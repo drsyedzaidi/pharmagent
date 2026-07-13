@@ -15,17 +15,15 @@ from __future__ import annotations
 import itertools
 from pathlib import Path
 
-import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
+from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.pharmstate import PharmState, StudyInfo
-from app.core.llm import MockLLM
 from app.core.store import SessionStore
 from app.tools.base import ToolContext
 from app.tools.regulatory_tools import generate_272
-
 
 SAMPLE = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
 
@@ -238,7 +236,7 @@ def test_http_272_download():
     from app.main import app
     client = TestClient(app)
     sid = client.post("/api/sessions").json()["id"]
-    gen = client.post(f"/api/sessions/{sid}/report/272", json={})
+    client.post(f"/api/sessions/{sid}/report/272", json={})
     # extract filename from report path
     state = client.get(f"/api/sessions/{sid}/state").json()
     filename = Path(state["regulatory_report_path"]).name

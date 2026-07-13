@@ -16,11 +16,11 @@ from pharmacometricsbench.generators import build_taskset
 from pharmacometricsbench.grading import grade_task, score_report
 from pharmacometricsbench.llm import (
     MockLLM,
+    _extract_json_object,
     build_prompt,
     make_llm_agent,
     parse_answer,
 )
-from pharmacometricsbench.llm import _extract_json_object
 
 
 def test_parser_prefers_last_json_fence():
