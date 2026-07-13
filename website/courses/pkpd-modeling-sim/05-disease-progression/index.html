@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 05: Disease Progression — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Phase 05: Disease Progression, part of PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 05: Disease Progression</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation</p>
+      <article class="lesson-doc"><h1>Phase 05: Disease Progression</h1>
+<p>Most drugs are not given to healthy people — they are given to patients whose underlying disease is marching forward whether or not treatment is present. This phase introduces the mathematical machinery that separates natural disease trajectory from drug effect, quantifies the spontaneous improvement we call placebo response, and applies these ideas to a canonical clinical dataset: HbA1c dynamics in Type 2 diabetes (Frey 2003). Mastering this material lets you answer the question regulators actually ask — "how much of the observed benefit is the drug, and how much is background noise?"</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Write and simulate linear, logistic, and exponential disease-progression models</li>
+<li>Distinguish placebo response from natural history and encode both mathematically</li>
+<li>Contrast symptomatic and disease-modifying drug effects in model structure and parameter identifiability</li>
+<li>Replicate the Frey 2003 HbA1c model in mrgsolve and interpret its clinical predictions</li>
+<li>Use baseline disease severity as a covariate on drug effect parameters</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/01-disease-progression-models">01-disease-progression-models</a></code></td>
+<td>Disease Progression Models and Placebo Effects</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/02-symptomatic-vs-disease-modifying">02-symptomatic-vs-disease-modifying</a></code></td>
+<td>Drug Effects on Disease: Symptomatic vs Disease-Modifying</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/03-hba1c-worked-example">03-hba1c-worked-example</a></code></td>
+<td>Worked Example: HbA1c in Type 2 Diabetes</td>
+<td>75 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 3.25 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 (PKPD Foundations), Phase 02 (Direct Effect Models), Phase 04 (Indirect Response Models). Understanding of Emax and IDR model structures.</p>
+<h2>References</h2>
+<ul>
+<li>Gabrielsson J, Weiner D. <em>Pharmacokinetic and Pharmacodynamic Data Analysis</em>. 5th ed. Swedish Pharmaceutical Press, 2016. Chapters 5 and 8.</li>
+<li>Holford NHG. Disease progression models. In: Kimko HC, Duffull SB (eds). <em>Simulation for Designing Clinical Trials</em>. Marcel Dekker, 2003.</li>
+<li>Frey N, Laveille C, Paraire M, Francillard M, Holford NHG, Jochemsen R. Population PKPD modelling of the long-term hypoglycaemic effect of gliclazide given as a once-a-day modified release (MR) formulation. <em>Br J Clin Pharmacol</em> 2003;55:147–157.</li>
+<li>Rowland M, Tozer TN. <em>Clinical Pharmacokinetics and Pharmacodynamics</em>. 4th ed. Lippincott, 2011.</li>
+<li>Jusko WJ, Ko HC. Physiologic indirect response models. <em>Clin Pharmacol Ther</em> 1994;56:406–419.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/01-disease-progression-models">Disease Progression Models and Placebo Effects</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/02-symptomatic-vs-disease-modifying">Drug Effects on Disease: Symptomatic vs Disease-Modifying</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/05-disease-progression/03-hba1c-worked-example">Worked Example: HbA1c in Type 2 Diabetes</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

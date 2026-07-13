@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+# data (uploads), DB & artifacts — sample_data/ is intentionally committed
+backend/data/
+backend/pharmagent.db
+*.db
+# node (all frontends: frontend/, dashboard/, website/)
+frontend/node_modules/
+frontend/dist/
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+*.tsbuildinfo
+node_modules/.cache/
+# env
+.env
+.env.local
+.env.*.local
+# caches & build metadata
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+# secrets & runtime
+*.key
+*.pem
+*.sqlite
+*.sqlite3
+# OS cruft
+.DS_Store

@@ -1,0 +1,9 @@
+# Scope to real source. Exclude data, caches, and the retired graphify output.
+graphify-out/
+data/
+sample_data/
+.ruff_cache/
+.pytest_cache/
+*.csv
+*.parquet
+*.ipynb

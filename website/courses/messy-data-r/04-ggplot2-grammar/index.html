@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 04: ggplot2 Grammar of Graphics — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 04: ggplot2 Grammar of Graphics, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 04: ggplot2 Grammar of Graphics</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 04: ggplot2 Grammar of Graphics</h1>
+<p>This phase builds every chart in the course from one consistent mental model — Wilkinson's<br />
+grammar of graphics as implemented in <code>ggplot2</code> — instead of memorizing one-off recipes per<br />
+chart type. You will construct a plot layer by layer starting from a bare <code>ggplot(data,
+aes(x,y))</code> call, learn to choose the right geometry for a given data type and question, and<br />
+control facets, statistical transforms, and coordinate systems — including the semi-log<br />
+concentration-time plot that is the default display format for PK data. By the end you can<br />
+look at any tabular dataset and know which geom, which scale, and which panel layout the<br />
+data actually calls for.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Decompose any <code>ggplot2</code> chart into its grammar components: data, aesthetic mappings, geoms,<br />
+  stats, scales, coordinate system, facets, and theme</li>
+<li>Distinguish mapping an aesthetic to a variable (<code>aes(color = ID)</code>) from setting it to a<br />
+  constant (<code>color = "steelblue"</code>), and predict the visual result of each</li>
+<li>Build a fully layered PK concentration-time plot: individual points, connecting lines, and<br />
+  a summary ribbon, all in one <code>ggplot2</code> call chain</li>
+<li>Apply a decision framework — distribution, relationship, composition, categorical<br />
+  comparison, time-series/profile — to choose the correct geom for a given variable pair</li>
+<li>Build the PK spaghetti-plot idiom: per-subject lines at low alpha plus a bold central-<br />
+  tendency overlay via <code>stat_summary()</code></li>
+<li>Use <code>facet_wrap()</code> and <code>facet_grid()</code> to build small multiples across a categorical<br />
+  stratum (e.g. dose group)</li>
+<li>Distinguish geom-internal stats (<code>geom_boxplot</code>, <code>geom_histogram</code>) from explicit stat<br />
+  layers (<code>stat_smooth</code>, <code>stat_summary</code>)</li>
+<li>Choose the correct coordinate system and scale transform for the data — including<br />
+<code>scale_y_log10()</code> for semi-log PK plots — and explain why <code>coord_cartesian(ylim = ...)</code><br />
+  is safe for zooming while <code>ylim()</code>/<code>scale_*_continuous(limits = ...)</code> silently drops data<br />
+  and biases any fitted smooth</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/01-grammar-of-graphics">01-grammar-of-graphics</a></code></td>
+<td>The Grammar of Graphics: aes(), Geoms, and Layers</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/02-choosing-the-right-plot">02-choosing-the-right-plot</a></code></td>
+<td>Choosing the Right Plot for the Data</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/03-facets-and-stats">03-facets-and-stats</a></code></td>
+<td>Facets, Statistical Transforms, and Coordinate Systems</td>
+<td>55 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.7 h</p>
+<h2>Prerequisites</h2>
+<p>Phases 01–03 (tidyverse import, dplyr/tidyr cleaning, joins). Base familiarity with data<br />
+frames/tibbles. <code>install.packages(c("tidyverse", "scales"))</code> (<code>ggplot2</code> ships inside<br />
+<code>tidyverse</code>).</p>
+<h2>Continuity Dataset</h2>
+<p>All three lessons simulate and reuse the same population PK dataset: 24 subjects split<br />
+across three oral dose groups (50/100/200 mg), one-compartment first-order absorption and<br />
+elimination with between-subject variability on <code>Ka</code>, <code>Ke</code>, and <code>V</code>, plus proportional and<br />
+additive residual error, sampled at 9 nominal timepoints (0–24 h). Each lesson's script<br />
+regenerates it from the same <code>set.seed()</code> so every plot is reproducible standalone.</p>
+<h2>References</h2>
+<ul>
+<li>Wilkinson L (2005). <em>The Grammar of Graphics</em>, 2nd ed. Springer.</li>
+<li>Wickham H (2016). <em>ggplot2: Elegant Graphics for Data Analysis</em>, 2nd ed. Springer.</li>
+<li>Wilke CO (2019). <em>Fundamentals of Data Visualization</em>. O'Reilly. https://clauswilke.com/dataviz/</li>
+<li><code>ggplot2</code> reference site: https://ggplot2.tidyverse.org/reference/</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/01-grammar-of-graphics">Lesson 01: The Grammar of Graphics: aes(), Geoms, and Layers</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/02-choosing-the-right-plot">Lesson 02: Choosing the Right Plot for the Data</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/04-ggplot2-grammar/03-facets-and-stats">Lesson 03: Facets, Statistical Transforms, and Coordinate Systems</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

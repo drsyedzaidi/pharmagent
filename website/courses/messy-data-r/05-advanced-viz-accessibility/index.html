@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 05: Advanced Visualization & Accessibility — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 05: Advanced Visualization & Accessibility, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 05: Advanced Visualization & Accessibility</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 05: Advanced Visualization &amp; Accessibility</h1>
+<p>This phase moves past default <code>ggplot2</code> output and treats colour as a design decision<br />
+with consequences. You will learn to match colour scales to data type (sequential,<br />
+diverging, qualitative), understand why the default hue wheel actively misleads a<br />
+meaningful fraction of readers with colour-vision deficiency, adopt perceptually<br />
+uniform and colour-blind-safe palettes (<code>viridis</code>, Okabe-Ito, <code>colorspace</code>) as defaults,<br />
+and build a reusable custom theme with correct <code>ggsave()</code> export settings for slides,<br />
+web, and print journals. By the end you can audit any figure for colour-blind safety<br />
+and ship it at publication resolution in the right file format.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Choose sequential, diverging, or qualitative colour scales based on the underlying data type, and explain why rainbow/jet colormaps distort perception</li>
+<li>Identify why default <code>ggplot2</code> hues are not colour-blind-safe, and apply <code>viridis</code>, <code>colorspace</code>, and Okabe-Ito palettes as safe alternatives</li>
+<li>Simulate colour-vision deficiency to audit a plot, and apply the redundant-channel rule (shape/linetype/direct labels) so no critical distinction depends on colour alone</li>
+<li>Build a reusable custom <code>ggplot2</code> theme and export publication-ready figures with <code>ggsave()</code> at correct dpi, units, and file format for the target medium</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/01-color-scales">01-color-scales</a></code></td>
+<td>Color and Scales for Effective Storytelling</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/02-accessibility">02-accessibility</a></code></td>
+<td>Accessibility: Colour-Blind-Safe Palettes and Perceptual Uniformity</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/03-themes-and-export">03-themes-and-export</a></code></td>
+<td>Custom Themes and Publication-Ready Export</td>
+<td>50 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.6 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 04 (ggplot2 Grammar of Graphics) — comfort with <code>aes()</code>, geoms, facets, and<br />
+building a plot layer by layer. Packages: <code>tidyverse</code>, <code>viridis</code>, <code>colorspace</code>,<br />
+<code>colorblindr</code> (optional; install from GitHub — see Lesson 02), <code>scales</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Okabe M, Ito K (2008). Color universal design (CUD) — how to make figures and presentations that are friendly to colorblind people. https://jfly.uni-koeln.de/color/</li>
+<li>Wilke CO (2019). <em>Fundamentals of Data Visualization</em>, ch. on colour. O'Reilly. https://clauswilke.com/dataviz/</li>
+<li>Garnier S, Ross N, Rudis R, et al. <code>viridis</code> package documentation. https://sjmgarnier.github.io/viridis/</li>
+<li>Zeileis A, Fisher JC, Hornik K, et al. (2020). colorspace: A toolbox for manipulating and assessing colors and palettes. <em>Journal of Statistical Software</em> 96(1):1-49.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/01-color-scales">Lesson 01: Color and Scales for Effective Storytelling</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/02-accessibility">Lesson 02: Accessibility — Colour-Blind-Safe Palettes and Perceptual Uniformity</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/05-advanced-viz-accessibility/03-themes-and-export">Lesson 03: Custom Themes and Publication-Ready Export</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

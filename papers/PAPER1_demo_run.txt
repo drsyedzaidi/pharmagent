@@ -1,0 +1,19 @@
+
+Cross-engine comparison — oral_1cmt, 6 subjects, 3/3 engines available
+
+PREDICTION RANKING (engine-agnostic — this picks the winner)
+  engine           pred_rmse  vpc_cov90  pred_r2   |bias|
+  nlmixr2_focei       0.0699     1.0000   0.9866   0.0012
+  pharmagent_focei    0.0843     1.0000   0.9805   0.0140
+  ensemble            0.0849     0.7500   0.9803   0.0255
+  monolix_like        0.1673     0.3750   0.9233   0.1111
+
+WITHIN-ENGINE LIKELIHOOD (never compared across engines)
+  pharmagent_focei oral_1cmt    ofv=-107.7950  aic=-95.7950  bic=-83.8611
+  nlmixr2_focei    oral_1cmt    ofv=-210.5074  aic=—  bic=—
+  monolix_like     oral_1cmt    ofv=-82.7950  aic=—  bic=—
+  ensemble         oral_1cmt    ofv=—  aic=—  bic=—
+
+WINNER: nlmixr2_focei  (metric: pred_rmse asc; ties -> vpc_coverage90 desc, pred_r2 desc, |pred_bias| asc)
+NOTE: OFV/AIC/BIC are within-engine only and are excluded from cross-engine ranking (different algorithms' likelihoods are not comparable).
+

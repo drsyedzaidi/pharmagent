@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 01: Foundations of Missing Data — Handling Missing Data in R</title>
+  <meta name="description" content="Phase 01: Foundations of Missing Data, part of Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 01: Foundations of Missing Data</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R</p>
+      <article class="lesson-doc"><h1>Phase 01: Foundations of Missing Data</h1>
+<p>Missing data is not a nuisance to be swept away with a single line of code — it is a<br />
+statistical problem whose correct treatment depends entirely on <em>why</em> the data are<br />
+missing. This phase builds the conceptual foundation for the whole course: what missing<br />
+data <em>is</em>, how it biases estimates and destroys inferential validity, the formal<br />
+MCAR/MAR/MNAR taxonomy from Rubin (1976), how to quantify the <em>cost</em> of missingness via<br />
+the fraction of missing information, and the practical R toolkit you will use in every<br />
+later phase. By the end you can look at a missing value and reason correctly about which<br />
+methods are valid and which will silently mislead you.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Define missing data and explain how it biases point estimates, reduces power, and can invalidate inference</li>
+<li>State the formal definitions of MCAR, MAR, and MNAR, and classify a mechanism from a described scenario</li>
+<li>Explain why the missingness mechanism — not the amount missing — determines which methods are valid</li>
+<li>Distinguish "fraction of missing data" from "fraction of missing information," and reason about what makes missingness costly</li>
+<li>Demonstrate, by simulation, that listwise deletion is unbiased under MCAR but biased under MAR</li>
+<li>Install and orient the core R missing-data toolkit (<code>naniar</code>, <code>VIM</code>, <code>visdat</code>, <code>mice</code>, <code>ggmice</code>, <code>missForest</code>, <code>softImpute</code>)</li>
+<li>Use base-R missing-data primitives (<code>NA</code>, <code>is.na()</code>, <code>complete.cases()</code>) and distinguish structural from statistical missingness</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="01-missingness-taxonomy/index.html">01-missingness-taxonomy</a></code></td>
+<td>Missing Data: Definition, Impact, and the MCAR/MAR/MNAR Taxonomy</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/01-foundations/02-fraction-missing-information">02-fraction-missing-information</a></code></td>
+<td>Bias, Power, and the Fraction of Missing Information</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/01-foundations/03-r-toolkit-setup">03-r-toolkit-setup</a></code></td>
+<td>The R Missing-Data Toolkit</td>
+<td>45 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.75 h</p>
+<h2>Prerequisites</h2>
+<p>Basic statistics (mean, variance, linear regression, expectation, bias). Working R<br />
+knowledge (data frames, functions, <code>install.packages()</code>). No prior missing-data theory is<br />
+assumed. A recent R (≥ 4.1) with the ability to compile source packages is helpful but not<br />
+strictly required.</p>
+<h2>References</h2>
+<ul>
+<li>Rubin DB. Inference and missing data. <em>Biometrika</em> 1976;63(3):581–592.</li>
+<li>Little RJA, Rubin DB. <em>Statistical Analysis with Missing Data</em>. 3rd ed. Wiley, 2019.</li>
+<li>van Buuren S. <em>Flexible Imputation of Missing Data</em>. 2nd ed. CRC Press, 2018. https://stefvanbuuren.name/fimd/</li>
+<li>Schafer JL, Graham JW. Missing data: our view of the state of the art. <em>Psychol Methods</em> 2002;7(2):147–177.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="01-missingness-taxonomy/index.html">Lesson 01: Missing Data — Definition, Impact, and the MCAR/MAR/MNAR Taxonomy</a> <span class="tag live">Free preview</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/01-foundations/02-fraction-missing-information">Lesson 02: Bias, Power, and the Fraction of Missing Information</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/01-foundations/03-r-toolkit-setup">Lesson 03: The R Missing-Data Toolkit</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

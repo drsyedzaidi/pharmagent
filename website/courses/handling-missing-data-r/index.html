@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Handling Missing Data in R — From General Theory to Pharmacometric Practice</title>
+  <meta name="description" content="Handling Missing Data in R: From General Theory to Pharmacometric Practice." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../styles.v2.css" />
+  <link rel="stylesheet" href="../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../index.html#capabilities">Product</a>
+        <a href="../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../courses.html">Courses</a> <span aria-hidden="true">/</span> <span aria-current="page">Handling Missing Data in R</span></nav>
+      
+      <p class="eyebrow">From General Theory to Pharmacometric Practice</p>
+      <article class="lesson-doc"><h1>Handling Missing Data in R — From General Theory to Pharmacometric Practice</h1>
+<p>A hands-on course on diagnosing and handling missing data in R. It starts from the<br />
+statistical foundations every analyst needs — the MCAR/MAR/MNAR taxonomy, diagnostics,<br />
+deletion, single and multiple imputation — and then carries those ideas into the setting<br />
+where they bite hardest: <strong>population pharmacokinetic (popPK) and PK/PD analysis</strong>, where<br />
+missingness shows up as absent dose/time records, below-quantification-limit (BLQ)<br />
+concentrations, and incomplete covariates. Each lesson derives the method from first<br />
+principles, implements it in R, and ships a keepable artifact — a checklist, decision<br />
+tree, or analysis script — for use on real projects.</p>
+<p>This course was built by fusing the syllabus of the Physalia <em>Handling Missing Data in R</em><br />
+workshop with the pharmacometric missing-data literature (Beal 2001 on BLQ; Johansson &amp;<br />
+Karlsson 2013 on missing covariates; Jonsson &amp; Nyberg 2024 on FREM).</p>
+<h2>Who This Is For</h2>
+<p>Pharmacometricians, clinical pharmacologists, and quantitative analysts who already use R<br />
+and want a single course that covers both the general missing-data toolkit (<code>naniar</code>,<br />
+<code>VIM</code>, <code>mice</code>) and its pharmacometric specializations (BLQ likelihood methods, covariate<br />
+imputation, FREM). Phases 01–04 stand on their own for any analyst; phases 05–06 assume<br />
+familiarity with population modeling.</p>
+<h2>Prerequisites</h2>
+<ul>
+<li>R basics: <code>dplyr</code>, <code>ggplot2</code>, reading and reshaping data frames</li>
+<li>Introductory statistics: means, variances, regression, likelihood</li>
+<li>For phases 05–06: population PK concepts (NONMEM/nlmixr2 dataset structure, IIV, covariates)</li>
+<li>Packages: <code>install.packages(c("naniar","VIM","visdat","mice","ggmice","missForest","softImpute","dplyr","ggplot2"))</code></li>
+<li>For phases 05–06 (optional but recommended): <code>mrgsolve</code>, <code>nlmixr2</code></li>
+</ul>
+<h2>What You Will Learn</h2>
+<ul>
+<li>Distinguish MCAR, MAR, and MNAR — and why the mechanism dictates which methods are valid</li>
+<li>Explore and visualize missingness in R with shadow matrices, <code>VIM</code>, and <code>naniar</code></li>
+<li>Apply deletion, single imputation, and stochastic regression imputation — and see how each biases estimates</li>
+<li>Run multiple imputation by chained equations (<code>mice</code>) and pool results with Rubin's rules</li>
+<li>Use iterative / machine-learning imputation (EM, SoftImpute, <code>missForest</code>)</li>
+<li>Handle the missing-data problems specific to popPK datasets: absent time/dose records, dose imputation with <code>ADDL</code>/<code>SS</code></li>
+<li>Choose and implement a BLQ method (Beal's M1–M7), including the censored-likelihood M3 method in NONMEM and nlmixr2</li>
+<li>Impute time-varying covariates within subjects (LOCF/NOCB) and handle wholly missing covariates (CC, SI, MI, full ML)</li>
+<li>Build a Full Random Effects Model (FREM) that handles missing covariates implicitly</li>
+</ul>
+<h2>Phase Ladder</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Phase</th>
+<th>Ships</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td>Foundations of Missing Data</td>
+<td>MCAR/MAR/MNAR decision tree + R toolkit setup</td>
+</tr>
+<tr>
+<td>02</td>
+<td>Diagnosing Missingness in R</td>
+<td>Missing-data diagnostic report template</td>
+</tr>
+<tr>
+<td>03</td>
+<td>Classical Methods — Deletion &amp; Single Imputation</td>
+<td>Method-selection checklist</td>
+</tr>
+<tr>
+<td>04</td>
+<td>Modern Imputation — Multiple &amp; Iterative</td>
+<td>End-to-end MICE workflow script</td>
+</tr>
+<tr>
+<td>05</td>
+<td>Missing Data in popPK — Structure, Time, Dose, BLQ</td>
+<td>BLQ decision guide + M3 (NONMEM/nlmixr2) template</td>
+</tr>
+<tr>
+<td>06</td>
+<td>Missing Covariate Data &amp; FREM</td>
+<td>Covariate-missingness method map + FREM starter</td>
+</tr>
+</tbody>
+</table>
+<h2>Key References</h2>
+<ul>
+<li>Rubin DB (1976). Inference and missing data. <em>Biometrika</em> 63:581–592.</li>
+<li>Little RJA, Rubin DB (2019). <em>Statistical Analysis with Missing Data</em>, 3rd ed. Wiley.</li>
+<li>van Buuren S (2018). <em>Flexible Imputation of Missing Data</em>, 2nd ed. CRC Press. (free online: https://stefvanbuuren.name/fimd/)</li>
+<li>Beal SL (2001). Ways to fit a PK model with some data below the quantification limit. <em>J Pharmacokinet Pharmacodyn</em> 28(5):481–504.</li>
+<li>Bergstrand M, Karlsson MO (2009). Handling data below the limit of quantification in mixed effect models. <em>AAPS J</em> 11(2):371–380.</li>
+<li>Ahn JE et al. (2008). Likelihood based approaches to handling data below the quantification limit using NONMEM VI. <em>J Pharmacokinet Pharmacodyn</em> 35:401–421.</li>
+<li>Johansson ÅM, Karlsson MO (2013). Comparison of methods for handling missing covariate data. <em>AAPS J</em> 15(4):1232–1241.</li>
+<li>Jonsson EN, Nyberg J (2024). Full random effects models (FREM): A practical usage guide. <em>CPT Pharmacometrics Syst Pharmacol</em> 13:1297–1308.</li>
+<li>Bauer RJ (2019). NONMEM tutorial part II: estimation methods and advanced examples. <em>CPT Pharmacometrics Syst Pharmacol</em> 8(8):538–556.</li>
+</ul>
+<h2>Tooling</h2>
+<ul>
+<li>R (&gt;= 4.2)</li>
+<li>General missing-data: <code>naniar</code>, <code>VIM</code>, <code>visdat</code>, <code>mice</code>, <code>ggmice</code>, <code>missForest</code>, <code>softImpute</code></li>
+<li>Pharmacometric: <code>mrgsolve</code> (simulation), <code>nlmixr2</code> (fitting), NONMEM syntax shown where relevant</li>
+<li><code>dplyr</code>, <code>ggplot2</code>, <code>rmarkdown</code></li>
+</ul>
+<h2>Pedagogy: Learn → Build → Ship → Check</h2>
+<p>Every lesson runs the same four-move loop. You derive the concept, implement it in R,<br />
+walk away with a reusable artifact, and answer 3 check questions before advancing.</p>
+<h2>Slides</h2>
+<p>Marp decks for each phase live in <code>lecture-slides/slides/</code>. See <code>lecture-slides/index.md</code>.</p></article>
+      <section class="lesson-section">
+        <h2>Phases</h2>
+        <ol class="phase-lesson-list"><li><a href="01-foundations/index.html"><strong>Phase 01: Foundations of Missing Data</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="02-diagnostics-r/index.html"><strong>Phase 02: Diagnosing Missingness in R</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="03-classical-methods/index.html"><strong>Phase 03: Classical Methods — Deletion & Single Imputation</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="04-modern-imputation/index.html"><strong>Phase 04: Modern Imputation — Multiple & Iterative</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="05-poppk-structure-blq/index.html"><strong>Phase 05: Missing Data in Population PK — Structure, Time, Dose, and BLQ</strong></a> <span class="mono lesson-count">4 lessons</span></li><li><a href="06-covariates-frem/index.html"><strong>Phase 06: Missing Covariate Data & FREM</strong></a> <span class="mono lesson-count">4 lessons</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../index.html#top">Product</a>
+        <a href="../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

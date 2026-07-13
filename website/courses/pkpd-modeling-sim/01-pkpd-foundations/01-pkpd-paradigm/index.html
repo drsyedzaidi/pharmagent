@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lesson 01: The PKPD Paradigm — From Dose to Effect — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Lesson 01: The PKPD Paradigm — From Dose to Effect: a free preview lesson from PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../../index.html#capabilities">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <a href="../index.html">01-pkpd-foundations</a> <span aria-hidden="true">/</span> <span aria-current="page">Lesson 01: The PKPD Paradigm — From Dose to Effect</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation &middot; 01-pkpd-foundations &middot; <span class="tag live">Free preview</span></p>
+      <article class="lesson-doc"><h1>Lesson 01: The PKPD Paradigm — From Dose to Effect</h1>
+<p><strong>Objective.</strong> Trace the complete dose → absorption → distribution → effect chain and assign a mathematical role to each link.</p>
+<p><strong>Prerequisites.</strong> None (first lesson in the course).</p>
+<hr />
+<h2>Concept (from first principles)</h2>
+<h3>The chain</h3>
+<p>Every pharmacological intervention traverses four links:</p>
+<div class="codehilite"><pre><span></span><code>Dose
+  │  (Route, formulation, release)
+  ▼
+Concentration at site of measurement  [PK]
+  │  (Link function: Cp → Ce or direct)
+  ▼
+Concentration at biophase / receptor  [PK-PD link]
+  │  (Receptor binding, transduction)
+  ▼
+Effect                                [PD]
+</code></pre></div>
+
+<p>Each link is governed by differential equations. The modeler's job is to identify which equations are needed and parameterize them.</p>
+<hr />
+<h3>Pharmacokinetic layer</h3>
+<p>For a one-compartment oral model:</p>
+<p><strong>Absorption:</strong><br />
+<span class="math-display">$$\frac{dA_{gut}}{dt} = -K_a \cdot A_{gut}, \quad A_{gut}(0) = F \cdot \text{Dose}$$</span></p>
+<p><strong>Central compartment:</strong><br />
+<span class="math-display">$$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$$</span></p>
+<p>Plasma concentration:<br />
+<span class="math-display">$$C_p(t) = \frac{A_c(t)}{V}$$</span></p>
+<p>Elimination half-life:<br />
+<span class="math-display">$$t_{1/2} = \frac{\ln 2 \cdot V}{CL}$$</span></p>
+<p><strong>Units discipline (critical):</strong> if Dose is in mg, V in L, then <span class="math-inline">$A_c$</span> is in mg and <span class="math-inline">$C_p$</span> is in mg/L = µg/mL.<br />
+<span class="math-inline">$CL$</span> is in L/h, <span class="math-inline">$K_a$</span> in h⁻¹. Always verify units cancel correctly before coding.</p>
+<hr />
+<h3>Pharmacodynamic layer</h3>
+<p>The PD model converts <span class="math-inline">$C_p$</span> (or biophase concentration <span class="math-inline">$C_e$</span>) into an effect <span class="math-inline">$E$</span>.</p>
+<p>Three archetypes (explored in depth in Lesson 02):</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Key feature</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Direct</td>
+<td><span class="math-inline">$E = f(C_p)$</span> instantaneous</td>
+<td>Neuromuscular blockade</td>
+</tr>
+<tr>
+<td>Effect-compartment (Ce)</td>
+<td>CCW hysteresis explained by biophase lag (ke0)</td>
+<td>Sedatives</td>
+</tr>
+<tr>
+<td>Indirect response (IDR)</td>
+<td>Effect on synthesis/elimination of response</td>
+<td>Corticosteroid on cell counts (warfarin/INR is a related precursor/cascade case)</td>
+</tr>
+</tbody>
+</table>
+<p>The simplest direct model is the <strong>Emax model</strong>:</p>
+<p><span class="math-display">$$E = E_0 + \frac{E_{max} \cdot C_p}{\text{EC}_{50} + C_p}$$</span></p>
+<p>Parameters:<br />
+- <span class="math-inline">$E_0$</span> — baseline effect (same units as <span class="math-inline">$E$</span>)<br />
+- <span class="math-inline">$C_p$</span>0 — maximum drug-attributable change (same units as <span class="math-inline">$C_p$</span>1)<br />
+- <span class="math-inline">$C_p$</span>2 — concentration producing 50% of <span class="math-inline">$C_p$</span>3 (same units as <span class="math-inline">$C_p$</span>4)</p>
+<p>The Hill (sigmoidal Emax) extension adds cooperativity <span class="math-inline">$C_p$</span>5:</p>
+<p><span class="math-display">$$E = E_0 + \frac{E_{max} \cdot C_p^\gamma}{\text{EC}_{50}^\gamma + C_p^\gamma}$$</span></p>
+<hr />
+<h3>Why the paradigm matters</h3>
+<p>Before fitting data:<br />
+1. <strong>Draw the box-and-arrow diagram.</strong> Every box is a state variable; every arrow is a rate.<br />
+2. <strong>Assign units to every parameter.</strong> Dimensional errors are the most common mrgsolve bug.<br />
+3. <strong>Identify the PK-PD link.</strong> Direct? Effect compartment? IDR?<br />
+4. <strong>Choose an identifiable parameterization.</strong> You cannot estimate both <span class="math-inline">$C_p$</span>6 and <span class="math-inline">$C_p$</span>7 separately without IV data.</p>
+<hr />
+<h2>Worked Example</h2>
+<p><strong>Scenario.</strong> An analgesic is dosed orally at 200 mg. PK: CL = 5 L/h, V = 50 L, Ka = 1 h⁻¹, F = 0.8. PD: direct Emax, E₀ = 2 (pain score 0–10), Emax = 6, EC₅₀ = 0.5 mg/L.</p>
+<p><strong>Step 1 — Dose entering gut:</strong></p>
+<p><span class="math-display">$$A_{gut}(0) = 0.8 \times 200 = 160 \text{ mg}$$</span></p>
+<p><strong>Step 2 — Peak concentration:</strong></p>
+<p><span class="math-display">$$C_{max} \approx \frac{F \cdot \text{Dose}}{V} \cdot \frac{K_a}{K_a - K_e} \cdot \left(e^{-K_e t_{max}} - e^{-K_a t_{max}}\right)$$</span></p>
+<p>With <span class="math-inline">$C_p$</span>8 h⁻¹ and <span class="math-inline">$C_p$</span>9 h⁻¹:</p>
+<p><span class="math-display">$$t_{max} = \frac{\ln(K_a/K_e)}{K_a - K_e} = \frac{\ln(10)}{0.9} \approx 2.56 \text{ h}$$</span></p>
+<p><span class="math-display">$$C_{max} \approx \frac{0.8 \times 200}{50} \cdot \frac{1}{0.9} \cdot \left(e^{-0.1 \times 2.56} - e^{-1 \times 2.56}\right) \approx 2.48 \text{ mg/L}$$</span></p>
+<p><strong>Step 3 — Effect at peak:</strong></p>
+<p><span class="math-display">$$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$$</span>0</p>
+<p>In this model the score rises with drug effect toward the ceiling <span class="math-inline">$CL$</span>0; at Cmax the effect is 6.99 units. The drug-attributable change at peak is <span class="math-inline">$CL$</span>1, i.e. ~83% of <span class="math-inline">$CL$</span>2 (the maximum drug-attributable change).</p>
+<p><em>(Reference: Gabrielsson &amp; Weiner, §3.1 — direct-link PK/PD model; Rowland &amp; Tozer, Ch. 20 — factors controlling drug effects.)</em></p>
+<hr />
+<h2>Build it</h2>
+<p>The companion script <code>code/lesson_01.R</code> simulates this scenario end-to-end:</p>
+<ol>
+<li>Define the mrgsolve model with <code><span class="math-inline">$CL$</span>3CMT</code>, <code><span class="math-inline">$CL$</span>4TABLE</code></li>
+<li>Set up a dosing event at t = 0 (200 mg oral, 5-min infusion approximation or bolus into gut compartment)</li>
+<li>Simulate over 0–24 h</li>
+<li>Plot <span class="math-inline">$CL$</span>5 and <span class="math-inline">$CL$</span>6 on dual-panel ggplot</li>
+<li>Annotate Cmax, tmax, and the effect at Cmax</li>
+</ol>
+<hr />
+<h2>Common Pitfalls</h2>
+<ol>
+<li>
+<p><strong>Units mismatch.</strong> Dose in mg, V in mL → Cp in mg/mL = 1000 µg/mL. Always track units explicitly; put them in <code>$PARAM</code> comments.</p>
+</li>
+<li>
+<p><strong>Forgetting bioavailability.</strong> In an oral model, <code>A_gut(0) = F * Dose</code>, not <code>Dose</code>. If you initialize gut as <code>Dose</code> you overestimate Cp by 1/F.</p>
+</li>
+<li>
+<p><strong>Confusing Emax and E_max + E0.</strong> The Emax parameter is the <em>incremental</em> maximum. Baseline E0 is separate. A model with E0 = 2, Emax = 6 reaches a ceiling of 8, not 6.</p>
+</li>
+<li>
+<p><strong>Using linear C–E when saturation is present.</strong> If EC50 &lt;&lt; Cp, linear approximation fails at high doses. Sigmoid Emax is required whenever the dose range spans the EC50.</p>
+</li>
+<li>
+<p>**Omitting <span class="math-inline">$CL$</span>7ODE<code>or</code><span class="math-inline">$CL$</span>8CAPTURE` them, they will not appear in the simulated output dataframe.</p>
+</li>
+</ol>
+<hr />
+<h2>Ship it</h2>
+<p><code>outputs/artifact.md</code> — <strong>PKPD Paradigm Reference Card</strong>: box-and-arrow diagram, the five canonical equations (absorption, central, Ce, Emax, IDR), parameter tables with units, and a 3-question diagnostic checklist to classify any new PKPD problem.</p>
+<hr />
+<h2>Check</h2>
+<ol>
+<li>For a one-compartment oral model with CL = 10 L/h and V = 100 L, what is the elimination half-life?</li>
+<li>A drug has E0 = 5, Emax = 5, EC50 = 2 mg/L. At Cp = 2 mg/L, what is the predicted effect?</li>
+<li>Which parameter in the Emax model controls sensitivity (potency) of the concentration–effect relationship?</li>
+</ol></article>
+
+      <section class='lesson-section'><h2>Code</h2><h3 class="lesson-subhead mono">lesson_01.R</h3><div class="codehilite"><pre><span></span><span class="c1">## ============================================================</span>
+<span class="c1">## Lesson 01: The PKPD Paradigm — From Dose to Effect</span>
+<span class="c1">## One-compartment oral PK + direct Emax PD</span>
+<span class="c1">## ============================================================</span>
+<span class="c1">## Units: Dose [mg], V [L], CL [L/h], Ka [1/h]</span>
+<span class="c1">##        Cp [mg/L = ug/mL], Time [h], Effect [pain score 0–10]</span>
+<span class="c1">## ============================================================</span>
+
+<span class="nf">library</span><span class="p">(</span><span class="n">mrgsolve</span><span class="p">)</span>
+<span class="nf">library</span><span class="p">(</span><span class="n">dplyr</span><span class="p">)</span>
+<span class="nf">library</span><span class="p">(</span><span class="n">ggplot2</span><span class="p">)</span>
+
+<span class="nf">set.seed</span><span class="p">(</span><span class="m">42</span><span class="p">)</span>
+
+<span class="c1"># ── 1. Define the mrgsolve model ────────────────────────────────────────────</span>
+
+<span class="n">code</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="s">&#39;</span>
+<span class="s">$PARAM</span>
+<span class="s">CL   = 5     // Clearance (L/h)</span>
+<span class="s">V    = 50    // Volume of distribution (L)</span>
+<span class="s">Ka   = 1     // Absorption rate constant (1/h)</span>
+<span class="s">F1   = 0.8   // Oral bioavailability (fraction)</span>
+<span class="s">E0   = 2     // Baseline pain score</span>
+<span class="s">Emax = 6     // Maximum drug-attributable effect reduction</span>
+<span class="s">EC50 = 0.5   // Concentration at half-maximum effect (mg/L)</span>
+<span class="s">gamma = 1    // Hill coefficient (1 = hyperbolic Emax)</span>
+
+<span class="s">$CMT</span>
+<span class="s">// Compartment declarations</span>
+<span class="s">GUT    // Oral depot: drug awaiting absorption [mg]</span>
+<span class="s">CENT   // Central compartment [mg]</span>
+
+<span class="s">$MAIN</span>
+<span class="s">// Apply oral bioavailability to the GUT depot so the absorbed</span>
+<span class="s">// amount is F1 * Dose (e.g. 0.8 * 200 = 160 mg). Without this,</span>
+<span class="s">// mrgsolve delivers the full nominal dose and ignores F1.</span>
+<span class="s">F_GUT = F1;</span>
+
+<span class="s">$ODE</span>
+<span class="s">// Rate of change in gut depot</span>
+<span class="s">dxdt_GUT  = -Ka * GUT;</span>
+
+<span class="s">// Rate of change in central compartment</span>
+<span class="s">// Ke = CL/V; direct elimination from central</span>
+<span class="s">dxdt_CENT = Ka * GUT - (CL/V) * CENT;</span>
+
+<span class="s">$TABLE</span>
+<span class="s">// Derived quantities computed at each time step</span>
+<span class="s">double Cp = CENT / V;             // Plasma concentration (mg/L)</span>
+
+<span class="s">// Sigmoidal Emax model (Hill equation)</span>
+<span class="s">// Numerator uses pow() for correct gamma handling</span>
+<span class="s">double E  = E0 + Emax * pow(Cp, gamma) /</span>
+<span class="s">            (pow(EC50, gamma) + pow(Cp, gamma));</span>
+
+<span class="s">$CAPTURE Cp E</span>
+<span class="s">&#39;</span>
+
+<span class="n">mod</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">mcode</span><span class="p">(</span><span class="s">&quot;pkpd_lesson01&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">code</span><span class="p">)</span>
+
+<span class="c1"># ── 2. Bioavailability scaling ───────────────────────────────────────────────</span>
+<span class="c1"># F1 is applied to the GUT depot via `F_GUT = F1` in $MAIN (see model above),</span>
+<span class="c1"># so the absorbed amount is F1 * Dose = 0.8 * 200 = 160 mg.</span>
+<span class="n">mod</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">param</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span><span class="w"> </span><span class="n">F1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0.8</span><span class="p">)</span>
+
+<span class="c1"># ── 3. Set up dosing event ───────────────────────────────────────────────────</span>
+<span class="c1"># Single oral dose of 200 mg at time 0</span>
+<span class="c1"># cmt = 1 (GUT), time = 0, evid = 1 (dose event)</span>
+<span class="n">dose</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ev</span><span class="p">(</span><span class="n">amt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">200</span><span class="p">,</span><span class="w"> </span><span class="n">cmt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">time</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="n">evid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">)</span>
+
+<span class="c1"># ── 4. Simulate ─────────────────────────────────────────────────────────────</span>
+<span class="n">out</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">mod</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">ev</span><span class="p">(</span><span class="n">dose</span><span class="p">)</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">mrgsim</span><span class="p">(</span>
+<span class="w">    </span><span class="n">start</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="p">,</span>
+<span class="w">    </span><span class="n">end</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="m">24</span><span class="p">,</span>
+<span class="w">    </span><span class="n">delta</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="m">0.1</span><span class="p">,</span><span class="w">    </span><span class="c1"># 0.1 h resolution for smooth curves</span>
+<span class="w">    </span><span class="n">obsonly</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">TRUE</span><span class="w">   </span><span class="c1"># return only observation records</span>
+<span class="w">  </span><span class="p">)</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">as.data.frame</span><span class="p">()</span>
+
+<span class="c1"># ── 5. Find Cmax and tmax ────────────────────────────────────────────────────</span>
+<span class="n">cmax_row</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">out</span><span class="p">[</span><span class="nf">which.max</span><span class="p">(</span><span class="n">out</span><span class="o">$</span><span class="n">Cp</span><span class="p">),</span><span class="w"> </span><span class="p">]</span>
+<span class="n">cmax_val</span><span class="w">  </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">cmax_row</span><span class="o">$</span><span class="n">Cp</span>
+<span class="n">tmax_val</span><span class="w">  </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">cmax_row</span><span class="o">$</span><span class="n">time</span>
+<span class="n">emax_val</span><span class="w">  </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">cmax_row</span><span class="o">$</span><span class="n">E</span>
+
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;Cmax = %.3f mg/L at tmax = %.2f h\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">cmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">tmax_val</span><span class="p">))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;Effect at Cmax = %.2f\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">emax_val</span><span class="p">))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;t_half = %.2f h\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="m">2</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="m">5</span><span class="p">))</span>
+
+<span class="c1"># ── 6. Visualize ─────────────────────────────────────────────────────────────</span>
+
+<span class="c1"># Panel A: PK — concentration vs time</span>
+<span class="n">p_pk</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ggplot</span><span class="p">(</span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="nf">aes</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">time</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Cp</span><span class="p">))</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">geom_line</span><span class="p">(</span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;#2C6FAC&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">linewidth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1.2</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">geom_vline</span><span class="p">(</span><span class="n">xintercept</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">linetype</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;dashed&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;gray50&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;point&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;#E05A2B&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;text&quot;</span><span class="p">,</span>
+<span class="w">           </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tmax_val</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="m">0.5</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cmax_val</span><span class="p">,</span>
+<span class="w">           </span><span class="n">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;Cmax = %.2f mg/L\ntmax = %.1f h&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">cmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">tmax_val</span><span class="p">),</span>
+<span class="w">           </span><span class="n">hjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="n">vjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0.5</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3.5</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">labs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">title</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Lesson 01 — One-Compartment Oral PK&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">x</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Time (h)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">y</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Plasma Concentration (mg/L)&quot;</span>
+<span class="w">  </span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">theme_classic</span><span class="p">(</span><span class="n">base_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">13</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">theme</span><span class="p">(</span><span class="n">plot.title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">element_text</span><span class="p">(</span><span class="n">face</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;bold&quot;</span><span class="p">))</span>
+
+<span class="c1"># Panel B: PD — effect vs time (direct link)</span>
+<span class="n">p_pd</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ggplot</span><span class="p">(</span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="nf">aes</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">time</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">E</span><span class="p">))</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">geom_line</span><span class="p">(</span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;#E05A2B&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">linewidth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1.2</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">geom_hline</span><span class="p">(</span><span class="n">yintercept</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w">   </span><span class="n">linetype</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;dotted&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;gray40&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w">   </span><span class="c1"># E0</span>
+<span class="w">  </span><span class="nf">geom_hline</span><span class="p">(</span><span class="n">yintercept</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">8</span><span class="p">,</span><span class="w">   </span><span class="n">linetype</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;dotted&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;gray40&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w">   </span><span class="c1"># E0 + Emax</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;text&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">23</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">2.3</span><span class="p">,</span><span class="w">  </span><span class="n">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;E0 = 2&quot;</span><span class="p">,</span><span class="w">        </span><span class="n">hjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3.5</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;text&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">23</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">8.3</span><span class="p">,</span><span class="w">  </span><span class="n">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;E0 + Emax = 8&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">hjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3.5</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;point&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tmax_val</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">emax_val</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="n">color</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;#2C6FAC&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">annotate</span><span class="p">(</span><span class="s">&quot;text&quot;</span><span class="p">,</span>
+<span class="w">           </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tmax_val</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="m">0.5</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">emax_val</span><span class="p">,</span>
+<span class="w">           </span><span class="n">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;E(Cmax) = %.2f&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">emax_val</span><span class="p">),</span>
+<span class="w">           </span><span class="n">hjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="n">vjust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0.5</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3.5</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">scale_y_continuous</span><span class="p">(</span><span class="n">limits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="m">9</span><span class="p">))</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">labs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">title</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Lesson 01 — Direct Emax PD (pain score)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">x</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Time (h)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">y</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;Effect (pain score)&quot;</span>
+<span class="w">  </span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">theme_classic</span><span class="p">(</span><span class="n">base_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">13</span><span class="p">)</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="nf">theme</span><span class="p">(</span><span class="n">plot.title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">element_text</span><span class="p">(</span><span class="n">face</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;bold&quot;</span><span class="p">))</span>
+
+<span class="c1"># Combine with patchwork if available, else print separately</span>
+<span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="nf">requireNamespace</span><span class="p">(</span><span class="s">&quot;patchwork&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">quietly</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">TRUE</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nf">library</span><span class="p">(</span><span class="n">patchwork</span><span class="p">)</span>
+<span class="w">  </span><span class="nf">print</span><span class="p">(</span><span class="n">p_pk</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">p_pd</span><span class="p">)</span>
+<span class="p">}</span><span class="w"> </span><span class="kr">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nf">print</span><span class="p">(</span><span class="n">p_pk</span><span class="p">)</span>
+<span class="w">  </span><span class="nf">print</span><span class="p">(</span><span class="n">p_pd</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1"># ── 7. Export figure ─────────────────────────────────────────────────────────</span>
+<span class="c1"># Uncomment to save:</span>
+<span class="c1"># ggsave(&quot;outputs/lesson01_pkpd_paradigm.png&quot;, width = 8, height = 6, dpi = 150)</span>
+
+<span class="c1"># ── Output note ──────────────────────────────────────────────────────────────</span>
+<span class="c1"># Expected output:</span>
+<span class="c1">#   Cmax ~ 2.48 mg/L at tmax ~ 2.56 h</span>
+<span class="c1">#   Effect at Cmax ~ 6.99  (drug-attributable change ~4.99 = ~83% of Emax)</span>
+<span class="c1">#   t_half = 6.93 h</span>
+<span class="c1"># Two panels: Cp(t) in blue, E(t) in orange, dotted horizontal lines at E0 and ceiling.</span>
+</pre></div>
+</section>
+      
+      <section class='lesson-section'><h2>Check</h2><div class='quiz-list'><details class="quiz-item">
+  <summary>For a one-compartment oral model with CL = 10 L/h and V = 100 L, what is the elimination half-life?</summary>
+  <ul class="quiz-options"><li>A. 10 h</li><li>B. 6.93 h</li><li>C. 14.4 h</li><li>D. 3.47 h</li></ul>
+  <p class="quiz-answer"><strong>Answer: B</strong></p>
+  <p class="quiz-explanation">t½ = ln(2) × V / CL = 0.693 × 100 / 10 = 6.93 h. Ke = CL/V = 0.1 h⁻¹; t½ = ln2/Ke = 6.93 h.</p>
+</details>
+<details class="quiz-item">
+  <summary>A drug has E0 = 5, Emax = 5, EC50 = 2 mg/L (Hill γ = 1). At Cp = 2 mg/L, what is the predicted effect E?</summary>
+  <ul class="quiz-options"><li>A. 5</li><li>B. 7.5</li><li>C. 10</li><li>D. 2.5</li></ul>
+  <p class="quiz-answer"><strong>Answer: B</strong></p>
+  <p class="quiz-explanation">At Cp = EC50, the drug achieves exactly 50% of Emax. E = E0 + Emax × Cp/(EC50 + Cp) = 5 + 5 × 2/(2+2) = 5 + 2.5 = 7.5.</p>
+</details>
+<details class="quiz-item">
+  <summary>Which parameter in the sigmoidal Emax model controls the potency (sensitivity) of the concentration–effect relationship?</summary>
+  <ul class="quiz-options"><li>A. Emax</li><li>B. E0</li><li>C. EC50</li><li>D. Hill coefficient γ</li></ul>
+  <p class="quiz-answer"><strong>Answer: C</strong></p>
+  <p class="quiz-explanation">EC50 is the concentration that produces 50% of maximum effect and is the standard measure of potency. A lower EC50 means the drug is more potent. Emax controls efficacy (ceiling), γ controls the steepness of the sigmoid, and E0 sets the baseline.</p>
+</details></div></section>
+      <section class='lesson-section'><h2>Ship it</h2><div class='artifact-box'><h1>PKPD Paradigm — Reference Card</h1>
+<h2>The Dose-to-Effect Chain</h2>
+<div class="codehilite"><pre><span></span><code>DOSE
+ │ F · Dose → GUT compartment
+ ▼
+PHARMACOKINETICS
+ │ Ka: GUT → CENTRAL
+ │ CL/V: elimination from CENTRAL
+ │ Cp = A_central / V
+ ▼
+PK–PD LINK
+ │ Direct: Cp → E immediately
+ │ Effect-cmt: ke0 drives Ce toward Cp (delay)
+ │ IDR: Cp modulates Kin or Kout (turnover)
+ ▼
+PHARMACODYNAMICS
+ │ E = f(Ce or Cp)
+ ▼
+EFFECT (clinical endpoint)
+</code></pre></div>
+
+<hr />
+<h2>Core Equations with Units</h2>
+<h3>One-Compartment Oral PK</h3>
+<table>
+<thead>
+<tr>
+<th>Equation</th>
+<th>Units check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="math-inline">$\frac{dA_{gut}}{dt} = -K_a \cdot A_{gut}$</span></td>
+<td>mg/h = h⁻¹ · mg ✓</td>
+</tr>
+<tr>
+<td><span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span></td>
+<td>mg/h = h⁻¹·mg − (L/h)/L·mg ✓</td>
+</tr>
+<tr>
+<td><span class="math-inline">$C_p = A_c / V$</span></td>
+<td>mg/L = mg / L ✓</td>
+</tr>
+<tr>
+<td><span class="math-inline">$t_{1/2} = \ln(2) \cdot V / CL$</span></td>
+<td>h = L / (L/h) ✓</td>
+</tr>
+<tr>
+<td><span class="math-inline">$K_e = CL / V$</span></td>
+<td>h⁻¹ = (L/h) / L ✓</td>
+</tr>
+</tbody>
+</table>
+<h3>Emax (Hyperbolic) Model</h3>
+<p><span class="math-display">$$E = E_0 + \frac{E_{max} \cdot C_p}{EC_{50} + C_p}$$</span></p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+<th>Typical units</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="math-inline">$E_0$</span></td>
+<td>Baseline (drug-free) effect</td>
+<td>same as E</td>
+</tr>
+<tr>
+<td><span class="math-inline">$E_{max}$</span></td>
+<td>Maximum incremental drug effect</td>
+<td>same as E</td>
+</tr>
+<tr>
+<td><span class="math-inline">$EC_{50}$</span></td>
+<td>Potency: Cp at 50% of Emax</td>
+<td>mg/L (or µg/mL)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ceiling:</strong> <span class="math-inline">$E_{max} + E_0$</span> as <span class="math-inline">$C_p \to \infty$</span></p>
+<h3>Sigmoidal (Hill) Emax</h3>
+<p><span class="math-display">$$E = E_0 + \frac{E_{max} \cdot C_p^\gamma}{EC_{50}^\gamma + C_p^\gamma}$$</span></p>
+<table>
+<thead>
+<tr>
+<th><span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span>0</th>
+<th>Shape</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Hyperbolic Emax (Clark occupancy)</td>
+</tr>
+<tr>
+<td>&gt; 1</td>
+<td>Steeper sigmoidal; sharper threshold</td>
+</tr>
+<tr>
+<td>&lt; 1</td>
+<td>Flatter; broad graded response</td>
+</tr>
+</tbody>
+</table>
+<h3>Effect Compartment (Biophase)</h3>
+<p><span class="math-display">$$\frac{dC_e}{dt} = k_{e0} \cdot (C_p - C_e)$$</span></p>
+<p>At steady state: <span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span>1. Hysteresis loop collapses to a curve when Ce is used as the driver.</p>
+<h3>Indirect Response (IDR) — Type I (inhibit Kin)</h3>
+<p><span class="math-display">$$\frac{dR}{dt} = K_{in} \cdot \left(1 - \frac{I_{max} \cdot C_p}{IC_{50} + C_p}\right) - K_{out} \cdot R$$</span></p>
+<p>Baseline: <span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span>2 (set as initial condition)</p>
+<hr />
+<h2>Parameter Checklist Before Coding</h2>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>If No → Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Every parameter has units written down?</td>
+<td>Annotate $PARAM comments</td>
+</tr>
+<tr>
+<td>All rate constants in h⁻¹ (or same time unit as simulation)?</td>
+<td>Convert or re-parameterize</td>
+</tr>
+<tr>
+<td>Dose units match V units?</td>
+<td>Adjust so Cp = Dose_units / V_units</td>
+</tr>
+<tr>
+<td>EC50 units match Cp units?</td>
+<td>Verify both in mg/L or both in µg/mL</td>
+</tr>
+<tr>
+<td>E0 biologically plausible at C=0?</td>
+<td>Run zero-dose simulation and inspect</td>
+</tr>
+<tr>
+<td>IDR baseline set: R0 = Kin/Kout?</td>
+<td>Set via <code>init()</code> in R, not $INIT</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>PKPD Model Classification Decision Tree</h2>
+<div class="codehilite"><pre><span></span><code>Does the effect follow Cp with no delay?
+  YES → Direct model (Emax or linear)
+  NO  → Is there hysteresis on the C–E loop?
+          YES → Effect compartment (Ke0 model)
+          NO  → Does the drug affect a physiological turnover?
+                  YES → Indirect response (IDR) model
+                  NO  → Tolerance / transit model (advanced)
+</code></pre></div>
+
+<hr />
+<h2>Key Numbers for Sanity Checks</h2>
+<ul>
+<li>Oral tmax (1-cmt): <span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span>3</li>
+<li>At EC50: drug achieves exactly 50% of Emax</li>
+<li>At 10 × EC50: drug achieves 91% of Emax (Hill γ = 1)</li>
+<li>IDR response peak lag: heuristically of order <span class="math-inline">$\frac{dA_c}{dt} = K_a \cdot A_{gut} - \frac{CL}{V} \cdot A_c$</span>4 after peak Cp (exact lag also depends on the Cp profile)</li>
+</ul>
+<hr />
+<p><em>Reference: Gabrielsson &amp; Weiner §2–4 (PK-PD paradigm); Rowland &amp; Tozer Ch. 20; Holford &amp; Sheiner 1981.</em></p></div></section>
+
+      <div class="lesson-upsell">
+        <p>This is the free preview lesson. The rest of <strong>PKPD Modeling and Simulation</strong> — every remaining phase and lesson — unlocks with enrollment.</p>
+        <a href="https://pharmagent-dashboard.netlify.app/checkout/pkpd-modeling-sim" class="btn btn-primary">Enroll to unlock the full course &rarr;</a>
+      </div>
+
+      <nav class="lesson-pager"><span></span><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/01-pkpd-foundations/02-concentration-effect" class="btn btn-primary">Continue this course &rarr;</a></nav>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../../index.html#top">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

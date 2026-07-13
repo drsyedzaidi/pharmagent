@@ -1,0 +1,11 @@
+{
+  "projectRoot": "/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend",
+  "batchFiles": [
+    {"path": ".dockerignore", "language": "unknown", "sizeLines": 9, "fileCategory": "infra"},
+    {"path": "Dockerfile", "language": "dockerfile", "sizeLines": 37, "fileCategory": "infra"}
+  ],
+  "batchImportData": {
+    ".dockerignore": [],
+    "Dockerfile": []
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "projectRoot": "/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend",
+  "batchFiles": [
+    {"path": "tests/test_nlme.py", "language": "python", "sizeLines": 494, "fileCategory": "code"},
+    {"path": "tests/test_nmexport.py", "language": "python", "sizeLines": 68, "fileCategory": "code"},
+    {"path": "tests/test_orchestrator.py", "language": "python", "sizeLines": 105, "fileCategory": "code"},
+    {"path": "tests/test_pk_models.py", "language": "python", "sizeLines": 157, "fileCategory": "code"},
+    {"path": "tests/test_poppk_compute.py", "language": "python", "sizeLines": 162, "fileCategory": "code"},
+    {"path": "tests/test_report_272.py", "language": "python", "sizeLines": 257, "fileCategory": "code"},
+    {"path": "tests/test_skills.py", "language": "python", "sizeLines": 181, "fileCategory": "code"},
+    {"path": "tests/test_ss_compute.py", "language": "python", "sizeLines": 101, "fileCategory": "code"},
+    {"path": "tests/test_vpc.py", "language": "python", "sizeLines": 232, "fileCategory": "code"}
+  ],
+  "batchImportData": {
+    "tests/test_nlme.py": [],
+    "tests/test_nmexport.py": [],
+    "tests/test_orchestrator.py": [],
+    "tests/test_pk_models.py": [],
+    "tests/test_poppk_compute.py": [],
+    "tests/test_report_272.py": [],
+    "tests/test_skills.py": [],
+    "tests/test_ss_compute.py": [],
+    "tests/test_vpc.py": []
+  }
+}

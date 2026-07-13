@@ -1,0 +1,1130 @@
+{
+  "nodes": [
+    {
+      "id": "file:app/core/store.py",
+      "type": "file",
+      "name": "store.py",
+      "filePath": "app/core/store.py",
+      "summary": "SQLite persistence layer for sessions and their audit trails: SessionStore saves and loads session state plus serialized audit chains keyed by session id.",
+      "tags": [
+        "persistence",
+        "repository",
+        "database",
+        "audit"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Repository pattern over raw sqlite3; audit chain stored as serialized JSON alongside session state."
+    },
+    {
+      "id": "class:app/core/store.py:SessionStore",
+      "type": "class",
+      "name": "SessionStore",
+      "filePath": "app/core/store.py",
+      "lineRange": [
+        38,
+        100
+      ],
+      "summary": "SQLite repository persisting session records (owner, state, audit list) with save, load_all, and get accessors used by the orchestrator on startup and after each mutation.",
+      "tags": [
+        "persistence",
+        "repository",
+        "database"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/db/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/db/__init__.py",
+      "summary": "Empty package marker for the app.db package.",
+      "tags": [
+        "entry-point",
+        "barrel",
+        "package-init"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/main.py",
+      "type": "file",
+      "name": "main.py",
+      "filePath": "app/main.py",
+      "summary": "FastAPI application entry point wiring all HTTP routes for PharmAgent: sessions, dataset upload, chat, workflows, every PK/NCA/BE/NLME/SCM analysis, async jobs, exports (CSV/control/CDISC), skills, adversarial review, reports, and the SPA frontend mount, with bearer auth and a request-context/error envelope.",
+      "tags": [
+        "entry-point",
+        "api-handler",
+        "middleware",
+        "security"
+      ],
+      "complexity": "complex",
+      "languageNotes": "FastAPI with pydantic request models per endpoint, dependency-injected ownership checks (owned_session/current_owner), and a request_context middleware adding request ids and a uniform error body."
+    },
+    {
+      "id": "function:app/main.py:request_context",
+      "type": "function",
+      "name": "request_context",
+      "filePath": "app/main.py",
+      "lineRange": [
+        40,
+        61
+      ],
+      "summary": "ASGI middleware that attaches a request id, logs structured request/response context, and normalizes errors into the standard envelope.",
+      "tags": [
+        "middleware",
+        "observability",
+        "error-handling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/main.py:current_owner",
+      "type": "function",
+      "name": "current_owner",
+      "filePath": "app/main.py",
+      "lineRange": [
+        78,
+        87
+      ],
+      "summary": "Auth dependency that resolves the calling owner from the bearer Authorization header, enforcing the configured API token.",
+      "tags": [
+        "security",
+        "authentication",
+        "middleware"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/main.py:upload_for_session",
+      "type": "function",
+      "name": "upload_for_session",
+      "filePath": "app/main.py",
+      "lineRange": [
+        193,
+        221
+      ],
+      "summary": "Endpoint that accepts a dataset file upload for a session, persists it within the allowed data directory, and registers it on the session state.",
+      "tags": [
+        "api-handler",
+        "data-pipeline",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/main.py:run_nlme",
+      "type": "function",
+      "name": "run_nlme",
+      "filePath": "app/main.py",
+      "lineRange": [
+        319,
+        325
+      ],
+      "summary": "Endpoint that submits a population NLME fit as a background job and returns its job id for polling.",
+      "tags": [
+        "api-handler",
+        "nlme",
+        "job-queue"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/main.py:export_cdisc",
+      "type": "function",
+      "name": "export_cdisc",
+      "filePath": "app/main.py",
+      "lineRange": [
+        433,
+        441
+      ],
+      "summary": "Endpoint that builds and streams the CDISC ADaM submission zip (ADPC/ADPP/define.xml) for a session.",
+      "tags": [
+        "api-handler",
+        "regulatory",
+        "export"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/main.py:run_skill",
+      "type": "function",
+      "name": "run_skill",
+      "filePath": "app/main.py",
+      "lineRange": [
+        495,
+        504
+      ],
+      "summary": "Endpoint that replays a previously captured skill workflow against a session for the calling owner.",
+      "tags": [
+        "api-handler",
+        "workflow",
+        "skill"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/tools/__init__.py",
+      "summary": "Empty package marker for the app.tools package containing all agent tool modules.",
+      "tags": [
+        "entry-point",
+        "barrel",
+        "package-init"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/base.py",
+      "type": "file",
+      "name": "base.py",
+      "filePath": "app/tools/base.py",
+      "summary": "Tool framework foundation: ToolContext and ToolResult value objects, the Tool descriptor (with to_anthropic schema export), and a ToolRegistry that registers, looks up, scopes per-agent, and executes tools.",
+      "tags": [
+        "framework",
+        "type-definition",
+        "factory",
+        "registry"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Registry + descriptor pattern; to_anthropic adapts each tool into the Anthropic tool-use schema consumed by RealLLM."
+    },
+    {
+      "id": "class:app/tools/base.py:Tool",
+      "type": "class",
+      "name": "Tool",
+      "filePath": "app/tools/base.py",
+      "lineRange": [
+        37,
+        50
+      ],
+      "summary": "Descriptor for a single callable tool (name, description, input schema, handler, agent scope) with to_anthropic to expose it to the LLM.",
+      "tags": [
+        "framework",
+        "type-definition",
+        "factory"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:app/tools/base.py:ToolRegistry",
+      "type": "class",
+      "name": "ToolRegistry",
+      "filePath": "app/tools/base.py",
+      "lineRange": [
+        53,
+        101
+      ],
+      "summary": "Central registry of all tools supporting register, get, names, per-agent filtering (for_agent), and execute, which invokes a tool handler against a PharmState/context.",
+      "tags": [
+        "framework",
+        "registry",
+        "factory"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/be_tools.py",
+      "type": "file",
+      "name": "be_tools.py",
+      "filePath": "app/tools/be_tools.py",
+      "summary": "Bioequivalence Agent tools that derive test/reference geometric mean ratios and 90% confidence intervals from NCA exposures, exposed as the module's TOOLS for the registry.",
+      "tags": [
+        "service",
+        "bioequivalence",
+        "statistics",
+        "tool"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Domain BE workflow: log-transformed exposure comparison; helpers resolve treatment columns and pick reference/test arms."
+    },
+    {
+      "id": "function:app/tools/be_tools.py:run_bioequivalence",
+      "type": "function",
+      "name": "run_bioequivalence",
+      "filePath": "app/tools/be_tools.py",
+      "lineRange": [
+        69,
+        138
+      ],
+      "summary": "Computes the test-vs-reference GMR and 90% CI for PK exposures across treatment arms and writes the bioequivalence result to PharmState.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/builtins.py",
+      "type": "file",
+      "name": "builtins.py",
+      "filePath": "app/tools/builtins.py",
+      "summary": "Assembles the default ToolRegistry by collecting the TOOLS lists from every tool module (data, NCA, BE, dose-proportionality, compartmental, popPK, PK model, QC, report, regulatory, review).",
+      "tags": [
+        "factory",
+        "registry",
+        "barrel",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/builtins.py:default_registry",
+      "type": "function",
+      "name": "default_registry",
+      "filePath": "app/tools/builtins.py",
+      "lineRange": [
+        20,
+        27
+      ],
+      "summary": "Builds and returns a ToolRegistry populated with all tools from the bundled tool modules; the single wiring point used by the orchestrator.",
+      "tags": [
+        "factory",
+        "registry",
+        "wiring"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/compartmental_tools.py",
+      "type": "file",
+      "name": "compartmental_tools.py",
+      "filePath": "app/tools/compartmental_tools.py",
+      "summary": "Compartmental Agent tools that fit 1- and 2-compartment oral PK models per subject and write a compacted comparison to PharmState, exposed via the module TOOLS.",
+      "tags": [
+        "service",
+        "pk-model",
+        "compartmental",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/compartmental_tools.py:fit_compartmental_models",
+      "type": "function",
+      "name": "fit_compartmental_models",
+      "filePath": "app/tools/compartmental_tools.py",
+      "lineRange": [
+        40,
+        106
+      ],
+      "summary": "Fits one- and two-compartment oral models per subject, compares them, and stores a compact per-model summary (optionally steady-state) in PharmState.",
+      "tags": [
+        "pk-model",
+        "compartmental",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/data_tools.py",
+      "type": "file",
+      "name": "data_tools.py",
+      "filePath": "app/tools/data_tools.py",
+      "summary": "Data Manager tools to load, profile, validate (CDISC), and visualize PK datasets, with path-sandboxing and role detection; exposed as TOOLS for the registry.",
+      "tags": [
+        "service",
+        "data-pipeline",
+        "validation",
+        "tool"
+      ],
+      "complexity": "complex",
+      "languageNotes": "_safe_path enforces the data-dir allowlist (path-traversal guard) before any file read."
+    },
+    {
+      "id": "function:app/tools/data_tools.py:load_dataset",
+      "type": "function",
+      "name": "load_dataset",
+      "filePath": "app/tools/data_tools.py",
+      "lineRange": [
+        50,
+        64
+      ],
+      "summary": "Loads a dataset from a sandbox-validated path into PharmState, recording detected column roles and metadata.",
+      "tags": [
+        "data-pipeline",
+        "tool",
+        "validation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/data_tools.py:profile_pk_dataset",
+      "type": "function",
+      "name": "profile_pk_dataset",
+      "filePath": "app/tools/data_tools.py",
+      "lineRange": [
+        67,
+        102
+      ],
+      "summary": "Profiles a loaded PK dataset (subjects, records, time/concentration ranges, role coverage) and stores the profile summary on PharmState.",
+      "tags": [
+        "data-pipeline",
+        "tool",
+        "profiling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/data_tools.py:validate_cdisc",
+      "type": "function",
+      "name": "validate_cdisc",
+      "filePath": "app/tools/data_tools.py",
+      "lineRange": [
+        105,
+        135
+      ],
+      "summary": "Checks a dataset against CDISC-style structural expectations and records validation findings on PharmState.",
+      "tags": [
+        "validation",
+        "regulatory",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/data_tools.py:generate_spaghetti_plot",
+      "type": "function",
+      "name": "generate_spaghetti_plot",
+      "filePath": "app/tools/data_tools.py",
+      "lineRange": [
+        138,
+        190
+      ],
+      "summary": "Generates a per-subject concentration-vs-time spaghetti plot for the loaded dataset and stores the rendered figure on PharmState.",
+      "tags": [
+        "visualization",
+        "data-pipeline",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/dp_tools.py",
+      "type": "file",
+      "name": "dp_tools.py",
+      "filePath": "app/tools/dp_tools.py",
+      "summary": "Dose-Proportionality Agent tool that assesses dose proportionality via the power model over NCA exposures, exposed as the module TOOLS.",
+      "tags": [
+        "service",
+        "dose-proportionality",
+        "statistics",
+        "tool"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/dp_tools.py:run_dose_proportionality",
+      "type": "function",
+      "name": "run_dose_proportionality",
+      "filePath": "app/tools/dp_tools.py",
+      "lineRange": [
+        13,
+        44
+      ],
+      "summary": "Fits the power model (log exposure vs log dose) across dose levels to assess dose proportionality and writes the result to PharmState.",
+      "tags": [
+        "dose-proportionality",
+        "statistics",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/nca_tools.py",
+      "type": "file",
+      "name": "nca_tools.py",
+      "filePath": "app/tools/nca_tools.py",
+      "summary": "NCA Agent tool computing non-compartmental PK parameters (Cmax, Tmax, AUC, half-life, lambda-z, etc.) including steady-state handling, exposed as the module TOOLS.",
+      "tags": [
+        "service",
+        "nca",
+        "pharmacokinetics",
+        "tool"
+      ],
+      "complexity": "complex",
+      "languageNotes": "compute_nca is the batch's largest single function (~154 lines), covering full NCA parameter derivation with lambda-z regression."
+    },
+    {
+      "id": "function:app/tools/nca_tools.py:compute_nca",
+      "type": "function",
+      "name": "compute_nca",
+      "filePath": "app/tools/nca_tools.py",
+      "lineRange": [
+        23,
+        176
+      ],
+      "summary": "Computes the full non-compartmental parameter set per subject (exposure, peak, terminal-slope, half-life and steady-state metrics) and stores the NCA summary on PharmState.",
+      "tags": [
+        "nca",
+        "pharmacokinetics",
+        "tool"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/tools/pkmodel_tools.py",
+      "type": "file",
+      "name": "pkmodel_tools.py",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "summary": "Modeler Agent tool suite: fits/compares the structural PK model library, simulates profiles, runs VPC, true NLME, stepwise covariate modeling (SCM), MAP/TDM forecasting, diagnostics, and dose sweeps over PharmState.",
+      "tags": [
+        "service",
+        "pk-model",
+        "nlme",
+        "tool"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Largest file in the batch (660 lines); _build_subjects assembles per-subject estimation data (with optional BLQ/M3 censoring) shared by fit/VPC/NLME/SCM/forecast."
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "type": "function",
+      "name": "_build_subjects",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        37,
+        124
+      ],
+      "summary": "Transforms the source dataframe into per-subject dosing/observation records (optionally flagging BLQ) used as the common input for all PK model fitting routines.",
+      "tags": [
+        "pk-model",
+        "data-pipeline",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:fit_pk_model",
+      "type": "function",
+      "name": "fit_pk_model",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        141,
+        188
+      ],
+      "summary": "Fits and compares candidate structural PK models from the library, selecting a best fit and storing parameters, fit metrics, and RSEs on PharmState.",
+      "tags": [
+        "pk-model",
+        "tool",
+        "model-selection"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:simulate_pk_profile",
+      "type": "function",
+      "name": "simulate_pk_profile",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        208,
+        251
+      ],
+      "summary": "Simulates concentration-time profiles for a chosen model and dosing regimen and stores the simulated curves on PharmState.",
+      "tags": [
+        "pk-model",
+        "simulation",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:run_vpc",
+      "type": "function",
+      "name": "run_vpc",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        269,
+        325
+      ],
+      "summary": "Runs a (prediction-corrected) visual predictive check by simulating replicate datasets and summarizing observed-vs-predicted percentiles into PharmState.",
+      "tags": [
+        "pk-model",
+        "vpc",
+        "diagnostics",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:run_nlme",
+      "type": "function",
+      "name": "run_nlme",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        328,
+        366
+      ],
+      "summary": "Fits a true nonlinear mixed-effects population model (FOCE-I/SAEM) over the assembled subjects and stores thetas, omega/shrinkage, and sigma on PharmState.",
+      "tags": [
+        "nlme",
+        "pk-model",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:run_scm",
+      "type": "function",
+      "name": "run_scm",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        401,
+        447
+      ],
+      "summary": "Performs stepwise covariate modeling over candidate covariate-parameter relationships and records the selected covariate model on PharmState.",
+      "tags": [
+        "nlme",
+        "covariate-modeling",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:forecast_map",
+      "type": "function",
+      "name": "forecast_map",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        450,
+        484
+      ],
+      "summary": "Produces a MAP/TDM Bayesian individual forecast from prior population parameters and observed levels, storing the forecast on PharmState.",
+      "tags": [
+        "pk-model",
+        "bayesian",
+        "forecasting",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:run_diagnostics",
+      "type": "function",
+      "name": "run_diagnostics",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        487,
+        513
+      ],
+      "summary": "Computes residual/goodness-of-fit diagnostics for the last fitted model and stores the diagnostic summary on PharmState.",
+      "tags": [
+        "pk-model",
+        "diagnostics",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:run_dose_sweep",
+      "type": "function",
+      "name": "run_dose_sweep",
+      "filePath": "app/tools/pkmodel_tools.py",
+      "lineRange": [
+        516,
+        545
+      ],
+      "summary": "Sweeps a range of doses through the fitted model to project exposure metrics and stores the dose-sweep table on PharmState.",
+      "tags": [
+        "pk-model",
+        "simulation",
+        "tool"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:app/core/store.py",
+      "target": "class:app/core/store.py:SessionStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/core/store.py",
+      "target": "class:app/core/store.py:SessionStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:request_context",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:current_owner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:upload_for_session",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:run_nlme",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:export_cdisc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "function:app/main.py:run_skill",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/core/orchestrator.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/core/jobs.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/core/exporters.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/core/cdisc.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/main.py",
+      "target": "file:app/core/logging_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "function:app/main.py:export_cdisc",
+      "target": "function:app/core/cdisc.py:build_package",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/base.py",
+      "target": "class:app/tools/base.py:Tool",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/base.py",
+      "target": "class:app/tools/base.py:ToolRegistry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/base.py",
+      "target": "class:app/tools/base.py:Tool",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/base.py",
+      "target": "class:app/tools/base.py:ToolRegistry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/be_tools.py",
+      "target": "function:app/tools/be_tools.py:run_bioequivalence",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/be_tools.py",
+      "target": "function:app/tools/be_tools.py:run_bioequivalence",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/be_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "function:app/tools/builtins.py:default_registry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "function:app/tools/builtins.py:default_registry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/be_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/compartmental_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/data_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/dp_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/nca_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/builtins.py",
+      "target": "file:app/tools/pkmodel_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/tools/compartmental_tools.py",
+      "target": "function:app/tools/compartmental_tools.py:fit_compartmental_models",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/compartmental_tools.py",
+      "target": "function:app/tools/compartmental_tools.py:fit_compartmental_models",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/compartmental_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:load_dataset",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:profile_pk_dataset",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:validate_cdisc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:generate_spaghetti_plot",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:load_dataset",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:profile_pk_dataset",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:validate_cdisc",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "function:app/tools/data_tools.py:generate_spaghetti_plot",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/data_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:app/tools/dp_tools.py",
+      "target": "function:app/tools/dp_tools.py:run_dose_proportionality",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/dp_tools.py",
+      "target": "function:app/tools/dp_tools.py:run_dose_proportionality",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/dp_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:app/tools/nca_tools.py",
+      "target": "function:app/tools/nca_tools.py:compute_nca",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/nca_tools.py",
+      "target": "function:app/tools/nca_tools.py:compute_nca",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/nca_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:fit_pk_model",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:simulate_pk_profile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_vpc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_nlme",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_scm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:forecast_map",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_diagnostics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_dose_sweep",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:fit_pk_model",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:simulate_pk_profile",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_vpc",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_nlme",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_scm",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:forecast_map",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_diagnostics",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "function:app/tools/pkmodel_tools.py:run_dose_sweep",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/tools/pkmodel_tools.py",
+      "target": "file:app/tools/base.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "function:app/tools/pkmodel_tools.py:fit_pk_model",
+      "target": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:app/tools/pkmodel_tools.py:run_nlme",
+      "target": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:app/tools/pkmodel_tools.py:run_vpc",
+      "target": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

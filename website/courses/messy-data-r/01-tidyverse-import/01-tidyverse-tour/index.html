@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard — Dealing with Messy Data in R</title>
+  <meta name="description" content="Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard: a free preview lesson from Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../../index.html#capabilities">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <a href="../index.html">01-tidyverse-import</a> <span aria-hidden="true">/</span> <span aria-current="page">Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R &middot; 01-tidyverse-import &middot; <span class="tag live">Free preview</span></p>
+      <article class="lesson-doc"><h1>Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard</h1>
+<p><strong>Objective.</strong> Explain what the tidyverse is and why it exists, use tibbles instead of base data frames with an understanding of what changed, compose pipelines with the pipe operator, and apply Wickham's tidy-data definition to classify a dataset as tidy or messy.</p>
+<p><strong>Prerequisites.</strong> Base R: vectors, data frames, functions, indexing.</p>
+<hr />
+<h2>Concept (from first principles)</h2>
+<h3>What the tidyverse actually is</h3>
+<p>The tidyverse is not one package — it is a family of ~25 R packages (<code>ggplot2</code>, <code>dplyr</code>,<br />
+<code>tidyr</code>, <code>readr</code>, <code>purrr</code>, <code>tibble</code>, <code>stringr</code>, <code>forcats</code>, and more) that share three<br />
+design commitments:</p>
+<ol>
+<li><strong>A common data structure.</strong> Every function that can take tabular input expects (and<br />
+   returns) a tibble, not a base <code>data.frame</code>.</li>
+<li><strong>A common grammar.</strong> Verbs are functions: <code>filter()</code> selects rows, <code>select()</code> selects<br />
+   columns, <code>mutate()</code> creates columns, <code>summarise()</code> collapses rows. The first argument<br />
+   is always the data, which is what makes piping work.</li>
+<li><strong>A common philosophy on tidy data.</strong> Every package assumes the input is already<br />
+   "tidy" (defined below) — messiness is handled explicitly with <code>tidyr</code>, not silently<br />
+   inside plotting or modeling code.</li>
+</ol>
+<p><code>library(tidyverse)</code> loads the core eight packages at once. You will use <code>readr</code> and<br />
+<code>readxl</code> in this lesson and lesson 2; <code>dplyr</code>/<code>tidyr</code> start in Phase 02.</p>
+<hr />
+<h3>Tibbles vs base <code>data.frame</code></h3>
+<p>A tibble (<code>tbl_df</code>) is a data frame with stricter, more predictable behavior. Four<br />
+concrete differences:</p>
+<table>
+<thead>
+<tr>
+<th>Behavior</th>
+<th>base <code>data.frame</code></th>
+<th>tibble</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partial column-name matching</td>
+<td><code>df<span class="math-inline">$se` matches `subject_id` if unambiguous — silent | `tb$</span>se</code> returns <code>NULL</code> with a warning-free <code>NULL</code>, forcing you to spell it out</td>
+<td></td>
+</tr>
+<tr>
+<td>String columns</td>
+<td><code>stringsAsFactors</code> converted strings to factors by default pre-R-4.0</td>
+<td>Strings always stay character; never auto-factored</td>
+</tr>
+<tr>
+<td>Printing</td>
+<td>Prints <strong>all</strong> rows/columns, can flood the console</td>
+<td>Prints first 10 rows and only the columns that fit the width, plus each column's type</td>
+</tr>
+<tr>
+<td>List-columns</td>
+<td>Awkward, error-prone to create and print</td>
+<td>First-class: a tibble column can hold a list (e.g. nested model fits, vectors of varying length per row)</td>
+</tr>
+</tbody>
+</table>
+<div class="codehilite"><pre><span></span><code><span class="nf">library</span><span class="p">(</span><span class="n">tibble</span><span class="p">)</span>
+
+<span class="c1"># Base data.frame: partial matching silently &quot;works&quot;</span>
+<span class="n">df</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span><span class="n">subject_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">:</span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="n">concentration</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">1.2</span><span class="p">,</span><span class="w"> </span><span class="kc">NA</span><span class="p">,</span><span class="w"> </span><span class="m">3.4</span><span class="p">))</span>
+<span class="n">df</span><span class="o">$</span><span class="n">conc</span><span class="w">        </span><span class="c1"># partial match on &quot;concentration&quot; — returns the column, no warning</span>
+
+<span class="c1"># Tibble: no partial matching</span>
+<span class="n">tb</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">as_tibble</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+<span class="n">tb</span><span class="o">$</span><span class="n">conc</span><span class="w">        </span><span class="c1"># returns NULL — forces exact names, catches typos early</span>
+</code></pre></div>
+
+<div class="codehilite"><pre><span></span><code><span class="c1"># Printing: tibble shows type + truncates, base data.frame does not</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>
+<span class="c1">#&gt; # A tibble: 3 x 2</span>
+<span class="c1">#&gt;   subject_id concentration</span>
+<span class="c1">#&gt;        &lt;int&gt;         &lt;dbl&gt;</span>
+<span class="c1">#&gt; 1          1           1.2</span>
+<span class="c1">#&gt; 2          2          NA</span>
+<span class="c1">#&gt; 3          3           3.4</span>
+</code></pre></div>
+
+<p>Row names are also treated differently: tibbles do not support rownames as a parallel<br />
+identifier — if you need a subject ID, it should be an explicit column, which is itself<br />
+a tidy-data discipline (see below).</p>
+<hr />
+<h3>The pipe: <code>|&gt;</code> and <code>%&gt;%</code></h3>
+<p>Base R (4.1+) ships a native pipe, <code>|&gt;</code>. The tidyverse historically used <code>magrittr</code>'s<br />
+<code>%&gt;%</code>. Both take the expression on the left and insert it as the first argument of the<br />
+function on the right:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">x</span><span class="w"> </span><span class="o">|&gt;</span><span class="w"> </span><span class="nf">f</span><span class="p">()</span><span class="w">          </span><span class="c1"># equivalent to f(x)</span>
+<span class="n">x</span><span class="w"> </span><span class="o">|&gt;</span><span class="w"> </span><span class="nf">f</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="w">         </span><span class="c1"># equivalent to f(x, y)</span>
+<span class="n">x</span><span class="w"> </span><span class="o">%&gt;%</span><span class="w"> </span><span class="nf">f</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="w">        </span><span class="c1"># magrittr — same result, older syntax</span>
+</code></pre></div>
+
+<p>Why pipe instead of nesting function calls? Compare:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Nested — read inside-out, hard to trace data flow</span>
+<span class="nf">round</span><span class="p">(</span><span class="nf">mean</span><span class="p">(</span><span class="nf">sqrt</span><span class="p">(</span><span class="nf">abs</span><span class="p">(</span><span class="nf">c</span><span class="p">(</span><span class="m">-4</span><span class="p">,</span><span class="w"> </span><span class="m">9</span><span class="p">,</span><span class="w"> </span><span class="m">16</span><span class="p">)))),</span><span class="w"> </span><span class="m">2</span><span class="p">)</span>
+
+<span class="c1"># Piped — read top-to-bottom / left-to-right, matches the order of operations</span>
+<span class="nf">c</span><span class="p">(</span><span class="m">-4</span><span class="p">,</span><span class="w"> </span><span class="m">9</span><span class="p">,</span><span class="w"> </span><span class="m">16</span><span class="p">)</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">abs</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">sqrt</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">mean</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">round</span><span class="p">(</span><span class="m">2</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The piped version reads like a sentence: "take this vector, then take absolute value,<br />
+then square root, then mean, then round." This is the single biggest reason tidyverse<br />
+code is more readable than equivalent base R for multi-step transformations.</p>
+<p><strong><code>|&gt;</code> vs <code>%&gt;%</code> — practical differences:</strong><br />
+- <code>|&gt;</code> is built into R itself (no package needed) since R 4.1.0.<br />
+- <code>%&gt;%</code> supports a placeholder (<code>.</code>) for inserting the piped value in a non-first<br />
+  argument position, e.g. <code>df %&gt;% lm(y ~ x, data = .)</code>. Base <code>|&gt;</code> gained a similar <code>_</code><br />
+  placeholder in R 4.2+ but requires naming the argument: <code>df |&gt; lm(y ~ x, data = _)</code>.<br />
+- New tidyverse code and this course default to <code>|&gt;</code>; you will still see <code>%&gt;%</code> constantly<br />
+  in existing scripts, papers, and Stack Overflow answers — read both fluently.</p>
+<hr />
+<h3>Tidy data: Wickham's definition</h3>
+<p>A dataset is <strong>tidy</strong> when three conditions hold simultaneously:</p>
+<ol>
+<li>Each <strong>variable</strong> forms a column.</li>
+<li>Each <strong>observation</strong> forms a row.</li>
+<li>Each <strong>type of observational unit</strong> forms a table.</li>
+</ol>
+<p>This sounds abstract until you see the violation. Consider concentration-time data<br />
+recorded wide, one column per nominal timepoint — a common way labs export data, and a<br />
+common way it arrives messy:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># WIDE (messy for analysis): one row per subject, one column per timepoint</span>
+<span class="n">wide</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">tibble</span><span class="o">::</span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">t0</span><span class="p">,</span><span class="w">  </span><span class="o">~</span><span class="n">t1</span><span class="p">,</span><span class="w">  </span><span class="o">~</span><span class="n">t2</span><span class="p">,</span><span class="w">  </span><span class="o">~</span><span class="n">t4</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">0.0</span><span class="p">,</span><span class="w"> </span><span class="m">4.2</span><span class="p">,</span><span class="w">  </span><span class="m">3.1</span><span class="p">,</span><span class="w">  </span><span class="m">1.4</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">0.0</span><span class="p">,</span><span class="w"> </span><span class="m">3.9</span><span class="p">,</span><span class="w">  </span><span class="m">2.8</span><span class="p">,</span><span class="w">  </span><span class="m">1.1</span>
+<span class="p">)</span>
+<span class="n">wide</span>
+</code></pre></div>
+
+<p>Here <code>t0</code>, <code>t1</code>, <code>t2</code>, <code>t4</code> are not four variables — they are four <strong>values</strong> of one<br />
+variable (<code>time</code>), each paired with one value of another variable (<code>conc</code>). The column<br />
+headers are data, not variable names. This violates rule 1.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># LONG (tidy): one row per observation (subject x time)</span>
+<span class="n">long</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">tibble</span><span class="o">::</span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">time</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">conc</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">0</span><span class="p">,</span><span class="w">    </span><span class="m">0.0</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">1</span><span class="p">,</span><span class="w">    </span><span class="m">4.2</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">2</span><span class="p">,</span><span class="w">    </span><span class="m">3.1</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">4</span><span class="p">,</span><span class="w">    </span><span class="m">1.4</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">0</span><span class="p">,</span><span class="w">    </span><span class="m">0.0</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">1</span><span class="p">,</span><span class="w">    </span><span class="m">3.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">2</span><span class="p">,</span><span class="w">    </span><span class="m">2.8</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">4</span><span class="p">,</span><span class="w">    </span><span class="m">1.1</span>
+<span class="p">)</span>
+<span class="n">long</span>
+</code></pre></div>
+
+<p>Now <code>subject_id</code>, <code>time</code>, and <code>conc</code> are each a column, and each row is exactly one<br />
+measurement (one subject at one time). <code>ggplot2::geom_line(aes(time, conc, group =
+subject_id))</code> works directly on the long form; it cannot consume the wide form at all<br />
+without reshaping first. Reshaping wide ↔ long is <code>tidyr::pivot_longer()</code> /<br />
+<code>pivot_wider()</code> — covered in Phase 02 — but recognizing the violation is a Phase 01<br />
+skill: you must be able to look at any table and say "this is wide" or "this is tidy"<br />
+before you write a single line of cleaning code.</p>
+<p>The third rule — one table per observational unit — matters for relational data: subject<br />
+demographics (one row per subject) and dosing records (one row per dose event) are two<br />
+different observational units and belong in two different tables, joined later on<br />
+<code>subject_id</code> (Phase 03).</p>
+<hr />
+<h2>Worked Example</h2>
+<p><strong>Scenario.</strong> A lab hands you a spreadsheet of steady-state trough concentrations for<br />
+three subjects, recorded across three visits, in wide format. Diagnose the tidy-data<br />
+violation and reshape by hand (conceptually) before any Phase-02 tooling exists.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">library</span><span class="p">(</span><span class="n">tibble</span><span class="p">)</span>
+
+<span class="n">trough_wide</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit1</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit2</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit3</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">8.2</span><span class="p">,</span><span class="w">     </span><span class="m">7.9</span><span class="p">,</span><span class="w">     </span><span class="m">8.5</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">6.1</span><span class="p">,</span><span class="w">     </span><span class="m">6.4</span><span class="p">,</span><span class="w">     </span><span class="m">5.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">9.0</span><span class="p">,</span><span class="w">     </span><span class="m">8.8</span><span class="p">,</span><span class="w">     </span><span class="m">9.3</span>
+<span class="p">)</span>
+<span class="n">trough_wide</span>
+</code></pre></div>
+
+<p><strong>Step 1 — Identify the variables actually present.</strong> There are four conceptual<br />
+variables: <code>subject_id</code>, <code>sex</code>, <code>visit number</code>, and <code>trough concentration</code>. The wide<br />
+table only gives two of them explicit columns (<code>subject_id</code>, <code>sex</code>); <code>visit1</code>/<code>visit2</code>/<br />
+<code>visit3</code> smuggle "visit number" into column <em>names</em>, and the cell values are the<br />
+concentrations.</p>
+<p><strong>Step 2 — Predict the tidy shape.</strong> Every combination of subject and visit is one<br />
+observation, so the tidy table needs one row per subject-visit pair:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">trough_long</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">trough</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">8.2</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">7.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">8.5</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">6.1</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">6.4</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">5.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">9.0</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">8.8</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">9.3</span>
+<span class="p">)</span>
+<span class="n">trough_long</span>
+</code></pre></div>
+
+<p><strong>Step 3 — Confirm against the three rules.</strong> <code>subject_id</code>, <code>sex</code>, <code>visit</code>, <code>trough</code> are<br />
+each one column ✓. Each row is exactly one subject observed at one visit ✓. One<br />
+observational unit (a trough measurement) per table ✓. This table is tidy and is now<br />
+<code>ggplot2</code>- and <code>dplyr</code>-ready; the wide version was not.</p>
+<hr />
+<h2>Build it</h2>
+<p><code>code/lesson_01.R</code> walks through:</p>
+<ol>
+<li>Loading the tidyverse and confirming which core packages attach</li>
+<li>Building the same small dataset as a base <code>data.frame</code> and as a <code>tibble</code>, and<br />
+   demonstrating the four behavioral differences (partial matching, factors, printing,<br />
+   list-columns)</li>
+<li>A <code>|&gt;</code> pipeline vs the equivalent nested calls, timed conceptually by readability</li>
+<li>Converting the wide trough example to long form by hand (<code>tribble()</code> only — no<br />
+<code>pivot_longer()</code> yet, that is Phase 02) to force explicit reasoning about tidy shape</li>
+<li>A tidy/messy classification exercise on three small example tables</li>
+</ol>
+<hr />
+<h2>Common Pitfalls</h2>
+<ol>
+<li>
+<p><strong>Assuming <code>data.frame()</code> and <code>tibble()</code> behave identically.</strong> Code that relies on<br />
+   partial column matching (<code>df$conc</code> matching <code>concentration</code>) will silently break — or<br />
+   worse, silently return <code>NULL</code> — the moment the object becomes a tibble. Always spell<br />
+   out full column names.</p>
+</li>
+<li>
+<p><strong>Treating wide format as "just how the data comes" and building <code>dplyr</code>/<code>ggplot2</code><br />
+   code around it.</strong> Every downstream tidyverse tool assumes long/tidy input. Fighting<br />
+   wide data with ad hoc column-by-column code is more work than reshaping once, up<br />
+   front (Phase 02).</p>
+</li>
+<li>
+<p><strong>Mixing <code>%&gt;%</code> and <code>|&gt;</code> inconsistently within one script.</strong> Both work, but pick one<br />
+   per script/project for readability; do not alternate line to line.</p>
+</li>
+<li>
+<p><strong>Forgetting the placeholder syntax differs.</strong> <code>df %&gt;% lm(y ~ x, data = .)</code> uses <code>.</code>;<br />
+   the base pipe needs a named placeholder, <code>df |&gt; lm(y ~ x, data = _)</code>, and only works<br />
+   inside a function call with a named argument — <code>x |&gt; f(_, 2)</code> for positional<br />
+   placement is not supported.</p>
+</li>
+<li>
+<p><strong>Believing "tidy" means "clean."</strong> A dataset can be perfectly tidy (each variable a<br />
+   column, each observation a row) and still contain typos, wrong types, duplicates, or<br />
+   missing-value sentinels. Tidy is a <em>shape</em> property; clean is a <em>content</em> property.<br />
+   Lesson 03 covers the content audit.</p>
+</li>
+</ol>
+<hr />
+<h2>Ship it</h2>
+<p><code>outputs/artifact.md</code> — <strong>Tidyverse vs Base R Cheat Sheet</strong>: tibble vs data.frame<br />
+behavior table, pipe syntax reference (<code>|&gt;</code> vs <code>%&gt;%</code>), and the tidy-data three-rule<br />
+checklist with a wide-vs-long visual reference.</p>
+<hr />
+<h2>Check</h2>
+<ol>
+<li>You run <code>df$conc</code> on a tibble whose only concentration column is named<br />
+<code>concentration</code>, expecting partial matching like base R. What happens?</li>
+<li>A dataset has one row per patient and separate columns <code>dose_week1</code>, <code>dose_week2</code>,<br />
+<code>dose_week3</code>. Is this tidy? Why or why not?</li>
+<li>What is the key syntactic difference between the magrittr placeholder (<code>.</code>) and the<br />
+   base R pipe placeholder (<code>_</code>) when passing piped data into a non-first argument?</li>
+</ol></article>
+
+      <section class='lesson-section'><h2>Code</h2><h3 class="lesson-subhead mono">lesson_01.R</h3><div class="codehilite"><pre><span></span><span class="c1"># Lesson 01: The Tidyverse — Tibbles, Pipes, and the Tidy Data Standard</span>
+<span class="c1"># Self-contained script. Run top to bottom.</span>
+
+<span class="c1"># install.packages(&quot;tidyverse&quot;)  # run once if not already installed</span>
+<span class="nf">library</span><span class="p">(</span><span class="n">tidyverse</span><span class="p">)</span><span class="w">   </span><span class="c1"># attaches ggplot2, dplyr, tidyr, readr, purrr, tibble, stringr, forcats</span>
+<span class="nf">library</span><span class="p">(</span><span class="n">tibble</span><span class="p">)</span>
+
+<span class="nf">set.seed</span><span class="p">(</span><span class="m">1</span><span class="p">)</span><span class="w">  </span><span class="c1"># only needed for the randomized ID example below</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 1. Which core packages did we just attach?</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="nf">tidyverse_packages</span><span class="p">()</span><span class="w">   </span><span class="c1"># lists the packages considered &quot;core tidyverse&quot;</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 2. Base data.frame vs tibble: four concrete behavioral differences</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+
+<span class="c1"># 2a. Partial column-name matching</span>
+<span class="n">df</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span><span class="n">subject_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">:</span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="n">concentration</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">1.2</span><span class="p">,</span><span class="w"> </span><span class="kc">NA</span><span class="p">,</span><span class="w"> </span><span class="m">3.4</span><span class="p">))</span>
+<span class="n">tb</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">as_tibble</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Base data.frame partial match df$conc  -&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">df</span><span class="o">$</span><span class="n">conc</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1"># silently works</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Tibble partial match tb$conc           -&gt;&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="nf">is.null</span><span class="p">(</span><span class="n">tb</span><span class="o">$</span><span class="n">conc</span><span class="p">))</span><span class="w"> </span><span class="s">&quot;NULL (no partial match)&quot;</span><span class="w"> </span><span class="kr">else</span><span class="w"> </span><span class="n">tb</span><span class="o">$</span><span class="n">conc</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># 2b. stringsAsFactors behavior</span>
+<span class="n">df_str</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span><span class="n">sex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">))</span>
+<span class="n">tb_str</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tibble</span><span class="p">(</span><span class="n">sex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Base data.frame sex column class:&quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">class</span><span class="p">(</span><span class="n">df_str</span><span class="o">$</span><span class="n">sex</span><span class="p">),</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1"># character (R &gt;= 4.0)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Tibble sex column class:         &quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">class</span><span class="p">(</span><span class="n">tb_str</span><span class="o">$</span><span class="n">sex</span><span class="p">),</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1"># always character</span>
+
+<span class="c1"># 2c. Printing: tibble truncates and shows column types; data.frame dumps everything</span>
+<span class="n">big_df</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">:</span><span class="m">20</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">rnorm</span><span class="p">(</span><span class="m">20</span><span class="p">))</span>
+<span class="n">big_tb</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">as_tibble</span><span class="p">(</span><span class="n">big_df</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">big_tb</span><span class="p">)</span><span class="w">   </span><span class="c1"># shows &quot;# A tibble: 20 x 2&quot; + first 10 rows + column types</span>
+
+<span class="c1"># 2d. List-columns: first-class in tibbles, awkward in base data.frame</span>
+<span class="n">tb_list_col</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tibble</span><span class="p">(</span>
+<span class="w">  </span><span class="n">subject_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;S02&quot;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">visit_times</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">list</span><span class="p">(</span><span class="nf">c</span><span class="p">(</span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">4</span><span class="p">),</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">4</span><span class="p">,</span><span class="w"> </span><span class="m">8</span><span class="p">,</span><span class="w"> </span><span class="m">24</span><span class="p">))</span><span class="w">  </span><span class="c1"># unequal-length vectors per row</span>
+<span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">tb_list_col</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;visit_times for S02:&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">tb_list_col</span><span class="o">$</span><span class="n">visit_times</span><span class="p">[[</span><span class="m">2</span><span class="p">]],</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 3. Piping: |&gt; (base) vs %&gt;% (magrittr) vs nested calls</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">raw_vals</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">-4</span><span class="p">,</span><span class="w"> </span><span class="m">9</span><span class="p">,</span><span class="w"> </span><span class="m">16</span><span class="p">)</span>
+
+<span class="c1"># Nested (inside-out, hard to read)</span>
+<span class="n">nested_result</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">round</span><span class="p">(</span><span class="nf">mean</span><span class="p">(</span><span class="nf">sqrt</span><span class="p">(</span><span class="nf">abs</span><span class="p">(</span><span class="n">raw_vals</span><span class="p">))),</span><span class="w"> </span><span class="m">2</span><span class="p">)</span>
+
+<span class="c1"># Base pipe (left to right)</span>
+<span class="n">piped_result</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">raw_vals</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">abs</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">sqrt</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">mean</span><span class="p">()</span><span class="w"> </span><span class="o">|&gt;</span>
+<span class="w">  </span><span class="nf">round</span><span class="p">(</span><span class="m">2</span><span class="p">)</span>
+
+<span class="c1"># magrittr pipe — identical result, older syntax you will see everywhere</span>
+<span class="n">piped_result_magrittr</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">raw_vals</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">abs</span><span class="p">()</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">sqrt</span><span class="p">()</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">mean</span><span class="p">()</span><span class="w"> </span><span class="o">%&gt;%</span>
+<span class="w">  </span><span class="nf">round</span><span class="p">(</span><span class="m">2</span><span class="p">)</span>
+
+<span class="nf">stopifnot</span><span class="p">(</span><span class="n">nested_result</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">piped_result</span><span class="p">,</span><span class="w"> </span><span class="n">piped_result</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">piped_result_magrittr</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Nested:&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">nested_result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;| Base pipe:&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">piped_result</span><span class="p">,</span>
+<span class="w">    </span><span class="s">&quot;| magrittr pipe:&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">piped_result_magrittr</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># Placeholder syntax difference: magrittr `.` vs base R `_`</span>
+<span class="n">mini</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tibble</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">:</span><span class="m">5</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">4</span><span class="p">,</span><span class="w"> </span><span class="m">5</span><span class="p">,</span><span class="w"> </span><span class="m">4</span><span class="p">,</span><span class="w"> </span><span class="m">5</span><span class="p">))</span>
+
+<span class="n">fit_magrittr</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">mini</span><span class="w"> </span><span class="o">%&gt;%</span><span class="w"> </span><span class="nf">lm</span><span class="p">(</span><span class="n">y</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">.</span><span class="p">)</span><span class="w">          </span><span class="c1"># `.` = piped data, any position</span>
+<span class="n">fit_base</span><span class="w">     </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">mini</span><span class="w"> </span><span class="o">|&gt;</span><span class="w"> </span><span class="nf">lm</span><span class="p">(</span><span class="n">y</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>_<span class="p">)</span><span class="w">            </span><span class="c1"># `_` = piped data, must be named arg</span>
+<span class="nf">stopifnot</span><span class="p">(</span><span class="nf">identical</span><span class="p">(</span><span class="nf">coef</span><span class="p">(</span><span class="n">fit_magrittr</span><span class="p">),</span><span class="w"> </span><span class="nf">coef</span><span class="p">(</span><span class="n">fit_base</span><span class="p">)))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Both pipes produced identical lm() fits.\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 4. Wide -&gt; long by hand (tribble only; pivot_longer() arrives in Phase 02)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">trough_wide</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit1</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit2</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit3</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">8.2</span><span class="p">,</span><span class="w">     </span><span class="m">7.9</span><span class="p">,</span><span class="w">     </span><span class="m">8.5</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">6.1</span><span class="p">,</span><span class="w">     </span><span class="m">6.4</span><span class="p">,</span><span class="w">     </span><span class="m">5.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w">        </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">9.0</span><span class="p">,</span><span class="w">     </span><span class="m">8.8</span><span class="p">,</span><span class="w">     </span><span class="m">9.3</span>
+<span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\nWide (messy shape) trough data:\n&quot;</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">trough_wide</span><span class="p">)</span>
+
+<span class="n">trough_long</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">visit</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">trough</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">8.2</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">7.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">8.5</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">6.1</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">6.4</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">5.9</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">9.0</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">2</span><span class="p">,</span><span class="w"> </span><span class="m">8.8</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S03&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">,</span><span class="w"> </span><span class="m">9.3</span>
+<span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\nLong (tidy shape) trough data:\n&quot;</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">trough_long</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 5. Tidy/messy classification exercise</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># Table A: tidy (one row per subject-time observation)</span>
+<span class="n">table_a</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">time</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">conc</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="m">0.0</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="m">4.2</span>
+<span class="p">)</span>
+
+<span class="c1"># Table B: messy — column headers are values (dose levels), not variable names</span>
+<span class="n">table_b</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">dose_50mg</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">dose_100mg</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">dose_200mg</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">1.1</span><span class="p">,</span><span class="w">        </span><span class="m">2.4</span><span class="p">,</span><span class="w">         </span><span class="m">5.0</span>
+<span class="p">)</span>
+
+<span class="c1"># Table C: messy — two variables (subject demographics + dose events) crammed in one table</span>
+<span class="n">table_c</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tribble</span><span class="p">(</span>
+<span class="w">  </span><span class="o">~</span><span class="n">subject_id</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">dose_time</span><span class="p">,</span><span class="w"> </span><span class="o">~</span><span class="n">dose_amt</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">34</span><span class="p">,</span><span class="w">   </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">0</span><span class="p">,</span><span class="w">          </span><span class="m">100</span><span class="p">,</span>
+<span class="w">  </span><span class="s">&quot;S01&quot;</span><span class="p">,</span><span class="w">        </span><span class="m">34</span><span class="p">,</span><span class="w">   </span><span class="s">&quot;M&quot;</span><span class="p">,</span><span class="w">  </span><span class="m">12</span><span class="p">,</span><span class="w">         </span><span class="m">100</span>
+<span class="p">)</span>
+
+<span class="n">classify_tidy</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kr">function</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">is_tidy</span><span class="p">,</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;%-10s %-7s %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="n">is_tidy</span><span class="p">)</span><span class="w"> </span><span class="s">&quot;TIDY&quot;</span><span class="w"> </span><span class="kr">else</span><span class="w"> </span><span class="s">&quot;MESSY&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">reason</span><span class="p">))</span>
+<span class="p">}</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\nClassification:\n&quot;</span><span class="p">)</span>
+<span class="nf">classify_tidy</span><span class="p">(</span><span class="s">&quot;table_a&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">TRUE</span><span class="p">,</span><span class="w">  </span><span class="s">&quot;each variable a column, each row one observation&quot;</span><span class="p">)</span>
+<span class="nf">classify_tidy</span><span class="p">(</span><span class="s">&quot;table_b&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">FALSE</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;dose_50mg/100mg/200mg are values of &#39;dose&#39;, not variables&quot;</span><span class="p">)</span>
+<span class="nf">classify_tidy</span><span class="p">(</span><span class="s">&quot;table_c&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">FALSE</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;mixes two observational units (subject, dose event) in one table&quot;</span><span class="p">)</span>
+
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\nLesson 01 complete.\n&quot;</span><span class="p">)</span>
+</pre></div>
+</section>
+      
+      <section class='lesson-section'><h2>Check</h2><div class='quiz-list'><details class="quiz-item">
+  <summary>You run df$conc on a tibble whose only concentration column is named 'concentration', expecting the partial matching you're used to from base data.frame. What happens?</summary>
+  <ul class="quiz-options"><li>A. It returns the concentration column, with a warning about partial matching</li><li>B. It returns NULL — tibbles do not support partial column-name matching</li><li>C. It throws a hard error and stops execution</li><li>D. It returns the first column of the tibble regardless of name</li></ul>
+  <p class="quiz-answer"><strong>Answer: B</strong></p>
+  <p class="quiz-explanation">Tibbles deliberately disable partial matching on $ to prevent silent bugs from typos or abbreviated names. df$conc on a base data.frame would silently match 'concentration', but the identical code on a tibble returns NULL with no error, forcing you to spell out the full column name.</p>
+</details>
+<details class="quiz-item">
+  <summary>A dataset has one row per patient and separate columns dose_week1, dose_week2, dose_week3. Is this tidy data by Wickham's definition?</summary>
+  <ul class="quiz-options"><li>A. Yes — each column is clearly labeled and each patient has one row</li><li>B. Yes, as long as all three columns are numeric</li><li>C. No — 'week' is a variable whose values (week1/2/3) have been spread into column names instead of a single column</li><li>D. No — tidy data requires every column to be numeric</li></ul>
+  <p class="quiz-answer"><strong>Answer: C</strong></p>
+  <p class="quiz-explanation">This is the classic wide-format violation of tidy data rule 1 (each variable forms a column). dose_week1/2/3 are not three variables — they are three values of one variable ('week'), each paired with one value of another variable (dose). The tidy form would have columns patient_id, week, dose with one row per patient-week observation.</p>
+</details>
+<details class="quiz-item">
+  <summary>What is the key syntactic difference between the magrittr pipe placeholder (.) and the base R pipe placeholder (_) when inserting piped data into a non-first argument?</summary>
+  <ul class="quiz-options"><li>A. There is no difference — both work identically in any position</li><li>B. magrittr's `.` can be used positionally anywhere; base R's `_` must be used as a named argument (e.g. data = _)</li><li>C. Base R's `_` works in any position; magrittr's `.` must be a named argument</li><li>D. Both require the argument to be named and cannot be used positionally</li></ul>
+  <p class="quiz-answer"><strong>Answer: B</strong></p>
+  <p class="quiz-explanation">magrittr's `.` placeholder is flexible — df %>% lm(y ~ x, data = .) works because `.` stands in for the piped object wherever it appears. Base R's `|>` placeholder `_` (R >= 4.2) is stricter: it must be attached to a named argument, so df |> lm(y ~ x, data = _) works but a bare positional `_` does not.</p>
+</details></div></section>
+      <section class='lesson-section'><h2>Ship it</h2><div class='artifact-box'><h1>Tidyverse vs Base R Cheat Sheet</h1>
+<h2>Tibble vs <code>data.frame</code> Behavior</h2>
+<table>
+<thead>
+<tr>
+<th>Behavior</th>
+<th>base <code>data.frame</code></th>
+<th>tibble</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partial column matching (<code>df$conc</code> for <code>concentration</code>)</td>
+<td>Matches silently</td>
+<td>Returns <code>NULL</code>, no match</td>
+</tr>
+<tr>
+<td>String columns</td>
+<td>Historically auto-factored (<code>stringsAsFactors</code>, pre-4.0 default)</td>
+<td>Always stays character</td>
+</tr>
+<tr>
+<td>Printing</td>
+<td>Dumps all rows/columns</td>
+<td>Shows first 10 rows, fits console width, prints column types</td>
+</tr>
+<tr>
+<td>List-columns</td>
+<td>Awkward, error-prone</td>
+<td>First-class citizen</td>
+</tr>
+<tr>
+<td>Row names</td>
+<td>Can carry a parallel rowname identifier</td>
+<td>No rowname identifier — use an explicit ID column</td>
+</tr>
+<tr>
+<td>Creation</td>
+<td><code>data.frame(...)</code></td>
+<td><code>tibble(...)</code> or <code>as_tibble(df)</code></td>
+</tr>
+<tr>
+<td>Row-wise literal construction</td>
+<td>Manual <code>data.frame(..., stringsAsFactors = FALSE)</code></td>
+<td><code>tribble(~col1, ~col2, val, val, ...)</code> — readable, row-oriented</td>
+</tr>
+</tbody>
+</table>
+<h2>Pipe Syntax Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th><code>%&gt;%</code> (magrittr)</th>
+<th><code>|&gt;</code> (base R, 4.1+)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Requires package</td>
+<td><code>magrittr</code> / tidyverse</td>
+<td>None — built into R</td>
+</tr>
+<tr>
+<td>Basic form</td>
+<td><code>x %&gt;% f(y)</code> = <code>f(x, y)</code></td>
+<td><code>x |&gt; f(y)</code> = <code>f(x, y)</code></td>
+</tr>
+<tr>
+<td>Placeholder for non-first arg</td>
+<td><code>.</code> — usable anywhere</td>
+<td><code>_</code> — must be a named argument (R &gt;= 4.2)</td>
+</tr>
+<tr>
+<td>Example</td>
+<td><code>df %&gt;% lm(y ~ x, data = .)</code></td>
+<td><code>df \|&gt; lm(y ~ x, data = _)</code></td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>Slight function-call overhead</td>
+<td>Syntax transform, effectively free</td>
+</tr>
+<tr>
+<td>Where you'll see it</td>
+<td>Nearly all existing tidyverse code, papers, Stack Overflow</td>
+<td>New code, this course's default</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Rule of thumb:</strong> pick one pipe per script and stay consistent. Read both fluently —<br />
+you cannot avoid <code>%&gt;%</code> in the wild.</p>
+<h2>Tidy Data — The Three Rules (Wickham 2014)</h2>
+<ol>
+<li>Each <strong>variable</strong> forms a column.</li>
+<li>Each <strong>observation</strong> forms a row.</li>
+<li>Each <strong>type of observational unit</strong> forms a table.</li>
+</ol>
+<h3>Wide (messy) vs Long (tidy) — Quick Visual</h3>
+<div class="codehilite"><pre><span></span><code>WIDE (messy):                          LONG (tidy):
+subject_id  t0   t1   t2               subject_id  time  conc
+S01         0.0  4.2  3.1              S01         0     0.0
+S02         0.0  3.9  2.8              S01         1     4.2
+                                        S01         2     3.1
+                                        S02         0     0.0
+                                        S02         1     3.9
+                                        S02         2     2.8
+</code></pre></div>
+
+<p>Column headers that are <em>values</em> (timepoints, dose levels, visit numbers) — not<br />
+variable names — are the single most common tidy-data violation. Reshaping tools<br />
+(<code>pivot_longer()</code>/<code>pivot_wider()</code>) arrive in Phase 02; for now, the skill is<br />
+<strong>recognizing</strong> the violation by eye.</p>
+<h3>Tidy Is Not the Same as Clean</h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>What it means</th>
+<th>Checked by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tidy</td>
+<td>Correct <em>shape</em>: one variable per column, one observation per row</td>
+<td>Eyeballing structure (this lesson)</td>
+</tr>
+<tr>
+<td>Clean</td>
+<td>Correct <em>content</em>: right types, no duplicates, no sentinel codes, consistent categories</td>
+<td>Systematic audit (Lesson 03)</td>
+</tr>
+</tbody>
+</table>
+<p>A dataset can be tidy and still be full of <code>"BLQ"</code> strings in a numeric column, <code>-99</code><br />
+sentinel missing codes, or duplicate subject rows.</p>
+<h2>Quick Reference: Core Tidyverse Packages</h2>
+<table>
+<thead>
+<tr>
+<th>Package</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tibble</code></td>
+<td>The tibble data structure</td>
+</tr>
+<tr>
+<td><code>readr</code></td>
+<td>Fast, type-guessing flat-file import (<code>read_csv</code>, <code>read_delim</code>)</td>
+</tr>
+<tr>
+<td><code>dplyr</code></td>
+<td>Row/column verbs: <code>filter</code>, <code>select</code>, <code>mutate</code>, <code>summarise</code>, <code>group_by</code></td>
+</tr>
+<tr>
+<td><code>tidyr</code></td>
+<td>Reshaping: <code>pivot_longer</code>, <code>pivot_wider</code>, <code>separate</code>, <code>unite</code></td>
+</tr>
+<tr>
+<td><code>ggplot2</code></td>
+<td>Grammar-of-graphics plotting</td>
+</tr>
+<tr>
+<td><code>purrr</code></td>
+<td>Functional programming / iteration (<code>map()</code> family)</td>
+</tr>
+<tr>
+<td><code>stringr</code></td>
+<td>Consistent string manipulation</td>
+</tr>
+<tr>
+<td><code>forcats</code></td>
+<td>Factor/categorical variable handling</td>
+</tr>
+</tbody>
+</table></div></section>
+
+      <div class="lesson-upsell">
+        <p>This is the free preview lesson. The rest of <strong>Dealing with Messy Data in R</strong> — every remaining phase and lesson — unlocks with enrollment.</p>
+        <a href="https://pharmagent-dashboard.netlify.app/checkout/messy-data-r" class="btn btn-primary">Enroll to unlock the full course &rarr;</a>
+      </div>
+
+      <nav class="lesson-pager"><span></span><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/01-tidyverse-import/02-importing-messy-data" class="btn btn-primary">Continue this course &rarr;</a></nav>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../../index.html#top">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

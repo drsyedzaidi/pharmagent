@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 08: Clinical Trial Simulation — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Phase 08: Clinical Trial Simulation, part of PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 08: Clinical Trial Simulation</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation</p>
+      <article class="lesson-doc"><h1>Phase 08: Clinical Trial Simulation</h1>
+<p>Clinical Trial Simulation (CTS) integrates a calibrated PK model, a PD model, and an explicit trial design into a single in-silico experiment that mirrors a planned study, generating virtual patient populations, simulated observations, and summary statistics before a single subject is enrolled. This phase walks from the foundational CTS workflow in mrgsolve through dose-selection by target attainment, rigorous propagation of parameter uncertainty via bootstrap, and ends with a full regulatory-grade PKPD CTS pipeline as a capstone. By the end you can build and defend a simulation-based dose rationale suitable for a regulatory briefing document.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Assemble a complete CTS workflow: PK model + PD model + trial design + virtual population + simulate + summarize</li>
+<li>Implement inter-individual variability (IIV) with an omega block and residual unexplained variability (RUV) in mrgsolve</li>
+<li>Generate dose-response curves by simulation and select doses using target attainment probability</li>
+<li>Propagate parameter uncertainty via bootstrap resampling and report confidence intervals on PD endpoints</li>
+<li>Recognize and apply the CTS idioms used in regulatory submissions (FDA/EMA modeling and simulation reports)</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/01-cts-framework">01-cts-framework</a></code></td>
+<td>CTS Framework with mrgsolve</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/02-target-attainment">02-target-attainment</a></code></td>
+<td>Target Attainment and Dose Selection</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/03-uncertainty-propagation">03-uncertainty-propagation</a></code></td>
+<td>Uncertainty Propagation in CTS</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td>04</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/04-capstone-cts-pipeline">04-capstone-cts-pipeline</a></code></td>
+<td>Capstone — Full PKPD CTS Pipeline</td>
+<td>90 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 5.25 h</p>
+<h2>Prerequisites</h2>
+<p>Phases 01–07 of this course, or equivalent: one-compartment oral PK, Emax and indirect-response PD models in mrgsolve, IIV/RUV concepts, and familiarity with <code>dplyr</code>/<code>ggplot2</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Gabrielsson J, Weiner D. <em>Pharmacokinetic and Pharmacodynamic Data Analysis</em>. 5th ed. Swedish Pharmaceutical Press, 2016. (Chapters 9–10)</li>
+<li>Rowland M, Tozer TN. <em>Clinical Pharmacokinetics and Pharmacodynamics</em>. 4th ed. Lippincott, 2011. (Chapter 20)</li>
+<li>Holford NHG et al. Simulation of clinical trials. <em>Annu Rev Pharmacol Toxicol</em> 2000;40:209–234.</li>
+<li>Kimko HC, Duffull SB (eds). <em>Simulation for Designing Clinical Trials</em>. Marcel Dekker, 2003.</li>
+<li>EMA. <em>Guideline on reporting the results of population pharmacokinetic analyses</em>. EMA/CHMP/EWP/185990/2006.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/01-cts-framework">CTS Framework with mrgsolve</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/02-target-attainment">Target Attainment and Dose Selection</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/03-uncertainty-propagation">Uncertainty Propagation in CTS</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/08-clinical-trial-simulation/04-capstone-cts-pipeline">Capstone — Full PKPD CTS Pipeline</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

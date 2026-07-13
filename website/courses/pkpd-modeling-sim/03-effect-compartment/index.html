@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 03: Effect Compartment and Hysteresis — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Phase 03: Effect Compartment and Hysteresis, part of PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 03: Effect Compartment and Hysteresis</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation</p>
+      <article class="lesson-doc"><h1>Phase 03: Effect Compartment and Hysteresis</h1>
+<p>Plasma drug concentrations and pharmacodynamic responses often peak at different times — a phenomenon called <strong>hysteresis</strong>. This phase introduces the mathematical framework to account for that delay: the effect compartment (link model), its governing ODE, and the rate constant Ke0 that controls equilibration speed between plasma and the site of action.</p>
+<h2>Learning Objectives</h2>
+<p>By the end of this phase you will be able to:</p>
+<ol>
+<li>Distinguish clockwise from counterclockwise hysteresis in a concentration–effect plot and explain the mechanistic cause of each.</li>
+<li>Derive the effect-compartment ODE from first principles and define Ke0 in terms of equilibration half-life.</li>
+<li>Implement a full PK/PD model with an effect compartment in mrgsolve, simulate it, and estimate Ke0 from hysteresis data.</li>
+</ol>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Topic</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td>hysteresis-pk-pd-out-of-phase</td>
+<td>What hysteresis is and why it matters</td>
+<td>30 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td>link-model-ke0</td>
+<td>The effect-compartment ODE and Ke0</td>
+<td>40 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td>implementing-ke0-mrgsolve</td>
+<td>Full mrgsolve implementation and estimation</td>
+<td>50 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Estimated total time:</strong> 2 hours</p>
+<h2>Prerequisites</h2>
+<ul>
+<li>Phase 01 (PK fundamentals, 1-cmt and 2-cmt models in mrgsolve)</li>
+<li>Phase 02 (Emax / IDR pharmacodynamic models)</li>
+</ul>
+<h2>Key References</h2>
+<ul>
+<li>Sheiner LB, Stanski DR, Vozeh S, Miller RD, Ham J. Simultaneous modeling of pharmacokinetics and pharmacodynamics: application to d-tubocurarine. <em>Clin Pharmacol Ther.</em> 1979;25(3):358–371.</li>
+<li>Gabrielsson J, Weiner D. <em>Pharmacokinetic and Pharmacodynamic Data Analysis</em>, 5th ed. Swedish Pharmaceutical Press, 2016. Chapter 4.</li>
+<li>Rowland M, Tozer TN. <em>Clinical Pharmacokinetics and Pharmacodynamics</em>, 4th ed. Lippincott, 2011. Chapter 23.</li>
+<li>Holford NHG, Sheiner LB. Understanding the dose-effect relationship: clinical application of pharmacokinetic-pharmacodynamic models. <em>Clin Pharmacokinet.</em> 1981;6(6):429–453.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/03-effect-compartment/01-hysteresis-pk-pd-out-of-phase">Lesson 01: Hysteresis — When PK and PD Are Out of Phase</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/03-effect-compartment/02-link-model-ke0">Lesson 02: The Link Model and Effect Compartment (Ke0)</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/03-effect-compartment/03-implementing-ke0-mrgsolve">Lesson 03: Implementing Ke0 in mrgsolve</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 06: Publication Figures — Multi-Panel & Case Study — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 06: Publication Figures — Multi-Panel & Case Study, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 06: Publication Figures — Multi-Panel & Case Study</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 06: Publication Figures — Multi-Panel &amp; Case Study</h1>
+<p><strong>This is the capstone phase of the course.</strong> Every prior phase built one skill in<br />
+isolation: import (01), clean with dplyr/tidyr (02), join multi-table data (03), the<br />
+ggplot2 grammar of graphics (04), and accessible colour/theme design (05). Phase 06 does<br />
+not teach a new data skill — it teaches <strong>composition</strong>: taking several individually<br />
+correct ggplot2 panels and assembling them into one tagged, aligned, publication-grade<br />
+figure, then exporting it at the resolution and format a journal actually requires. The<br />
+final lesson runs the entire pipeline end to end, from raw messy data to a submission-<br />
+ready PDF/PNG, integrating everything from Phases 01–05 into one deliverable.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Compose multi-panel figures with <code>patchwork</code> using <code>+</code>, <code>/</code>, <code>|</code>, and nested<br />
+  parentheses for arbitrary layouts</li>
+<li>Control panel geometry with <code>plot_layout(ncol=, nrow=, widths=, heights=)</code> and add<br />
+  panel tags (A, B, C…) with <code>plot_annotation(tag_levels=)</code></li>
+<li>Collect a shared legend across panels with <code>plot_layout(guides = "collect")</code></li>
+<li>Use <code>cowplot::plot_grid()</code> as an alternative composition engine, with <code>align</code>/<code>axis</code><br />
+  for pixel-perfect axis alignment across heterogeneous panel types</li>
+<li>Extract and manually place a legend with <code>cowplot::get_legend()</code>, and annotate a<br />
+  composed figure with <code>ggdraw()</code> + <code>draw_label()</code>/<code>draw_image()</code></li>
+<li>Know when to reach for <code>patchwork</code> (fast, tag-friendly, general layout) versus<br />
+<code>cowplot</code> (axis alignment across dissimilar plot types, manual legend control)</li>
+<li>Run the full pipeline: import messy popPK data → clean → join covariates → build 3–4<br />
+  ggplot2 panels → apply an accessible style guide → compose → export at 300+ dpi PNG<br />
+  and vector PDF</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/01-multipanel-patchwork">01-multipanel-patchwork</a></code></td>
+<td>Multi-Panel Figures with patchwork</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/02-multipanel-cowplot">02-multipanel-cowplot</a></code></td>
+<td>Multi-Panel Figures with cowplot and Shared Legends</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/03-capstone-pk-figure-panel">03-capstone-pk-figure-panel</a></code></td>
+<td>Capstone — End-to-End: A Publication-Ready PK/PD Figure Panel</td>
+<td>90 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 3.2 h</p>
+<h2>Prerequisites</h2>
+<p>Phases 01–05 of this course (tidyverse import, dplyr/tidyr cleaning, joins, ggplot2<br />
+grammar, accessible colour/theme design). <code>install.packages(c("tidyverse", "patchwork",
+"cowplot", "scales", "viridis"))</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Pedersen TL. <code>patchwork</code> documentation: https://patchwork.data-imaginist.com/</li>
+<li>Wilke CO (2019). <em>Fundamentals of Data Visualization</em>. O'Reilly, ch. on compound<br />
+  figures. https://clauswilke.com/dataviz/</li>
+<li>Wilke CO. <code>cowplot</code> documentation: https://wilkelab.org/cowplot/</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/01-multipanel-patchwork">Lesson 01: Multi-Panel Figures with patchwork</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/02-multipanel-cowplot">Lesson 02: Multi-Panel Figures with cowplot and Shared Legends</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/06-publication-figures/03-capstone-pk-figure-panel">Lesson 03: CAPSTONE — End-to-End: A Publication-Ready PK/PD Figure Panel</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

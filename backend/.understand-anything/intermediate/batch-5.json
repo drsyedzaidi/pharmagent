@@ -1,0 +1,560 @@
+{
+  "nodes": [
+    {
+      "id": "file:app/tools/poppk_tools.py",
+      "type": "file",
+      "name": "poppk_tools.py",
+      "filePath": "app/tools/poppk_tools.py",
+      "summary": "PopPK agent tool exposing a deterministic two-stage (STS) population summary and covariate screen, deriving typical values and IIV from individual compartmental or NCA fits rather than a true NLME fit.",
+      "tags": ["service", "pharmacometrics", "poppk", "tool"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/poppk_tools.py:run_poppk",
+      "type": "function",
+      "name": "run_poppk",
+      "filePath": "app/tools/poppk_tools.py",
+      "lineRange": [63, 95],
+      "summary": "Tool entrypoint that builds per-subject parameter rows, computes two-stage typical value and geometric-CV IIV, and screens covariate relationships, returning a ToolResult summary.",
+      "tags": ["tool", "poppk", "two-stage", "covariate"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/poppk_tools.py:_covariate_by_subject",
+      "type": "function",
+      "name": "_covariate_by_subject",
+      "filePath": "app/tools/poppk_tools.py",
+      "lineRange": [41, 60],
+      "summary": "Maps a detected covariate column to a per-subject numeric value by grouping the dataset on the subject role and taking each subject's first usable covariate observation.",
+      "tags": ["covariate", "data-transform", "poppk"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/poppk_tools.py:_from_compartmental",
+      "type": "function",
+      "name": "_from_compartmental",
+      "filePath": "app/tools/poppk_tools.py",
+      "lineRange": [27, 38],
+      "summary": "Extracts per-subject CL/V/KA parameter rows from a previously stored compartmental fit in state for use as the two-stage input.",
+      "tags": ["data-transform", "poppk", "compartmental"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/qc_tools.py",
+      "type": "file",
+      "name": "qc_tools.py",
+      "filePath": "app/tools/qc_tools.py",
+      "summary": "Quality-control agent tool that runs a battery of pass/warn/fail checks over dataset and analysis state (record counts, data quality, parameter plausibility) and aggregates an overall QC verdict.",
+      "tags": ["service", "validation", "quality-control", "tool"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/qc_tools.py:run_qc",
+      "type": "function",
+      "name": "run_qc",
+      "filePath": "app/tools/qc_tools.py",
+      "lineRange": [26, 105],
+      "summary": "Runs the full QC checklist against pharm state, appending individual check results and issues, then returns a ToolResult with counts of passed, warned, and failed checks.",
+      "tags": ["tool", "quality-control", "validation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/tools/regulatory_tools.py",
+      "type": "file",
+      "name": "regulatory_tools.py",
+      "filePath": "app/tools/regulatory_tools.py",
+      "summary": "Generates an ICH/FDA Module 2.7.2 (Summary of Clinical Pharmacology) Word document from analysis state, assembling narrative sections (background, NCA, popPK, special populations, DDI, conclusions) and standardized tables.",
+      "tags": ["service", "regulatory", "report-generation", "docx", "tool"],
+      "complexity": "complex",
+      "languageNotes": "Uses python-docx (Document, Pt) to build a structured regulatory submission document with headings, tables, and page breaks."
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:generate_272",
+      "type": "function",
+      "name": "generate_272",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [376, 469],
+      "summary": "Tool entrypoint that assembles the full 2.7.2 document — title page, provenance, all narrative sections and summary tables — saves it to disk, and returns a ToolResult with the report path and study info.",
+      "tags": ["tool", "regulatory", "report-generation", "docx"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_24_special_pops",
+      "type": "function",
+      "name": "_section_24_special_pops",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [177, 235],
+      "summary": "Builds the special-populations section by classifying selected covariates (renal, hepatic, age, weight, sex, other) into subsections and rendering each covariate effect narrative.",
+      "tags": ["regulatory", "covariate", "report-section"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_26_conclusions",
+      "type": "function",
+      "name": "_section_26_conclusions",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [246, 294],
+      "summary": "Synthesizes a conclusions section, narrating the population model, IIV, selected covariates, and key exposure findings drawn from analysis state.",
+      "tags": ["regulatory", "report-section", "narrative"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_22_poppk",
+      "type": "function",
+      "name": "_section_22_poppk",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [101, 143],
+      "summary": "Renders the population-PK narrative subsection covering estimation method, structural model, parameter estimates, IIV, residual error, and VPC/GOF outcomes.",
+      "tags": ["regulatory", "poppk", "report-section"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_23_analyses",
+      "type": "function",
+      "name": "_section_23_analyses",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [146, 174],
+      "summary": "Renders the additional-analyses section, summarizing dose-proportionality and bioequivalence results when present in state.",
+      "tags": ["regulatory", "report-section", "bioequivalence"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_table_2722_poppk",
+      "type": "function",
+      "name": "_table_2722_poppk",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [316, 344],
+      "summary": "Builds Table 2.7.2.2 of population-PK parameter estimates with RSE, IIV omega, shrinkage, and residual sigma rows.",
+      "tags": ["regulatory", "poppk", "report-table"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_table_2723_covariates",
+      "type": "function",
+      "name": "_table_2723_covariates",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [347, 371],
+      "summary": "Builds Table 2.7.2.3 listing selected covariate effects (coefficient, exponent, ΔOFV) and standalone covariate-effect screens.",
+      "tags": ["regulatory", "covariate", "report-table"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_table_2721_nca",
+      "type": "function",
+      "name": "_table_2721_nca",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [299, 313],
+      "summary": "Builds Table 2.7.2.1 of NCA exposure parameters (Cmax, Tmax, AUClast, AUCinf, t1/2, CL/F) grouped by dose.",
+      "tags": ["regulatory", "nca", "report-table"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_21_background",
+      "type": "function",
+      "name": "_section_21_background",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [55, 77],
+      "summary": "Renders the background and overview section of the 2.7.2 document from study metadata.",
+      "tags": ["regulatory", "report-section", "narrative"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_section_22_nca",
+      "type": "function",
+      "name": "_section_22_nca",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [80, 98],
+      "summary": "Renders the non-compartmental analysis narrative subsection describing exposure metrics and methodology.",
+      "tags": ["regulatory", "nca", "report-section"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:_kv_table",
+      "type": "function",
+      "name": "_kv_table",
+      "filePath": "app/tools/regulatory_tools.py",
+      "lineRange": [39, 50],
+      "summary": "Shared helper that renders a headed key-value table into the document, or a placeholder line when there are no rows.",
+      "tags": ["utility", "docx", "report-table"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/report_tools.py",
+      "type": "file",
+      "name": "report_tools.py",
+      "filePath": "app/tools/report_tools.py",
+      "summary": "Generates a general analysis report Word document from state, rendering per-subject and dose-summary NCA tables, extra sections for BE and dose-proportionality, and a reproducibility/provenance section.",
+      "tags": ["service", "report-generation", "docx", "tool"],
+      "complexity": "complex",
+      "languageNotes": "Uses python-docx to build the report with tables and a deferred import of collect_provenance for the reproducibility section."
+    },
+    {
+      "id": "function:app/tools/report_tools.py:generate_report",
+      "type": "function",
+      "name": "generate_report",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [237, 293],
+      "summary": "Tool entrypoint that builds the analysis report document — NCA summary/subject tables, extra analysis sections, and reproducibility — saves it, and returns a ToolResult with the report path.",
+      "tags": ["tool", "report-generation", "docx"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/tools/report_tools.py:_extra_sections",
+      "type": "function",
+      "name": "_extra_sections",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [121, 213],
+      "summary": "Appends optional report sections for bioequivalence and dose-proportionality results when those analyses are present in state.",
+      "tags": ["report-section", "bioequivalence", "dose-proportionality"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/tools/report_tools.py:_reproducibility_section",
+      "type": "function",
+      "name": "_reproducibility_section",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [216, 234],
+      "summary": "Renders a reproducibility section capturing package versions, git SHA, and dataset hash via collect_provenance for audit traceability.",
+      "tags": ["report-section", "provenance", "reproducibility"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/report_tools.py:_summary_table",
+      "type": "function",
+      "name": "_summary_table",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [91, 107],
+      "summary": "Renders the dose-grouped NCA summary statistics table into the report document.",
+      "tags": ["report-table", "nca", "docx"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/report_tools.py:_subject_table",
+      "type": "function",
+      "name": "_subject_table",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [60, 75],
+      "summary": "Renders the per-subject NCA parameter table, sorted by a stable subject key.",
+      "tags": ["report-table", "nca", "docx"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/report_tools.py:_dose_grouped_meaningfully",
+      "type": "function",
+      "name": "_dose_grouped_meaningfully",
+      "filePath": "app/tools/report_tools.py",
+      "lineRange": [78, 88],
+      "summary": "Heuristic that decides whether the NCA summary contains more than one meaningful dose group, controlling whether a dose-grouped table is shown.",
+      "tags": ["utility", "report-generation", "nca"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/tools/review_tools.py",
+      "type": "file",
+      "name": "review_tools.py",
+      "filePath": "app/tools/review_tools.py",
+      "summary": "Reviewer agent tool that wraps the adversarial compute module, running independent recomputation and consistency checks over analysis results to surface findings.",
+      "tags": ["service", "adversarial-review", "validation", "tool"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/tools/review_tools.py:adversarial_review",
+      "type": "function",
+      "name": "adversarial_review",
+      "filePath": "app/tools/review_tools.py",
+      "lineRange": [23, 44],
+      "summary": "Tool entrypoint that runs the adversarial review over current state and raw data, returning findings and an overall goal-met verdict as a ToolResult.",
+      "tags": ["tool", "adversarial-review", "validation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/workflows.py",
+      "type": "file",
+      "name": "workflows.py",
+      "filePath": "app/workflows.py",
+      "summary": "Defines ordered workflow templates (currently the end-to-end nca_full pipeline) mapping steps to agent/tool assignments with human-review gates, plus a get_workflow lookup.",
+      "tags": ["configuration", "workflow", "orchestration"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:conftest.py",
+      "type": "file",
+      "name": "conftest.py",
+      "filePath": "conftest.py",
+      "summary": "Pytest bootstrap that inserts the backend root onto sys.path so the app package is importable during test collection.",
+      "tags": ["test", "configuration", "pytest"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:pharmagent.db",
+      "type": "file",
+      "name": "pharmagent.db",
+      "filePath": "pharmagent.db",
+      "summary": "SQLite database file backing session persistence and audit storage for the PharmAgent backend.",
+      "tags": ["database", "persistence", "sqlite"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "tests/__init__.py",
+      "summary": "Empty package marker making the tests directory an importable Python package.",
+      "tags": ["test", "package-marker", "barrel"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/reference/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "tests/reference/__init__.py",
+      "summary": "Empty package marker making the reference-validation tests an importable Python package.",
+      "tags": ["test", "package-marker", "barrel"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:tests/reference/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "tests/reference/README.md",
+      "summary": "Explains the reference-validation suite: how it drives the shipping compute path on canonical public datasets (Theophylline) to assert literature concordance, cross-method consistency, and optional exact tool concordance.",
+      "tags": ["documentation", "validation", "pharmacometrics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/reference/references.py",
+      "type": "file",
+      "name": "references.py",
+      "filePath": "tests/reference/references.py",
+      "summary": "Pins canonical public datasets (Theophylline) to published popPK literature consensus values with acceptance bands, plus an optional slot for the user's own NONMEM/Monolix/nlmixr2 run for exact concordance.",
+      "tags": ["test", "reference-data", "pharmacometrics", "validation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/reference/test_theophylline.py",
+      "type": "file",
+      "name": "test_theophylline.py",
+      "filePath": "tests/reference/test_theophylline.py",
+      "summary": "Reference-validation test that drives the shipping NCA + FOCE-I + SAEM path on the Theophylline dataset and asserts estimates fall within published literature bands and agree across methods.",
+      "tags": ["test", "validation", "pharmacometrics", "integration"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_adversarial.py",
+      "type": "file",
+      "name": "test_adversarial.py",
+      "filePath": "tests/test_adversarial.py",
+      "summary": "Tests the adversarial review compute and its HTTP endpoint: that clean state meets the goal, that data inconsistencies are flagged at correct severities, recomputation triggers, and the review loop terminates.",
+      "tags": ["test", "adversarial-review", "integration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:tests/test_api.py",
+      "type": "file",
+      "name": "test_api.py",
+      "filePath": "tests/test_api.py",
+      "summary": "FastAPI endpoint tests covering public health/models routes, the session-and-NCA workflow, auth enforcement, CSV upload validation, and background-job submission/polling.",
+      "tags": ["test", "api-test", "integration", "fastapi"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_audit_and_state.py",
+      "type": "file",
+      "name": "test_audit_and_state.py",
+      "filePath": "tests/test_audit_and_state.py",
+      "summary": "Unit tests verifying the audit hash-chain stays intact and detects tampering, and that PharmState enforces per-field ownership.",
+      "tags": ["test", "audit", "security"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/test_be_compute.py",
+      "type": "file",
+      "name": "test_be_compute.py",
+      "filePath": "tests/test_be_compute.py",
+      "summary": "Unit tests for the bioequivalence compute, checking GMR and confidence intervals against hand-computed values for paired and parallel designs and the overall BE verdict logic.",
+      "tags": ["test", "bioequivalence", "unit-test"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_cdisc.py",
+      "type": "file",
+      "name": "test_cdisc.py",
+      "filePath": "tests/test_cdisc.py",
+      "summary": "Tests CDISC ADaM export: that ADPP is built in long BDS form with standard PARAMCDs and that the package zip contains valid define.xml, including the no-dataframe path.",
+      "tags": ["test", "cdisc", "export", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/test_compartmental_compute.py",
+      "type": "file",
+      "name": "test_compartmental_compute.py",
+      "filePath": "tests/test_compartmental_compute.py",
+      "summary": "Unit tests for compartmental models: closed-form agreement and vectorization of 1-/2-cmt oral concentration, parameter recovery from a simulated fit, and grouped model selection.",
+      "tags": ["test", "compartmental", "unit-test", "pharmacometrics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_diagnostics.py",
+      "type": "file",
+      "name": "test_diagnostics.py",
+      "filePath": "tests/test_diagnostics.py",
+      "summary": "Unit tests for residual diagnostics and NPDE: identity fits give zero IWRES, PRED uses typical not individual parameters, and NPDE is well-calibrated, bounded, and deterministic for a fixed seed.",
+      "tags": ["test", "diagnostics", "npde", "unit-test"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_dose_sweep.py",
+      "type": "file",
+      "name": "test_dose_sweep.py",
+      "filePath": "tests/test_dose_sweep.py",
+      "summary": "Unit tests for the dose-sweep compute: linear PK is dose-proportional, Michaelis-Menten is super-proportional, output envelope/metadata shapes are consistent, and Cavg equals AUC over tau.",
+      "tags": ["test", "dose-sweep", "unit-test", "pharmacometrics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_dp_compute.py",
+      "type": "file",
+      "name": "test_dp_compute.py",
+      "filePath": "tests/test_dp_compute.py",
+      "summary": "Unit tests for dose-proportionality power-model estimation: slope recovery for proportional/sub-/super-proportional data, closed-form critical region and CI, and aggregation across parameters.",
+      "tags": ["test", "dose-proportionality", "unit-test"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_forecast.py",
+      "type": "file",
+      "name": "test_forecast.py",
+      "filePath": "tests/test_forecast.py",
+      "summary": "Unit tests for MAP/TDM forecasting: Bayesian update pulls individual estimates toward truth, no-levels falls back to population typical, dose optimization hits a target, and steady-state metrics are ordered.",
+      "tags": ["test", "forecast", "tdm", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/test_identity_audit.py",
+      "type": "file",
+      "name": "test_identity_audit.py",
+      "filePath": "tests/test_identity_audit.py",
+      "summary": "Tests identity-aware tamper-evident auditing: actor/reason recording with chain verification, tampering detection, backward compatibility, provenance stamping, and signed human-review entries.",
+      "tags": ["test", "audit", "provenance", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_nca_compute.py",
+      "type": "file",
+      "name": "test_nca_compute.py",
+      "filePath": "tests/test_nca_compute.py",
+      "summary": "Unit tests for non-compartmental analysis: exact lambda_z and t1/2, AUCinf against analytic truth, Cmax/Tmax, CL/V, small percent-extrapolation, and dose grouping.",
+      "tags": ["test", "nca", "unit-test", "pharmacometrics"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {"source": "file:app/tools/poppk_tools.py", "target": "function:app/tools/poppk_tools.py:run_poppk", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/poppk_tools.py", "target": "function:app/tools/poppk_tools.py:_covariate_by_subject", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/poppk_tools.py", "target": "function:app/tools/poppk_tools.py:_from_compartmental", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/poppk_tools.py", "target": "function:app/tools/poppk_tools.py:run_poppk", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/poppk_tools.py", "target": "file:app/compute/poppk.py", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/poppk_tools.py", "target": "file:app/core/pharmstate.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/poppk_tools.py", "target": "file:app/core/schema_extractor.py", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/poppk_tools.py", "target": "file:app/tools/base.py", "type": "related", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/tools/qc_tools.py", "target": "function:app/tools/qc_tools.py:run_qc", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/qc_tools.py", "target": "function:app/tools/qc_tools.py:run_qc", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/qc_tools.py", "target": "file:app/core/pharmstate.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/qc_tools.py", "target": "file:app/tools/base.py", "type": "related", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:generate_272", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_24_special_pops", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_26_conclusions", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_22_poppk", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_23_analyses", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_table_2722_poppk", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_table_2723_covariates", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_table_2721_nca", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_21_background", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_section_22_nca", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:_kv_table", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "function:app/tools/regulatory_tools.py:generate_272", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_24_special_pops", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_26_conclusions", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_22_poppk", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_23_analyses", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_table_2722_poppk", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_table_2723_covariates", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_table_2721_nca", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_21_background", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/regulatory_tools.py:generate_272", "target": "function:app/tools/regulatory_tools.py:_section_22_nca", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "file:app/core/pharmstate.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "file:app/tools/base.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "file:app/core/provenance.py", "type": "calls", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:generate_report", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:_extra_sections", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:_reproducibility_section", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:_summary_table", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:_subject_table", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:_dose_grouped_meaningfully", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/report_tools.py", "target": "function:app/tools/report_tools.py:generate_report", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/report_tools.py:generate_report", "target": "function:app/tools/report_tools.py:_extra_sections", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/report_tools.py:generate_report", "target": "function:app/tools/report_tools.py:_reproducibility_section", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/report_tools.py:generate_report", "target": "function:app/tools/report_tools.py:_summary_table", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/report_tools.py:generate_report", "target": "function:app/tools/report_tools.py:_subject_table", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "function:app/tools/report_tools.py:_reproducibility_section", "target": "file:app/core/provenance.py", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/report_tools.py", "target": "file:app/core/pharmstate.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/report_tools.py", "target": "file:app/tools/base.py", "type": "related", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/tools/review_tools.py", "target": "function:app/tools/review_tools.py:adversarial_review", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:app/tools/review_tools.py", "target": "function:app/tools/review_tools.py:adversarial_review", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/review_tools.py", "target": "file:app/compute/adversarial.py", "type": "calls", "direction": "forward", "weight": 0.8},
+    {"source": "file:app/tools/review_tools.py", "target": "file:app/core/pharmstate.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/review_tools.py", "target": "file:app/tools/base.py", "type": "related", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:tests/reference/test_theophylline.py", "target": "file:tests/reference/references.py", "type": "related", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/nlme.py", "target": "file:tests/reference/test_theophylline.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/pkmodel_tools.py", "target": "file:tests/reference/test_theophylline.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/adversarial.py", "target": "file:tests/test_adversarial.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/pharmstate.py", "target": "file:tests/test_adversarial.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/main.py", "target": "file:tests/test_adversarial.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/main.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/config.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/llm.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/orchestrator.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/store.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/jobs.py", "target": "file:tests/test_api.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/core/audit.py", "target": "file:tests/test_audit_and_state.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/pharmstate.py", "target": "file:tests/test_audit_and_state.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/bioequivalence.py", "target": "file:tests/test_be_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/core/cdisc.py", "target": "file:tests/test_cdisc.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/pharmstate.py", "target": "file:tests/test_cdisc.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/compartmental.py", "target": "file:tests/test_compartmental_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/diagnostics.py", "target": "file:tests/test_diagnostics.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_models.py", "target": "file:tests/test_diagnostics.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_simulate.py", "target": "file:tests/test_diagnostics.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/dose_sweep.py", "target": "file:tests/test_dose_sweep.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/dose_proportionality.py", "target": "file:tests/test_dp_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/forecast.py", "target": "file:tests/test_forecast.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_models.py", "target": "file:tests/test_forecast.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_simulate.py", "target": "file:tests/test_forecast.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/core/audit.py", "target": "file:tests/test_identity_audit.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/llm.py", "target": "file:tests/test_identity_audit.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/orchestrator.py", "target": "file:tests/test_identity_audit.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/provenance.py", "target": "file:tests/test_identity_audit.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/store.py", "target": "file:tests/test_identity_audit.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/nca.py", "target": "file:tests/test_nca_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "document:tests/reference/README.md", "target": "file:tests/reference/test_theophylline.py", "type": "documents", "direction": "forward", "weight": 0.5},
+    {"source": "document:tests/reference/README.md", "target": "file:tests/reference/references.py", "type": "documents", "direction": "forward", "weight": 0.5}
+  ]
+}

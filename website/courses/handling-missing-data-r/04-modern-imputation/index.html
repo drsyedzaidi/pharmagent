@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 04: Modern Imputation — Multiple & Iterative — Handling Missing Data in R</title>
+  <meta name="description" content="Phase 04: Modern Imputation — Multiple & Iterative, part of Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 04: Modern Imputation — Multiple & Iterative</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R</p>
+      <article class="lesson-doc"><h1>Phase 04: Modern Imputation — Multiple &amp; Iterative</h1>
+<p>Phase 03 ended on a cliff-hanger: adding a random residual draw to regression imputation<br />
+restores the variance, but a <em>single</em> stochastically imputed dataset still lies about its<br />
+standard errors, because it treats the filled-in values as if they were real observations.<br />
+This phase resolves that tension. The fix is not a cleverer imputation model — it is to<br />
+impute <em>more than once</em>, analyze each completed dataset, and pool the results with a rule<br />
+that carries the extra uncertainty of not-knowing directly into the standard errors. That<br />
+is <strong>multiple imputation (MI)</strong> and <strong>Rubin's rules</strong>. From the principle we build the<br />
+workhorse implementation — <strong>MICE</strong> (Multiple Imputation by Chained Equations, a.k.a. Fully<br />
+Conditional Specification) — end to end in R: inspect the missingness pattern, choose<br />
+per-variable imputation methods, wire up the predictor matrix, run the Gibbs-like sweeps,<br />
+check convergence, analyze with <code>with()</code>, and pool with <code>pool()</code>. Finally we survey the<br />
+iterative and machine-learning imputers — the <strong>EM algorithm</strong>, <strong>SoftImpute</strong> for<br />
+high-dimensional low-rank matrices, and <strong>missForest</strong> for mixed-type nonlinear data — and<br />
+place each on the map of <em>when to reach for it</em> and <em>when it needs an MI wrapper to give<br />
+honest inference</em>. Throughout, every method is tested against a <strong>known simulated truth</strong>,<br />
+so you can watch pooled MI recover the true regression coefficient while complete-case and<br />
+single-imputation estimates stay biased or over-confident.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Explain the three-step logic of multiple imputation — impute <span class="math-inline">$m&gt;1$</span> times from the posterior predictive of <span class="math-inline">$Y_{mis}\mid Y_{obs}$</span>, analyze each completed dataset, then pool — and why it beats any single-imputation method</li>
+<li>State and apply <strong>Rubin's rules</strong>: the pooled estimate <span class="math-inline">$\bar Q$</span>, within-imputation variance <span class="math-inline">$\bar U$</span>, between-imputation variance <span class="math-inline">$B$</span>, and total variance <span class="math-inline">$T=\bar U+(1+1/m)B$</span></li>
+<li>Derive the relative increase in variance <span class="math-inline">$r=(1+1/m)B/\bar U$</span> and the fraction of missing information <span class="math-inline">$\lambda=(r+2/(df+3))/(r+1)$</span>, and read them as diagnostics</li>
+<li>Distinguish a <em>proper</em> and <em>congenial</em> imputation model from an improper one, and state the MAR validity condition</li>
+<li>Run a complete <code>mice</code> workflow: <code>md.pattern</code>, per-variable <code>method</code>, the <code>predictorMatrix</code>, <code>mice(m, maxit)</code>, convergence trace plots, <code>densityplot</code>/<code>stripplot</code> diagnostics, <code>with()</code>, and <code>pool()</code></li>
+<li>Explain <strong>predictive mean matching</strong> (PMM) and why it is a safe default numeric method; give practical guidance on <span class="math-inline">$m$</span>, <code>maxit</code>, and predictor selection</li>
+<li>Describe the <strong>EM algorithm</strong> (E-step expected sufficient statistics, M-step re-estimation) and why its single completed dataset understates uncertainty</li>
+<li>Contrast <strong>SoftImpute</strong> (low-rank SVD + nuclear-norm soft-thresholding) and <strong>missForest</strong> (random-forest iterative imputation with OOB error) and select the right modern method for a given data shape</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/01-multiple-imputation-principle">01-multiple-imputation-principle</a></code></td>
+<td>Multiple Imputation and Rubin's Rules</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/02-mice-in-r">02-mice-in-r</a></code></td>
+<td>MICE: Multiple Imputation by Chained Equations in R</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/03-iterative-ml-imputation">03-iterative-ml-imputation</a></code></td>
+<td>Iterative and Machine-Learning Imputation: EM, SoftImpute, missForest</td>
+<td>65 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 3.3 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 (MCAR/MAR/MNAR taxonomy; the missingness indicator), Phase 02 (missingness<br />
+diagnostics; the shadow matrix), and especially Phase 03 (deletion, mean/regression/<br />
+stochastic-regression imputation, and <em>why single imputation understates standard errors</em> —<br />
+this phase is the direct sequel). Working R with <code>dplyr</code> and <code>ggplot2</code>. Comfort with linear<br />
+regression, sample variance/covariance, and the idea of a sampling distribution and standard<br />
+error. Install:<br />
+<code>install.packages(c("mice", "ggmice", "missForest", "softImpute", "dplyr", "ggplot2", "lattice"))</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Rubin DB. <em>Multiple Imputation for Nonresponse in Surveys</em>. Wiley, 1987. (The original MI monograph; Rubin's rules in Ch. 3.)</li>
+<li>van Buuren S, Groothuis-Oudshoorn K. mice: Multivariate Imputation by Chained Equations in R. <em>J Stat Softw</em> 2011;45(3):1–67.</li>
+<li>van Buuren S. <em>Flexible Imputation of Missing Data</em>. 2nd ed. CRC Press, 2018. https://stefvanbuuren.name/fimd/ (FIMD — §2 MI theory, §3 FCS/MICE, §4 PMM.)</li>
+<li>Stekhoven DJ, Bühlmann P. MissForest — non-parametric missing value imputation for mixed-type data. <em>Bioinformatics</em> 2012;28(1):112–118.</li>
+<li>Mazumder R, Hastie T, Tibshirani R. Spectral regularization algorithms for learning large incomplete matrices (SoftImpute). <em>J Mach Learn Res</em> 2010;11:2287–2322.</li>
+<li>Dempster AP, Laird NM, Rubin DB. Maximum likelihood from incomplete data via the EM algorithm. <em>J R Stat Soc B</em> 1977;39(1):1–38.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/01-multiple-imputation-principle">Lesson 01: Multiple Imputation and Rubin's Rules</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/02-mice-in-r">Lesson 02: MICE — Multiple Imputation by Chained Equations in R</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/04-modern-imputation/03-iterative-ml-imputation">Lesson 03: Iterative and Machine-Learning Imputation — EM, SoftImpute, missForest</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

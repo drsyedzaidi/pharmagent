@@ -1,0 +1,8 @@
+generated 30 tasks -> /Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend/pharmacometricsbench/tasks/v0.jsonl
+
+PharmacometricsBench v0 — 30 tasks, 5 categories
+
+  oracle   overall=1.000   [be=1.00  compartmental=1.00  dp=1.00  exposure=1.00  nca=1.00]   (0 errored, 0 parse-gap)
+  naive    overall=0.778   [be=0.67  compartmental=0.50  dp=0.92  exposure=0.92  nca=0.89]   (0 errored, 0 parse-gap)
+  llm      overall=0.778   [be=0.67  compartmental=0.50  dp=0.92  exposure=0.92  nca=0.89]   (0 errored, 0 parse-gap)
+

@@ -1,0 +1,150 @@
+[
+  {
+    "id": "layer:api-entry",
+    "name": "API & Entry",
+    "description": "FastAPI application bootstrap and HTTP surface: app entrypoint (main.py), runtime settings (config.py), top-level workflow wiring (workflows.py), and DB package init that mount the agentic pharmacometrics service.",
+    "nodeIds": [
+      "file:app/__init__.py",
+      "file:app/db/__init__.py",
+      "file:app/main.py",
+      "file:app/config.py",
+      "file:app/workflows.py"
+    ]
+  },
+  {
+    "id": "layer:agents",
+    "name": "Agent Layer",
+    "description": "LLM agent orchestration: the supervisor that drives multi-step pharmacometrics reasoning, the base agent abstraction, and the agent/tool definitions registry.",
+    "nodeIds": [
+      "file:app/agents/__init__.py",
+      "file:app/agents/base.py",
+      "file:app/agents/definitions.py",
+      "file:app/agents/supervisor.py"
+    ]
+  },
+  {
+    "id": "layer:tools",
+    "name": "Tool Layer",
+    "description": "Agent-callable tool implementations (PK model, NCA, BE, dose-proportionality, compartmental, poppk, report, regulatory, QC, review, data tools) plus the tool base/registry that bridge agents to the deterministic compute engine.",
+    "nodeIds": [
+      "file:app/tools/__init__.py",
+      "file:app/tools/base.py",
+      "file:app/tools/be_tools.py",
+      "file:app/tools/builtins.py",
+      "file:app/tools/compartmental_tools.py",
+      "file:app/tools/data_tools.py",
+      "file:app/tools/dp_tools.py",
+      "file:app/tools/nca_tools.py",
+      "file:app/tools/pkmodel_tools.py",
+      "file:app/tools/poppk_tools.py",
+      "file:app/tools/qc_tools.py",
+      "file:app/tools/regulatory_tools.py",
+      "file:app/tools/report_tools.py",
+      "file:app/tools/review_tools.py"
+    ]
+  },
+  {
+    "id": "layer:compute",
+    "name": "Compute Engine",
+    "description": "Deterministic PK/PKPD numerical core: structural PK models, simulation/forecast, NCA (incl. steady-state), NLME (FOCE-I/SAEM/poppk), bioequivalence, dose-proportionality, dose-sweep, VPC, diagnostics, adversarial checks, and NONMEM export.",
+    "nodeIds": [
+      "file:app/compute/__init__.py",
+      "file:app/compute/adversarial.py",
+      "file:app/compute/bioequivalence.py",
+      "file:app/compute/compartmental.py",
+      "file:app/compute/diagnostics.py",
+      "file:app/compute/dose_proportionality.py",
+      "file:app/compute/dose_sweep.py",
+      "file:app/compute/dosing.py",
+      "file:app/compute/forecast.py",
+      "file:app/compute/nca_ss.py",
+      "file:app/compute/nca.py",
+      "file:app/compute/nlme.py",
+      "file:app/compute/nmexport.py",
+      "file:app/compute/pk_fit.py",
+      "file:app/compute/pk_models.py",
+      "file:app/compute/pk_simulate.py",
+      "file:app/compute/poppk.py",
+      "file:app/compute/vpc.py"
+    ]
+  },
+  {
+    "id": "layer:core",
+    "name": "Core Orchestration & Infrastructure",
+    "description": "Cross-cutting runtime services: the orchestrator, SHA-256 audit chain, background job runner, persistence store, LLM client, pharm-state, provenance/reproducibility, CDISC/exporters, schema extraction, skills, and logging config.",
+    "nodeIds": [
+      "file:app/core/store.py",
+      "file:app/core/__init__.py",
+      "file:app/core/audit.py",
+      "file:app/core/cdisc.py",
+      "file:app/core/exporters.py",
+      "file:app/core/jobs.py",
+      "file:app/core/llm.py",
+      "file:app/core/logging_config.py",
+      "file:app/core/orchestrator.py",
+      "file:app/core/pharmstate.py",
+      "file:app/core/provenance.py",
+      "file:app/core/schema_extractor.py",
+      "file:app/core/skills.py"
+    ]
+  },
+  {
+    "id": "layer:test",
+    "name": "Test Suite",
+    "description": "Pytest suite covering compute modules, API, orchestrator, audit/state, NLME, VPC, and the published-literature reference-validation tests (Theophylline) plus shared fixtures.",
+    "nodeIds": [
+      "file:conftest.py",
+      "file:tests/__init__.py",
+      "file:tests/reference/__init__.py",
+      "file:tests/reference/references.py",
+      "file:tests/reference/test_theophylline.py",
+      "file:tests/test_adversarial.py",
+      "file:tests/test_api.py",
+      "file:tests/test_audit_and_state.py",
+      "file:tests/test_be_compute.py",
+      "file:tests/test_cdisc.py",
+      "file:tests/test_compartmental_compute.py",
+      "file:tests/test_diagnostics.py",
+      "file:tests/test_dose_sweep.py",
+      "file:tests/test_dp_compute.py",
+      "file:tests/test_forecast.py",
+      "file:tests/test_identity_audit.py",
+      "file:tests/test_nca_compute.py",
+      "file:tests/test_nlme.py",
+      "file:tests/test_nmexport.py",
+      "file:tests/test_orchestrator.py",
+      "file:tests/test_pk_models.py",
+      "file:tests/test_poppk_compute.py",
+      "file:tests/test_report_272.py",
+      "file:tests/test_skills.py",
+      "file:tests/test_ss_compute.py",
+      "file:tests/test_vpc.py"
+    ]
+  },
+  {
+    "id": "layer:infrastructure",
+    "name": "Infrastructure",
+    "description": "Containerization and deployment: the multi-stage Dockerfile (builder and runtime stages) and the .dockerignore that package the backend for uvicorn-based serving.",
+    "nodeIds": [
+      "service:Dockerfile",
+      "service:Dockerfile:builder",
+      "service:Dockerfile:runtime",
+      "service:.dockerignore"
+    ]
+  },
+  {
+    "id": "layer:project-support",
+    "name": "Project Config & Docs",
+    "description": "Project-level configuration (.env.example, ruff.toml, understand-anything configs/scan), dependency manifests (requirements*.txt), reference-test README, and the SQLite database artifact supporting the build and tooling environment.",
+    "nodeIds": [
+      "config:.env.example",
+      "document:requirements.txt",
+      "document:requirements-dev.txt",
+      "config:ruff.toml",
+      "config:.understand-anything/.understandignore",
+      "config:.understand-anything/intermediate/scan-result.json",
+      "file:pharmagent.db",
+      "document:tests/reference/README.md"
+    ]
+  }
+]

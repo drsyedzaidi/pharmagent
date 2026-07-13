@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 04: Indirect Response Models — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Phase 04: Indirect Response Models, part of PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 04: Indirect Response Models</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation</p>
+      <article class="lesson-doc"><h1>Phase 04: Indirect Response Models</h1>
+<p>Many drugs do not act directly on a measured biomarker; instead, they perturb the <em>production</em> or <em>degradation</em> of a response variable that turns over continuously. This phase develops the mathematical and conceptual foundation for indirect response (IDR) modeling, derives the four canonical model structures (Dayneka 1993, Jusko 1994), and teaches fitting against a real corticosteroid dataset using mrgsolve and nlmixr2.</p>
+<h2>Learning Objectives</h2>
+<p>By the end of this phase you will be able to:</p>
+<ol>
+<li>Explain the turnover concept and derive the baseline condition <span class="math-inline">$R_0 = K_{in}/K_{out}$</span>.</li>
+<li>Classify a PD mechanism as IDR Model I, II, III, or IV and write the correct ODE.</li>
+<li>Predict onset/offset asymmetry and time-to-peak as a function of drug and system parameters.</li>
+<li>Fit a two-stage PK/IDR model to cortisol suppression data and diagnose misspecification.</li>
+</ol>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/01-idr-turnover-paradigm">01-idr-turnover-paradigm</a></code></td>
+<td>Turnover Pharmacodynamics — The IDR Paradigm</td>
+<td>45 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/02-idr-models-I-II-kin">02-idr-models-I-II-kin</a></code></td>
+<td>IDR Models I and II — Inhibition and Stimulation of Kin</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/03-idr-models-III-IV-kout">03-idr-models-III-IV-kout</a></code></td>
+<td>IDR Models III and IV — Inhibition and Stimulation of Kout</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>04</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/04-fitting-idr-corticosteroid">04-fitting-idr-corticosteroid</a></code></td>
+<td>Fitting IDR Models: Corticosteroid Baseline Effect Example</td>
+<td>60 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Estimated total:</strong> ~3.5 hours</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 (PK Fundamentals), Phase 02 (Direct Effect Models), Phase 03 (Effect Compartment Models).</p>
+<h2>Key References</h2>
+<ul>
+<li>Dayneka NL, Garg V, Jusko WJ. Comparison of four basic models of indirect pharmacodynamic responses. <em>J Pharmacokinet Biopharm</em> 1993;21(4):457–478.</li>
+<li>Jusko WJ, Ko HC. Physiologic indirect response models characterize diverse types of pharmacodynamic effects. <em>Clin Pharmacol Ther</em> 1994;56(4):406–419.</li>
+<li>Gabrielsson J, Weiner D. <em>Pharmacokinetic and Pharmacodynamic Data Analysis</em>, 5th ed. Swedish Pharmaceutical Press, 2016.</li>
+<li>Rowland M, Tozer TN. <em>Clinical Pharmacokinetics and Pharmacodynamics</em>, 4th ed. Lippincott Williams &amp; Wilkins, 2010.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/01-idr-turnover-paradigm">Turnover Pharmacodynamics — The IDR Paradigm</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/02-idr-models-I-II-kin">IDR Models I and II — Inhibition and Stimulation of Kin</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/03-idr-models-III-IV-kout">IDR Models III and IV — Inhibition and Stimulation of Kout</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/04-indirect-response-models/04-fitting-idr-corticosteroid">Fitting IDR Models: Corticosteroid Baseline Effect Example</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,389 @@
+{
+  "nodes": [
+    {
+      "id": "file:tests/test_nlme.py",
+      "type": "file",
+      "name": "test_nlme.py",
+      "filePath": "tests/test_nlme.py",
+      "summary": "Comprehensive unit tests for the NLME estimation engine: simulates synthetic populations with known parameters and verifies FOCE-I and SAEM recover theta/omega/sigma, plus covariate models, SCM selection, parameter uncertainty (RSE), and M3 BLQ censored-likelihood handling.",
+      "tags": ["test", "nlme", "parameter-recovery", "pharmacometrics", "scm"],
+      "complexity": "complex",
+      "languageNotes": "Heavy use of pytest fixtures (session-scoped synthetic populations) and pytest.approx tolerance-based parameter-recovery assertions; numpy RNG seeding makes simulations deterministic."
+    },
+    {
+      "id": "file:tests/test_nmexport.py",
+      "type": "file",
+      "name": "test_nmexport.py",
+      "filePath": "tests/test_nmexport.py",
+      "summary": "Unit tests for NONMEM control-stream and mrgsolve C++ code generation, asserting correct ADVAN/TRANS selection, power-model covariate THETA blocks, ALAG lag-time handling on depot, and None return for unsupported models.",
+      "tags": ["test", "code-generation", "nonmem", "mrgsolve", "export"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/test_orchestrator.py",
+      "type": "file",
+      "name": "test_orchestrator.py",
+      "filePath": "tests/test_orchestrator.py",
+      "summary": "Integration tests for the agent Orchestrator and Supervisor: verifies LLM-based routing, workflow pause at the human-review gate, resume-to-report completion, privacy (metadata-only), SQLite persistence across restart, and session ownership enforcement.",
+      "tags": ["test", "orchestrator", "workflow", "integration", "persistence"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_pk_models.py",
+      "type": "file",
+      "name": "test_pk_models.py",
+      "filePath": "tests/test_pk_models.py",
+      "summary": "Unit tests for the 18-model PK/PKPD library: validates analytic closed-form agreement (IV/oral 1-2cmt), allometric scaling, Michaelis-Menten saturability, transit-compartment peak delay, Emax/IDR PKPD behavior, parameter fitting, and AIC-based model comparison.",
+      "tags": ["test", "pk-models", "pkpd", "model-library", "parameter-recovery"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_poppk_compute.py",
+      "type": "file",
+      "name": "test_poppk_compute.py",
+      "filePath": "tests/test_poppk_compute.py",
+      "summary": "Unit tests for two-stage popPK summary statistics: closed-form verification of geometric mean, geometric CV%, typical-value/IIV summarization, and log-linear covariate-effect estimation with edge cases for nonpositive and insufficient data.",
+      "tags": ["test", "poppk", "statistics", "covariate", "two-stage"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_report_272.py",
+      "type": "file",
+      "name": "test_report_272.py",
+      "filePath": "tests/test_report_272.py",
+      "summary": "Tests for the FDA Section 2.7.2 regulatory report generator: validates placeholder handling for empty state, NCA/NLME/SCM table population, study-info propagation, reproducibility section, and HTTP endpoints for report generation and download.",
+      "tags": ["test", "regulatory", "report-generation", "integration", "fda"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:tests/test_skills.py",
+      "type": "file",
+      "name": "test_skills.py",
+      "filePath": "tests/test_skills.py",
+      "summary": "Tests for the skill capture/replay subsystem: verifies step distillation (dropping I/O and profiling, collapsing duplicates), SkillStore save/get/list/delete with versioning, markdown rendering, and end-to-end replay reproducing an NCA workflow on a fresh session, including HTTP routes.",
+      "tags": ["test", "skills", "capture-replay", "integration", "versioning"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_ss_compute.py",
+      "type": "file",
+      "name": "test_ss_compute.py",
+      "filePath": "tests/test_ss_compute.py",
+      "summary": "Unit tests for steady-state PK computation: confirms SS concentration formulas match single-dose superposition and reduce correctly at large tau, SS fitting recovers parameters, multiple-dose detection, and steady-state NCA grouping by dose.",
+      "tags": ["test", "steady-state", "nca", "superposition", "pharmacokinetics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_vpc.py",
+      "type": "file",
+      "name": "test_vpc.py",
+      "filePath": "tests/test_vpc.py",
+      "summary": "Unit tests for VPC and goodness-of-fit diagnostics: validates CV-to-SD conversion, observed-vs-predicted GOF metrics, simulation-based VPC band ordering and lognormal spread, determinism under fixed seed, and prediction-corrected VPC (pcVPC) structure and coverage.",
+      "tags": ["test", "vpc", "diagnostics", "goodness-of-fit", "simulation"],
+      "complexity": "complex"
+    },
+
+    {
+      "id": "function:tests/test_nlme.py:_make_population",
+      "type": "function",
+      "name": "_make_population",
+      "filePath": "tests/test_nlme.py",
+      "lineRange": [39, 75],
+      "summary": "Simulates a synthetic NLME population with known CL/V/KA typical values and lognormal IIV plus residual error, returning subject records used as ground truth for parameter-recovery assertions.",
+      "tags": ["test-fixture", "simulation", "synthetic-data", "nlme"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_nlme.py:_make_cov_population",
+      "type": "function",
+      "name": "_make_cov_population",
+      "filePath": "tests/test_nlme.py",
+      "lineRange": [351, 372],
+      "summary": "Builds a synthetic population whose clearance depends on a weight covariate with a known exponent, used to test covariate-model recovery and stepwise covariate modeling selection.",
+      "tags": ["test-fixture", "simulation", "covariate", "nlme"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_nlme.py:_censored_population",
+      "type": "function",
+      "name": "_censored_population",
+      "filePath": "tests/test_nlme.py",
+      "lineRange": [454, 475],
+      "summary": "Generates a population with concentrations censored below an LLOQ and a parallel BLQ flag array, used to test the M3 censored-likelihood estimation path.",
+      "tags": ["test-fixture", "simulation", "blq", "m3-censoring"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_nlme.py:test_sparse_subject_is_handled",
+      "type": "function",
+      "name": "test_sparse_subject_is_handled",
+      "filePath": "tests/test_nlme.py",
+      "lineRange": [235, 266],
+      "summary": "Verifies FOCE-I fitting tolerates a subject with very few observations without crashing and still returns finite estimates for the full cohort.",
+      "tags": ["test", "nlme", "robustness", "edge-case"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_nlme.py:test_scm_selects_true_covariate_and_rejects_noise",
+      "type": "function",
+      "name": "test_scm_selects_true_covariate_and_rejects_noise",
+      "filePath": "tests/test_nlme.py",
+      "lineRange": [415, 429],
+      "summary": "Runs stepwise covariate modeling on a synthetic population and asserts the true weight-on-CL covariate is selected while a noise covariate is rejected.",
+      "tags": ["test", "scm", "covariate-selection", "nlme"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_nmexport.py:_fit",
+      "type": "function",
+      "name": "_fit",
+      "filePath": "tests/test_nmexport.py",
+      "lineRange": [7, 15],
+      "summary": "Helper that constructs a minimal fitted-model dict (model key, theta, IIV, covariate spec) used as input to the NONMEM and mrgsolve code builders under test.",
+      "tags": ["test-helper", "fixture", "nmexport"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:tests/test_orchestrator.py:test_persistence_survives_restart",
+      "type": "function",
+      "name": "test_persistence_survives_restart",
+      "filePath": "tests/test_orchestrator.py",
+      "lineRange": [69, 85],
+      "summary": "Creates a session and workflow under one Orchestrator backed by an on-disk SessionStore, then reconstructs a fresh Orchestrator and asserts the session and intact audit chain are recovered.",
+      "tags": ["test", "persistence", "orchestrator", "audit"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_pk_models.py:test_pkpd_dual_endpoint_fit_recovers",
+      "type": "function",
+      "name": "test_pkpd_dual_endpoint_fit_recovers",
+      "filePath": "tests/test_pk_models.py",
+      "lineRange": [98, 112],
+      "summary": "Simulates a coupled PK/PD dual-endpoint dataset and verifies the joint fitter recovers the known PK and PD parameters within tolerance.",
+      "tags": ["test", "pkpd", "dual-endpoint", "parameter-recovery"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_pk_models.py:test_simulate_timecourse_single_and_multidose",
+      "type": "function",
+      "name": "test_simulate_timecourse_single_and_multidose",
+      "filePath": "tests/test_pk_models.py",
+      "lineRange": [127, 140],
+      "summary": "Checks the timecourse simulator produces correct single-dose and multiple-dose accumulation profiles across the model library.",
+      "tags": ["test", "simulation", "multidose", "pk-models"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_poppk_compute.py:test_two_stage_summary_typical_value_and_iiv",
+      "type": "function",
+      "name": "test_two_stage_summary_typical_value_and_iiv",
+      "filePath": "tests/test_poppk_compute.py",
+      "lineRange": [53, 70],
+      "summary": "Verifies the two-stage summary computes the correct geometric-mean typical value and inter-individual variability from per-subject parameter estimates.",
+      "tags": ["test", "poppk", "two-stage", "statistics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_poppk_compute.py:test_covariate_effect_perfect_log_linear",
+      "type": "function",
+      "name": "test_covariate_effect_perfect_log_linear",
+      "filePath": "tests/test_poppk_compute.py",
+      "lineRange": [102, 120],
+      "summary": "Constructs a perfect log-linear covariate relationship and asserts the covariate-effect estimator recovers the exact slope.",
+      "tags": ["test", "covariate", "log-linear", "statistics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_report_272.py:_nlme_state",
+      "type": "function",
+      "name": "_nlme_state",
+      "filePath": "tests/test_report_272.py",
+      "lineRange": [68, 88],
+      "summary": "Builds a synthetic PharmState populated with NLME results, used to test that the Section 2.7.2 report renders model tables and conclusions.",
+      "tags": ["test-fixture", "regulatory", "state-builder", "nlme"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_report_272.py:test_full_state_no_crash",
+      "type": "function",
+      "name": "test_full_state_no_crash",
+      "filePath": "tests/test_report_272.py",
+      "lineRange": [196, 209],
+      "summary": "Smoke test asserting the 2.7.2 report generator runs end-to-end without error on a fully populated state combining NCA, NLME, and SCM results.",
+      "tags": ["test", "regulatory", "smoke-test", "report-generation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_report_272.py:test_http_272_download",
+      "type": "function",
+      "name": "test_http_272_download",
+      "filePath": "tests/test_report_272.py",
+      "lineRange": [237, 248],
+      "summary": "Exercises the HTTP endpoint that downloads a generated 2.7.2 report file via the FastAPI TestClient.",
+      "tags": ["test", "http", "regulatory", "integration"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_skills.py:test_http_capture_list_get_run_delete",
+      "type": "function",
+      "name": "test_http_capture_list_get_run_delete",
+      "filePath": "tests/test_skills.py",
+      "lineRange": [156, 176],
+      "summary": "End-to-end HTTP test covering the full skill lifecycle: capture from a session, list, get, run (replay), and delete via the FastAPI TestClient.",
+      "tags": ["test", "http", "skills", "integration"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_skills.py:test_capture_then_inspect_steps",
+      "type": "function",
+      "name": "test_capture_then_inspect_steps",
+      "filePath": "tests/test_skills.py",
+      "lineRange": [110, 119],
+      "summary": "Captures a skill from an executed NCA session and asserts the distilled steps reflect the tool calls performed.",
+      "tags": ["test", "skills", "capture", "distillation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:tests/test_ss_compute.py:test_extract_multiple_dose",
+      "type": "function",
+      "name": "test_extract_multiple_dose",
+      "filePath": "tests/test_ss_compute.py",
+      "lineRange": [75, 89],
+      "summary": "Verifies steady-state dosing-interval extraction correctly identifies multiple-dose regimens and partitions the profile into per-tau intervals.",
+      "tags": ["test", "steady-state", "dosing", "interval-extraction"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_vpc.py:_make_subject",
+      "type": "function",
+      "name": "_make_subject",
+      "filePath": "tests/test_vpc.py",
+      "lineRange": [27, 38],
+      "summary": "Helper that builds a single subject record with given parameters and weight covariate for use across the VPC and GOF tests.",
+      "tags": ["test-helper", "fixture", "vpc"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_vpc.py:_correct_model_population",
+      "type": "function",
+      "name": "_correct_model_population",
+      "filePath": "tests/test_vpc.py",
+      "lineRange": [183, 200],
+      "summary": "Simulates a population from the correct model so that pcVPC band coverage of the observed data can be validated.",
+      "tags": ["test-fixture", "simulation", "pcvpc", "vpc"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_vpc.py:test_obs_vs_pred_identity_is_perfect_fit",
+      "type": "function",
+      "name": "test_obs_vs_pred_identity_is_perfect_fit",
+      "filePath": "tests/test_vpc.py",
+      "lineRange": [57, 76],
+      "summary": "Asserts that when individual predictions equal observations, the observed-vs-predicted GOF metrics report a perfect fit.",
+      "tags": ["test", "goodness-of-fit", "obs-vs-pred", "vpc"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_vpc.py:test_vpc_band_lognormal_spread_matches_cv",
+      "type": "function",
+      "name": "test_vpc_band_lognormal_spread_matches_cv",
+      "filePath": "tests/test_vpc.py",
+      "lineRange": [159, 178],
+      "summary": "Verifies the simulated VPC band spread matches the lognormal IIV implied by the specified coefficient of variation.",
+      "tags": ["test", "vpc", "lognormal", "variability"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_make_population", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_make_cov_population", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_censored_population", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:test_sparse_subject_is_handled", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:test_scm_selects_true_covariate_and_rejects_noise", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_make_population", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_make_cov_population", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:_censored_population", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:test_sparse_subject_is_handled", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_nlme.py", "target": "function:tests/test_nlme.py:test_scm_selects_true_covariate_and_rejects_noise", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_nmexport.py", "target": "function:tests/test_nmexport.py:_fit", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_nmexport.py", "target": "function:tests/test_nmexport.py:_fit", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_orchestrator.py", "target": "function:tests/test_orchestrator.py:test_persistence_survives_restart", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_orchestrator.py", "target": "function:tests/test_orchestrator.py:test_persistence_survives_restart", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_pk_models.py", "target": "function:tests/test_pk_models.py:test_pkpd_dual_endpoint_fit_recovers", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_pk_models.py", "target": "function:tests/test_pk_models.py:test_simulate_timecourse_single_and_multidose", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_pk_models.py", "target": "function:tests/test_pk_models.py:test_pkpd_dual_endpoint_fit_recovers", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_pk_models.py", "target": "function:tests/test_pk_models.py:test_simulate_timecourse_single_and_multidose", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_poppk_compute.py", "target": "function:tests/test_poppk_compute.py:test_two_stage_summary_typical_value_and_iiv", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_poppk_compute.py", "target": "function:tests/test_poppk_compute.py:test_covariate_effect_perfect_log_linear", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_poppk_compute.py", "target": "function:tests/test_poppk_compute.py:test_two_stage_summary_typical_value_and_iiv", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_poppk_compute.py", "target": "function:tests/test_poppk_compute.py:test_covariate_effect_perfect_log_linear", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:_nlme_state", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:test_full_state_no_crash", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:test_http_272_download", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:_nlme_state", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:test_full_state_no_crash", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_report_272.py", "target": "function:tests/test_report_272.py:test_http_272_download", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_skills.py", "target": "function:tests/test_skills.py:test_http_capture_list_get_run_delete", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_skills.py", "target": "function:tests/test_skills.py:test_capture_then_inspect_steps", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_skills.py", "target": "function:tests/test_skills.py:test_http_capture_list_get_run_delete", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_skills.py", "target": "function:tests/test_skills.py:test_capture_then_inspect_steps", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_ss_compute.py", "target": "function:tests/test_ss_compute.py:test_extract_multiple_dose", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_ss_compute.py", "target": "function:tests/test_ss_compute.py:test_extract_multiple_dose", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:_make_subject", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:_correct_model_population", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:test_obs_vs_pred_identity_is_perfect_fit", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:test_vpc_band_lognormal_spread_matches_cv", "type": "contains", "direction": "forward", "weight": 1.0},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:_make_subject", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:_correct_model_population", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:test_obs_vs_pred_identity_is_perfect_fit", "type": "exports", "direction": "forward", "weight": 0.8},
+    {"source": "file:tests/test_vpc.py", "target": "function:tests/test_vpc.py:test_vpc_band_lognormal_spread_matches_cv", "type": "exports", "direction": "forward", "weight": 0.8},
+
+    {"source": "file:app/compute/nlme.py", "target": "file:tests/test_nlme.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_models.py", "target": "file:tests/test_nlme.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_simulate.py", "target": "file:tests/test_nlme.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/nmexport.py", "target": "file:tests/test_nmexport.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/agents/supervisor.py", "target": "file:tests/test_orchestrator.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/llm.py", "target": "file:tests/test_orchestrator.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/orchestrator.py", "target": "file:tests/test_orchestrator.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/store.py", "target": "file:tests/test_orchestrator.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/compartmental.py", "target": "file:tests/test_pk_models.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_fit.py", "target": "file:tests/test_pk_models.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_models.py", "target": "file:tests/test_pk_models.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_simulate.py", "target": "file:tests/test_pk_models.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/poppk.py", "target": "file:tests/test_poppk_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/core/orchestrator.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/pharmstate.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/llm.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/store.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/base.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/tools/regulatory_tools.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/main.py", "target": "file:tests/test_report_272.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/core/llm.py", "target": "file:tests/test_skills.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/orchestrator.py", "target": "file:tests/test_skills.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/skills.py", "target": "file:tests/test_skills.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/core/store.py", "target": "file:tests/test_skills.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/main.py", "target": "file:tests/test_skills.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/compartmental.py", "target": "file:tests/test_ss_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/dosing.py", "target": "file:tests/test_ss_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/nca_ss.py", "target": "file:tests/test_ss_compute.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+
+    {"source": "file:app/compute/pk_models.py", "target": "file:tests/test_vpc.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/pk_simulate.py", "target": "file:tests/test_vpc.py", "type": "tested_by", "direction": "forward", "weight": 0.5},
+    {"source": "file:app/compute/vpc.py", "target": "file:tests/test_vpc.py", "type": "tested_by", "direction": "forward", "weight": 0.5}
+  ]
+}

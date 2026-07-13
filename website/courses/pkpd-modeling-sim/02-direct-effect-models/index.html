@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 02: Direct Effect Models — PKPD Modeling and Simulation</title>
+  <meta name="description" content="Phase 02: Direct Effect Models, part of PKPD Modeling and Simulation." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">PKPD Modeling and Simulation</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 02: Direct Effect Models</span></nav>
+      
+      <p class="eyebrow">PKPD Modeling and Simulation</p>
+      <article class="lesson-doc"><h1>Phase 02: Direct Effect Models</h1>
+<p>Direct effect models assume the observed pharmacodynamic response at any moment<br />
+is driven solely by the drug concentration present at that same moment — no lag,<br />
+no memory. This phase derives each model family from first principles, builds<br />
+intuition for parameter meaning through concrete numerical examples, and closes<br />
+with hands-on fitting of all three model types in R using mrgsolve and nlmixr2.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Derive the linear and log-linear PD models from first principles and state the<br />
+  concentration range where each is appropriate</li>
+<li>Derive the Emax model from receptor occupancy theory (Clark equation) and<br />
+  extend it to the Hill/sigmoidal Emax form</li>
+<li>Interpret EC50, Emax, and the Hill coefficient gamma in physiological and<br />
+  clinical terms</li>
+<li>Recognize saturation behavior and understand why the log-linear model breaks<br />
+  down at high and low concentrations</li>
+<li>Fit linear, Emax, and sigmoidal Emax direct effect models to observed PK/PD<br />
+  data using nlmixr2 and evaluate goodness of fit</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/01-linear-log-linear-pd">01-linear-log-linear-pd</a></code></td>
+<td>Linear and Log-Linear PD Models</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/02-emax-hill-equation">02-emax-hill-equation</a></code></td>
+<td>Emax and Sigmoidal Emax (Hill Equation)</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/03-fitting-direct-effect-r">03-fitting-direct-effect-r</a></code></td>
+<td>Fitting Direct Effect Models in R</td>
+<td>75 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 3 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 complete. Comfortable with one-compartment oral PK math (CL, V, Ka,<br />
+t½). R and mrgsolve installed (Phase 01, Lesson 03).</p>
+<h2>Key References</h2>
+<ul>
+<li>Gabrielsson J, Weiner D. <em>Pharmacokinetic and Pharmacodynamic Data Analysis</em>. 5th ed. Swedish Pharmaceutical Press, 2016. [Chapters 4–5]</li>
+<li>Rowland M, Tozer TN. <em>Clinical Pharmacokinetics and Pharmacodynamics</em>. 4th ed. Lippincott, 2011. [Chapter 20]</li>
+<li>Holford NHG, Sheiner LB. Understanding the dose-effect relationship. <em>Clin Pharmacokinet</em> 1981;6:429–453.</li>
+<li>Hill AV. The possible effects of the aggregation of the molecules of haemoglobin on its dissociation curves. <em>J Physiol</em> 1910;40:iv–vii.</li>
+<li>Clark AJ. <em>The Mode of Action of Drugs on Cells</em>. Arnold, 1933.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/01-linear-log-linear-pd">Lesson 01: Linear and Log-Linear PD Models</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/02-emax-hill-equation">Lesson 02: Emax and Sigmoidal Emax (Hill Equation)</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/pkpd-modeling-sim/02-direct-effect-models/03-fitting-direct-effect-r">Lesson 03: Fitting Direct Effect Models in R</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

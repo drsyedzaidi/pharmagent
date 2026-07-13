@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 05: Missing Data in Population PK — Structure, Time, Dose, and BLQ — Handling Missing Data in R</title>
+  <meta name="description" content="Phase 05: Missing Data in Population PK — Structure, Time, Dose, and BLQ, part of Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 05: Missing Data in Population PK — Structure, Time, Dose, and BLQ</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R</p>
+      <article class="lesson-doc"><h1>Phase 05: Missing Data in Population PK — Structure, Time, Dose, and BLQ</h1>
+<p>Phases 01–04 built the general missing-data toolkit on rectangular, one-row-per-subject<br />
+data. Pharmacometric data are not rectangular. A population PK (popPK) dataset is a<br />
+<strong>time-ordered stream of event records</strong> — each row is either a dose or an observation —<br />
+and missingness in that stream behaves very differently depending on <em>which</em> item is<br />
+missing and <em>why</em>. This phase carries the MCAR/MAR/MNAR taxonomy from Phase 01 into the<br />
+popPK event dataset, then works through the three missingness problems every analyst<br />
+meets: absent date/time and dose records, and — the hard one — concentrations below the<br />
+limit of quantification (BLQ), which are <strong>MNAR by construction</strong> and are handled with<br />
+Beal's censored-likelihood methods M1–M7.</p>
+<p>By the end you can look at a raw NONMEM/nlmixr2 dataset, classify every kind of<br />
+missingness it contains, impute a dose history correctly with <code>ADDL</code>/<code>II</code>/<code>SS</code>, choose a<br />
+BLQ method defensibly from the %BLQ, and implement the M3 censored likelihood in both<br />
+NONMEM <code>$ERROR</code> and nlmixr2.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Read a popPK dataset as an event stream and explain why a missing <strong>dose</strong> record damages more observations than a missing <strong>concentration</strong> (dosing propagates forward; observations do not)</li>
+<li>Map each classical missing-data type (MCAR/MAR/MNAR) onto the standard NONMEM data items (<code>ID TIME DV AMT CMT EVID MDV ADDL II SS BLQ</code> + covariates)</li>
+<li>Handle missing date/time and missing dose amount by exclusion, and impute a between-visit dose history using the two encodings <code>ADDL</code>/<code>II</code> and <code>SS</code>/<code>II</code></li>
+<li>Explain <em>why</em> BLQ data are MNAR and why a BLQ record still carries information (<code>C &lt; LLOQ</code>)</li>
+<li>Enumerate Beal's methods M1–M7 precisely, state the bias each introduces, and pick a method from the %BLQ using the modern (Bergstrand &amp; Karlsson, Ahn) consensus</li>
+<li>Implement the M3 censored likelihood: the annotated NONMEM <code><span class="math-inline">$ERROR` block (F_FLAG / `PHI()` / LAPLACIAN / `$</span>SIGMA 1 FIX</code>) and the nlmixr2 <code>cens</code>/<code>limit</code> analogue</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/01-poppk-event-dataset">01-poppk-event-dataset</a></code></td>
+<td>The popPK Event Dataset and Where Missingness Lives</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/02-missing-time-and-dose">02-missing-time-and-dose</a></code></td>
+<td>Missing Date/Time and Dose Amount Records</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/03-blq-as-mnar-beal-methods">03-blq-as-mnar-beal-methods</a></code></td>
+<td>BLQ Concentrations as MNAR: Beal's M1–M7</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>04</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/04-implementing-m3">04-implementing-m3</a></code></td>
+<td>Implementing the M3 Method</td>
+<td>60 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> ~3.75 h</p>
+<h2>Prerequisites</h2>
+<ul>
+<li>Phase 01 (MCAR/MAR/MNAR taxonomy) — the mechanism vocabulary is used throughout</li>
+<li>Population PK dataset structure: the NONMEM data items, EVID, one-compartment vs two-compartment models, IIV and residual error</li>
+<li>R basics: <code>dplyr</code>, <code>ggplot2</code>. For the BLQ simulation, <code>mrgsolve</code> is used where available; a closed-form fallback is provided</li>
+<li>Optional: <code>nlmixr2</code> for the M3 fitting analogue</li>
+</ul>
+<h2>References</h2>
+<ul>
+<li>Beal SL (2001). Ways to fit a PK model with some data below the quantification limit. <em>J Pharmacokinet Pharmacodyn</em> 28(5):481–504.</li>
+<li>Bergstrand M, Karlsson MO (2009). Handling data below the limit of quantification in mixed effect models. <em>AAPS J</em> 11(2):371–380.</li>
+<li>Ahn JE, Karlsson MO, Dunne A, Ludden TM (2008). Likelihood based approaches to handling data below the quantification limit using NONMEM VI. <em>J Pharmacokinet Pharmacodyn</em> 35:401–421.</li>
+<li>Bauer RJ (2019). NONMEM tutorial part II: estimation methods and advanced examples. <em>CPT Pharmacometrics Syst Pharmacol</em> 8(8):538–556.</li>
+<li>Byon W, Smith MK, Chan P, et al. (2013). Establishing best practices and guidance in population modeling: an experience with an internal population PK/PD analysis guidance. <em>CPT Pharmacometrics Syst Pharmacol</em> 2:e51. <em>(dataset conventions)</em></li>
+<li>Keizer RJ, Karlsson MO, Hooker A (2013). Modeling and simulation workbench for NONMEM: tutorial on Xpose, and PsN. <em>CPT Pharmacometrics Syst Pharmacol</em> 2:e50. <em>(tooling)</em></li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/01-poppk-event-dataset">Lesson 01: The popPK Event Dataset and Where Missingness Lives</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/02-missing-time-and-dose">Lesson 02: Missing Date/Time and Dose Amount Records</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/03-blq-as-mnar-beal-methods">Lesson 03: BLQ Concentrations as MNAR — Beal's M1–M7</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/05-poppk-structure-blq/04-implementing-m3">Lesson 04: Implementing the M3 Method</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

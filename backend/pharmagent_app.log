@@ -1,0 +1,31 @@
+{"ts": "2026-07-05T16:24:33-0400", "level": "INFO", "logger": "pharmagent", "msg": "serving_frontend", "dist": "/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/frontend/dist"}
+INFO:     Started server process [77598]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+{"ts": "2026-07-05T16:24:34-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "26c117d5649b", "method": "GET", "path": "/api/health", "status": 200, "duration_ms": 2.4}
+{"ts": "2026-07-05T16:24:34-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "655b7a0012f4", "method": "POST", "path": "/api/sessions", "status": 200, "duration_ms": 91.4}
+{"ts": "2026-07-05T16:24:34-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "d291e5ffc392", "method": "POST", "path": "/api/sessions/sess_6246d977/upload", "status": 200, "duration_ms": 12.6}
+/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend/app/compute/vpc.py:297: RuntimeWarning: All-NaN slice encountered
+  sim_p05 = np.nanmedian(rep_p[:, :, 0], axis=0)
+/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend/app/compute/vpc.py:298: RuntimeWarning: All-NaN slice encountered
+  sim_p50 = np.nanmedian(rep_p[:, :, 1], axis=0)
+/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend/app/compute/vpc.py:299: RuntimeWarning: All-NaN slice encountered
+  sim_p95 = np.nanmedian(rep_p[:, :, 2], axis=0)
+/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend/.venv/lib/python3.13/site-packages/numpy/lib/_nanfunctions_impl.py:1593: RuntimeWarning: All-NaN slice encountered
+  return fnb._ureduce(a,
+{"ts": "2026-07-05T16:24:38-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "528f0cfc990b", "method": "POST", "path": "/api/sessions/sess_6246d977/workflow/start", "status": 200, "duration_ms": 4200.7}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "a16bf7907acb", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.4}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "a4818487369a", "method": "GET", "path": "/assets/index-Lh8b_1zX.js", "status": 200, "duration_ms": 4.2}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "9ddce776fe1e", "method": "GET", "path": "/assets/index-Vo-7o9Qg.css", "status": 200, "duration_ms": 3.8}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "3eadb79c84ec", "method": "GET", "path": "/api/health", "status": 200, "duration_ms": 1.7}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "24a4d046588e", "method": "GET", "path": "/api/pk_models", "status": 200, "duration_ms": 1.6}
+{"ts": "2026-07-05T16:24:57-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "e7c3c504aba1", "method": "POST", "path": "/api/sessions", "status": 200, "duration_ms": 2.7}
+{"ts": "2026-07-13T13:01:49-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "ce645b90549d", "method": "GET", "path": "/api/health", "status": 200, "duration_ms": 41.8}
+{"ts": "2026-07-13T13:01:49-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "03d4ccb082b8", "method": "GET", "path": "/", "status": 200, "duration_ms": 44.5}
+{"ts": "2026-07-13T13:01:49-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "51f0f9fd65e6", "method": "GET", "path": "/assets/index-Lh8b_1zX.js", "status": 200, "duration_ms": 4.8}
+{"ts": "2026-07-13T13:01:49-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "084746e28521", "method": "GET", "path": "/assets/index-Vo-7o9Qg.css", "status": 200, "duration_ms": 5.7}
+{"ts": "2026-07-13T13:01:50-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "f4251e438006", "method": "GET", "path": "/api/health", "status": 200, "duration_ms": 18.0}
+{"ts": "2026-07-13T13:01:50-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "493a99fbb5ca", "method": "GET", "path": "/api/pk_models", "status": 200, "duration_ms": 20.3}
+{"ts": "2026-07-13T13:01:50-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "e41e7ccdacad", "method": "POST", "path": "/api/sessions", "status": 200, "duration_ms": 39.6}
+{"ts": "2026-07-13T13:01:51-0400", "level": "INFO", "logger": "pharmagent", "msg": "request", "request_id": "e1ab03fcab39", "method": "GET", "path": "/favicon.svg", "status": 200, "duration_ms": 18.4}

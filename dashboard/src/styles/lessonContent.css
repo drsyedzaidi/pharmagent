@@ -1,0 +1,139 @@
+/* Ported from pharmagent/website/build/generate_courses.py's LESSON_CSS so
+   the gated lesson viewer renders identically to the free-preview page on
+   the marketing site. Scoped under .lesson-content -- local custom
+   properties here match pharmagent/website/styles.v2.css's Clinical-Blue
+   values exactly (a different naming convention than this app's Tailwind
+   @theme tokens, kept as-is to avoid retranslating every generated HTML
+   fragment's class names). */
+
+.lesson-content {
+  --primary: #1F66A6;
+  --ink: #16314A;
+  --ink-muted: #5E7388;
+  --ink-subtle: #8298AC;
+  --ink-on-accent: #0C447C;
+  --surface-1: #FFFFFF;
+  --surface-2: #F4F7FB;
+  --hairline: #D7E2EE;
+  --accent-soft: #E3EEF9;
+  --accent-soft-border: #B5D4F4;
+  --success: #1D7A5A;
+  --serif: "Spectral", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  color: var(--ink);
+}
+
+.lesson-content .lesson-doc h1 { font-family: var(--serif); font-size: clamp(26px, 3.4vw, 38px); letter-spacing: -0.5px; margin-bottom: 18px; color: var(--ink); }
+.lesson-content .lesson-doc h2 { font-family: var(--serif); font-size: 22px; margin: 40px 0 14px; color: var(--ink); }
+.lesson-content .lesson-doc h3 { font-family: var(--serif); font-size: 18px; margin: 28px 0 10px; color: var(--ink); }
+.lesson-content .lesson-doc p { color: var(--ink); margin: 14px 0; line-height: 1.7; }
+.lesson-content .lesson-doc ul, .lesson-content .lesson-doc ol { color: var(--ink); line-height: 1.7; padding-left: 22px; margin: 14px 0; }
+.lesson-content .lesson-doc li { margin: 6px 0; }
+.lesson-content .lesson-doc hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.lesson-content .lesson-doc strong { color: var(--ink); }
+.lesson-content .lesson-doc blockquote {
+  border-left: 3px solid var(--primary); margin: 18px 0; padding: 6px 18px;
+  background: var(--surface-2); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--ink-muted);
+}
+.lesson-content .lesson-doc table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14.5px; }
+.lesson-content .lesson-doc th, .lesson-content .lesson-doc td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
+.lesson-content .lesson-doc th { background: var(--surface-2); font-family: var(--mono); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+.lesson-content .lesson-doc code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 4px; padding: 1px 5px; }
+.lesson-content .lesson-doc pre { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 16px; overflow-x: auto; }
+.lesson-content .lesson-doc pre code { background: none; border: none; padding: 0; }
+.lesson-content .math-inline, .lesson-content .math-display { font-family: var(--mono); color: var(--ink-on-accent); background: var(--accent-soft); border-radius: 4px; padding: 0 4px; }
+.lesson-content .math-display-block { font-family: var(--mono); color: var(--ink-on-accent); background: var(--accent-soft); border: 1px solid var(--accent-soft-border); border-radius: var(--radius-sm); padding: 14px 18px; margin: 16px 0; text-align: center; overflow-x: auto; }
+.lesson-content .lesson-subhead { margin-top: 24px; color: var(--ink-muted); font-size: 13px; }
+.lesson-content .lesson-section { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--hairline); }
+.lesson-content .lesson-section h2 { font-family: var(--serif); font-size: 24px; margin-bottom: 18px; color: var(--ink); }
+.lesson-content .codehilite { border-radius: var(--radius-md); padding: 16px; overflow-x: auto; font-size: 13.5px; margin: 10px 0 20px; }
+.lesson-content .lesson-figures { display: grid; gap: 20px; }
+.lesson-content .lesson-figure { margin: 0; background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 12px; }
+.lesson-content .lesson-figure img { width: 100%; height: auto; border-radius: var(--radius-sm); }
+.lesson-content .lesson-figure figcaption { color: var(--ink-subtle); font-size: 11.5px; margin-top: 8px; text-align: center; }
+.lesson-content .quiz-list { display: grid; gap: 10px; }
+.lesson-content .quiz-item { background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 16px 18px; }
+.lesson-content .quiz-item summary { cursor: pointer; font-weight: 500; color: var(--ink); }
+.lesson-content .quiz-item summary:hover { color: var(--primary); }
+.lesson-content .quiz-options { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; color: var(--ink-muted); font-size: 14.5px; }
+.lesson-content .quiz-answer { color: var(--success); margin: 10px 0 6px; }
+.lesson-content .quiz-explanation { color: var(--ink-muted); font-size: 14.5px; line-height: 1.6; }
+.lesson-content .artifact-box { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 24px 28px; }
+.lesson-content .artifact-box h1:first-child { font-size: 20px; margin-top: 0; }
+
+/* pygments "friendly" style, regenerated from the same formatter the
+   generator uses -- keep in sync if generate_courses.py's style= changes */
+.lesson-content pre { line-height: 125%; }
+.lesson-content .codehilite .hll { background-color: #ffffcc }
+.lesson-content .codehilite { background: #f0f0f0; }
+.lesson-content .codehilite .c { color: #60A0B0; font-style: italic }
+.lesson-content .codehilite .err { border: 1px solid #F00 }
+.lesson-content .codehilite .k { color: #007020; font-weight: bold }
+.lesson-content .codehilite .o { color: #666 }
+.lesson-content .codehilite .ch { color: #60A0B0; font-style: italic }
+.lesson-content .codehilite .cm { color: #60A0B0; font-style: italic }
+.lesson-content .codehilite .cp { color: #007020 }
+.lesson-content .codehilite .cpf { color: #60A0B0; font-style: italic }
+.lesson-content .codehilite .c1 { color: #60A0B0; font-style: italic }
+.lesson-content .codehilite .cs { color: #60A0B0; background-color: #FFF0F0 }
+.lesson-content .codehilite .gd { color: #A00000 }
+.lesson-content .codehilite .ge { font-style: italic }
+.lesson-content .codehilite .ges { font-weight: bold; font-style: italic }
+.lesson-content .codehilite .gr { color: #F00 }
+.lesson-content .codehilite .gh { color: #000080; font-weight: bold }
+.lesson-content .codehilite .gi { color: #00A000 }
+.lesson-content .codehilite .go { color: #888 }
+.lesson-content .codehilite .gp { color: #C65D09; font-weight: bold }
+.lesson-content .codehilite .gs { font-weight: bold }
+.lesson-content .codehilite .gu { color: #800080; font-weight: bold }
+.lesson-content .codehilite .gt { color: #04D }
+.lesson-content .codehilite .kc { color: #007020; font-weight: bold }
+.lesson-content .codehilite .kd { color: #007020; font-weight: bold }
+.lesson-content .codehilite .kn { color: #007020; font-weight: bold }
+.lesson-content .codehilite .kp { color: #007020 }
+.lesson-content .codehilite .kr { color: #007020; font-weight: bold }
+.lesson-content .codehilite .kt { color: #902000 }
+.lesson-content .codehilite .m { color: #40A070 }
+.lesson-content .codehilite .s { color: #4070A0 }
+.lesson-content .codehilite .na { color: #4070A0 }
+.lesson-content .codehilite .nb { color: #007020 }
+.lesson-content .codehilite .nc { color: #0E84B5; font-weight: bold }
+.lesson-content .codehilite .no { color: #60ADD5 }
+.lesson-content .codehilite .nd { color: #555; font-weight: bold }
+.lesson-content .codehilite .ni { color: #D55537; font-weight: bold }
+.lesson-content .codehilite .ne { color: #007020 }
+.lesson-content .codehilite .nf { color: #06287E }
+.lesson-content .codehilite .nl { color: #002070; font-weight: bold }
+.lesson-content .codehilite .nn { color: #0E84B5; font-weight: bold }
+.lesson-content .codehilite .nt { color: #062873; font-weight: bold }
+.lesson-content .codehilite .nv { color: #BB60D5 }
+.lesson-content .codehilite .ow { color: #007020; font-weight: bold }
+.lesson-content .codehilite .w { color: #BBB }
+.lesson-content .codehilite .mb { color: #40A070 }
+.lesson-content .codehilite .mf { color: #40A070 }
+.lesson-content .codehilite .mh { color: #40A070 }
+.lesson-content .codehilite .mi { color: #40A070 }
+.lesson-content .codehilite .mo { color: #40A070 }
+.lesson-content .codehilite .sa { color: #4070A0 }
+.lesson-content .codehilite .sb { color: #4070A0 }
+.lesson-content .codehilite .sc { color: #4070A0 }
+.lesson-content .codehilite .dl { color: #4070A0 }
+.lesson-content .codehilite .sd { color: #4070A0; font-style: italic }
+.lesson-content .codehilite .s2 { color: #4070A0 }
+.lesson-content .codehilite .se { color: #4070A0; font-weight: bold }
+.lesson-content .codehilite .sh { color: #4070A0 }
+.lesson-content .codehilite .si { color: #70A0D0; font-style: italic }
+.lesson-content .codehilite .sx { color: #C65D09 }
+.lesson-content .codehilite .sr { color: #235388 }
+.lesson-content .codehilite .s1 { color: #4070A0 }
+.lesson-content .codehilite .ss { color: #517918 }
+.lesson-content .codehilite .bp { color: #007020 }
+.lesson-content .codehilite .fm { color: #06287E }
+.lesson-content .codehilite .vc { color: #BB60D5 }
+.lesson-content .codehilite .vg { color: #BB60D5 }
+.lesson-content .codehilite .vi { color: #BB60D5 }
+.lesson-content .codehilite .vm { color: #BB60D5 }
+.lesson-content .codehilite .il { color: #40A070 }

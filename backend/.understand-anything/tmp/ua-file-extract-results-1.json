@@ -1,0 +1,140 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 2,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": ".dockerignore",
+      "language": "unknown",
+      "fileCategory": "infra",
+      "totalLines": 9,
+      "nonEmptyLines": 9,
+      "metrics": {}
+    },
+    {
+      "path": "Dockerfile",
+      "language": "dockerfile",
+      "fileCategory": "infra",
+      "totalLines": 37,
+      "nonEmptyLines": 31,
+      "services": [
+        {
+          "name": "builder",
+          "image": "python:3.13-slim",
+          "ports": [],
+          "startLine": 6,
+          "endLine": 14
+        },
+        {
+          "name": "runtime",
+          "image": "python:3.13-slim",
+          "ports": [
+            8000
+          ],
+          "startLine": 15,
+          "endLine": 38
+        }
+      ],
+      "steps": [
+        {
+          "name": "FROM python:3.13-slim AS builder",
+          "startLine": 6,
+          "endLine": 6
+        },
+        {
+          "name": "WORKDIR /build",
+          "startLine": 7,
+          "endLine": 7
+        },
+        {
+          "name": "RUN python -m venv /opt/venv",
+          "startLine": 8,
+          "endLine": 8
+        },
+        {
+          "name": "ENV PATH=\"/opt/venv/bin:$PATH\"",
+          "startLine": 9,
+          "endLine": 9
+        },
+        {
+          "name": "COPY requirements.txt .",
+          "startLine": 10,
+          "endLine": 10
+        },
+        {
+          "name": "RUN pip install --no-cache-dir --upgrade pip && \\",
+          "startLine": 11,
+          "endLine": 11
+        },
+        {
+          "name": "FROM python:3.13-slim AS runtime",
+          "startLine": 15,
+          "endLine": 15
+        },
+        {
+          "name": "ENV PATH=\"/opt/venv/bin:$PATH\" \\",
+          "startLine": 16,
+          "endLine": 16
+        },
+        {
+          "name": "COPY --from=builder /opt/venv /opt/venv",
+          "startLine": 21,
+          "endLine": 21
+        },
+        {
+          "name": "WORKDIR /app",
+          "startLine": 23,
+          "endLine": 23
+        },
+        {
+          "name": "COPY app ./app",
+          "startLine": 24,
+          "endLine": 24
+        },
+        {
+          "name": "COPY sample_data ./sample_data",
+          "startLine": 25,
+          "endLine": 25
+        },
+        {
+          "name": "RUN useradd --create-home --uid 10001 pharma && \\",
+          "startLine": 28,
+          "endLine": 28
+        },
+        {
+          "name": "USER pharma",
+          "startLine": 30,
+          "endLine": 30
+        },
+        {
+          "name": "VOLUME [\"/data\"]",
+          "startLine": 31,
+          "endLine": 31
+        },
+        {
+          "name": "EXPOSE 8000",
+          "startLine": 32,
+          "endLine": 32
+        },
+        {
+          "name": "HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \\",
+          "startLine": 34,
+          "endLine": 34
+        },
+        {
+          "name": "CMD [\"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"",
+          "startLine": 37,
+          "endLine": 37
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "serviceCount": 2,
+        "stepCount": 18
+      }
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 02: Data Transformation with dplyr & tidyr — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 02: Data Transformation with dplyr & tidyr, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 02: Data Transformation with dplyr & tidyr</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 02: Data Transformation with dplyr &amp; tidyr</h1>
+<p>This phase turns raw, imported-but-still-messy tables into clean, analysis-ready<br />
+tibbles. You will learn the five core <code>dplyr</code> verbs as composable building blocks,<br />
+master grouped aggregation and group-wise transforms (including the window-function<br />
+patterns every longitudinal or repeated-measures dataset needs), and reshape data<br />
+between wide and long forms with <code>tidyr</code>. One continuity dataset — a simulated messy<br />
+clinical/PK trial extract with inconsistent sex coding, multiple lab-value columns, a<br />
+compound subject-visit ID, and repeated measures per subject — runs through all three<br />
+lessons, so each new verb is applied to the same recognizable mess instead of a fresh<br />
+toy example every time.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Compose <code>select()</code>, <code>filter()</code>, <code>mutate()</code>, <code>arrange()</code>, and <code>summarise()</code> into<br />
+  pipeable, non-mutating data transformation chains</li>
+<li>Recode messy categorical values safely with <code>case_when()</code>, and recognize how<br />
+<code>filter()</code> silently drops <code>NA</code> rows unless you test for them explicitly</li>
+<li>Use <code>group_by()</code> + <code>summarise()</code> for aggregation, and understand the <code>.groups=</code><br />
+  argument and the "list column"/forgotten-<code>ungroup()</code> traps</li>
+<li>Distinguish <code>mutate()</code>-after-<code>group_by()</code> (group-wise transform, same row count) from<br />
+<code>summarise()</code> (collapses to one row per group), and apply window functions (<code>lag()</code>,<br />
+<code>lead()</code>, <code>cumsum()</code>, <code>row_number()</code>) inside grouped <code>mutate()</code></li>
+<li>Reshape data with <code>pivot_longer()</code> and <code>pivot_wider()</code>, and split/combine compound<br />
+  columns with <code>separate_wider_delim()</code> and <code>unite()</code></li>
+<li>Explain why reshaping is a means to tidy data, not a fixed destination — wide and<br />
+  long can both be tidy depending on the unit of observation</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/01-dplyr-verbs">01-dplyr-verbs</a></code></td>
+<td>The Five dplyr Verbs: select, filter, mutate, arrange, summarise</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/02-grouped-operations">02-grouped-operations</a></code></td>
+<td>Grouped Operations and group_by/summarise Pitfalls</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/03-tidyr-reshaping">03-tidyr-reshaping</a></code></td>
+<td>Reshaping with tidyr: pivot_longer, pivot_wider, separate, unite</td>
+<td>55 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.7 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 (Tidyverse Foundations &amp; Data Import) — tibbles, the pipe, and Wickham's<br />
+tidy-data definition. <code>install.packages(c("tidyverse"))</code> (uses <code>dplyr</code>, <code>tidyr</code>,<br />
+<code>tibble</code> from the core tidyverse).</p>
+<h2>References</h2>
+<ul>
+<li>Wickham H, Çetinkaya-Rundel M, Grolemund G (2023). <em>R for Data Science</em>, 2nd ed.,<br />
+  ch. 3–5. O'Reilly. https://r4ds.hadley.nz/</li>
+<li>Wickham H (2014). Tidy data. <em>Journal of Statistical Software</em> 59(10):1–23.</li>
+<li><code>dplyr</code> package documentation: https://dplyr.tidyverse.org/</li>
+<li><code>tidyr</code> package documentation: https://tidyr.tidyverse.org/</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/01-dplyr-verbs">Lesson 01: The Five dplyr Verbs — select, filter, mutate, arrange, summarise</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/02-grouped-operations">Lesson 02: Grouped Operations and group_by/summarise Pitfalls</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/02-dplyr-tidyr-cleaning/03-tidyr-reshaping">Lesson 03: Reshaping with tidyr — pivot_longer, pivot_wider, separate, unite</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

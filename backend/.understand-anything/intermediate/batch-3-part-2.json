@@ -1,0 +1,1302 @@
+{
+  "nodes": [
+    {
+      "id": "file:app/compute/nlme.py",
+      "type": "file",
+      "name": "nlme.py",
+      "filePath": "app/compute/nlme.py",
+      "summary": "True nonlinear mixed-effects estimation for the PK model library: FOCE-I (Laplace conditional EBEs) and SAEM estimators sharing a lognormal IIV and residual-error model, plus stepwise covariate modeling, parameter uncertainty, and MAP estimation.",
+      "tags": [
+        "nlme",
+        "focei",
+        "saem",
+        "population-pk"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Laplace approximation with numeric Hessian for FOCE-I; stochastic-approximation EM for SAEM; SCM with warm-start and optional parallel batch fitting."
+    },
+    {
+      "id": "function:app/compute/nlme.py:_build_cov_effects",
+      "type": "function",
+      "name": "_build_cov_effects",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        230,
+        260
+      ],
+      "summary": "Builds covariate-effect descriptors from a model specification and subject covariates.",
+      "tags": [
+        "nlme",
+        "covariate-model",
+        "model-spec"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_ind_obj",
+      "type": "function",
+      "name": "_ind_obj",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        406,
+        437
+      ],
+      "summary": "Individual conditional objective function (joint log-likelihood of data and random effects) minimized to find a subject's EBE.",
+      "tags": [
+        "nlme",
+        "objective-function",
+        "ebe"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_numeric_hessian",
+      "type": "function",
+      "name": "_numeric_hessian",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        440,
+        468
+      ],
+      "summary": "Finite-difference numeric Hessian of an objective used for the Laplace approximation and uncertainty.",
+      "tags": [
+        "nlme",
+        "numerical-methods",
+        "hessian"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_conditional_mode",
+      "type": "function",
+      "name": "_conditional_mode",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        471,
+        496
+      ],
+      "summary": "Finds a subject's empirical Bayes estimate by minimizing the individual conditional objective.",
+      "tags": [
+        "nlme",
+        "ebe",
+        "optimization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_laplace_subject",
+      "type": "function",
+      "name": "_laplace_subject",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        499,
+        535
+      ],
+      "summary": "Laplace-approximated marginal likelihood contribution for one subject, integrating out random effects.",
+      "tags": [
+        "nlme",
+        "laplace",
+        "likelihood"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_population_ofv",
+      "type": "function",
+      "name": "_population_ofv",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        538,
+        562
+      ],
+      "summary": "Population objective function value summed over all subjects' Laplace contributions.",
+      "tags": [
+        "nlme",
+        "objective-function",
+        "population"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_initial_theta",
+      "type": "function",
+      "name": "_initial_theta",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        579,
+        605
+      ],
+      "summary": "Derives initial fixed-effect (theta) estimates from subject data before population fitting.",
+      "tags": [
+        "nlme",
+        "initialization",
+        "estimation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_parameter_uncertainty",
+      "type": "function",
+      "name": "_parameter_uncertainty",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        653,
+        758
+      ],
+      "summary": "Estimates parameter standard errors and RSEs from the objective Hessian, with condition-number reporting.",
+      "tags": [
+        "nlme",
+        "uncertainty",
+        "standard-error"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_assemble",
+      "type": "function",
+      "name": "_assemble",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        814,
+        854
+      ],
+      "summary": "Assembles the final NLME result object (theta, omega, sigma, OFV, EBEs, covariate records, uncertainty) from a completed fit.",
+      "tags": [
+        "nlme",
+        "result-assembly",
+        "output"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:focei_fit",
+      "type": "function",
+      "name": "focei_fit",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        872,
+        979
+      ],
+      "summary": "FOCE-I population fit: iteratively optimizes fixed effects and variance components using per-subject Laplace EBEs, returning estimates, shrinkage, and uncertainty.",
+      "tags": [
+        "nlme",
+        "focei",
+        "estimation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_saem_estep",
+      "type": "function",
+      "name": "_saem_estep",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1013,
+        1043
+      ],
+      "summary": "SAEM expectation step: MCMC sampling of subject random effects given current parameters.",
+      "tags": [
+        "nlme",
+        "saem",
+        "mcmc"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_saem_update_theta",
+      "type": "function",
+      "name": "_saem_update_theta",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1046,
+        1097
+      ],
+      "summary": "SAEM maximization step updating fixed effects and variance components from stochastic-approximation sufficient statistics.",
+      "tags": [
+        "nlme",
+        "saem",
+        "maximization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:saem_fit",
+      "type": "function",
+      "name": "saem_fit",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1100,
+        1216
+      ],
+      "summary": "SAEM population fit: stochastic-approximation EM alternating MCMC E-step and parameter M-step, deterministic for a fixed seed.",
+      "tags": [
+        "nlme",
+        "saem",
+        "estimation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nlme.py:population_fit",
+      "type": "function",
+      "name": "population_fit",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1235,
+        1275
+      ],
+      "summary": "Dispatches a population fit to FOCE-I or SAEM by method and returns the unified result.",
+      "tags": [
+        "nlme",
+        "dispatch",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_warm_init",
+      "type": "function",
+      "name": "_warm_init",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1284,
+        1305
+      ],
+      "summary": "Warm-starts a candidate covariate fit from a parent result's estimates to accelerate SCM.",
+      "tags": [
+        "nlme",
+        "scm",
+        "warm-start"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:_fit_batch",
+      "type": "function",
+      "name": "_fit_batch",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1312,
+        1329
+      ],
+      "summary": "Fits a batch of candidate models, optionally across a process pool, for stepwise covariate modeling.",
+      "tags": [
+        "nlme",
+        "scm",
+        "parallel"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nlme.py:scm",
+      "type": "function",
+      "name": "scm",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1332,
+        1475
+      ],
+      "summary": "Stepwise covariate modeling: forward-selection then backward-elimination of covariate effects by OFV change, with warm-start and optional parallelism.",
+      "tags": [
+        "nlme",
+        "scm",
+        "covariate-model",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nlme.py:map_estimate",
+      "type": "function",
+      "name": "map_estimate",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        1507,
+        1544
+      ],
+      "summary": "Maximum a posteriori estimation of an individual's random effects from observed concentrations and a population prior (used by TDM forecasting).",
+      "tags": [
+        "nlme",
+        "map-estimation",
+        "bayesian",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:app/compute/nlme.py:_CovEffect",
+      "type": "class",
+      "name": "_CovEffect",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        176,
+        227
+      ],
+      "summary": "Covariate-effect model: holds parameter/covariate linkage, centering, and a multiplier factor with describe/key helpers.",
+      "tags": [
+        "nlme",
+        "covariate-model",
+        "data-model"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:app/compute/nlme.py:_PopSpec",
+      "type": "class",
+      "name": "_PopSpec",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        263,
+        281
+      ],
+      "summary": "Population-model specification bundling structural model, IIV parameters, error model, and covariate effects for the estimators.",
+      "tags": [
+        "nlme",
+        "model-spec",
+        "data-model"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:app/compute/nlme.py:_Subject",
+      "type": "class",
+      "name": "_Subject",
+      "filePath": "app/compute/nlme.py",
+      "lineRange": [
+        77,
+        123
+      ],
+      "summary": "Internal per-subject record holding doses, observation times/concentrations, weight, and covariates for population fitting.",
+      "tags": [
+        "nlme",
+        "data-model",
+        "subject"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/nmexport.py",
+      "type": "file",
+      "name": "nmexport.py",
+      "filePath": "app/compute/nmexport.py",
+      "summary": "Generates NONMEM control streams and mrgsolve C++ model code from a fitted NLME result, mapping structural models to ADVAN/TRANS and translating IIV, residual error, and covariate effects.",
+      "tags": [
+        "export",
+        "nonmem",
+        "mrgsolve",
+        "code-generation"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Maps oral/IV 1-2 cmt fits to ADVAN2/TRANS2 and ADVAN3/TRANS4; covariate effects written as power-of-covariate THETA terms; ALAG1 for absorption lag."
+    },
+    {
+      "id": "function:app/compute/nmexport.py:build_nonmem",
+      "type": "function",
+      "name": "build_nonmem",
+      "filePath": "app/compute/nmexport.py",
+      "lineRange": [
+        85,
+        172
+      ],
+      "summary": "Builds a NONMEM control stream from an NLME fit, selecting the ADVAN/TRANS subroutine and emitting $PK/$THETA/$OMEGA/$SIGMA with covariate and lag terms.",
+      "tags": [
+        "export",
+        "nonmem",
+        "code-generation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nmexport.py:build_mrgsolve",
+      "type": "function",
+      "name": "build_mrgsolve",
+      "filePath": "app/compute/nmexport.py",
+      "lineRange": [
+        175,
+        267
+      ],
+      "summary": "Builds an mrgsolve C++ model (ODE plus parameter/IIV/error blocks) from an NLME fit.",
+      "tags": [
+        "export",
+        "mrgsolve",
+        "code-generation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/compute/pk_fit.py",
+      "type": "file",
+      "name": "pk_fit.py",
+      "filePath": "app/compute/pk_fit.py",
+      "summary": "Individual (naive-pooled / two-stage) fitting of structural PK and PK-PD models by nonlinear least squares, with Jacobian-based RSEs, dataset-level fitting, and AIC model comparison.",
+      "tags": [
+        "curve-fitting",
+        "pk-model",
+        "pkpd",
+        "optimization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:rse_from_jacobian",
+      "type": "function",
+      "name": "rse_from_jacobian",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        26,
+        46
+      ],
+      "summary": "Derives parameter relative standard errors from the least-squares Jacobian and residual sum of squares.",
+      "tags": [
+        "uncertainty",
+        "standard-error",
+        "jacobian"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:fit_subject_model",
+      "type": "function",
+      "name": "fit_subject_model",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        73,
+        126
+      ],
+      "summary": "Fits one subject's concentration data to a structural PK model by nonlinear least squares, returning parameters, RSEs, and fit metrics.",
+      "tags": [
+        "curve-fitting",
+        "pk-model",
+        "optimization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:_pkpd_init",
+      "type": "function",
+      "name": "_pkpd_init",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        152,
+        171
+      ],
+      "summary": "Builds initial parameter guesses for a joint PK-PD fit from PK and PD observations.",
+      "tags": [
+        "pkpd",
+        "initialization",
+        "curve-fitting"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:fit_subject_pkpd",
+      "type": "function",
+      "name": "fit_subject_pkpd",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        174,
+        230
+      ],
+      "summary": "Fits a subject's joint PK-PD model (concentration and effect endpoints) by nonlinear least squares.",
+      "tags": [
+        "curve-fitting",
+        "pkpd",
+        "optimization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:fit_pk_dataset",
+      "type": "function",
+      "name": "fit_pk_dataset",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        233,
+        268
+      ],
+      "summary": "Fits a structural model to every subject in a dataset and summarizes parameters via two-stage statistics.",
+      "tags": [
+        "curve-fitting",
+        "two-stage",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/pk_fit.py:compare_models",
+      "type": "function",
+      "name": "compare_models",
+      "filePath": "app/compute/pk_fit.py",
+      "lineRange": [
+        271,
+        283
+      ],
+      "summary": "Ranks candidate structural models by AIC across the subject set.",
+      "tags": [
+        "model-selection",
+        "aic",
+        "curve-fitting"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/pk_models.py",
+      "type": "file",
+      "name": "pk_models.py",
+      "filePath": "app/compute/pk_models.py",
+      "summary": "Structural PK / PK-PD model library (18 models ported from the PopPK Workbench): each model is a pure-Python ODE system with allometric scaling, dosing-compartment conventions, and a concentration map, exposed through a registry.",
+      "tags": [
+        "pk-model",
+        "ode",
+        "model-library",
+        "pharmacokinetics"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Allometric exponents 0.75 for CL/Q/Vmax and 1.0 for volumes centered at 70 kg; includes Michaelis-Menten, transit-absorption, effect-compartment, and indirect-response (IDR) models."
+    },
+    {
+      "id": "function:app/compute/pk_models.py:list_models",
+      "type": "function",
+      "name": "list_models",
+      "filePath": "app/compute/pk_models.py",
+      "lineRange": [
+        276,
+        279
+      ],
+      "summary": "Returns the registry of available structural PK/PK-PD models.",
+      "tags": [
+        "model-library",
+        "registry",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/pk_models.py:get_model",
+      "type": "function",
+      "name": "get_model",
+      "filePath": "app/compute/pk_models.py",
+      "lineRange": [
+        282,
+        285
+      ],
+      "summary": "Looks up a structural model definition by its key.",
+      "tags": [
+        "model-library",
+        "registry",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:app/compute/pk_models.py:PKModel",
+      "type": "class",
+      "name": "PKModel",
+      "filePath": "app/compute/pk_models.py",
+      "lineRange": [
+        24,
+        42
+      ],
+      "summary": "Dataclass describing one structural model: key, label, group, IV/PD flags, parameters, defaults, compartment layout, ODE right-hand side, concentration map, init state, effect function, and lag parameter.",
+      "tags": [
+        "pk-model",
+        "data-model",
+        "model-spec"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/pk_simulate.py",
+      "type": "file",
+      "name": "pk_simulate.py",
+      "filePath": "app/compute/pk_simulate.py",
+      "summary": "Numerical simulator integrating the structural PK/PK-PD ODE models over dose events and observation times, with allometric parameter scaling and a steady-state time-course helper.",
+      "tags": [
+        "simulation",
+        "ode-solver",
+        "pk-model",
+        "pharmacokinetics"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/pk_simulate.py:scale_params",
+      "type": "function",
+      "name": "scale_params",
+      "filePath": "app/compute/pk_simulate.py",
+      "lineRange": [
+        22,
+        29
+      ],
+      "summary": "Applies allometric weight scaling to a model's parameters before simulation.",
+      "tags": [
+        "simulation",
+        "allometric-scaling",
+        "pk-model"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/pk_simulate.py:simulate",
+      "type": "function",
+      "name": "simulate",
+      "filePath": "app/compute/pk_simulate.py",
+      "lineRange": [
+        38,
+        123
+      ],
+      "summary": "Integrates a structural model's ODE system across dose events and returns predicted concentrations at the requested observation times.",
+      "tags": [
+        "simulation",
+        "ode-solver",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/pk_simulate.py:simulate_timecourse",
+      "type": "function",
+      "name": "simulate_timecourse",
+      "filePath": "app/compute/pk_simulate.py",
+      "lineRange": [
+        126,
+        144
+      ],
+      "summary": "Simulates a dense steady-state concentration time-course for a multiple-dose regimen.",
+      "tags": [
+        "simulation",
+        "steady-state",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/poppk.py",
+      "type": "file",
+      "name": "poppk.py",
+      "filePath": "app/compute/poppk.py",
+      "summary": "Two-stage population summary statistics: geometric-mean typical values and between-subject IIV from individual fits, plus log-linear covariate-effect estimation.",
+      "tags": [
+        "population-pk",
+        "two-stage",
+        "statistics",
+        "covariate"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/poppk.py:two_stage_summary",
+      "type": "function",
+      "name": "two_stage_summary",
+      "filePath": "app/compute/poppk.py",
+      "lineRange": [
+        65,
+        100
+      ],
+      "summary": "Summarizes individual-fit parameters into geometric-mean typical values and IIV (geometric CV) per parameter.",
+      "tags": [
+        "two-stage",
+        "statistics",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/poppk.py:covariate_effect",
+      "type": "function",
+      "name": "covariate_effect",
+      "filePath": "app/compute/poppk.py",
+      "lineRange": [
+        103,
+        156
+      ],
+      "summary": "Estimates a log-linear covariate effect on a parameter from matched individual-fit and covariate values.",
+      "tags": [
+        "covariate",
+        "regression",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/compute/vpc.py",
+      "type": "file",
+      "name": "vpc.py",
+      "filePath": "app/compute/vpc.py",
+      "summary": "Pure, deterministic observed-vs-predicted goodness-of-fit and visual predictive check (VPC, including prediction-corrected pcVPC) built on the structural PK/PK-PD simulator.",
+      "tags": [
+        "vpc",
+        "goodness-of-fit",
+        "simulation",
+        "diagnostics"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Simulation-based percentile bands under IIV with a fixed seed for reproducibility; pcVPC normalizes observations and simulations by typical prediction."
+    },
+    {
+      "id": "function:app/compute/vpc.py:obs_vs_pred",
+      "type": "function",
+      "name": "obs_vs_pred",
+      "filePath": "app/compute/vpc.py",
+      "lineRange": [
+        56,
+        122
+      ],
+      "summary": "Pairs every positive observation with its individual prediction (IPRED) for goodness-of-fit plots and metrics.",
+      "tags": [
+        "vpc",
+        "goodness-of-fit",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/vpc.py:_gof_log",
+      "type": "function",
+      "name": "_gof_log",
+      "filePath": "app/compute/vpc.py",
+      "lineRange": [
+        125,
+        152
+      ],
+      "summary": "Computes log-scale goodness-of-fit metrics between observed and individually predicted concentrations.",
+      "tags": [
+        "goodness-of-fit",
+        "metrics",
+        "vpc"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/vpc.py:vpc_band",
+      "type": "function",
+      "name": "vpc_band",
+      "filePath": "app/compute/vpc.py",
+      "lineRange": [
+        155,
+        198
+      ],
+      "summary": "Builds simulation-based VPC percentile bands by sampling the population IIV model on a time grid with a fixed seed.",
+      "tags": [
+        "vpc",
+        "simulation",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/vpc.py:pcvpc",
+      "type": "function",
+      "name": "pcvpc",
+      "filePath": "app/compute/vpc.py",
+      "lineRange": [
+        201,
+        312
+      ],
+      "summary": "Computes a prediction-corrected VPC: bins observations and simulations and normalizes by typical prediction to remove dosing/covariate heterogeneity.",
+      "tags": [
+        "vpc",
+        "pcvpc",
+        "simulation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_build_cov_effects",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_ind_obj",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_numeric_hessian",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_conditional_mode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_laplace_subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_population_ofv",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_initial_theta",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_parameter_uncertainty",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_assemble",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:focei_fit",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_saem_estep",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_saem_update_theta",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:saem_fit",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:population_fit",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_warm_init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:_fit_batch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:scm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:map_estimate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:focei_fit",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:saem_fit",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:population_fit",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:scm",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "function:app/compute/nlme.py:map_estimate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "class:app/compute/nlme.py:_CovEffect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "class:app/compute/nlme.py:_PopSpec",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "class:app/compute/nlme.py:_Subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/nlme.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/nmexport.py",
+      "target": "function:app/compute/nmexport.py:build_nonmem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nmexport.py",
+      "target": "function:app/compute/nmexport.py:build_mrgsolve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nmexport.py",
+      "target": "function:app/compute/nmexport.py:build_nonmem",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nmexport.py",
+      "target": "function:app/compute/nmexport.py:build_mrgsolve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:rse_from_jacobian",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_subject_model",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:_pkpd_init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_subject_pkpd",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_pk_dataset",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:compare_models",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_subject_model",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_subject_pkpd",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:fit_pk_dataset",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "function:app/compute/pk_fit.py:compare_models",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/pk_fit.py",
+      "target": "file:app/compute/poppk.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "function:app/compute/pk_models.py:list_models",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "function:app/compute/pk_models.py:get_model",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "function:app/compute/pk_models.py:list_models",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "function:app/compute/pk_models.py:get_model",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "class:app/compute/pk_models.py:PKModel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_models.py",
+      "target": "class:app/compute/pk_models.py:PKModel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "function:app/compute/pk_simulate.py:scale_params",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "function:app/compute/pk_simulate.py:simulate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "function:app/compute/pk_simulate.py:simulate_timecourse",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "function:app/compute/pk_simulate.py:simulate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "function:app/compute/pk_simulate.py:simulate_timecourse",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/pk_simulate.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/poppk.py",
+      "target": "function:app/compute/poppk.py:two_stage_summary",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/poppk.py",
+      "target": "function:app/compute/poppk.py:covariate_effect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/poppk.py",
+      "target": "function:app/compute/poppk.py:two_stage_summary",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/poppk.py",
+      "target": "function:app/compute/poppk.py:covariate_effect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:obs_vs_pred",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:_gof_log",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:vpc_band",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:pcvpc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:obs_vs_pred",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:vpc_band",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "function:app/compute/vpc.py:pcvpc",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/vpc.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

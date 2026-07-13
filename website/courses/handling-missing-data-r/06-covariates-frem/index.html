@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 06: Missing Covariate Data & FREM — Handling Missing Data in R</title>
+  <meta name="description" content="Phase 06: Missing Covariate Data & FREM, part of Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 06: Missing Covariate Data & FREM</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R</p>
+      <article class="lesson-doc"><h1>Phase 06: Missing Covariate Data &amp; FREM</h1>
+<p>Covariates are how a population model explains between-subject variability — but covariates<br />
+are themselves data, and they go missing. A subject's weight is recorded at screening but not<br />
+at every visit; a pooled late-phase dataset is missing renal function for an entire study;<br />
+a survey returns with sex left blank. This phase closes the course by treating the covariate<br />
+side of the missing-data problem, from within-subject time-varying gaps (LOCF/NOCB) through<br />
+wholly-missing covariates (CC, single/model-based imputation, multiple imputation, full ML/EST)<br />
+to the Full Random Effects Model (FREM), which sidesteps the whole exclusion problem by treating<br />
+covariates as observations. The capstone stitches Phases 01–06 into one end-to-end, missing-data-aware<br />
+covariate analysis with a reusable decision flow and reporting checklist.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Impute time-varying covariates within a subject using LOCF, NOCB, and linear interpolation, and judge when each biases the analysis</li>
+<li>Enumerate and select among methods for wholly-missing covariates (CC, SI, model-based SI, MI, ML, full-ML/EST), keyed to the missing-data mechanism and the fraction of missing information</li>
+<li>Reproduce the Johansson &amp; Karlsson (2013) result: MI, full-ML-on-weight, and EST are unbiased under MCAR/MAR; only EST stays unbiased under MNAR</li>
+<li>Explain FREM's core idea — covariates as observations, covariate effects read from the OMEGA covariance matrix — and why it is insensitive to covariate correlation and implicitly handles missing covariates</li>
+<li>Execute a complete missing-data-aware covariate workflow: diagnose mechanism → choose BLQ method → impute time-varying covariates → choose a missing-covariate strategy → fit → interpret → justify</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/01-time-varying-covariate-imputation">01-time-varying-covariate-imputation</a></code></td>
+<td>Imputing Time-Varying Covariates Within a Subject</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/02-missing-covariate-methods">02-missing-covariate-methods</a></code></td>
+<td>Methods for Wholly-Missing Covariates</td>
+<td>70 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/03-frem">03-frem</a></code></td>
+<td>FREM: Covariates as Observations</td>
+<td>70 min</td>
+</tr>
+<tr>
+<td>04</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/04-capstone-missing-aware-covariate-workflow">04-capstone-missing-aware-covariate-workflow</a></code></td>
+<td>Capstone — An End-to-End Missing-Data-Aware Covariate Analysis</td>
+<td>90 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 4.75 h</p>
+<h2>Prerequisites</h2>
+<p>Phases 01–05 of this course: the MCAR/MAR/MNAR taxonomy and fraction-of-missing-information<br />
+(Phase 01), missingness diagnostics in R (Phase 02), deletion and single imputation (Phase 03),<br />
+multiple imputation with <code>mice</code> (Phase 04), and popPK event-dataset structure plus BLQ/Beal M1–M7<br />
+methods (Phase 05). Working R with <code>dplyr</code>/<code>tidyr</code>; reading familiarity with NONMEM/nlmixr2 control-stream syntax.</p>
+<h2>References</h2>
+<ul>
+<li>Johansson ÅM, Karlsson MO. Comparison of methods for handling missing covariate data. <em>AAPS J</em> 2013;15(4):1232–1241.</li>
+<li>Jonsson EN, Nyberg J. Full random effects models (FREM): A practical usage guide. <em>CPT Pharmacometrics Syst Pharmacol</em> 2024;13:1297–1308.</li>
+<li>Yngman G, Nyberg J, Jonsson EN, Karlsson MO. An introduction to the full random effects model. <em>CPT Pharmacometrics Syst Pharmacol</em> 2022;11(2):149–160.</li>
+<li>Karlsson MO. A tutorial on covariate handling and model building in population analyses. (Uppsala pharmacometrics course material / PAGE tutorials).</li>
+<li>Beal SL. Ways to fit a PK model with some data below the quantification limit. <em>J Pharmacokinet Pharmacodyn</em> 2001;28(5):481–504.</li>
+<li>Little RJA, Rubin DB. <em>Statistical Analysis with Missing Data</em>. 2nd ed. Wiley, 2002.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/01-time-varying-covariate-imputation">Lesson 01: Imputing Time-Varying Covariates Within a Subject</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/02-missing-covariate-methods">Lesson 02: Methods for Wholly-Missing Covariates</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/03-frem">Lesson 03: FREM — Covariates as Observations</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/06-covariates-frem/04-capstone-missing-aware-covariate-workflow">Lesson 04 (Capstone): An End-to-End Missing-Data-Aware Covariate Analysis</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

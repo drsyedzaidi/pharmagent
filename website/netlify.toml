@@ -1,0 +1,23 @@
+# Netlify config for the PharmAgent marketing site.
+# Static site: this folder is published as-is (no build step).
+
+[build]
+  publish = "."
+  command = ""
+
+# ── Security headers (site is 100% static, zero JavaScript) ──
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# Long-cache the stylesheet (rename the file to bust cache on change)
+[[headers]]
+  for = "/styles.v2.css"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, must-revalidate"

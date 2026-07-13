@@ -1,0 +1,32 @@
+# Netlify config for the PharmAgent student dashboard.
+# Unlike pharmagent/website (zero-build, zero-JS), this is a Vite+React app
+# with server-side Functions for Stripe + entitlement-checked lesson content.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Security headers. This app legitimately needs script-src 'self' (React) and
+# connect-src to Supabase (auth/db/storage) -- unlike the marketing site,
+# which stays script-src 'none'. Update the supabase.co wildcard if your
+# project ref changes; Stripe Checkout is a top-level navigation (not a
+# fetch), so it needs no connect-src/frame-src entry.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# SPA fallback: client-side routes (react-router) must resolve to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

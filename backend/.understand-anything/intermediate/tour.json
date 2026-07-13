@@ -1,0 +1,91 @@
+[
+  {
+    "order": 1,
+    "title": "Application Entry Point",
+    "description": "Start here: app/main.py is the FastAPI bootstrap and the entire HTTP surface of PharmAgent. It wires every route (sessions, dataset upload, chat, all PK/NCA/BE/NLME/SCM analyses, async jobs, CSV/CDISC exports, skills, adversarial review, reports) behind bearer auth and a request-context middleware that stamps request ids and normalizes errors into one envelope. config.py centralizes runtime wiring via a pydantic Settings model (LLM key/model, mock-LLM toggle, data/DB paths, auth token, CORS) so the rest of the app never reads the environment directly. Read these two together to get the bird's-eye view before going deeper.",
+    "nodeIds": ["file:app/main.py", "file:app/config.py"],
+    "languageLesson": "FastAPI declares one pydantic request model per endpoint and uses dependency injection (Depends) for cross-cutting concerns like the current_owner auth check, so validation and authorization happen before handler code runs."
+  },
+  {
+    "order": 2,
+    "title": "Setup & Dependencies",
+    "description": "Before tracing code, understand what the project is built from. requirements.txt pins the production stack: FastAPI/uvicorn/starlette/pydantic for the web layer, pandas/numpy/scipy for the numeric core, python-docx for regulatory exports, and the anthropic client for the optional LLM. requirements-dev.txt adds pytest, httpx, ruff, and pip-audit and is deliberately excluded from the production image. .env.example documents every PHARMAGENT_* setting and reveals a key design choice: all of them are optional, so the app boots keyless with a MockLLM in open dev mode.",
+    "nodeIds": ["document:requirements.txt", "document:requirements-dev.txt", "config:.env.example"]
+  },
+  {
+    "order": 3,
+    "title": "The Shared State Bus",
+    "description": "Everything in PharmAgent flows through PharmState, defined in core/pharmstate.py. It is a typed pydantic object that acts as a communication bus: it holds the datasets, column-role mappings, and every analysis result, and is passed between agents, tools, and the orchestrator. Its apply_writes function is the gatekeeper that validates and merges any field an agent tries to write. This is one of the most depended-upon modules in the codebase (high fan-in), so understanding its shape now makes every later step easier to read.",
+    "nodeIds": ["file:app/core/pharmstate.py"],
+    "languageLesson": "Pydantic models give the shared state runtime validation and typed field access for free, turning the state bus into a self-checking contract rather than a loose dict that any caller could corrupt."
+  },
+  {
+    "order": 4,
+    "title": "Provenance: Audit Chain & Reproducibility",
+    "description": "PharmAgent is built for regulated pharmacometrics, so trust is a first-class feature. core/audit.py implements a tamper-evident hash chain: each AuditEntry links to the previous one via a SHA-256 hash over its inputs and outputs, and AuditChain can append, verify, and serialize the chain for Part-11-style provenance. core/provenance.py complements this by capturing package versions, platform info, git SHA, and SHA-256 hashes of input files so any result can be reproduced. Together they answer 'who did what, to which data, and can we prove it wasn't altered?'",
+    "nodeIds": ["file:app/core/audit.py", "file:app/core/provenance.py"],
+    "languageLesson": "A hash chain makes tampering detectable: because every entry's hash folds in the previous entry's hash, altering any past record breaks verification for every record after it — the same Merkle-style linking idea used in blockchains and git."
+  },
+  {
+    "order": 5,
+    "title": "Core Orchestration: Sessions, Jobs & Persistence",
+    "description": "core/orchestrator.py is the runtime hub the API calls into: it owns sessions, routes chat to the right agent, executes tool/PK runs under per-session locking, drives the adversarial-review loop and workflows, captures/replays skills, and persists state plus the audit chain after every mutation. core/jobs.py offloads slow work (NLME, SCM) to a thread pool so the request returns a job id to poll instead of blocking. core/store.py is the SQLite persistence layer that saves and loads session state and serialized audit chains. This is the spine that connects the HTTP layer (Step 1) to the agents and compute engine ahead.",
+    "nodeIds": ["file:app/core/orchestrator.py", "file:app/core/jobs.py", "file:app/core/store.py"]
+  },
+  {
+    "order": 6,
+    "title": "The Agent Layer",
+    "description": "PharmAgent is agentic: an LLM-driven supervisor decides which domain expert handles a request. agents/supervisor.py is a two-stage router that scores the user message against weighted domain keywords and falls back to LLM classification only when ambiguous. agents/base.py defines the Agent abstraction and its AgentResult — an agent owns a system prompt and a set of bound tools and runs a bounded tool-use loop, mutating PharmState only through the audited tool registry (never by calling other agents). agents/definitions.py is the roster of domain agents (their prompts and descriptions). core/llm.py underpins all of this with an LLM protocol, a keyless MockLLM for tests, and a RealLLM backed by the Anthropic SDK.",
+    "nodeIds": ["file:app/agents/supervisor.py", "file:app/agents/base.py", "file:app/agents/definitions.py", "file:app/core/llm.py"]
+  },
+  {
+    "order": 7,
+    "title": "The Tool Bridge: Registry & Wiring",
+    "description": "Tools are how agents reach the deterministic compute engine. tools/base.py is the framework foundation: ToolContext and ToolResult value objects, the Tool descriptor (which can export its schema to the Anthropic tool-use format), and a ToolRegistry that registers, scopes per-agent, and executes tools while enforcing audit logging and write-access checks. This file has the highest fan-in in the project — nearly every tool module depends on it. tools/builtins.py is the single wiring point: its default_registry collects the TOOLS lists from every tool module so the orchestrator gets one fully populated registry. data_tools.py handles dataset loading and column-role assignment that feed every downstream analysis.",
+    "nodeIds": ["file:app/tools/base.py", "file:app/tools/builtins.py", "file:app/tools/data_tools.py"],
+    "languageLesson": "Each tool exposing a to_anthropic schema is the adapter pattern: the same Tool descriptor serves both the LLM (as a JSON tool-use spec) and the Python runtime (as a callable handler), keeping the agent-facing contract and the implementation in one place."
+  },
+  {
+    "order": 8,
+    "title": "The Modeler Toolbelt",
+    "description": "With the registry understood, look at representative tool modules that bridge agents to compute. tools/pkmodel_tools.py is the Modeler Agent's suite — it fits and compares the structural PK model library, simulates profiles, and runs VPC, true NLME, stepwise covariate modeling, MAP/TDM forecasting, diagnostics, and dose sweeps, all over PharmState. tools/nca_tools.py is the simpler NCA Agent tool computing Cmax, AUC, half-life, lambda-z, and steady-state parameters. Notice the consistent shape: a tool validates inputs, calls a pure compute function, and writes the result back to state through the registry — never doing the math itself.",
+    "nodeIds": ["file:app/tools/pkmodel_tools.py", "file:app/tools/nca_tools.py"]
+  },
+  {
+    "order": 9,
+    "title": "Compute Foundation: PK Models & Simulation",
+    "description": "Now reach the deterministic numerical core that the tools delegate to. compute/pk_models.py is the structural PK/PK-PD model library — 18 models ported from the PopPK Workbench, each a pure-Python ODE system with allometric scaling and a concentration map, exposed through a registry. compute/pk_simulate.py integrates those ODE systems over dose events and observation times and provides a steady-state time-course helper. These two are the bedrock (both high fan-in): every fit, VPC, diagnostic, and dose-sweep ultimately simulates a model defined here. compute/pk_fit.py performs individual (naive-pooled / two-stage) nonlinear least-squares fitting with Jacobian-based standard errors and AIC model comparison.",
+    "nodeIds": ["file:app/compute/pk_models.py", "file:app/compute/pk_simulate.py", "file:app/compute/pk_fit.py"]
+  },
+  {
+    "order": 10,
+    "title": "The NLME Engine",
+    "description": "compute/nlme.py is the analytical crown jewel and the single highest-fan-out module in the project. It implements true nonlinear mixed-effects estimation over the model library: FOCE-I (Laplace-approximated conditional EBEs) and SAEM estimators that share a lognormal between-subject variability and residual-error model. On top of the core fit it layers stepwise covariate modeling (forward selection then backward elimination by objective-function change, with warm-starts and optional process-pool parallelism), parameter uncertainty from the objective Hessian, and MAP estimation that powers the TDM dose forecasting. This is what makes PharmAgent a genuine pharmacometrics platform rather than a calculator.",
+    "nodeIds": ["file:app/compute/nlme.py", "file:app/compute/forecast.py"]
+  },
+  {
+    "order": 11,
+    "title": "NCA, Diagnostics & Adversarial Review",
+    "description": "Surrounding the population engine are the analyses that interpret and stress-test a fit. compute/nca.py does single-dose non-compartmental analysis (lambda-z selection, trapezoidal AUC, Cmax/Tmax, CL/F, half-life), with steady-state handled in nca_ss.py. compute/vpc.py builds observed-vs-predicted goodness-of-fit and visual predictive checks (including prediction-corrected pcVPC), and compute/diagnostics.py adds weighted residuals and NPDE. The standout is compute/adversarial.py: a clean-context skeptic that independently and deterministically recomputes key NCA/NLME quantities from raw data with method-agnostic arithmetic to catch bugs in the primary code — an automated second opinion on every result.",
+    "nodeIds": ["file:app/compute/nca.py", "file:app/compute/vpc.py", "file:app/compute/diagnostics.py", "file:app/compute/adversarial.py"]
+  },
+  {
+    "order": 12,
+    "title": "Regulatory Outputs: CDISC & Exports",
+    "description": "The platform closes the loop by turning analysis state into submission-grade deliverables. core/cdisc.py builds CDISC ADaM-style datasets straight from PharmState — ADPC (concentration records), ADPP (NCA parameters), and a define.xml metadata document, zipped by build_package. core/exporters.py emits CSV for every result type plus NONMEM control streams and mrgsolve C++ model code, so a fit done here can be reproduced in industry-standard tools. core/skills.py captures a session's command log as a replayable Skill (serializable to markdown and persisted in SQLite), letting a vetted workflow be rerun on new data.",
+    "nodeIds": ["file:app/core/cdisc.py", "file:app/core/exporters.py", "file:app/core/skills.py"]
+  },
+  {
+    "order": 13,
+    "title": "Reference Validation: Trusting the Numbers",
+    "description": "The capstone is how PharmAgent proves its math is correct. tests/reference/references.py pins canonical public datasets (Theophylline) to published popPK literature consensus values with acceptance bands, and tests/reference/test_theophylline.py drives the actual shipping NCA + FOCE-I + SAEM code path on that data, asserting the estimates fall inside the literature bands AND agree across methods. The reference README explains the philosophy: validate the real path, not a mock. Alongside, tests/test_nlme.py recovers known parameters from synthetic populations (theta/omega/sigma, covariates, SCM, RSE, BLQ/M3), and tests/test_audit_and_state.py confirms the hash chain detects tampering and PharmState enforces per-field ownership — closing the loop back to Steps 3 and 4.",
+    "nodeIds": ["file:tests/reference/test_theophylline.py", "file:tests/reference/references.py", "document:tests/reference/README.md", "file:tests/test_nlme.py", "file:tests/test_audit_and_state.py"]
+  },
+  {
+    "order": 14,
+    "title": "Containerization & Deployment",
+    "description": "Finally, see how the backend ships. The Dockerfile is a multi-stage build: the builder stage (python:3.13-slim) installs pinned requirements into a virtualenv at /opt/venv, and the runtime stage copies only that venv plus the app code into a fresh slim image, runs as a non-root 'pharma' user, exposes port 8000, and launches uvicorn for app.main:app (Step 1) with a /api/health healthcheck. .dockerignore keeps virtualenvs, caches, tests, local data, SQLite DBs, and secrets out of the build context. ruff.toml defines the linting standard (120-char lines, py313, a curated high-signal rule set tuned for the compact numeric code style).",
+    "nodeIds": ["service:Dockerfile", "service:Dockerfile:builder", "service:Dockerfile:runtime", "service:.dockerignore", "config:ruff.toml"],
+    "languageLesson": "Multi-stage Docker builds use two FROM stages: the builder carries pip and build tooling to compile the venv, while the final image copies only the runtime artifacts. This keeps build-time dependencies and source caches out of production, shrinking the image and reducing attack surface."
+  }
+]

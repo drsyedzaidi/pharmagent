@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 02: Diagnosing Missingness in R — Handling Missing Data in R</title>
+  <meta name="description" content="Phase 02: Diagnosing Missingness in R, part of Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 02: Diagnosing Missingness in R</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R</p>
+      <article class="lesson-doc"><h1>Phase 02: Diagnosing Missingness in R</h1>
+<p>Before you impute a single value you must know <em>how much</em> is missing, <em>where</em> it<br />
+sits, and <em>why</em> it might be absent. This phase turns the general theory of<br />
+missing-data mechanisms (MCAR / MAR / MNAR) into concrete R diagnostics: counting<br />
+and summarising missingness, building the <strong>shadow matrix</strong> so you can test whether<br />
+absence in one variable relates to the values of another, visualising co-missingness<br />
+patterns, and probing the mechanism with Little's MCAR test — while never losing<br />
+sight of the fact that the data alone can never confirm MNAR. By the end you can<br />
+produce a reproducible Missing-Data Diagnostic Report for any clinical/PK dataset.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Quantify per-variable and per-case missingness with base R and <code>naniar</code> verbs</li>
+<li>Construct and reason about the shadow matrix / nabular data to link missingness in X to observed values of Y</li>
+<li>Choose the right visualisation (<code>vis_miss</code>, <code>aggr</code>, margin plots, UpSet, <code>geom_miss_point</code>) for each diagnostic question</li>
+<li>Run and correctly interpret Little's MCAR test, and articulate why MAR and MNAR are indistinguishable from data alone</li>
+<li>Assemble a full diagnostic workflow into a reproducible report template</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/01-descriptive-diagnostics">01-descriptive-diagnostics</a></code></td>
+<td>Descriptive Diagnostics and the Shadow Matrix</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/02-visualizing-missingness">02-visualizing-missingness</a></code></td>
+<td>Visualizing Missingness</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/03-probing-the-mechanism">03-probing-the-mechanism</a></code></td>
+<td>Probing the Mechanism: Can We Tell MCAR from MAR?</td>
+<td>60 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.8 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 01 (the taxonomy of missingness: MCAR, MAR, MNAR; the concept of a<br />
+missingness indicator). Working R with <code>tidyverse</code>. Install:<br />
+<code>install.packages(c("naniar", "visdat", "VIM", "mice", "UpSetR", "ggplot2", "dplyr"))</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Little RJA. A test of missing completely at random for multivariate data with missing values. <em>J Am Stat Assoc</em> 1988;83:1198–1202.</li>
+<li>Tierney N, Cook D. Expanding tidy data principles to facilitate missing data exploration, visualization and assessment of imputations (<code>naniar</code>). <em>J Stat Softw</em> 2023;105(7):1–31.</li>
+<li>van Buuren S. <em>Flexible Imputation of Missing Data</em>. 2nd ed. CRC Press, 2018. https://stefvanbuuren.name/fimd/</li>
+<li>Kabacoff RI. <em>R in Action</em>. 3rd ed. Manning, 2022. (Ch. on missing data / <code>VIM</code>, <code>mice</code>.)</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/01-descriptive-diagnostics">Lesson 01: Descriptive Diagnostics and the Shadow Matrix</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/02-visualizing-missingness">Lesson 02: Visualizing Missingness</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/02-diagnostics-r/03-probing-the-mechanism">Lesson 03: Probing the Mechanism — Can We Tell MCAR from MAR?</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

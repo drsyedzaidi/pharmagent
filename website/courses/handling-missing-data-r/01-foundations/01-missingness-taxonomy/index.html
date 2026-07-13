@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lesson 01: Missing Data — Definition, Impact, and the MCAR/MAR/MNAR Taxonomy — Handling Missing Data in R</title>
+  <meta name="description" content="Lesson 01: Missing Data — Definition, Impact, and the MCAR/MAR/MNAR Taxonomy: a free preview lesson from Handling Missing Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../../index.html#capabilities">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../index.html">Handling Missing Data in R</a> <span aria-hidden="true">/</span> <a href="../index.html">01-foundations</a> <span aria-hidden="true">/</span> <span aria-current="page">Lesson 01: Missing Data — Definition, Impact, and the MCAR/MAR/MNAR Taxonomy</span></nav>
+      
+      <p class="eyebrow">Handling Missing Data in R &middot; 01-foundations &middot; <span class="tag live">Free preview</span></p>
+      <article class="lesson-doc"><h1>Lesson 01: Missing Data — Definition, Impact, and the MCAR/MAR/MNAR Taxonomy</h1>
+<p><strong>Objective.</strong> Define missing data formally, explain why it threatens the validity of an analysis, and master the Rubin (1976) taxonomy — MCAR, MAR, MNAR — that governs which methods are legitimate.</p>
+<p><strong>Prerequisites.</strong> Basic statistics (expectation, bias, conditional probability). No prior missing-data theory required.</p>
+<hr />
+<h2>Concept (from first principles)</h2>
+<h3>What "missing data" actually is</h3>
+<p>Start with a complete data matrix you <em>wish</em> you had:</p>
+<p><span class="math-display">$$Y = \{y_{ij}\}, \quad i = 1,\dots,n \text{ (units)}, \quad j = 1,\dots,p \text{ (variables)}.$$</span></p>
+<p>Reality only lets you observe <em>some</em> of those cells. Encode which cells you got with a<br />
+<strong>missingness indicator matrix</strong> the same shape as <span class="math-inline">$Y$</span>:</p>
+<p><span class="math-display">$$R = \{r_{ij}\}, \qquad r_{ij} = \begin{cases} 1 & y_{ij} \text{ observed} \\ 0 & y_{ij} \text{ missing.} \end{cases}$$</span></p>
+<p>Partition the intended data into what you actually see and what you don't:</p>
+<p><span class="math-display">$$Y = (Y_{\text{obs}}, Y_{\text{mis}}).$$</span></p>
+<p>This is the entire setup. The deep insight of Rubin (1976) is that <span class="math-inline">$R$</span> is itself a random<br />
+variable with its own distribution, and the <em>whole game</em> is understanding how <span class="math-inline">$R$</span> relates<br />
+to <span class="math-inline">$Y$</span>. Missing data is not just "holes in a table" — it is a second stochastic process<br />
+sitting on top of your data-generating process. Ignore that second process and you can be<br />
+badly, invisibly wrong.</p>
+<blockquote>
+<p><strong>Missing ≠ zero, ≠ blank, ≠ "not applicable."</strong> A missing systolic blood pressure is<br />
+not a blood pressure of 0. A concentration below an assay's limit of quantification is<br />
+<em>present but uncertain</em>, not absent. Confusing these is the most common first-day error.</p>
+</blockquote>
+<hr />
+<h3>Why missing data is dangerous</h3>
+<p>Three separate harms, all real, often occurring together.</p>
+<p><strong>1. Bias.</strong> If the units you <em>keep</em> differ systematically from the units you <em>lose</em>, any<br />
+estimate computed on the survivors is an estimate for the wrong population. Suppose you<br />
+want <span class="math-inline">$\mathbb{E}[Y]$</span> but heavier individuals are less likely to report weight. The mean of<br />
+the <em>observed</em> weights,</p>
+<p><span class="math-display">$$\hat\mu_{\text{obs}} = \frac{1}{n_{\text{obs}}}\sum_{i:\,r_i = 1} y_i,$$</span></p>
+<p>targets <span class="math-inline">$\mathbb{E}[Y \mid R = 1]$</span>, not <span class="math-inline">$\mathbb{E}[Y]$</span>. These are equal only under special<br />
+conditions (below). Otherwise <span class="math-inline">$\hat\mu_{\text{obs}}$</span> is biased <em>no matter how large <span class="math-inline">$n$</span> is</em> —<br />
+more data does not fix it.</p>
+<p><strong>2. Reduced power / precision.</strong> Even when unbiased, throwing away rows shrinks the<br />
+effective sample size. Standard errors scale roughly as <span class="math-inline">$1/\sqrt{n_{\text{obs}}}$</span>, so<br />
+dropping 30% of rows inflates every confidence interval and weakens every test. In a<br />
+regression with several partially-observed covariates, listwise deletion can silently<br />
+discard the <em>majority</em> of rows even when no single variable is badly missing.</p>
+<p><strong>3. Invalid inference.</strong> The subtlest harm: a method can produce a point estimate <em>and</em> a<br />
+standard error that both look fine but are internally inconsistent. "Valid" is a<br />
+two-part promise — the estimate must be (approximately) <strong>unbiased</strong> <em>and</em> its reported<br />
+<strong>uncertainty must be correct</strong>. A single imputed value plugged in as if it were real<br />
+data satisfies neither: it biases nothing yet lies about how much you know, understating<br />
+the standard error because it pretends an imputed guess is an observation.</p>
+<hr />
+<h3>Rubin's taxonomy: MCAR, MAR, MNAR</h3>
+<p>The mechanism is defined by the conditional distribution of the missingness indicator <span class="math-inline">$R$</span>0<br />
+given the data. Let <span class="math-inline">$R$</span>1 denote unknown parameters of the missingness process.</p>
+<p><strong>MCAR — Missing Completely At Random.</strong> Missingness depends on <em>neither</em> the observed nor<br />
+the unobserved data:</p>
+<p><span class="math-display">$$P(R \mid Y_{\text{obs}}, Y_{\text{mis}}, \phi) = P(R \mid \phi).$$</span></p>
+<p>The probability a cell is missing is a coin flip unrelated to anything in the study. The<br />
+observed cases are a genuine random subsample of the intended sample. This is the friendly<br />
+case: almost everything works, you just have less of it.</p>
+<p><strong>MAR — Missing At Random.</strong> Missingness depends only on the <em>observed</em> data:</p>
+<p><span class="math-display">$$P(R \mid Y_{\text{obs}}, Y_{\text{mis}}, \phi) = P(R \mid Y_{\text{obs}}, \phi).$$</span></p>
+<p>Given what you <em>have</em> observed, the probability of missingness carries no further<br />
+information about the missing values themselves. The name is misleading — MAR is <em>not</em><br />
+"random." It means the missingness is fully explainable by variables you observed. This is<br />
+the workhorse assumption: methods that use the correlation between observed and missing<br />
+variables (multiple imputation, maximum likelihood) recover unbiased estimates under MAR.</p>
+<p><strong>MNAR — Missing Not At Random.</strong> Missingness depends on the <em>unobserved</em> value itself<br />
+(possibly after conditioning on the observed data):</p>
+<p><span class="math-display">$$P(R \mid Y_{\text{obs}}, Y_{\text{mis}}, \phi) \text{ genuinely depends on } Y_{\text{mis}}.$$</span></p>
+<p>The value that is missing is itself part of the reason it went missing. Here you <em>cannot</em><br />
+recover the truth from the observed data alone — you must supply a model for the<br />
+missingness mechanism, and that model rests on assumptions the data cannot verify.</p>
+<blockquote>
+<p><strong>Ignorability.</strong> MCAR and MAR are together called <strong>ignorable</strong>: you may ignore the<br />
+mechanism <span class="math-inline">$R$</span>2 and base inference on the observed-data likelihood alone (given a proper<br />
+method). MNAR is <strong>non-ignorable</strong> — the mechanism must be modeled jointly. This single<br />
+distinction is the practical payoff of the whole taxonomy.</p>
+</blockquote>
+<hr />
+<h3>A general example: sex and body weight in a survey</h3>
+<p>A questionnaire records <strong>sex</strong> (fully observed) and <strong>body weight</strong> (sometimes missing).<br />
+The same 30% missing weight can be any of the three mechanisms:</p>
+<ul>
+<li><strong>MCAR.</strong> A printing glitch omitted the weight question from a random subset of forms.<br />
+  Respondents never saw it. Missingness is independent of sex <em>and</em> of the true weight.</li>
+<li><strong>MAR.</strong> Women are less likely to report weight than men, but <em>within each sex</em> the<br />
+  probability of reporting does not depend on the actual weight. Missingness depends on<br />
+  sex — which you observed — so conditioning on sex restores validity.</li>
+<li><strong>MNAR.</strong> Heavier respondents (of either sex) are less likely to report, precisely<br />
+<em>because</em> they weigh more. Missingness depends on the very value that is missing. No<br />
+  amount of conditioning on sex fixes this, because the driver (weight) is unobserved for<br />
+  exactly the people you need it from.</li>
+</ul>
+<p>Notice the same variable, same missing fraction, three completely different correct<br />
+analyses. The mechanism — not the percentage — decides.</p>
+<hr />
+<h3>A pharmacometric teaser</h3>
+<p>The mechanisms are not academic; they are everywhere in PK/PD data.</p>
+<ul>
+<li><strong>MAR by design.</strong> Neonates are subject to strict limits on blood-draw volume, so they<br />
+  have <em>fewer</em> concentration samples than adults. Missingness of a sample depends on<br />
+<strong>age</strong> — a recorded covariate. This is textbook MAR: a population model that includes<br />
+  age (and its maturation function) uses the observed age–sampling relationship and<br />
+  remains valid.</li>
+<li><strong>MNAR from the assay.</strong> Concentrations below the <strong>lower limit of quantification<br />
+  (BLQ/LLOQ)</strong> are reported as "missing" or "&lt;LLOQ." But a value is BLQ <em>because it is<br />
+  low</em> — the missingness depends on the unobserved concentration itself. Naively deleting<br />
+  BLQ points biases clearance and terminal-phase estimates upward. This is MNAR, and it<br />
+  needs a mechanism model (e.g. the M3 censored-likelihood method) rather than deletion.</li>
+</ul>
+<p>You will meet both of these again in later phases. For now, just register that <em>the same<br />
+dataset can contain MAR missingness in one column and MNAR censoring in another.</em></p>
+<hr />
+<h3>Why the mechanism dictates the method</h3>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Ignorable?</th>
+<th>What breaks if you just delete</th>
+<th>Valid strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MCAR</strong></td>
+<td>Yes</td>
+<td>Nothing biased; you only lose power</td>
+<td>Complete-case analysis is <em>unbiased</em> (just inefficient); any proper method fine</td>
+</tr>
+<tr>
+<td><strong>MAR</strong></td>
+<td>Yes</td>
+<td>Deletion biases estimates unless the missingness predictors are also the analysis conditioning set</td>
+<td>A method that borrows strength from the observed–missing correlation: multiple imputation (MI) or full-information maximum likelihood (FIML)</td>
+</tr>
+<tr>
+<td><strong>MNAR</strong></td>
+<td>No</td>
+<td>Deletion <em>and</em> standard MI/ML are biased</td>
+<td>Model the missingness mechanism explicitly (selection or pattern-mixture models; M3 for BLQ) — relies on <strong>untestable</strong> assumptions; report sensitivity analyses</td>
+</tr>
+</tbody>
+</table>
+<p>The crucial, humbling fact: <strong>you cannot test MAR vs MNAR from the observed data alone.</strong><br />
+Whether missingness depends on the unseen values is, by definition, about the unseen<br />
+values. Distinguishing MAR from MNAR is a matter of <em>subject-matter judgment and design<br />
+knowledge</em>, not a statistic you can compute. (You <em>can</em> test MCAR against the alternatives,<br />
+e.g. Little's MCAR test — that comparison only involves observed data.)</p>
+<hr />
+<h2>Worked Example</h2>
+<p><strong>Scenario.</strong> A small clinical dataset records <code>sex</code>, <code>age</code>, <code>weight</code>, and a steady-state<br />
+PK <code>exposure</code> (AUC). We reason about <code>weight</code> missingness under each mechanism and predict<br />
+the bias in the estimated mean weight.</p>
+<p>Assume the truth: mean weight is 75 kg overall; females average 65 kg, males 85 kg; heavier<br />
+people have higher exposure. 40% of weights are missing.</p>
+<p><strong>Step 1 — MCAR.</strong> Missing weights are a random 40%. Observed-weight mean → still ≈ 75 kg.<br />
+Bias ≈ 0. Only the standard error grows (fewer rows).</p>
+<p><strong>Step 2 — MAR (missingness depends on sex).</strong> Suppose females are twice as likely to have<br />
+missing weight. The observed sample is now <em>male-enriched</em>, so:</p>
+<p><span class="math-display">$$\hat\mu_{\text{obs}} \approx \text{(weighted toward 85 kg)} &gt; 75 \text{ kg.}$$</span></p>
+<p>Complete-case analysis is <strong>biased upward</strong>. But because the driver (sex) is observed, a<br />
+model conditioning on sex — or MI using sex — recovers ≈ 75 kg. The <em>observed–missing link<br />
+runs through sex</em>, and we have sex.</p>
+<p><strong>Step 3 — MNAR (missingness depends on weight itself).</strong> Suppose the heaviest 40% simply<br />
+did not report. Then the observed weights are the <em>lighter</em> people:</p>
+<p><span class="math-display">$$\hat\mu_{\text{obs}} \approx \text{(mean of the lightest 60%)} &lt; 75 \text{ kg.}$$</span></p>
+<p>Now conditioning on sex does <em>not</em> help, because within each sex it is still the heavier<br />
+members who dropped out, and their weights are gone. Only an explicit mechanism model — with<br />
+an assumption about <em>how</em> probability of reporting falls with weight — can correct this, and<br />
+that assumption cannot be checked against the data.</p>
+<p><strong>Takeaway.</strong> Identical 40% missingness produced +0 bias (MCAR), upward bias correctable<br />
+with observed covariates (MAR), and downward bias correctable only under untestable<br />
+assumptions (MNAR). The code in <code>code/lesson_01.R</code> simulates exactly this and prints the<br />
+three biased means next to the truth.</p>
+<hr />
+<h2>Build it</h2>
+<p><code>code/lesson_01.R</code> walks through:</p>
+<ol>
+<li>Simulate a complete clinical dataset (<code>set.seed</code>) with <code>age</code>, <code>sex</code>, <code>weight</code>, <code>exposure</code></li>
+<li>Induce <strong>MCAR</strong> missingness on <code>weight</code> (random 40%)</li>
+<li>Induce <strong>MAR</strong> missingness (probability depends on observed <code>sex</code>)</li>
+<li>Induce <strong>MNAR</strong> missingness (probability depends on <code>weight</code> itself)</li>
+<li>Compute the complete-case mean weight under each mechanism and compare to the true mean</li>
+<li>Show Little-style intuition: cross-tabulate missingness against <code>sex</code> to reveal the MAR signal</li>
+<li>Print a summary table of bias by mechanism</li>
+</ol>
+<hr />
+<h2>Common Pitfalls</h2>
+<ol>
+<li>
+<p><strong>Treating "% missing" as the severity metric.</strong> 5% MNAR on your key endpoint can ruin<br />
+   an analysis; 50% MCAR on a nuisance variable may barely matter. The mechanism and the<br />
+   variable's role dominate the raw percentage.</p>
+</li>
+<li>
+<p><strong>Reading "MAR" as "the missingness is random."</strong> MAR means <em>conditionally</em> random given<br />
+   observed data. It is a strong, specific claim, not a shrug.</p>
+</li>
+<li>
+<p><strong>Believing you can test MAR vs MNAR.</strong> You cannot, from the data alone. Anyone who<br />
+   claims a p-value proves data are MAR has misunderstood the definition.</p>
+</li>
+<li>
+<p><strong>Deleting BLQ/LLOQ records "to be clean."</strong> That converts an MNAR censoring problem into<br />
+   guaranteed bias. Censored values carry information ("it was below X").</p>
+</li>
+<li>
+<p><strong>Assuming complete-case analysis is always wrong.</strong> Under genuine MCAR it is unbiased —<br />
+   merely inefficient. The sin of deletion is context-dependent, not universal.</p>
+</li>
+</ol>
+<hr />
+<h2>Ship it</h2>
+<p><code>outputs/artifact.md</code> — <strong>MCAR/MAR/MNAR Decision Tree + Worked-Example Table</strong>: a one-page<br />
+flowchart for classifying a mechanism from three questions, plus the survey and<br />
+pharmacometric worked examples side by side with the correct method for each.</p>
+<hr />
+<h2>Check</h2>
+<ol>
+<li>State the formal condition that distinguishes MAR from MNAR in terms of <span class="math-inline">$R$</span>3 and <span class="math-inline">$R$</span>4, and explain why the distinction cannot be tested from observed data alone.</li>
+<li>In a survey with missing body weight, describe one scenario each that makes the missingness MCAR, MAR, and MNAR — and say which one leaves complete-case analysis unbiased.</li>
+<li>Concentrations below an assay's limit of quantification are recorded as missing. Which mechanism is this, is it ignorable, and what goes wrong if you simply delete those records?</li>
+</ol></article>
+
+      <section class='lesson-section'><h2>Code</h2><h3 class="lesson-subhead mono">lesson_01.R</h3><div class="codehilite"><pre><span></span><span class="c1"># ============================================================================</span>
+<span class="c1"># Lesson 01 — Missing Data: MCAR / MAR / MNAR in action</span>
+<span class="c1"># Handling Missing Data in R — Phase 01, Foundations</span>
+<span class="c1">#</span>
+<span class="c1"># Goal: build ONE complete clinical dataset, then induce the three missingness</span>
+<span class="c1"># mechanisms on `weight` and watch what complete-case analysis does to the mean.</span>
+<span class="c1"># No external files required — everything is simulated with set.seed().</span>
+<span class="c1"># ============================================================================</span>
+
+<span class="nf">set.seed</span><span class="p">(</span><span class="m">1976</span><span class="p">)</span><span class="w">              </span><span class="c1"># Rubin (1976), for luck</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 1. Simulate a COMPLETE clinical dataset (the data we WISH we had)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">n</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">1000</span>
+
+<span class="n">sex</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">factor</span><span class="p">(</span><span class="nf">sample</span><span class="p">(</span><span class="nf">c</span><span class="p">(</span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;M&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">replace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">TRUE</span><span class="p">))</span><span class="w">          </span><span class="c1"># ~50/50</span>
+
+<span class="c1"># Weight depends on sex: females ~65 kg, males ~85 kg (SD 10)</span>
+<span class="n">weight</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ifelse</span><span class="p">(</span><span class="n">sex</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span>
+<span class="w">                 </span><span class="nf">rnorm</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">65</span><span class="p">,</span><span class="w"> </span><span class="n">sd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">10</span><span class="p">),</span>
+<span class="w">                 </span><span class="nf">rnorm</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">85</span><span class="p">,</span><span class="w"> </span><span class="n">sd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">10</span><span class="p">))</span>
+
+<span class="n">age</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">round</span><span class="p">(</span><span class="nf">rnorm</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">45</span><span class="p">,</span><span class="w"> </span><span class="n">sd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">15</span><span class="p">))</span><span class="w">                     </span><span class="c1"># years</span>
+<span class="n">age</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">pmax</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="m">18</span><span class="p">)</span><span class="w">                                           </span><span class="c1"># adults only</span>
+
+<span class="c1"># Steady-state exposure (AUC) rises with weight (heavier -&gt; higher AUC here)</span>
+<span class="n">exposure</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="m">2.0</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">weight</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">rnorm</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">sd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">15</span><span class="p">)</span>
+
+<span class="n">dat</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">:</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">weight</span><span class="p">,</span><span class="w"> </span><span class="n">exposure</span><span class="p">)</span>
+
+<span class="n">true_mean_weight</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">mean</span><span class="p">(</span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;TRUE mean weight (complete data): %.2f kg\n\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">true_mean_weight</span><span class="p">))</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 2. MCAR — missingness independent of everything (a random 40%)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">p_missing</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">0.40</span>
+<span class="n">mcar_missing</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">rbinom</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">prob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p_missing</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="m">1</span><span class="w">     </span><span class="c1"># coin flip</span>
+<span class="n">w_mcar</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span>
+<span class="n">w_mcar</span><span class="p">[</span><span class="n">mcar_missing</span><span class="p">]</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">NA</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 3. MAR — missingness depends on OBSERVED sex (females twice as likely missing)</span>
+<span class="c1">#    (independent of the weight value itself, within sex)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">prob_mar</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ifelse</span><span class="p">(</span><span class="n">dat</span><span class="o">$</span><span class="n">sex</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;F&quot;</span><span class="p">,</span><span class="w"> </span><span class="m">0.55</span><span class="p">,</span><span class="w"> </span><span class="m">0.25</span><span class="p">)</span><span class="w">                </span><span class="c1"># depends on sex only</span>
+<span class="n">mar_missing</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">rbinom</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">prob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">prob_mar</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="m">1</span>
+<span class="n">w_mar</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span>
+<span class="n">w_mar</span><span class="p">[</span><span class="n">mar_missing</span><span class="p">]</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">NA</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 4. MNAR — missingness depends on the WEIGHT value itself (heavier -&gt; more missing)</span>
+<span class="c1">#    Logistic in weight: probability of being missing rises with true weight.</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">lin</span><span class="w">  </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">-6</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="m">0.08</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span><span class="w">            </span><span class="c1"># centered so overall ~40% missing</span>
+<span class="n">prob_mnar</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">plogis</span><span class="p">(</span><span class="n">lin</span><span class="p">)</span><span class="w">                  </span><span class="c1"># 1 / (1 + exp(-lin))</span>
+<span class="n">mnar_missing</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">rbinom</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="p">,</span><span class="w"> </span><span class="n">prob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">prob_mnar</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="m">1</span>
+<span class="n">w_mnar</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span>
+<span class="n">w_mnar</span><span class="p">[</span><span class="n">mnar_missing</span><span class="p">]</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">NA</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 5. Complete-case (listwise) mean under each mechanism vs the truth</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="n">cc_mean</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kr">function</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="nf">mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">na.rm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">TRUE</span><span class="p">)</span><span class="w">   </span><span class="c1"># drop NAs, average the rest</span>
+
+<span class="n">results</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">data.frame</span><span class="p">(</span>
+<span class="w">  </span><span class="n">mechanism</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="s">&quot;Truth&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MCAR&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MAR&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MNAR&quot;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">n_observed</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="o">!</span><span class="nf">is.na</span><span class="p">(</span><span class="n">w_mcar</span><span class="p">)),</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="o">!</span><span class="nf">is.na</span><span class="p">(</span><span class="n">w_mar</span><span class="p">)),</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="o">!</span><span class="nf">is.na</span><span class="p">(</span><span class="n">w_mnar</span><span class="p">))),</span>
+<span class="w">  </span><span class="n">mean_weight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">c</span><span class="p">(</span><span class="n">true_mean_weight</span><span class="p">,</span><span class="w"> </span><span class="nf">cc_mean</span><span class="p">(</span><span class="n">w_mcar</span><span class="p">),</span><span class="w"> </span><span class="nf">cc_mean</span><span class="p">(</span><span class="n">w_mar</span><span class="p">),</span><span class="w"> </span><span class="nf">cc_mean</span><span class="p">(</span><span class="n">w_mnar</span><span class="p">))</span>
+<span class="p">)</span>
+<span class="n">results</span><span class="o">$</span><span class="n">bias</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">results</span><span class="o">$</span><span class="n">mean_weight</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">true_mean_weight</span>
+
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Complete-case mean weight by missingness mechanism:\n&quot;</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="n">results</span><span class="p">,</span><span class="w"> </span><span class="n">row.names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">FALSE</span><span class="p">,</span><span class="w"> </span><span class="n">digits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">4</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\nInterpretation:\n&quot;</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot; - MCAR  bias ~ 0        : observed cases are a random subsample\n&quot;</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot; - MAR   bias &gt; 0 (up)   : females (lighter) dropped out -&gt; male-enriched sample\n&quot;</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot; - MNAR  bias &lt; 0 (down) : the heaviest simply did not report -&gt; lighter survivors\n\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 6. The MAR signal is VISIBLE in observed data: missingness correlates with sex.</span>
+<span class="c1">#    (This is why MAR is &#39;ignorable&#39; — the driver, sex, is in hand.)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;MAR: missingness rate of weight by sex (driver is OBSERVED):\n&quot;</span><span class="p">)</span>
+<span class="n">mar_by_sex</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">tapply</span><span class="p">(</span><span class="nf">is.na</span><span class="p">(</span><span class="n">w_mar</span><span class="p">),</span><span class="w"> </span><span class="n">dat</span><span class="o">$</span><span class="n">sex</span><span class="p">,</span><span class="w"> </span><span class="n">mean</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="nf">round</span><span class="p">(</span><span class="n">mar_by_sex</span><span class="p">,</span><span class="w"> </span><span class="m">3</span><span class="p">))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;Different rates across sex -&gt; MAR is detectable &amp; correctable with sex.\n\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># 7. The MNAR signal is INVISIBLE: within the OBSERVED weights you cannot see it,</span>
+<span class="c1">#    because the informative values (heavy) are exactly the ones now gone.</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;MNAR: mean of OBSERVED weights vs mean of the weights that went MISSING:\n&quot;</span><span class="p">)</span>
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;  observed weights mean : %.2f kg\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">mean</span><span class="p">(</span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span><span class="p">[</span><span class="o">!</span><span class="n">mnar_missing</span><span class="p">])))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="nf">sprintf</span><span class="p">(</span><span class="s">&quot;  MISSING  weights mean : %.2f kg  &lt;- unobservable in real life\n&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="nf">mean</span><span class="p">(</span><span class="n">dat</span><span class="o">$</span><span class="n">weight</span><span class="p">[</span><span class="n">mnar_missing</span><span class="p">])))</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;The gap is the MNAR bias; no observed variable recovers it.\n&quot;</span><span class="p">)</span>
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># Reproducibility</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="nf">cat</span><span class="p">(</span><span class="s">&quot;\n----- sessionInfo() -----\n&quot;</span><span class="p">)</span>
+<span class="nf">print</span><span class="p">(</span><span class="nf">sessionInfo</span><span class="p">())</span>
+</pre></div>
+</section>
+      
+      <section class='lesson-section'><h2>Check</h2><div class='quiz-list'><details class="quiz-item">
+  <summary>What formal condition distinguishes MAR from MNAR, and why can it not be tested from observed data alone?</summary>
+  <ul class="quiz-options"><li>A. Under MAR, P(R | Y) depends only on Y_obs; under MNAR it also depends on Y_mis. It cannot be tested because the dependence on the missing values is, by definition, about values you never observed.</li><li>B. Under MAR the missing fraction is below 50%; under MNAR it is above 50%. It cannot be tested because sample sizes are too small.</li><li>C. Under MAR the data are normally distributed; under MNAR they are skewed. It cannot be tested without a normality assumption.</li><li>D. MAR and MNAR are identical; the distinction is purely terminological and any test would be circular.</li></ul>
+  <p class="quiz-answer"><strong>Answer: A</strong></p>
+  <p class="quiz-explanation">MAR means P(R | Y_obs, Y_mis) = P(R | Y_obs): missingness depends only on observed data. MNAR means the probability genuinely depends on the unobserved value Y_mis. Because that dependence concerns values you never got to see, no statistic computed from the observed data can confirm or refute it — distinguishing MAR from MNAR is a matter of subject-matter judgment, not a testable hypothesis. (MCAR, by contrast, CAN be tested, e.g. Little's test, since it only involves observed quantities.)</p>
+</details>
+<details class="quiz-item">
+  <summary>In a survey with missing body weight, which scenario is MAR (as opposed to MCAR or MNAR), and does complete-case analysis stay unbiased under it?</summary>
+  <ul class="quiz-options"><li>A. A printing error randomly omitted the question from some forms; complete-case analysis is unbiased.</li><li>B. Women are less likely to report weight than men, but within each sex reporting is unrelated to the actual weight; complete-case analysis of the raw mean is biased, though sex-conditioned methods recover it.</li><li>C. Heavier people are less likely to report precisely because they are heavy; complete-case analysis is unbiased.</li><li>D. Everyone reported their weight; there is no missingness to classify.</li></ul>
+  <p class="quiz-answer"><strong>Answer: B</strong></p>
+  <p class="quiz-explanation">Option A is MCAR (independent of everything), and there the raw complete-case mean IS unbiased. Option C is MNAR (depends on the unobserved weight itself). Option B is the MAR case: missingness depends on an OBSERVED variable (sex) but not on the weight value within sex. Under MAR the naive complete-case mean is biased (the sample gets sex-skewed), but because the driver (sex) is observed, a method that conditions on or imputes using sex recovers the correct estimate. That recoverability-from-observed-data is exactly what makes MAR ignorable.</p>
+</details>
+<details class="quiz-item">
+  <summary>Assay concentrations below the limit of quantification are recorded as missing. Which mechanism is this, is it ignorable, and what happens if you delete those records?</summary>
+  <ul class="quiz-options"><li>A. MCAR; ignorable; deletion is harmless because BLQ values are random.</li><li>B. MAR; ignorable; deletion is fine as long as you record the sampling time.</li><li>C. MNAR; non-ignorable; deletion biases estimates (e.g. clearance/terminal phase) because the values are missing precisely because they are low.</li><li>D. MAR; non-ignorable; deletion improves precision by removing noisy low values.</li></ul>
+  <p class="quiz-answer"><strong>Answer: C</strong></p>
+  <p class="quiz-explanation">A value is BLQ because it is below the assay's detection threshold — the missingness depends directly on the unobserved concentration itself. That is MNAR, and MNAR is non-ignorable: you must model the mechanism (e.g. the M3 censored-likelihood method) rather than ignore it. Simply deleting BLQ records discards the systematically lowest values, biasing terminal-phase and clearance estimates. The censored records still carry information — 'this concentration was below X' — which deletion throws away.</p>
+</details></div></section>
+      <section class='lesson-section'><h2>Ship it</h2><div class='artifact-box'><h1>MCAR / MAR / MNAR — Decision Tree &amp; Worked-Example Reference</h1>
+<p>A one-page tool for classifying a missingness mechanism and choosing a valid method.</p>
+<hr />
+<h2>The Three-Question Decision Tree</h2>
+<div class="codehilite"><pre><span></span><code>                        Does the probability that a value is MISSING
+                        depend on ANYTHING in the study?
+                                      │
+                 ┌────────────────────┴────────────────────┐
+                NO                                         YES
+                 │                                          │
+              ▼ MCAR                    Does it depend on the MISSING value
+        (Missing Completely            itself (after conditioning on what
+           At Random)                   you observed)?
+        Ignorable.                                 │
+        Observed = random          ┌───────────────┴───────────────┐
+        subsample.                NO                              YES
+                                   │                               │
+                                ▼ MAR                          ▼ MNAR
+                          (Missing At Random)          (Missing Not At Random)
+                          Depends only on OBSERVED       Depends on the UNOBSERVED
+                          data. Ignorable.               value. NON-ignorable.
+</code></pre></div>
+
+<p><strong>Read the tree as three yes/no questions:</strong></p>
+<ol>
+<li>Is missingness related to <em>anything</em>? → No ⇒ <strong>MCAR</strong>.</li>
+<li>If yes, is it fully explained by <em>observed</em> variables? → Yes ⇒ <strong>MAR</strong>.</li>
+<li>Does it still depend on the <em>missing value itself</em>? → Yes ⇒ <strong>MNAR</strong>.</li>
+</ol>
+<blockquote>
+<p>You can <em>test</em> the MCAR branch (e.g. Little's MCAR test). You <strong>cannot</strong> test the<br />
+MAR-vs-MNAR branch from data — it is a subject-matter judgment.</p>
+</blockquote>
+<hr />
+<h2>Formal Definitions (one line each)</h2>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Condition on <span class="math-inline">$P(R \mid Y_{\text{obs}}, Y_{\text{mis}}, \phi)$</span></th>
+<th style="text-align: center;">Ignorable?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MCAR</strong></td>
+<td><span class="math-inline">$= P(R \mid \phi)$</span> — depends on nothing</td>
+<td style="text-align: center;">Yes</td>
+</tr>
+<tr>
+<td><strong>MAR</strong></td>
+<td><span class="math-inline">$= P(R \mid Y_{\text{obs}}, \phi)$</span> — observed only</td>
+<td style="text-align: center;">Yes</td>
+</tr>
+<tr>
+<td><strong>MNAR</strong></td>
+<td>genuinely depends on <span class="math-inline">$Y_{\text{mis}}$</span></td>
+<td style="text-align: center;">No</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Worked Examples Side by Side</h2>
+<h3>General example — survey: sex (observed) + body weight (missing)</h3>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Scenario</th>
+<th>Complete-case mean weight</th>
+<th>Correct approach</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MCAR</strong></td>
+<td>Printing glitch dropped the weight question from random forms</td>
+<td>Unbiased (just noisier)</td>
+<td>Any proper method; deletion OK</td>
+</tr>
+<tr>
+<td><strong>MAR</strong></td>
+<td>Women less likely to report, but not by their actual weight</td>
+<td><strong>Biased</strong> (sample male-enriched)</td>
+<td>Impute / model <em>using sex</em> → recovers truth</td>
+</tr>
+<tr>
+<td><strong>MNAR</strong></td>
+<td>Heavier people less likely to report <em>because</em> heavy</td>
+<td><strong>Biased</strong> (survivors are lighter)</td>
+<td>Explicit mechanism model; sensitivity analysis; untestable assumptions</td>
+</tr>
+</tbody>
+</table>
+<h3>Pharmacometric example — PK/PD data</h3>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Scenario</th>
+<th>Why</th>
+<th>Correct approach</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MAR</strong></td>
+<td>Neonates get fewer blood draws (volume limits)</td>
+<td>Missingness depends on <strong>age</strong>, a recorded covariate</td>
+<td>Population model including age/maturation → valid</td>
+</tr>
+<tr>
+<td><strong>MNAR</strong></td>
+<td>Concentrations below LLOQ recorded as "missing"</td>
+<td>A value is BLQ <em>because it is low</em> — depends on the unobserved concentration</td>
+<td>M3 censored-likelihood; never delete BLQ records</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Method Selection Cheat Line</h2>
+<table>
+<thead>
+<tr>
+<th>If mechanism is…</th>
+<th>…then a valid method is</th>
+<th>…and this FAILS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MCAR</strong></td>
+<td>complete-case (unbiased, inefficient), MI, FIML</td>
+<td>nothing biased; just wasteful</td>
+</tr>
+<tr>
+<td><strong>MAR</strong></td>
+<td>multiple imputation (MI), full-information ML (FIML)</td>
+<td>complete-case deletion; single mean imputation</td>
+</tr>
+<tr>
+<td><strong>MNAR</strong></td>
+<td>selection / pattern-mixture models, M3 for BLQ</td>
+<td>deletion <strong>and</strong> naive MI/ML are biased</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>The Two Things to Remember</h2>
+<ol>
+<li><strong>The mechanism, not the percentage, decides.</strong> 5% MNAR on your endpoint can be worse<br />
+   than 50% MCAR on a nuisance variable.</li>
+<li><strong>"Valid" = unbiased <em>and</em> correctly-quantified uncertainty.</strong> A single plugged-in<br />
+   imputed value fails the second half even when it passes the first.</li>
+</ol></div></section>
+
+      <div class="lesson-upsell">
+        <p>This is the free preview lesson. The rest of <strong>Handling Missing Data in R</strong> — every remaining phase and lesson — unlocks with enrollment.</p>
+        <a href="https://pharmagent-dashboard.netlify.app/checkout/handling-missing-data-r" class="btn btn-primary">Enroll to unlock the full course &rarr;</a>
+      </div>
+
+      <nav class="lesson-pager"><span></span><a href="https://pharmagent-dashboard.netlify.app/learn/handling-missing-data-r/01-foundations/02-fraction-missing-information" class="btn btn-primary">Continue this course &rarr;</a></nav>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../../index.html#top">Product</a>
+        <a href="../../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

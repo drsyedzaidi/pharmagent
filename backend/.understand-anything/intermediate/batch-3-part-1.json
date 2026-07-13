@@ -1,0 +1,1484 @@
+{
+  "nodes": [
+    {
+      "id": "config:.understand-anything/.understandignore",
+      "type": "config",
+      "name": ".understandignore",
+      "filePath": ".understand-anything/.understandignore",
+      "summary": "Ignore-pattern file scoping the Understand-Anything codebase scan, excluding data, caches, notebooks, and the retired graphify output.",
+      "tags": [
+        "configuration",
+        "tooling",
+        "ignore-rules"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/scan-result.json",
+      "type": "config",
+      "name": "scan-result.json",
+      "filePath": ".understand-anything/intermediate/scan-result.json",
+      "summary": "Project-scanner inventory artifact for the Understand-Anything pipeline, listing every file with detected language, line count, and file category.",
+      "tags": [
+        "configuration",
+        "tooling",
+        "data-pipeline",
+        "inventory"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Generated JSON intermediate consumed by downstream graph-assembly stages; not hand-edited."
+    },
+    {
+      "id": "file:app/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/__init__.py",
+      "summary": "Empty package marker making `app` an importable Python package.",
+      "tags": [
+        "entry-point",
+        "package-init",
+        "barrel"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/agents/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/agents/__init__.py",
+      "summary": "Empty package marker making `app.agents` an importable Python package.",
+      "tags": [
+        "entry-point",
+        "package-init",
+        "barrel"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/compute/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/compute/__init__.py",
+      "summary": "Empty package marker making `app.compute` an importable Python package.",
+      "tags": [
+        "entry-point",
+        "package-init",
+        "barrel"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/agents/base.py",
+      "type": "file",
+      "name": "base.py",
+      "filePath": "app/agents/base.py",
+      "summary": "Defines the Agent base class and AgentResult: an agent owns a system prompt and bound tools, mutating PharmState only through the audited, write-checked tool registry in a bounded tool-use loop.",
+      "tags": [
+        "agent",
+        "base-class",
+        "tool-loop",
+        "orchestration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:app/agents/base.py:Agent",
+      "type": "class",
+      "name": "Agent",
+      "filePath": "app/agents/base.py",
+      "lineRange": [
+        28,
+        73
+      ],
+      "summary": "Base agent owning a system prompt and registry-bound tools; runs a bounded tool-use turn that executes tools (enforcing audit and write-access) and never calls other agents.",
+      "tags": [
+        "agent",
+        "base-class",
+        "tool-loop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:app/agents/base.py:AgentResult",
+      "type": "class",
+      "name": "AgentResult",
+      "filePath": "app/agents/base.py",
+      "lineRange": [
+        21,
+        24
+      ],
+      "summary": "Dataclass bundling an agent turn's resulting state, messages, and tool calls.",
+      "tags": [
+        "agent",
+        "data-model",
+        "result"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/agents/definitions.py",
+      "type": "file",
+      "name": "definitions.py",
+      "filePath": "app/agents/definitions.py",
+      "summary": "Phase-1 roster of domain agent definitions (system prompts and descriptions) used by the supervisor for routing and by the orchestrator to instantiate agents.",
+      "tags": [
+        "agent",
+        "configuration",
+        "definitions",
+        "prompts"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/agents/supervisor.py",
+      "type": "file",
+      "name": "supervisor.py",
+      "filePath": "app/agents/supervisor.py",
+      "summary": "Level-0 supervisor that routes a user message to a domain agent via weighted keyword scoring, falling back to LLM classification when ambiguous.",
+      "tags": [
+        "agent",
+        "routing",
+        "supervisor",
+        "classification"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:app/agents/supervisor.py:Supervisor",
+      "type": "class",
+      "name": "Supervisor",
+      "filePath": "app/agents/supervisor.py",
+      "lineRange": [
+        41,
+        55
+      ],
+      "summary": "Two-stage router: weighted keyword scoring over domain terms, then LLM classification on ambiguity; bypassed when a workflow template drives routing.",
+      "tags": [
+        "routing",
+        "supervisor",
+        "classification"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/compute/adversarial.py",
+      "type": "file",
+      "name": "adversarial.py",
+      "filePath": "app/compute/adversarial.py",
+      "summary": "Adversarial review engine: a clean-context skeptic that independently and deterministically refutes analysis results, recomputing key NCA/NLME quantities from raw data with method-agnostic arithmetic to catch bugs in the primary code.",
+      "tags": [
+        "validation",
+        "adversarial-review",
+        "quality-gate",
+        "recompute"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Distrusts tool-written numbers and re-derives Cmax/AUC plausibility independently."
+    },
+    {
+      "id": "function:app/compute/adversarial.py:_nca_internal",
+      "type": "function",
+      "name": "_nca_internal",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        51,
+        107
+      ],
+      "summary": "Internal NCA consistency checks (e.g. AUCinf below AUClast, non-positive CL/F, extrapolation out of range) emitting severity-graded findings.",
+      "tags": [
+        "validation",
+        "nca",
+        "consistency-check"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/adversarial.py:_nca_dose_monotonic",
+      "type": "function",
+      "name": "_nca_dose_monotonic",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        110,
+        125
+      ],
+      "summary": "Flags non-monotonic dose-vs-exposure trends across dose groups as a medium-severity finding.",
+      "tags": [
+        "validation",
+        "nca",
+        "dose-response"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/adversarial.py:_nlme_refute",
+      "type": "function",
+      "name": "_nlme_refute",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        128,
+        164
+      ],
+      "summary": "Refutes NLME fits by flagging over-parameterization and non-converged results.",
+      "tags": [
+        "validation",
+        "nlme",
+        "consistency-check"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/adversarial.py:_obs_by_subject",
+      "type": "function",
+      "name": "_obs_by_subject",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        168,
+        186
+      ],
+      "summary": "Groups raw observations by subject from a dataframe using role mappings, for independent recomputation.",
+      "tags": [
+        "data-prep",
+        "grouping",
+        "nca"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/adversarial.py:_nca_recompute",
+      "type": "function",
+      "name": "_nca_recompute",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        189,
+        223
+      ],
+      "summary": "Recomputes Cmax and an AUC plausibility band directly from raw observations to detect disagreement with reported NCA values.",
+      "tags": [
+        "validation",
+        "nca",
+        "recompute"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/adversarial.py:review",
+      "type": "function",
+      "name": "review",
+      "filePath": "app/compute/adversarial.py",
+      "lineRange": [
+        227,
+        265
+      ],
+      "summary": "Top-level adversarial review: runs internal checks plus raw-data recomputation against a state dump and goal, returning severity-sorted findings.",
+      "tags": [
+        "validation",
+        "adversarial-review",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/bioequivalence.py",
+      "type": "file",
+      "name": "bioequivalence.py",
+      "filePath": "app/compute/bioequivalence.py",
+      "summary": "Average bioequivalence assessment computing geometric mean ratios and 90% confidence intervals (paired crossover and parallel designs) against the 80-125% acceptance window.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "confidence-interval",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/bioequivalence.py:be_one_parameter",
+      "type": "function",
+      "name": "be_one_parameter",
+      "filePath": "app/compute/bioequivalence.py",
+      "lineRange": [
+        58,
+        74
+      ],
+      "summary": "Assesses bioequivalence for a single PK parameter, dispatching to paired or parallel computation.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "dispatch"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/bioequivalence.py:_be_paired",
+      "type": "function",
+      "name": "_be_paired",
+      "filePath": "app/compute/bioequivalence.py",
+      "lineRange": [
+        77,
+        107
+      ],
+      "summary": "Paired (crossover) bioequivalence: log-scale mean difference, standard error, and CI on test/reference exposures.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "crossover"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/bioequivalence.py:_be_parallel",
+      "type": "function",
+      "name": "_be_parallel",
+      "filePath": "app/compute/bioequivalence.py",
+      "lineRange": [
+        110,
+        138
+      ],
+      "summary": "Parallel-design bioequivalence: two-group log-scale comparison with pooled variance and CI.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "parallel-design"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/bioequivalence.py:assess_bioequivalence",
+      "type": "function",
+      "name": "assess_bioequivalence",
+      "filePath": "app/compute/bioequivalence.py",
+      "lineRange": [
+        141,
+        170
+      ],
+      "summary": "Assesses bioequivalence across all common PK parameters, blocking overall BE if any parameter fails.",
+      "tags": [
+        "bioequivalence",
+        "statistics",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/compartmental.py",
+      "type": "file",
+      "name": "compartmental.py",
+      "filePath": "app/compute/compartmental.py",
+      "summary": "Closed-form one- and two-compartment oral PK models (single-dose and steady-state) plus least-squares fitting of individual subjects and dose-grouped cohorts.",
+      "tags": [
+        "compartmental",
+        "pk-model",
+        "curve-fitting",
+        "pharmacokinetics"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Analytic concentration solutions vectorized over time; steady-state via superposition accumulation factor."
+    },
+    {
+      "id": "function:app/compute/compartmental.py:conc_1cmt_oral",
+      "type": "function",
+      "name": "conc_1cmt_oral",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        52,
+        63
+      ],
+      "summary": "Closed-form 1-compartment oral concentration over time given ka, CL, V.",
+      "tags": [
+        "compartmental",
+        "pk-model",
+        "closed-form"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:conc_2cmt_oral",
+      "type": "function",
+      "name": "conc_2cmt_oral",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        66,
+        95
+      ],
+      "summary": "Closed-form 2-compartment oral concentration solving the biexponential disposition from ka, CL, V1, Q, V2.",
+      "tags": [
+        "compartmental",
+        "pk-model",
+        "closed-form"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:conc_1cmt_oral_ss",
+      "type": "function",
+      "name": "conc_1cmt_oral_ss",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        107,
+        121
+      ],
+      "summary": "Steady-state 1-compartment oral concentration over a dosing interval via superposition.",
+      "tags": [
+        "compartmental",
+        "steady-state",
+        "closed-form"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:conc_2cmt_oral_ss",
+      "type": "function",
+      "name": "conc_2cmt_oral_ss",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        124,
+        155
+      ],
+      "summary": "Steady-state 2-compartment oral concentration over a dosing interval via superposition accumulation.",
+      "tags": [
+        "compartmental",
+        "steady-state",
+        "closed-form"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:_initial_estimates",
+      "type": "function",
+      "name": "_initial_estimates",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        176,
+        203
+      ],
+      "summary": "Derives initial parameter guesses (ka, CL, V) from observed time-concentration data before fitting.",
+      "tags": [
+        "curve-fitting",
+        "initialization",
+        "compartmental"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:fit_one_subject",
+      "type": "function",
+      "name": "fit_one_subject",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        206,
+        307
+      ],
+      "summary": "Fits a single subject's concentration-time profile to a chosen compartmental model by nonlinear least squares, returning parameters and fit metrics.",
+      "tags": [
+        "curve-fitting",
+        "compartmental",
+        "optimization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:fit_compartmental",
+      "type": "function",
+      "name": "fit_compartmental",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        310,
+        361
+      ],
+      "summary": "Fits compartmental models across subjects grouped by dose, selecting the best model per group.",
+      "tags": [
+        "curve-fitting",
+        "compartmental",
+        "model-selection",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/compartmental.py:fit_compartmental_ss",
+      "type": "function",
+      "name": "fit_compartmental_ss",
+      "filePath": "app/compute/compartmental.py",
+      "lineRange": [
+        364,
+        399
+      ],
+      "summary": "Fits steady-state compartmental models to extracted steady-state interval profiles.",
+      "tags": [
+        "curve-fitting",
+        "steady-state",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/diagnostics.py",
+      "type": "file",
+      "name": "diagnostics.py",
+      "filePath": "app/compute/diagnostics.py",
+      "summary": "Pure, deterministic model goodness-of-fit residual diagnostics (log-scale weighted residuals and NPDE) built on the structural PK/PK-PD simulator.",
+      "tags": [
+        "diagnostics",
+        "residuals",
+        "npde",
+        "goodness-of-fit"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Log-scale residuals for proportional error; NPDE via simulation under IIV with fixed seed for determinism."
+    },
+    {
+      "id": "function:app/compute/diagnostics.py:fit_residuals",
+      "type": "function",
+      "name": "fit_residuals",
+      "filePath": "app/compute/diagnostics.py",
+      "lineRange": [
+        76,
+        171
+      ],
+      "summary": "Computes population and individual weighted residuals (log scale) by pairing observations with typical and individual predictions, returning summary statistics.",
+      "tags": [
+        "diagnostics",
+        "residuals",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/diagnostics.py:npde",
+      "type": "function",
+      "name": "npde",
+      "filePath": "app/compute/diagnostics.py",
+      "lineRange": [
+        174,
+        281
+      ],
+      "summary": "Computes normalized prediction distribution errors by simulating each observation under the population IIV model with a fixed seed.",
+      "tags": [
+        "diagnostics",
+        "npde",
+        "simulation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/compute/dose_proportionality.py",
+      "type": "file",
+      "name": "dose_proportionality.py",
+      "filePath": "app/compute/dose_proportionality.py",
+      "summary": "Power-model dose-proportionality assessment: fits log(exposure) vs log(dose), computing the slope, confidence interval, and a critical-region acceptance test.",
+      "tags": [
+        "dose-proportionality",
+        "statistics",
+        "power-model",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/dose_proportionality.py:power_model",
+      "type": "function",
+      "name": "power_model",
+      "filePath": "app/compute/dose_proportionality.py",
+      "lineRange": [
+        36,
+        107
+      ],
+      "summary": "Fits the power model of exposure vs dose, returning slope, standard error, CI, and the proportionality critical-region decision.",
+      "tags": [
+        "dose-proportionality",
+        "regression",
+        "power-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/dose_proportionality.py:assess_dose_proportionality",
+      "type": "function",
+      "name": "assess_dose_proportionality",
+      "filePath": "app/compute/dose_proportionality.py",
+      "lineRange": [
+        110,
+        141
+      ],
+      "summary": "Aggregates power-model dose-proportionality assessments across all PK parameters.",
+      "tags": [
+        "dose-proportionality",
+        "statistics",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:app/compute/dose_sweep.py",
+      "type": "file",
+      "name": "dose_sweep.py",
+      "filePath": "app/compute/dose_sweep.py",
+      "summary": "Dose-sweep simulator computing steady-state exposure metrics (AUC, Cmax, Cavg, trough) across a range of doses for a structural PK model.",
+      "tags": [
+        "dose-sweep",
+        "simulation",
+        "exposure-metrics",
+        "pharmacokinetics"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/dose_sweep.py:_interval_metrics",
+      "type": "function",
+      "name": "_interval_metrics",
+      "filePath": "app/compute/dose_sweep.py",
+      "lineRange": [
+        31,
+        68
+      ],
+      "summary": "Computes per-interval exposure metrics (AUC over tau, Cmax, Cavg, trough) from a simulated concentration profile.",
+      "tags": [
+        "exposure-metrics",
+        "auc",
+        "steady-state"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/dose_sweep.py:dose_sweep",
+      "type": "function",
+      "name": "dose_sweep",
+      "filePath": "app/compute/dose_sweep.py",
+      "lineRange": [
+        71,
+        132
+      ],
+      "summary": "Sweeps a model across multiple doses, simulating each to steady state and returning interval exposure metrics and the response envelope.",
+      "tags": [
+        "dose-sweep",
+        "simulation",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/compute/dosing.py",
+      "type": "file",
+      "name": "dosing.py",
+      "filePath": "app/compute/dosing.py",
+      "summary": "Dosing-record utilities: expands NONMEM-style dose events (II/ADDL), detects multiple-dose regimens, and extracts steady-state dosing intervals from concentration records.",
+      "tags": [
+        "dosing",
+        "nonmem",
+        "steady-state",
+        "data-prep"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/dosing.py:_dose_times",
+      "type": "function",
+      "name": "_dose_times",
+      "filePath": "app/compute/dosing.py",
+      "lineRange": [
+        43,
+        64
+      ],
+      "summary": "Expands a dose row's interval (II) and additional-doses (ADDL) fields into explicit dose times.",
+      "tags": [
+        "dosing",
+        "nonmem",
+        "expansion"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/dosing.py:is_multiple_dose",
+      "type": "function",
+      "name": "is_multiple_dose",
+      "filePath": "app/compute/dosing.py",
+      "lineRange": [
+        77,
+        89
+      ],
+      "summary": "Detects whether a record set represents a multiple-dose regimen.",
+      "tags": [
+        "dosing",
+        "detection",
+        "regimen"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/dosing.py:extract_ss_intervals",
+      "type": "function",
+      "name": "extract_ss_intervals",
+      "filePath": "app/compute/dosing.py",
+      "lineRange": [
+        92,
+        155
+      ],
+      "summary": "Extracts per-subject steady-state dosing intervals (time-after-dose profiles) from concentration records for steady-state NCA and fitting.",
+      "tags": [
+        "dosing",
+        "steady-state",
+        "data-prep",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:app/compute/dosing.py:SSProfile",
+      "type": "class",
+      "name": "SSProfile",
+      "filePath": "app/compute/dosing.py",
+      "lineRange": [
+        33,
+        40
+      ],
+      "summary": "Dataclass describing one subject's steady-state interval: time-after-dose, concentrations, dose, tau, number of doses, and trough source.",
+      "tags": [
+        "dosing",
+        "data-model",
+        "steady-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/compute/forecast.py",
+      "type": "file",
+      "name": "forecast.py",
+      "filePath": "app/compute/forecast.py",
+      "summary": "Bayesian dose forecasting: MAP-estimates individual parameters from measured levels, simulates steady-state exposure, and optimizes the dose to hit a target metric.",
+      "tags": [
+        "forecast",
+        "map-estimation",
+        "dose-optimization",
+        "tdm"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/forecast.py:_optimize_dose",
+      "type": "function",
+      "name": "_optimize_dose",
+      "filePath": "app/compute/forecast.py",
+      "lineRange": [
+        38,
+        61
+      ],
+      "summary": "Optimizes the dose to achieve a target steady-state exposure metric for given individual parameters.",
+      "tags": [
+        "dose-optimization",
+        "forecast",
+        "steady-state"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/forecast.py:forecast",
+      "type": "function",
+      "name": "forecast",
+      "filePath": "app/compute/forecast.py",
+      "lineRange": [
+        64,
+        138
+      ],
+      "summary": "End-to-end TDM forecast: derives individual PK via MAP from measured levels (or population typical), simulates, and optionally optimizes dose to target.",
+      "tags": [
+        "forecast",
+        "map-estimation",
+        "tdm",
+        "entry-point"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/compute/nca_ss.py",
+      "type": "file",
+      "name": "nca_ss.py",
+      "filePath": "app/compute/nca_ss.py",
+      "summary": "Steady-state non-compartmental analysis computing per-subject AUC over tau, Cmax/Cmin, CL/F, and accumulation, then summarizing by dose.",
+      "tags": [
+        "nca",
+        "steady-state",
+        "pharmacokinetics"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/compute/nca_ss.py:nca_ss_subject",
+      "type": "function",
+      "name": "nca_ss_subject",
+      "filePath": "app/compute/nca_ss.py",
+      "lineRange": [
+        21,
+        73
+      ],
+      "summary": "Computes steady-state NCA parameters for one subject's dosing interval (AUCtau, Cmax, Cmin, Cavg, CL/F).",
+      "tags": [
+        "nca",
+        "steady-state",
+        "subject"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nca_ss.py:run_nca_ss",
+      "type": "function",
+      "name": "run_nca_ss",
+      "filePath": "app/compute/nca_ss.py",
+      "lineRange": [
+        76,
+        89
+      ],
+      "summary": "Runs steady-state NCA over all subject profiles and summarizes results grouped by dose.",
+      "tags": [
+        "nca",
+        "steady-state",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/compute/nca.py",
+      "type": "file",
+      "name": "nca.py",
+      "filePath": "app/compute/nca.py",
+      "summary": "Single-dose non-compartmental analysis: lambda_z selection, AUC by trapezoid, Cmax/Tmax, CL/F, half-life, percent extrapolation, plus geometric-mean dose summaries.",
+      "tags": [
+        "nca",
+        "pharmacokinetics",
+        "auc",
+        "lambda-z"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Best lambda_z chosen by adjusted R^2 over terminal windows; supports manual refit."
+    },
+    {
+      "id": "function:app/compute/nca.py:_auc_intervals",
+      "type": "function",
+      "name": "_auc_intervals",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        28,
+        45
+      ],
+      "summary": "Computes interval AUCs by the linear trapezoidal rule over a concentration-time profile.",
+      "tags": [
+        "nca",
+        "auc",
+        "trapezoid"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nca.py:_best_lambda_z",
+      "type": "function",
+      "name": "_best_lambda_z",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        48,
+        88
+      ],
+      "summary": "Selects the terminal elimination rate (lambda_z) by maximizing adjusted R^2 over candidate terminal windows.",
+      "tags": [
+        "nca",
+        "lambda-z",
+        "regression"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nca.py:refit_lambda_z_manual",
+      "type": "function",
+      "name": "refit_lambda_z_manual",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        91,
+        128
+      ],
+      "summary": "Refits lambda_z from a user-selected set of terminal points for manual NCA override.",
+      "tags": [
+        "nca",
+        "lambda-z",
+        "manual-override"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nca.py:nca_subject",
+      "type": "function",
+      "name": "nca_subject",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        131,
+        197
+      ],
+      "summary": "Computes full NCA parameters for one subject (Cmax, Tmax, AUClast, AUCinf, CL/F, Vz/F, t-half, % extrapolated) for IV or oral dosing.",
+      "tags": [
+        "nca",
+        "subject",
+        "pharmacokinetics"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/compute/nca.py:summarize_by_dose",
+      "type": "function",
+      "name": "summarize_by_dose",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        216,
+        233
+      ],
+      "summary": "Aggregates per-subject NCA parameters into geometric-mean and geometric-CV summaries grouped by dose.",
+      "tags": [
+        "nca",
+        "summary",
+        "geometric-mean"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:app/compute/nca.py:run_nca",
+      "type": "function",
+      "name": "run_nca",
+      "filePath": "app/compute/nca.py",
+      "lineRange": [
+        240,
+        268
+      ],
+      "summary": "Runs single-dose NCA across all subjects from records and dose mapping, returning per-subject and by-dose summaries.",
+      "tags": [
+        "nca",
+        "entry-point",
+        "pharmacokinetics"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:app/agents/base.py",
+      "target": "class:app/agents/base.py:Agent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "class:app/agents/base.py:Agent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "class:app/agents/base.py:AgentResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "class:app/agents/base.py:AgentResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "file:app/core/audit.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "file:app/core/pharmstate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/agents/base.py",
+      "target": "file:app/tools/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/agents/definitions.py",
+      "target": "file:app/agents/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/agents/supervisor.py",
+      "target": "class:app/agents/supervisor.py:Supervisor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/agents/supervisor.py",
+      "target": "class:app/agents/supervisor.py:Supervisor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/agents/supervisor.py",
+      "target": "file:app/agents/definitions.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/agents/supervisor.py",
+      "target": "file:app/core/llm.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:_nca_internal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:_nca_dose_monotonic",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:_nlme_refute",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:_obs_by_subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:_nca_recompute",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:review",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/adversarial.py",
+      "target": "function:app/compute/adversarial.py:review",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/bioequivalence.py",
+      "target": "function:app/compute/bioequivalence.py:be_one_parameter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/bioequivalence.py",
+      "target": "function:app/compute/bioequivalence.py:_be_paired",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/bioequivalence.py",
+      "target": "function:app/compute/bioequivalence.py:_be_parallel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/bioequivalence.py",
+      "target": "function:app/compute/bioequivalence.py:assess_bioequivalence",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/bioequivalence.py",
+      "target": "function:app/compute/bioequivalence.py:assess_bioequivalence",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:conc_1cmt_oral",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:conc_2cmt_oral",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:conc_1cmt_oral_ss",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:conc_2cmt_oral_ss",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:_initial_estimates",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:fit_one_subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:fit_compartmental",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:fit_compartmental_ss",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:fit_compartmental",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/compartmental.py",
+      "target": "function:app/compute/compartmental.py:fit_compartmental_ss",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "function:app/compute/diagnostics.py:fit_residuals",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "function:app/compute/diagnostics.py:npde",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "function:app/compute/diagnostics.py:fit_residuals",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "function:app/compute/diagnostics.py:npde",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/diagnostics.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/dose_proportionality.py",
+      "target": "function:app/compute/dose_proportionality.py:power_model",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dose_proportionality.py",
+      "target": "function:app/compute/dose_proportionality.py:assess_dose_proportionality",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dose_proportionality.py",
+      "target": "function:app/compute/dose_proportionality.py:assess_dose_proportionality",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/dose_sweep.py",
+      "target": "function:app/compute/dose_sweep.py:_interval_metrics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dose_sweep.py",
+      "target": "function:app/compute/dose_sweep.py:dose_sweep",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dose_sweep.py",
+      "target": "function:app/compute/dose_sweep.py:dose_sweep",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/dose_sweep.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/dose_sweep.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "function:app/compute/dosing.py:_dose_times",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "function:app/compute/dosing.py:is_multiple_dose",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "function:app/compute/dosing.py:extract_ss_intervals",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "function:app/compute/dosing.py:extract_ss_intervals",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "class:app/compute/dosing.py:SSProfile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/dosing.py",
+      "target": "class:app/compute/dosing.py:SSProfile",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "function:app/compute/forecast.py:_optimize_dose",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "function:app/compute/forecast.py:forecast",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "function:app/compute/forecast.py:forecast",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "file:app/compute/nlme.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "file:app/compute/pk_models.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/forecast.py",
+      "target": "file:app/compute/pk_simulate.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/nca_ss.py",
+      "target": "function:app/compute/nca_ss.py:nca_ss_subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca_ss.py",
+      "target": "function:app/compute/nca_ss.py:run_nca_ss",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca_ss.py",
+      "target": "function:app/compute/nca_ss.py:run_nca_ss",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nca_ss.py",
+      "target": "function:app/compute/nca_ss.py:nca_ss_subject",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nca_ss.py",
+      "target": "file:app/compute/nca.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:_auc_intervals",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:_best_lambda_z",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:refit_lambda_z_manual",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:nca_subject",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:summarize_by_dose",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:run_nca",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:run_nca",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:nca_subject",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:refit_lambda_z_manual",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/compute/nca.py",
+      "target": "function:app/compute/nca.py:summarize_by_dose",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

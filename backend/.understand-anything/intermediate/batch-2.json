@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "Template environment file documenting all PHARMAGENT_* runtime settings (optional Anthropic LLM key/model, SQLite storage paths, bearer-token auth, CORS origins, branding). All vars are optional — the app defaults to keyless MockLLM and open dev mode.",
+      "tags": ["configuration", "environment", "security", "settings"],
+      "complexity": "simple",
+      "languageNotes": "Every variable is commented out by default; absence of a key triggers the deterministic MockLLM fallback, and an unset API token leaves auth in open dev mode."
+    },
+    {
+      "id": "document:requirements.txt",
+      "type": "document",
+      "name": "requirements.txt",
+      "filePath": "requirements.txt",
+      "summary": "Pinned production dependency manifest for the FastAPI backend: web stack (fastapi, uvicorn, starlette, pydantic, pydantic-settings), numeric/scientific compute (pandas, numpy, scipy), DOCX export (python-docx), multipart uploads, and the anthropic LLM client.",
+      "tags": ["dependencies", "configuration", "build-system", "python"],
+      "complexity": "simple",
+      "languageNotes": "Exact-version pins (==) across all runtime packages enforce reproducible builds."
+    },
+    {
+      "id": "document:requirements-dev.txt",
+      "type": "document",
+      "name": "requirements-dev.txt",
+      "filePath": "requirements-dev.txt",
+      "summary": "Development and test tooling manifest, excluded from the production image: includes runtime deps via -r requirements.txt, plus pytest, httpx (test client), ruff (linter), and pip-audit (dependency vulnerability scanner).",
+      "tags": ["dependencies", "testing", "tooling", "development"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:ruff.toml",
+      "type": "config",
+      "name": "ruff.toml",
+      "filePath": "ruff.toml",
+      "summary": "Ruff linter configuration for the backend: 120-char line length, py313 target, and a curated high-signal rule set (pyflakes, pycodestyle, import-order, pyupgrade) with stylistic rules (E701/E702/E731/E741) and bugbear deliberately disabled for the compact numeric code style.",
+      "tags": ["configuration", "linting", "tooling", "build-system"],
+      "complexity": "simple",
+      "languageNotes": "Intentionally excludes flake8-bugbear and compact-numeric-style rules (semicolons, lambda aliases); tests are exempted from line-length (E501)."
+    }
+  ],
+  "edges": []
+}

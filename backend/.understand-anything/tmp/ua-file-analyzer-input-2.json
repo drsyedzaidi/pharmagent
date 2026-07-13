@@ -1,0 +1,15 @@
+{
+  "projectRoot": "/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend",
+  "batchFiles": [
+    {"path": ".env.example", "language": "config", "sizeLines": 23, "fileCategory": "config"},
+    {"path": "requirements-dev.txt", "language": "txt", "sizeLines": 6, "fileCategory": "docs"},
+    {"path": "requirements.txt", "language": "txt", "sizeLines": 13, "fileCategory": "docs"},
+    {"path": "ruff.toml", "language": "toml", "sizeLines": 15, "fileCategory": "config"}
+  ],
+  "batchImportData": {
+    ".env.example": [],
+    "requirements-dev.txt": [],
+    "requirements.txt": [],
+    "ruff.toml": []
+  }
+}

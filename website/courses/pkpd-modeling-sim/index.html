@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PKPD Modeling and Simulation — From Dose to Effect</title>
+  <meta name="description" content="PKPD Modeling and Simulation: From Dose to Effect." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../styles.v2.css" />
+  <link rel="stylesheet" href="../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../index.html#capabilities">Product</a>
+        <a href="../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../courses.html">Courses</a> <span aria-hidden="true">/</span> <span aria-current="page">PKPD Modeling and Simulation</span></nav>
+      
+      <p class="eyebrow">From Dose to Effect</p>
+      <article class="lesson-doc"><h1>PKPD Modeling and Simulation — From Dose to Effect</h1>
+<p>A hands-on course on pharmacodynamic (PD) modeling and PK/PD integration using R and mrgsolve. Each lesson derives the math from first principles, builds a working mrgsolve model, and ships a keepable artifact — template, checklist, or analysis script — for use on real projects.</p>
+<h2>Prerequisites</h2>
+<ul>
+<li>PK foundations: 1- and 2-compartment models, clearance, volume of distribution</li>
+<li>R basics: dplyr, ggplot2, reading data frames</li>
+<li>mrgsolve installed: <code>install.packages("mrgsolve")</code></li>
+</ul>
+<h2>What You Will Learn</h2>
+<ul>
+<li>How concentration and effect are linked — and why the link is rarely instantaneous</li>
+<li>Direct effect models: linear, log-linear, Emax, Hill</li>
+<li>Effect compartment and Ke0 for delayed response</li>
+<li>Indirect response (turnover) models I–IV</li>
+<li>Disease progression modeling and placebo effects</li>
+<li>Tolerance and rebound pharmacology</li>
+<li>Exposure–response regression for binary and continuous endpoints</li>
+<li>Clinical trial simulation pipeline in mrgsolve</li>
+</ul>
+<h2>Phase Ladder</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Phase</th>
+<th>Ships</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td>PKPD Foundations</td>
+<td>PKPD conceptual map + R/mrgsolve setup</td>
+</tr>
+<tr>
+<td>02</td>
+<td>Direct Effect Models</td>
+<td>Emax/Hill mrgsolve model template</td>
+</tr>
+<tr>
+<td>03</td>
+<td>Effect Compartment and Hysteresis</td>
+<td>Ke0 link-model mrgsolve template</td>
+</tr>
+<tr>
+<td>04</td>
+<td>Indirect Response Models</td>
+<td>IDR I–IV mrgsolve model library</td>
+</tr>
+<tr>
+<td>05</td>
+<td>Disease Progression</td>
+<td>Disease-on-drug model skeleton</td>
+</tr>
+<tr>
+<td>06</td>
+<td>Tolerance and Rebound</td>
+<td>Precursor-pool tolerance template</td>
+</tr>
+<tr>
+<td>07</td>
+<td>Exposure–Response Analysis</td>
+<td>E-R logistic + Emax report script</td>
+</tr>
+<tr>
+<td>08</td>
+<td>Clinical Trial Simulation</td>
+<td>Full CTS pipeline in mrgsolve</td>
+</tr>
+</tbody>
+</table>
+<h2>Key References</h2>
+<ul>
+<li>Gabrielsson J, Weaner D (2006). Pharmacokinetic and Pharmacodynamic Data Analysis, 4th ed.</li>
+<li>Rowland M, Tozer TN (2011). Clinical Pharmacokinetics and Pharmacodynamics, 4th ed.</li>
+<li>Dayneka NL et al. (1993). Comparison of four basic models of indirect pharmacodynamic responses. J Pharmacokinet Biopharm 21:457–478.</li>
+<li>Jusko WJ, Ko HC (1994). Physiologic indirect response models characterize diverse types of pharmacodynamic effects. Clin Pharmacol Ther 56:406–419.</li>
+<li>Sheiner LB et al. (1979). Simultaneous modeling of pharmacokinetics and pharmacodynamics. Clin Pharmacol Ther 25:358–371.</li>
+<li>Holford NH, Sheiner LB (1982). Kinetics of pharmacologic response. Pharmacol Ther 16:143–166.</li>
+</ul>
+<h2>Tooling</h2>
+<ul>
+<li>R (&gt;= 4.2), mrgsolve (&gt;= 1.0), dplyr, ggplot2</li>
+<li>Optional: nlmixr2, PKNCA, rmarkdown</li>
+<li>NONMEM syntax shown in lesson notes where relevant</li>
+</ul>
+<h2>Pedagogy: Learn → Build → Ship → Check</h2>
+<p>Every lesson runs the same four-move loop. You derive the concept, implement it in R/mrgsolve, walk away with a reusable artifact, and answer 3 check questions before advancing.</p></article>
+      <section class="lesson-section">
+        <h2>Phases</h2>
+        <ol class="phase-lesson-list"><li><a href="01-pkpd-foundations/index.html"><strong>Phase 01: PKPD Foundations</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="02-direct-effect-models/index.html"><strong>Phase 02: Direct Effect Models</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="03-effect-compartment/index.html"><strong>Phase 03: Effect Compartment and Hysteresis</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="04-indirect-response-models/index.html"><strong>Phase 04: Indirect Response Models</strong></a> <span class="mono lesson-count">4 lessons</span></li><li><a href="05-disease-progression/index.html"><strong>Phase 05: Disease Progression</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="06-tolerance-rebound/index.html"><strong>Phase 06: Tolerance and Rebound</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="07-exposure-response/index.html"><strong>Phase 07: Exposure–Response Analysis</strong></a> <span class="mono lesson-count">4 lessons</span></li><li><a href="08-clinical-trial-simulation/index.html"><strong>Phase 08: Clinical Trial Simulation</strong></a> <span class="mono lesson-count">4 lessons</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../index.html#top">Product</a>
+        <a href="../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

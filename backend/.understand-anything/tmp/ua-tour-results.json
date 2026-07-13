@@ -1,0 +1,1793 @@
+{
+  "scriptCompleted": true,
+  "entryPointCandidates": [
+    {
+      "id": "file:app/main.py",
+      "score": 5,
+      "name": "main.py",
+      "summary": "FastAPI application entry point wiring all HTTP routes for PharmAgent: sessions, dataset upload, chat, workflows, every PK/NCA/BE/NLME/SCM analysis, async jobs, exports (CSV/control/CDISC), skills, adversarial review, reports, and the SPA frontend mount, with bearer auth and a request-context/error envelope.",
+      "type": "file"
+    },
+    {
+      "id": "file:app/__init__.py",
+      "score": 2,
+      "name": "__init__.py",
+      "summary": "Empty package marker making `app` an importable Python package.",
+      "type": "file"
+    },
+    {
+      "id": "file:app/compute/compartmental.py",
+      "score": 2,
+      "name": "compartmental.py",
+      "summary": "Closed-form one- and two-compartment oral PK models (single-dose and steady-state) plus least-squares fitting of individual subjects and dose-grouped cohorts.",
+      "type": "file"
+    },
+    {
+      "id": "file:app/compute/pk_fit.py",
+      "score": 2,
+      "name": "pk_fit.py",
+      "summary": "Individual (naive-pooled / two-stage) fitting of structural PK and PK-PD models by nonlinear least squares, with Jacobian-based RSEs, dataset-level fitting, and AIC model comparison.",
+      "type": "file"
+    },
+    {
+      "id": "file:app/tools/regulatory_tools.py",
+      "score": 2,
+      "name": "regulatory_tools.py",
+      "summary": "Generates an ICH/FDA Module 2.7.2 (Summary of Clinical Pharmacology) Word document from analysis state, assembling narrative sections (background, NCA, popPK, special populations, DDI, conclusions) and standardized tables.",
+      "type": "file"
+    }
+  ],
+  "fanInRanking": [
+    {
+      "id": "file:app/tools/base.py",
+      "fanIn": 14,
+      "name": "base.py"
+    },
+    {
+      "id": "file:app/compute/pk_models.py",
+      "fanIn": 7,
+      "name": "pk_models.py"
+    },
+    {
+      "id": "file:app/core/pharmstate.py",
+      "fanIn": 7,
+      "name": "pharmstate.py"
+    },
+    {
+      "id": "file:tests/test_report_272.py",
+      "fanIn": 7,
+      "name": "test_report_272.py"
+    },
+    {
+      "id": "file:app/compute/pk_simulate.py",
+      "fanIn": 6,
+      "name": "pk_simulate.py"
+    },
+    {
+      "id": "file:tests/test_api.py",
+      "fanIn": 6,
+      "name": "test_api.py"
+    },
+    {
+      "id": "file:tests/test_identity_audit.py",
+      "fanIn": 5,
+      "name": "test_identity_audit.py"
+    },
+    {
+      "id": "file:tests/test_skills.py",
+      "fanIn": 5,
+      "name": "test_skills.py"
+    },
+    {
+      "id": "file:tests/test_orchestrator.py",
+      "fanIn": 4,
+      "name": "test_orchestrator.py"
+    },
+    {
+      "id": "file:tests/test_pk_models.py",
+      "fanIn": 4,
+      "name": "test_pk_models.py"
+    },
+    {
+      "id": "function:app/tools/pkmodel_tools.py:_build_subjects",
+      "fanIn": 4,
+      "name": "_build_subjects"
+    },
+    {
+      "id": "file:app/config.py",
+      "fanIn": 3,
+      "name": "config.py"
+    },
+    {
+      "id": "file:app/core/provenance.py",
+      "fanIn": 3,
+      "name": "provenance.py"
+    },
+    {
+      "id": "file:tests/reference/test_theophylline.py",
+      "fanIn": 3,
+      "name": "test_theophylline.py"
+    },
+    {
+      "id": "file:tests/test_adversarial.py",
+      "fanIn": 3,
+      "name": "test_adversarial.py"
+    },
+    {
+      "id": "file:tests/test_diagnostics.py",
+      "fanIn": 3,
+      "name": "test_diagnostics.py"
+    },
+    {
+      "id": "file:tests/test_forecast.py",
+      "fanIn": 3,
+      "name": "test_forecast.py"
+    },
+    {
+      "id": "file:tests/test_nlme.py",
+      "fanIn": 3,
+      "name": "test_nlme.py"
+    },
+    {
+      "id": "file:tests/test_ss_compute.py",
+      "fanIn": 3,
+      "name": "test_ss_compute.py"
+    },
+    {
+      "id": "file:tests/test_vpc.py",
+      "fanIn": 3,
+      "name": "test_vpc.py"
+    }
+  ],
+  "fanOutRanking": [
+    {
+      "id": "file:app/compute/nlme.py",
+      "fanOut": 30,
+      "name": "nlme.py"
+    },
+    {
+      "id": "file:app/core/orchestrator.py",
+      "fanOut": 19,
+      "name": "orchestrator.py"
+    },
+    {
+      "id": "file:app/tools/pkmodel_tools.py",
+      "fanOut": 19,
+      "name": "pkmodel_tools.py"
+    },
+    {
+      "id": "file:app/main.py",
+      "fanOut": 16,
+      "name": "main.py"
+    },
+    {
+      "id": "file:app/tools/regulatory_tools.py",
+      "fanOut": 16,
+      "name": "regulatory_tools.py"
+    },
+    {
+      "id": "file:app/compute/pk_fit.py",
+      "fanOut": 14,
+      "name": "pk_fit.py"
+    },
+    {
+      "id": "file:app/compute/compartmental.py",
+      "fanOut": 13,
+      "name": "compartmental.py"
+    },
+    {
+      "id": "file:app/compute/nca.py",
+      "fanOut": 11,
+      "name": "nca.py"
+    },
+    {
+      "id": "file:app/compute/pk_models.py",
+      "fanOut": 11,
+      "name": "pk_models.py"
+    },
+    {
+      "id": "file:app/compute/pk_simulate.py",
+      "fanOut": 11,
+      "name": "pk_simulate.py"
+    },
+    {
+      "id": "file:app/compute/vpc.py",
+      "fanOut": 10,
+      "name": "vpc.py"
+    },
+    {
+      "id": "file:app/core/llm.py",
+      "fanOut": 10,
+      "name": "llm.py"
+    },
+    {
+      "id": "file:tests/test_nlme.py",
+      "fanOut": 10,
+      "name": "test_nlme.py"
+    },
+    {
+      "id": "file:app/core/cdisc.py",
+      "fanOut": 9,
+      "name": "cdisc.py"
+    },
+    {
+      "id": "file:app/tools/builtins.py",
+      "fanOut": 9,
+      "name": "builtins.py"
+    },
+    {
+      "id": "file:app/tools/data_tools.py",
+      "fanOut": 9,
+      "name": "data_tools.py"
+    },
+    {
+      "id": "file:app/tools/report_tools.py",
+      "fanOut": 9,
+      "name": "report_tools.py"
+    },
+    {
+      "id": "function:app/tools/regulatory_tools.py:generate_272",
+      "fanOut": 9,
+      "name": "generate_272"
+    },
+    {
+      "id": "file:app/compute/adversarial.py",
+      "fanOut": 8,
+      "name": "adversarial.py"
+    },
+    {
+      "id": "file:app/core/exporters.py",
+      "fanOut": 8,
+      "name": "exporters.py"
+    }
+  ],
+  "bfsTraversal": {
+    "startNode": "file:app/main.py",
+    "order": [
+      "file:app/main.py",
+      "file:app/config.py",
+      "file:app/core/cdisc.py",
+      "file:app/core/exporters.py",
+      "file:app/core/jobs.py",
+      "file:app/core/logging_config.py",
+      "file:app/core/orchestrator.py",
+      "file:app/core/audit.py",
+      "file:app/core/llm.py",
+      "file:app/core/pharmstate.py",
+      "file:app/core/provenance.py",
+      "file:app/core/skills.py",
+      "file:app/core/store.py",
+      "file:app/tools/base.py",
+      "file:app/tools/builtins.py",
+      "file:app/tools/data_tools.py",
+      "file:app/tools/be_tools.py",
+      "file:app/tools/compartmental_tools.py",
+      "file:app/tools/dp_tools.py",
+      "file:app/tools/nca_tools.py",
+      "file:app/tools/pkmodel_tools.py"
+    ],
+    "depthMap": {
+      "file:app/main.py": 0,
+      "file:app/config.py": 1,
+      "file:app/core/cdisc.py": 1,
+      "file:app/core/exporters.py": 1,
+      "file:app/core/jobs.py": 1,
+      "file:app/core/logging_config.py": 1,
+      "file:app/core/orchestrator.py": 1,
+      "file:app/core/audit.py": 2,
+      "file:app/core/llm.py": 2,
+      "file:app/core/pharmstate.py": 2,
+      "file:app/core/provenance.py": 2,
+      "file:app/core/skills.py": 2,
+      "file:app/core/store.py": 2,
+      "file:app/tools/base.py": 2,
+      "file:app/tools/builtins.py": 2,
+      "file:app/tools/data_tools.py": 2,
+      "file:app/tools/be_tools.py": 3,
+      "file:app/tools/compartmental_tools.py": 3,
+      "file:app/tools/dp_tools.py": 3,
+      "file:app/tools/nca_tools.py": 3,
+      "file:app/tools/pkmodel_tools.py": 3
+    },
+    "byDepth": {
+      "0": [
+        "file:app/main.py"
+      ],
+      "1": [
+        "file:app/config.py",
+        "file:app/core/cdisc.py",
+        "file:app/core/exporters.py",
+        "file:app/core/jobs.py",
+        "file:app/core/logging_config.py",
+        "file:app/core/orchestrator.py"
+      ],
+      "2": [
+        "file:app/core/audit.py",
+        "file:app/core/llm.py",
+        "file:app/core/pharmstate.py",
+        "file:app/core/provenance.py",
+        "file:app/core/skills.py",
+        "file:app/core/store.py",
+        "file:app/tools/base.py",
+        "file:app/tools/builtins.py",
+        "file:app/tools/data_tools.py"
+      ],
+      "3": [
+        "file:app/tools/be_tools.py",
+        "file:app/tools/compartmental_tools.py",
+        "file:app/tools/dp_tools.py",
+        "file:app/tools/nca_tools.py",
+        "file:app/tools/pkmodel_tools.py"
+      ]
+    }
+  },
+  "nonCodeFiles": {
+    "documentation": [
+      {
+        "id": "document:requirements.txt",
+        "name": "requirements.txt",
+        "summary": "Pinned production dependency manifest for the FastAPI backend: web stack (fastapi, uvicorn, starlette, pydantic, pydantic-settings), numeric/scientific compute (pandas, numpy, scipy), DOCX export (python-docx), multipart uploads, and the anthropic LLM client."
+      },
+      {
+        "id": "document:requirements-dev.txt",
+        "name": "requirements-dev.txt",
+        "summary": "Development and test tooling manifest, excluded from the production image: includes runtime deps via -r requirements.txt, plus pytest, httpx (test client), ruff (linter), and pip-audit (dependency vulnerability scanner)."
+      },
+      {
+        "id": "document:tests/reference/README.md",
+        "name": "README.md",
+        "summary": "Explains the reference-validation suite: how it drives the shipping compute path on canonical public datasets (Theophylline) to assert literature concordance, cross-method consistency, and optional exact tool concordance."
+      }
+    ],
+    "infrastructure": [
+      {
+        "id": "service:Dockerfile",
+        "name": "Dockerfile",
+        "summary": "Multi-stage Docker build for the PharmAgent FastAPI backend: a builder stage installs pinned deps into a venv, and a slim runtime stage copies the venv plus app code, runs as a non-root user, and serves uvicorn on port 8000 with a /api/health healthcheck."
+      },
+      {
+        "id": "service:Dockerfile:builder",
+        "name": "builder",
+        "summary": "First build stage (python:3.13-slim) that creates a virtualenv at /opt/venv and installs pinned requirements, keeping build tooling out of the final image."
+      },
+      {
+        "id": "service:Dockerfile:runtime",
+        "name": "runtime",
+        "summary": "Final runtime stage (python:3.13-slim) that copies the prebuilt venv and app/sample_data, sets data-dir env vars, runs as non-root user 'pharma', exposes port 8000, and launches uvicorn for app.main:app."
+      },
+      {
+        "id": "service:.dockerignore",
+        "name": ".dockerignore",
+        "summary": "Docker build-context exclusion list that keeps virtualenvs, caches, tests, local data, SQLite DBs, secrets, and git metadata out of the image build context."
+      }
+    ],
+    "data": [],
+    "config": [
+      {
+        "id": "config:.env.example",
+        "name": ".env.example",
+        "summary": "Template environment file documenting all PHARMAGENT_* runtime settings (optional Anthropic LLM key/model, SQLite storage paths, bearer-token auth, CORS origins, branding). All vars are optional — the app defaults to keyless MockLLM and open dev mode."
+      },
+      {
+        "id": "config:ruff.toml",
+        "name": "ruff.toml",
+        "summary": "Ruff linter configuration for the backend: 120-char line length, py313 target, and a curated high-signal rule set (pyflakes, pycodestyle, import-order, pyupgrade) with stylistic rules (E701/E702/E731/E741) and bugbear deliberately disabled for the compact numeric code style."
+      },
+      {
+        "id": "config:.understand-anything/.understandignore",
+        "name": ".understandignore",
+        "summary": "Ignore-pattern file scoping the Understand-Anything codebase scan, excluding data, caches, notebooks, and the retired graphify output."
+      },
+      {
+        "id": "config:.understand-anything/intermediate/scan-result.json",
+        "name": "scan-result.json",
+        "summary": "Project-scanner inventory artifact for the Understand-Anything pipeline, listing every file with detected language, line count, and file category."
+      }
+    ]
+  },
+  "clusters": [],
+  "layers": {
+    "count": 8,
+    "list": [
+      {
+        "id": "layer:api-entry",
+        "name": "API & Entry",
+        "description": "FastAPI application bootstrap and HTTP surface: app entrypoint (main.py), runtime settings (config.py), top-level workflow wiring (workflows.py), and DB package init that mount the agentic pharmacometrics service."
+      },
+      {
+        "id": "layer:agents",
+        "name": "Agent Layer",
+        "description": "LLM agent orchestration: the supervisor that drives multi-step pharmacometrics reasoning, the base agent abstraction, and the agent/tool definitions registry."
+      },
+      {
+        "id": "layer:tools",
+        "name": "Tool Layer",
+        "description": "Agent-callable tool implementations (PK model, NCA, BE, dose-proportionality, compartmental, poppk, report, regulatory, QC, review, data tools) plus the tool base/registry that bridge agents to the deterministic compute engine."
+      },
+      {
+        "id": "layer:compute",
+        "name": "Compute Engine",
+        "description": "Deterministic PK/PKPD numerical core: structural PK models, simulation/forecast, NCA (incl. steady-state), NLME (FOCE-I/SAEM/poppk), bioequivalence, dose-proportionality, dose-sweep, VPC, diagnostics, adversarial checks, and NONMEM export."
+      },
+      {
+        "id": "layer:core",
+        "name": "Core Orchestration & Infrastructure",
+        "description": "Cross-cutting runtime services: the orchestrator, SHA-256 audit chain, background job runner, persistence store, LLM client, pharm-state, provenance/reproducibility, CDISC/exporters, schema extraction, skills, and logging config."
+      },
+      {
+        "id": "layer:test",
+        "name": "Test Suite",
+        "description": "Pytest suite covering compute modules, API, orchestrator, audit/state, NLME, VPC, and the published-literature reference-validation tests (Theophylline) plus shared fixtures."
+      },
+      {
+        "id": "layer:infrastructure",
+        "name": "Infrastructure",
+        "description": "Containerization and deployment: the multi-stage Dockerfile (builder and runtime stages) and the .dockerignore that package the backend for uvicorn-based serving."
+      },
+      {
+        "id": "layer:project-support",
+        "name": "Project Config & Docs",
+        "description": "Project-level configuration (.env.example, ruff.toml, understand-anything configs/scan), dependency manifests (requirements*.txt), reference-test README, and the SQLite database artifact supporting the build and tooling environment."
+      }
+    ]
+  },
+  "nodeSummaryIndex": {
+    "service:Dockerfile": {
+      "name": "Dockerfile",
+      "type": "service",
+      "summary": "Multi-stage Docker build for the PharmAgent FastAPI backend: a builder stage installs pinned deps into a venv, and a slim runtime stage copies the venv plus app code, runs as a non-root user, and serves uvicorn on port 8000 with a /api/health healthcheck."
+    },
+    "service:Dockerfile:builder": {
+      "name": "builder",
+      "type": "service",
+      "summary": "First build stage (python:3.13-slim) that creates a virtualenv at /opt/venv and installs pinned requirements, keeping build tooling out of the final image."
+    },
+    "service:Dockerfile:runtime": {
+      "name": "runtime",
+      "type": "service",
+      "summary": "Final runtime stage (python:3.13-slim) that copies the prebuilt venv and app/sample_data, sets data-dir env vars, runs as non-root user 'pharma', exposes port 8000, and launches uvicorn for app.main:app."
+    },
+    "service:.dockerignore": {
+      "name": ".dockerignore",
+      "type": "service",
+      "summary": "Docker build-context exclusion list that keeps virtualenvs, caches, tests, local data, SQLite DBs, secrets, and git metadata out of the image build context."
+    },
+    "config:.env.example": {
+      "name": ".env.example",
+      "type": "config",
+      "summary": "Template environment file documenting all PHARMAGENT_* runtime settings (optional Anthropic LLM key/model, SQLite storage paths, bearer-token auth, CORS origins, branding). All vars are optional — the app defaults to keyless MockLLM and open dev mode."
+    },
+    "document:requirements.txt": {
+      "name": "requirements.txt",
+      "type": "document",
+      "summary": "Pinned production dependency manifest for the FastAPI backend: web stack (fastapi, uvicorn, starlette, pydantic, pydantic-settings), numeric/scientific compute (pandas, numpy, scipy), DOCX export (python-docx), multipart uploads, and the anthropic LLM client."
+    },
+    "document:requirements-dev.txt": {
+      "name": "requirements-dev.txt",
+      "type": "document",
+      "summary": "Development and test tooling manifest, excluded from the production image: includes runtime deps via -r requirements.txt, plus pytest, httpx (test client), ruff (linter), and pip-audit (dependency vulnerability scanner)."
+    },
+    "config:ruff.toml": {
+      "name": "ruff.toml",
+      "type": "config",
+      "summary": "Ruff linter configuration for the backend: 120-char line length, py313 target, and a curated high-signal rule set (pyflakes, pycodestyle, import-order, pyupgrade) with stylistic rules (E701/E702/E731/E741) and bugbear deliberately disabled for the compact numeric code style."
+    },
+    "config:.understand-anything/.understandignore": {
+      "name": ".understandignore",
+      "type": "config",
+      "summary": "Ignore-pattern file scoping the Understand-Anything codebase scan, excluding data, caches, notebooks, and the retired graphify output."
+    },
+    "config:.understand-anything/intermediate/scan-result.json": {
+      "name": "scan-result.json",
+      "type": "config",
+      "summary": "Project-scanner inventory artifact for the Understand-Anything pipeline, listing every file with detected language, line count, and file category."
+    },
+    "file:app/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker making `app` an importable Python package."
+    },
+    "file:app/agents/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker making `app.agents` an importable Python package."
+    },
+    "file:app/compute/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker making `app.compute` an importable Python package."
+    },
+    "file:app/agents/base.py": {
+      "name": "base.py",
+      "type": "file",
+      "summary": "Defines the Agent base class and AgentResult: an agent owns a system prompt and bound tools, mutating PharmState only through the audited, write-checked tool registry in a bounded tool-use loop."
+    },
+    "class:app/agents/base.py:Agent": {
+      "name": "Agent",
+      "type": "class",
+      "summary": "Base agent owning a system prompt and registry-bound tools; runs a bounded tool-use turn that executes tools (enforcing audit and write-access) and never calls other agents."
+    },
+    "class:app/agents/base.py:AgentResult": {
+      "name": "AgentResult",
+      "type": "class",
+      "summary": "Dataclass bundling an agent turn's resulting state, messages, and tool calls."
+    },
+    "file:app/agents/definitions.py": {
+      "name": "definitions.py",
+      "type": "file",
+      "summary": "Phase-1 roster of domain agent definitions (system prompts and descriptions) used by the supervisor for routing and by the orchestrator to instantiate agents."
+    },
+    "file:app/agents/supervisor.py": {
+      "name": "supervisor.py",
+      "type": "file",
+      "summary": "Level-0 supervisor that routes a user message to a domain agent via weighted keyword scoring, falling back to LLM classification when ambiguous."
+    },
+    "class:app/agents/supervisor.py:Supervisor": {
+      "name": "Supervisor",
+      "type": "class",
+      "summary": "Two-stage router: weighted keyword scoring over domain terms, then LLM classification on ambiguity; bypassed when a workflow template drives routing."
+    },
+    "file:app/compute/adversarial.py": {
+      "name": "adversarial.py",
+      "type": "file",
+      "summary": "Adversarial review engine: a clean-context skeptic that independently and deterministically refutes analysis results, recomputing key NCA/NLME quantities from raw data with method-agnostic arithmetic to catch bugs in the primary code."
+    },
+    "function:app/compute/adversarial.py:_nca_internal": {
+      "name": "_nca_internal",
+      "type": "function",
+      "summary": "Internal NCA consistency checks (e.g. AUCinf below AUClast, non-positive CL/F, extrapolation out of range) emitting severity-graded findings."
+    },
+    "function:app/compute/adversarial.py:_nca_dose_monotonic": {
+      "name": "_nca_dose_monotonic",
+      "type": "function",
+      "summary": "Flags non-monotonic dose-vs-exposure trends across dose groups as a medium-severity finding."
+    },
+    "function:app/compute/adversarial.py:_nlme_refute": {
+      "name": "_nlme_refute",
+      "type": "function",
+      "summary": "Refutes NLME fits by flagging over-parameterization and non-converged results."
+    },
+    "function:app/compute/adversarial.py:_obs_by_subject": {
+      "name": "_obs_by_subject",
+      "type": "function",
+      "summary": "Groups raw observations by subject from a dataframe using role mappings, for independent recomputation."
+    },
+    "function:app/compute/adversarial.py:_nca_recompute": {
+      "name": "_nca_recompute",
+      "type": "function",
+      "summary": "Recomputes Cmax and an AUC plausibility band directly from raw observations to detect disagreement with reported NCA values."
+    },
+    "function:app/compute/adversarial.py:review": {
+      "name": "review",
+      "type": "function",
+      "summary": "Top-level adversarial review: runs internal checks plus raw-data recomputation against a state dump and goal, returning severity-sorted findings."
+    },
+    "file:app/compute/bioequivalence.py": {
+      "name": "bioequivalence.py",
+      "type": "file",
+      "summary": "Average bioequivalence assessment computing geometric mean ratios and 90% confidence intervals (paired crossover and parallel designs) against the 80-125% acceptance window."
+    },
+    "function:app/compute/bioequivalence.py:be_one_parameter": {
+      "name": "be_one_parameter",
+      "type": "function",
+      "summary": "Assesses bioequivalence for a single PK parameter, dispatching to paired or parallel computation."
+    },
+    "function:app/compute/bioequivalence.py:_be_paired": {
+      "name": "_be_paired",
+      "type": "function",
+      "summary": "Paired (crossover) bioequivalence: log-scale mean difference, standard error, and CI on test/reference exposures."
+    },
+    "function:app/compute/bioequivalence.py:_be_parallel": {
+      "name": "_be_parallel",
+      "type": "function",
+      "summary": "Parallel-design bioequivalence: two-group log-scale comparison with pooled variance and CI."
+    },
+    "function:app/compute/bioequivalence.py:assess_bioequivalence": {
+      "name": "assess_bioequivalence",
+      "type": "function",
+      "summary": "Assesses bioequivalence across all common PK parameters, blocking overall BE if any parameter fails."
+    },
+    "file:app/compute/compartmental.py": {
+      "name": "compartmental.py",
+      "type": "file",
+      "summary": "Closed-form one- and two-compartment oral PK models (single-dose and steady-state) plus least-squares fitting of individual subjects and dose-grouped cohorts."
+    },
+    "function:app/compute/compartmental.py:conc_1cmt_oral": {
+      "name": "conc_1cmt_oral",
+      "type": "function",
+      "summary": "Closed-form 1-compartment oral concentration over time given ka, CL, V."
+    },
+    "function:app/compute/compartmental.py:conc_2cmt_oral": {
+      "name": "conc_2cmt_oral",
+      "type": "function",
+      "summary": "Closed-form 2-compartment oral concentration solving the biexponential disposition from ka, CL, V1, Q, V2."
+    },
+    "function:app/compute/compartmental.py:conc_1cmt_oral_ss": {
+      "name": "conc_1cmt_oral_ss",
+      "type": "function",
+      "summary": "Steady-state 1-compartment oral concentration over a dosing interval via superposition."
+    },
+    "function:app/compute/compartmental.py:conc_2cmt_oral_ss": {
+      "name": "conc_2cmt_oral_ss",
+      "type": "function",
+      "summary": "Steady-state 2-compartment oral concentration over a dosing interval via superposition accumulation."
+    },
+    "function:app/compute/compartmental.py:_initial_estimates": {
+      "name": "_initial_estimates",
+      "type": "function",
+      "summary": "Derives initial parameter guesses (ka, CL, V) from observed time-concentration data before fitting."
+    },
+    "function:app/compute/compartmental.py:fit_one_subject": {
+      "name": "fit_one_subject",
+      "type": "function",
+      "summary": "Fits a single subject's concentration-time profile to a chosen compartmental model by nonlinear least squares, returning parameters and fit metrics."
+    },
+    "function:app/compute/compartmental.py:fit_compartmental": {
+      "name": "fit_compartmental",
+      "type": "function",
+      "summary": "Fits compartmental models across subjects grouped by dose, selecting the best model per group."
+    },
+    "function:app/compute/compartmental.py:fit_compartmental_ss": {
+      "name": "fit_compartmental_ss",
+      "type": "function",
+      "summary": "Fits steady-state compartmental models to extracted steady-state interval profiles."
+    },
+    "file:app/compute/diagnostics.py": {
+      "name": "diagnostics.py",
+      "type": "file",
+      "summary": "Pure, deterministic model goodness-of-fit residual diagnostics (log-scale weighted residuals and NPDE) built on the structural PK/PK-PD simulator."
+    },
+    "function:app/compute/diagnostics.py:fit_residuals": {
+      "name": "fit_residuals",
+      "type": "function",
+      "summary": "Computes population and individual weighted residuals (log scale) by pairing observations with typical and individual predictions, returning summary statistics."
+    },
+    "function:app/compute/diagnostics.py:npde": {
+      "name": "npde",
+      "type": "function",
+      "summary": "Computes normalized prediction distribution errors by simulating each observation under the population IIV model with a fixed seed."
+    },
+    "file:app/compute/dose_proportionality.py": {
+      "name": "dose_proportionality.py",
+      "type": "file",
+      "summary": "Power-model dose-proportionality assessment: fits log(exposure) vs log(dose), computing the slope, confidence interval, and a critical-region acceptance test."
+    },
+    "function:app/compute/dose_proportionality.py:power_model": {
+      "name": "power_model",
+      "type": "function",
+      "summary": "Fits the power model of exposure vs dose, returning slope, standard error, CI, and the proportionality critical-region decision."
+    },
+    "function:app/compute/dose_proportionality.py:assess_dose_proportionality": {
+      "name": "assess_dose_proportionality",
+      "type": "function",
+      "summary": "Aggregates power-model dose-proportionality assessments across all PK parameters."
+    },
+    "file:app/compute/dose_sweep.py": {
+      "name": "dose_sweep.py",
+      "type": "file",
+      "summary": "Dose-sweep simulator computing steady-state exposure metrics (AUC, Cmax, Cavg, trough) across a range of doses for a structural PK model."
+    },
+    "function:app/compute/dose_sweep.py:_interval_metrics": {
+      "name": "_interval_metrics",
+      "type": "function",
+      "summary": "Computes per-interval exposure metrics (AUC over tau, Cmax, Cavg, trough) from a simulated concentration profile."
+    },
+    "function:app/compute/dose_sweep.py:dose_sweep": {
+      "name": "dose_sweep",
+      "type": "function",
+      "summary": "Sweeps a model across multiple doses, simulating each to steady state and returning interval exposure metrics and the response envelope."
+    },
+    "file:app/compute/dosing.py": {
+      "name": "dosing.py",
+      "type": "file",
+      "summary": "Dosing-record utilities: expands NONMEM-style dose events (II/ADDL), detects multiple-dose regimens, and extracts steady-state dosing intervals from concentration records."
+    },
+    "function:app/compute/dosing.py:_dose_times": {
+      "name": "_dose_times",
+      "type": "function",
+      "summary": "Expands a dose row's interval (II) and additional-doses (ADDL) fields into explicit dose times."
+    },
+    "function:app/compute/dosing.py:is_multiple_dose": {
+      "name": "is_multiple_dose",
+      "type": "function",
+      "summary": "Detects whether a record set represents a multiple-dose regimen."
+    },
+    "function:app/compute/dosing.py:extract_ss_intervals": {
+      "name": "extract_ss_intervals",
+      "type": "function",
+      "summary": "Extracts per-subject steady-state dosing intervals (time-after-dose profiles) from concentration records for steady-state NCA and fitting."
+    },
+    "class:app/compute/dosing.py:SSProfile": {
+      "name": "SSProfile",
+      "type": "class",
+      "summary": "Dataclass describing one subject's steady-state interval: time-after-dose, concentrations, dose, tau, number of doses, and trough source."
+    },
+    "file:app/compute/forecast.py": {
+      "name": "forecast.py",
+      "type": "file",
+      "summary": "Bayesian dose forecasting: MAP-estimates individual parameters from measured levels, simulates steady-state exposure, and optimizes the dose to hit a target metric."
+    },
+    "function:app/compute/forecast.py:_optimize_dose": {
+      "name": "_optimize_dose",
+      "type": "function",
+      "summary": "Optimizes the dose to achieve a target steady-state exposure metric for given individual parameters."
+    },
+    "function:app/compute/forecast.py:forecast": {
+      "name": "forecast",
+      "type": "function",
+      "summary": "End-to-end TDM forecast: derives individual PK via MAP from measured levels (or population typical), simulates, and optionally optimizes dose to target."
+    },
+    "file:app/compute/nca_ss.py": {
+      "name": "nca_ss.py",
+      "type": "file",
+      "summary": "Steady-state non-compartmental analysis computing per-subject AUC over tau, Cmax/Cmin, CL/F, and accumulation, then summarizing by dose."
+    },
+    "function:app/compute/nca_ss.py:nca_ss_subject": {
+      "name": "nca_ss_subject",
+      "type": "function",
+      "summary": "Computes steady-state NCA parameters for one subject's dosing interval (AUCtau, Cmax, Cmin, Cavg, CL/F)."
+    },
+    "function:app/compute/nca_ss.py:run_nca_ss": {
+      "name": "run_nca_ss",
+      "type": "function",
+      "summary": "Runs steady-state NCA over all subject profiles and summarizes results grouped by dose."
+    },
+    "file:app/compute/nca.py": {
+      "name": "nca.py",
+      "type": "file",
+      "summary": "Single-dose non-compartmental analysis: lambda_z selection, AUC by trapezoid, Cmax/Tmax, CL/F, half-life, percent extrapolation, plus geometric-mean dose summaries."
+    },
+    "function:app/compute/nca.py:_auc_intervals": {
+      "name": "_auc_intervals",
+      "type": "function",
+      "summary": "Computes interval AUCs by the linear trapezoidal rule over a concentration-time profile."
+    },
+    "function:app/compute/nca.py:_best_lambda_z": {
+      "name": "_best_lambda_z",
+      "type": "function",
+      "summary": "Selects the terminal elimination rate (lambda_z) by maximizing adjusted R^2 over candidate terminal windows."
+    },
+    "function:app/compute/nca.py:refit_lambda_z_manual": {
+      "name": "refit_lambda_z_manual",
+      "type": "function",
+      "summary": "Refits lambda_z from a user-selected set of terminal points for manual NCA override."
+    },
+    "function:app/compute/nca.py:nca_subject": {
+      "name": "nca_subject",
+      "type": "function",
+      "summary": "Computes full NCA parameters for one subject (Cmax, Tmax, AUClast, AUCinf, CL/F, Vz/F, t-half, % extrapolated) for IV or oral dosing."
+    },
+    "function:app/compute/nca.py:summarize_by_dose": {
+      "name": "summarize_by_dose",
+      "type": "function",
+      "summary": "Aggregates per-subject NCA parameters into geometric-mean and geometric-CV summaries grouped by dose."
+    },
+    "function:app/compute/nca.py:run_nca": {
+      "name": "run_nca",
+      "type": "function",
+      "summary": "Runs single-dose NCA across all subjects from records and dose mapping, returning per-subject and by-dose summaries."
+    },
+    "file:app/compute/nlme.py": {
+      "name": "nlme.py",
+      "type": "file",
+      "summary": "True nonlinear mixed-effects estimation for the PK model library: FOCE-I (Laplace conditional EBEs) and SAEM estimators sharing a lognormal IIV and residual-error model, plus stepwise covariate modeling, parameter uncertainty, and MAP estimation."
+    },
+    "function:app/compute/nlme.py:_build_cov_effects": {
+      "name": "_build_cov_effects",
+      "type": "function",
+      "summary": "Builds covariate-effect descriptors from a model specification and subject covariates."
+    },
+    "function:app/compute/nlme.py:_ind_obj": {
+      "name": "_ind_obj",
+      "type": "function",
+      "summary": "Individual conditional objective function (joint log-likelihood of data and random effects) minimized to find a subject's EBE."
+    },
+    "function:app/compute/nlme.py:_numeric_hessian": {
+      "name": "_numeric_hessian",
+      "type": "function",
+      "summary": "Finite-difference numeric Hessian of an objective used for the Laplace approximation and uncertainty."
+    },
+    "function:app/compute/nlme.py:_conditional_mode": {
+      "name": "_conditional_mode",
+      "type": "function",
+      "summary": "Finds a subject's empirical Bayes estimate by minimizing the individual conditional objective."
+    },
+    "function:app/compute/nlme.py:_laplace_subject": {
+      "name": "_laplace_subject",
+      "type": "function",
+      "summary": "Laplace-approximated marginal likelihood contribution for one subject, integrating out random effects."
+    },
+    "function:app/compute/nlme.py:_population_ofv": {
+      "name": "_population_ofv",
+      "type": "function",
+      "summary": "Population objective function value summed over all subjects' Laplace contributions."
+    },
+    "function:app/compute/nlme.py:_initial_theta": {
+      "name": "_initial_theta",
+      "type": "function",
+      "summary": "Derives initial fixed-effect (theta) estimates from subject data before population fitting."
+    },
+    "function:app/compute/nlme.py:_parameter_uncertainty": {
+      "name": "_parameter_uncertainty",
+      "type": "function",
+      "summary": "Estimates parameter standard errors and RSEs from the objective Hessian, with condition-number reporting."
+    },
+    "function:app/compute/nlme.py:_assemble": {
+      "name": "_assemble",
+      "type": "function",
+      "summary": "Assembles the final NLME result object (theta, omega, sigma, OFV, EBEs, covariate records, uncertainty) from a completed fit."
+    },
+    "function:app/compute/nlme.py:focei_fit": {
+      "name": "focei_fit",
+      "type": "function",
+      "summary": "FOCE-I population fit: iteratively optimizes fixed effects and variance components using per-subject Laplace EBEs, returning estimates, shrinkage, and uncertainty."
+    },
+    "function:app/compute/nlme.py:_saem_estep": {
+      "name": "_saem_estep",
+      "type": "function",
+      "summary": "SAEM expectation step: MCMC sampling of subject random effects given current parameters."
+    },
+    "function:app/compute/nlme.py:_saem_update_theta": {
+      "name": "_saem_update_theta",
+      "type": "function",
+      "summary": "SAEM maximization step updating fixed effects and variance components from stochastic-approximation sufficient statistics."
+    },
+    "function:app/compute/nlme.py:saem_fit": {
+      "name": "saem_fit",
+      "type": "function",
+      "summary": "SAEM population fit: stochastic-approximation EM alternating MCMC E-step and parameter M-step, deterministic for a fixed seed."
+    },
+    "function:app/compute/nlme.py:population_fit": {
+      "name": "population_fit",
+      "type": "function",
+      "summary": "Dispatches a population fit to FOCE-I or SAEM by method and returns the unified result."
+    },
+    "function:app/compute/nlme.py:_warm_init": {
+      "name": "_warm_init",
+      "type": "function",
+      "summary": "Warm-starts a candidate covariate fit from a parent result's estimates to accelerate SCM."
+    },
+    "function:app/compute/nlme.py:_fit_batch": {
+      "name": "_fit_batch",
+      "type": "function",
+      "summary": "Fits a batch of candidate models, optionally across a process pool, for stepwise covariate modeling."
+    },
+    "function:app/compute/nlme.py:scm": {
+      "name": "scm",
+      "type": "function",
+      "summary": "Stepwise covariate modeling: forward-selection then backward-elimination of covariate effects by OFV change, with warm-start and optional parallelism."
+    },
+    "function:app/compute/nlme.py:map_estimate": {
+      "name": "map_estimate",
+      "type": "function",
+      "summary": "Maximum a posteriori estimation of an individual's random effects from observed concentrations and a population prior (used by TDM forecasting)."
+    },
+    "class:app/compute/nlme.py:_CovEffect": {
+      "name": "_CovEffect",
+      "type": "class",
+      "summary": "Covariate-effect model: holds parameter/covariate linkage, centering, and a multiplier factor with describe/key helpers."
+    },
+    "class:app/compute/nlme.py:_PopSpec": {
+      "name": "_PopSpec",
+      "type": "class",
+      "summary": "Population-model specification bundling structural model, IIV parameters, error model, and covariate effects for the estimators."
+    },
+    "class:app/compute/nlme.py:_Subject": {
+      "name": "_Subject",
+      "type": "class",
+      "summary": "Internal per-subject record holding doses, observation times/concentrations, weight, and covariates for population fitting."
+    },
+    "file:app/compute/nmexport.py": {
+      "name": "nmexport.py",
+      "type": "file",
+      "summary": "Generates NONMEM control streams and mrgsolve C++ model code from a fitted NLME result, mapping structural models to ADVAN/TRANS and translating IIV, residual error, and covariate effects."
+    },
+    "function:app/compute/nmexport.py:build_nonmem": {
+      "name": "build_nonmem",
+      "type": "function",
+      "summary": "Builds a NONMEM control stream from an NLME fit, selecting the ADVAN/TRANS subroutine and emitting $PK/$THETA/$OMEGA/$SIGMA with covariate and lag terms."
+    },
+    "function:app/compute/nmexport.py:build_mrgsolve": {
+      "name": "build_mrgsolve",
+      "type": "function",
+      "summary": "Builds an mrgsolve C++ model (ODE plus parameter/IIV/error blocks) from an NLME fit."
+    },
+    "file:app/compute/pk_fit.py": {
+      "name": "pk_fit.py",
+      "type": "file",
+      "summary": "Individual (naive-pooled / two-stage) fitting of structural PK and PK-PD models by nonlinear least squares, with Jacobian-based RSEs, dataset-level fitting, and AIC model comparison."
+    },
+    "function:app/compute/pk_fit.py:rse_from_jacobian": {
+      "name": "rse_from_jacobian",
+      "type": "function",
+      "summary": "Derives parameter relative standard errors from the least-squares Jacobian and residual sum of squares."
+    },
+    "function:app/compute/pk_fit.py:fit_subject_model": {
+      "name": "fit_subject_model",
+      "type": "function",
+      "summary": "Fits one subject's concentration data to a structural PK model by nonlinear least squares, returning parameters, RSEs, and fit metrics."
+    },
+    "function:app/compute/pk_fit.py:_pkpd_init": {
+      "name": "_pkpd_init",
+      "type": "function",
+      "summary": "Builds initial parameter guesses for a joint PK-PD fit from PK and PD observations."
+    },
+    "function:app/compute/pk_fit.py:fit_subject_pkpd": {
+      "name": "fit_subject_pkpd",
+      "type": "function",
+      "summary": "Fits a subject's joint PK-PD model (concentration and effect endpoints) by nonlinear least squares."
+    },
+    "function:app/compute/pk_fit.py:fit_pk_dataset": {
+      "name": "fit_pk_dataset",
+      "type": "function",
+      "summary": "Fits a structural model to every subject in a dataset and summarizes parameters via two-stage statistics."
+    },
+    "function:app/compute/pk_fit.py:compare_models": {
+      "name": "compare_models",
+      "type": "function",
+      "summary": "Ranks candidate structural models by AIC across the subject set."
+    },
+    "file:app/compute/pk_models.py": {
+      "name": "pk_models.py",
+      "type": "file",
+      "summary": "Structural PK / PK-PD model library (18 models ported from the PopPK Workbench): each model is a pure-Python ODE system with allometric scaling, dosing-compartment conventions, and a concentration map, exposed through a registry."
+    },
+    "function:app/compute/pk_models.py:list_models": {
+      "name": "list_models",
+      "type": "function",
+      "summary": "Returns the registry of available structural PK/PK-PD models."
+    },
+    "function:app/compute/pk_models.py:get_model": {
+      "name": "get_model",
+      "type": "function",
+      "summary": "Looks up a structural model definition by its key."
+    },
+    "class:app/compute/pk_models.py:PKModel": {
+      "name": "PKModel",
+      "type": "class",
+      "summary": "Dataclass describing one structural model: key, label, group, IV/PD flags, parameters, defaults, compartment layout, ODE right-hand side, concentration map, init state, effect function, and lag parameter."
+    },
+    "file:app/compute/pk_simulate.py": {
+      "name": "pk_simulate.py",
+      "type": "file",
+      "summary": "Numerical simulator integrating the structural PK/PK-PD ODE models over dose events and observation times, with allometric parameter scaling and a steady-state time-course helper."
+    },
+    "function:app/compute/pk_simulate.py:scale_params": {
+      "name": "scale_params",
+      "type": "function",
+      "summary": "Applies allometric weight scaling to a model's parameters before simulation."
+    },
+    "function:app/compute/pk_simulate.py:simulate": {
+      "name": "simulate",
+      "type": "function",
+      "summary": "Integrates a structural model's ODE system across dose events and returns predicted concentrations at the requested observation times."
+    },
+    "function:app/compute/pk_simulate.py:simulate_timecourse": {
+      "name": "simulate_timecourse",
+      "type": "function",
+      "summary": "Simulates a dense steady-state concentration time-course for a multiple-dose regimen."
+    },
+    "file:app/compute/poppk.py": {
+      "name": "poppk.py",
+      "type": "file",
+      "summary": "Two-stage population summary statistics: geometric-mean typical values and between-subject IIV from individual fits, plus log-linear covariate-effect estimation."
+    },
+    "function:app/compute/poppk.py:two_stage_summary": {
+      "name": "two_stage_summary",
+      "type": "function",
+      "summary": "Summarizes individual-fit parameters into geometric-mean typical values and IIV (geometric CV) per parameter."
+    },
+    "function:app/compute/poppk.py:covariate_effect": {
+      "name": "covariate_effect",
+      "type": "function",
+      "summary": "Estimates a log-linear covariate effect on a parameter from matched individual-fit and covariate values."
+    },
+    "file:app/compute/vpc.py": {
+      "name": "vpc.py",
+      "type": "file",
+      "summary": "Pure, deterministic observed-vs-predicted goodness-of-fit and visual predictive check (VPC, including prediction-corrected pcVPC) built on the structural PK/PK-PD simulator."
+    },
+    "function:app/compute/vpc.py:obs_vs_pred": {
+      "name": "obs_vs_pred",
+      "type": "function",
+      "summary": "Pairs every positive observation with its individual prediction (IPRED) for goodness-of-fit plots and metrics."
+    },
+    "function:app/compute/vpc.py:_gof_log": {
+      "name": "_gof_log",
+      "type": "function",
+      "summary": "Computes log-scale goodness-of-fit metrics between observed and individually predicted concentrations."
+    },
+    "function:app/compute/vpc.py:vpc_band": {
+      "name": "vpc_band",
+      "type": "function",
+      "summary": "Builds simulation-based VPC percentile bands by sampling the population IIV model on a time grid with a fixed seed."
+    },
+    "function:app/compute/vpc.py:pcvpc": {
+      "name": "pcvpc",
+      "type": "function",
+      "summary": "Computes a prediction-corrected VPC: bins observations and simulations and normalizes by typical prediction to remove dosing/covariate heterogeneity."
+    },
+    "file:app/core/store.py": {
+      "name": "store.py",
+      "type": "file",
+      "summary": "SQLite persistence layer for sessions and their audit trails: SessionStore saves and loads session state plus serialized audit chains keyed by session id."
+    },
+    "class:app/core/store.py:SessionStore": {
+      "name": "SessionStore",
+      "type": "class",
+      "summary": "SQLite repository persisting session records (owner, state, audit list) with save, load_all, and get accessors used by the orchestrator on startup and after each mutation."
+    },
+    "file:app/db/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker for the app.db package."
+    },
+    "file:app/main.py": {
+      "name": "main.py",
+      "type": "file",
+      "summary": "FastAPI application entry point wiring all HTTP routes for PharmAgent: sessions, dataset upload, chat, workflows, every PK/NCA/BE/NLME/SCM analysis, async jobs, exports (CSV/control/CDISC), skills, adversarial review, reports, and the SPA frontend mount, with bearer auth and a request-context/error envelope."
+    },
+    "function:app/main.py:request_context": {
+      "name": "request_context",
+      "type": "function",
+      "summary": "ASGI middleware that attaches a request id, logs structured request/response context, and normalizes errors into the standard envelope."
+    },
+    "function:app/main.py:current_owner": {
+      "name": "current_owner",
+      "type": "function",
+      "summary": "Auth dependency that resolves the calling owner from the bearer Authorization header, enforcing the configured API token."
+    },
+    "function:app/main.py:upload_for_session": {
+      "name": "upload_for_session",
+      "type": "function",
+      "summary": "Endpoint that accepts a dataset file upload for a session, persists it within the allowed data directory, and registers it on the session state."
+    },
+    "function:app/main.py:run_nlme": {
+      "name": "run_nlme",
+      "type": "function",
+      "summary": "Endpoint that submits a population NLME fit as a background job and returns its job id for polling."
+    },
+    "function:app/main.py:export_cdisc": {
+      "name": "export_cdisc",
+      "type": "function",
+      "summary": "Endpoint that builds and streams the CDISC ADaM submission zip (ADPC/ADPP/define.xml) for a session."
+    },
+    "function:app/main.py:run_skill": {
+      "name": "run_skill",
+      "type": "function",
+      "summary": "Endpoint that replays a previously captured skill workflow against a session for the calling owner."
+    },
+    "file:app/tools/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker for the app.tools package containing all agent tool modules."
+    },
+    "file:app/tools/base.py": {
+      "name": "base.py",
+      "type": "file",
+      "summary": "Tool framework foundation: ToolContext and ToolResult value objects, the Tool descriptor (with to_anthropic schema export), and a ToolRegistry that registers, looks up, scopes per-agent, and executes tools."
+    },
+    "class:app/tools/base.py:Tool": {
+      "name": "Tool",
+      "type": "class",
+      "summary": "Descriptor for a single callable tool (name, description, input schema, handler, agent scope) with to_anthropic to expose it to the LLM."
+    },
+    "class:app/tools/base.py:ToolRegistry": {
+      "name": "ToolRegistry",
+      "type": "class",
+      "summary": "Central registry of all tools supporting register, get, names, per-agent filtering (for_agent), and execute, which invokes a tool handler against a PharmState/context."
+    },
+    "file:app/tools/be_tools.py": {
+      "name": "be_tools.py",
+      "type": "file",
+      "summary": "Bioequivalence Agent tools that derive test/reference geometric mean ratios and 90% confidence intervals from NCA exposures, exposed as the module's TOOLS for the registry."
+    },
+    "function:app/tools/be_tools.py:run_bioequivalence": {
+      "name": "run_bioequivalence",
+      "type": "function",
+      "summary": "Computes the test-vs-reference GMR and 90% CI for PK exposures across treatment arms and writes the bioequivalence result to PharmState."
+    },
+    "file:app/tools/builtins.py": {
+      "name": "builtins.py",
+      "type": "file",
+      "summary": "Assembles the default ToolRegistry by collecting the TOOLS lists from every tool module (data, NCA, BE, dose-proportionality, compartmental, popPK, PK model, QC, report, regulatory, review)."
+    },
+    "function:app/tools/builtins.py:default_registry": {
+      "name": "default_registry",
+      "type": "function",
+      "summary": "Builds and returns a ToolRegistry populated with all tools from the bundled tool modules; the single wiring point used by the orchestrator."
+    },
+    "file:app/tools/compartmental_tools.py": {
+      "name": "compartmental_tools.py",
+      "type": "file",
+      "summary": "Compartmental Agent tools that fit 1- and 2-compartment oral PK models per subject and write a compacted comparison to PharmState, exposed via the module TOOLS."
+    },
+    "function:app/tools/compartmental_tools.py:fit_compartmental_models": {
+      "name": "fit_compartmental_models",
+      "type": "function",
+      "summary": "Fits one- and two-compartment oral models per subject, compares them, and stores a compact per-model summary (optionally steady-state) in PharmState."
+    },
+    "file:app/tools/data_tools.py": {
+      "name": "data_tools.py",
+      "type": "file",
+      "summary": "Data Manager tools to load, profile, validate (CDISC), and visualize PK datasets, with path-sandboxing and role detection; exposed as TOOLS for the registry."
+    },
+    "function:app/tools/data_tools.py:load_dataset": {
+      "name": "load_dataset",
+      "type": "function",
+      "summary": "Loads a dataset from a sandbox-validated path into PharmState, recording detected column roles and metadata."
+    },
+    "function:app/tools/data_tools.py:profile_pk_dataset": {
+      "name": "profile_pk_dataset",
+      "type": "function",
+      "summary": "Profiles a loaded PK dataset (subjects, records, time/concentration ranges, role coverage) and stores the profile summary on PharmState."
+    },
+    "function:app/tools/data_tools.py:validate_cdisc": {
+      "name": "validate_cdisc",
+      "type": "function",
+      "summary": "Checks a dataset against CDISC-style structural expectations and records validation findings on PharmState."
+    },
+    "function:app/tools/data_tools.py:generate_spaghetti_plot": {
+      "name": "generate_spaghetti_plot",
+      "type": "function",
+      "summary": "Generates a per-subject concentration-vs-time spaghetti plot for the loaded dataset and stores the rendered figure on PharmState."
+    },
+    "file:app/tools/dp_tools.py": {
+      "name": "dp_tools.py",
+      "type": "file",
+      "summary": "Dose-Proportionality Agent tool that assesses dose proportionality via the power model over NCA exposures, exposed as the module TOOLS."
+    },
+    "function:app/tools/dp_tools.py:run_dose_proportionality": {
+      "name": "run_dose_proportionality",
+      "type": "function",
+      "summary": "Fits the power model (log exposure vs log dose) across dose levels to assess dose proportionality and writes the result to PharmState."
+    },
+    "file:app/tools/nca_tools.py": {
+      "name": "nca_tools.py",
+      "type": "file",
+      "summary": "NCA Agent tool computing non-compartmental PK parameters (Cmax, Tmax, AUC, half-life, lambda-z, etc.) including steady-state handling, exposed as the module TOOLS."
+    },
+    "function:app/tools/nca_tools.py:compute_nca": {
+      "name": "compute_nca",
+      "type": "function",
+      "summary": "Computes the full non-compartmental parameter set per subject (exposure, peak, terminal-slope, half-life and steady-state metrics) and stores the NCA summary on PharmState."
+    },
+    "file:app/tools/pkmodel_tools.py": {
+      "name": "pkmodel_tools.py",
+      "type": "file",
+      "summary": "Modeler Agent tool suite: fits/compares the structural PK model library, simulates profiles, runs VPC, true NLME, stepwise covariate modeling (SCM), MAP/TDM forecasting, diagnostics, and dose sweeps over PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:_build_subjects": {
+      "name": "_build_subjects",
+      "type": "function",
+      "summary": "Transforms the source dataframe into per-subject dosing/observation records (optionally flagging BLQ) used as the common input for all PK model fitting routines."
+    },
+    "function:app/tools/pkmodel_tools.py:fit_pk_model": {
+      "name": "fit_pk_model",
+      "type": "function",
+      "summary": "Fits and compares candidate structural PK models from the library, selecting a best fit and storing parameters, fit metrics, and RSEs on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:simulate_pk_profile": {
+      "name": "simulate_pk_profile",
+      "type": "function",
+      "summary": "Simulates concentration-time profiles for a chosen model and dosing regimen and stores the simulated curves on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:run_vpc": {
+      "name": "run_vpc",
+      "type": "function",
+      "summary": "Runs a (prediction-corrected) visual predictive check by simulating replicate datasets and summarizing observed-vs-predicted percentiles into PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:run_nlme": {
+      "name": "run_nlme",
+      "type": "function",
+      "summary": "Fits a true nonlinear mixed-effects population model (FOCE-I/SAEM) over the assembled subjects and stores thetas, omega/shrinkage, and sigma on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:run_scm": {
+      "name": "run_scm",
+      "type": "function",
+      "summary": "Performs stepwise covariate modeling over candidate covariate-parameter relationships and records the selected covariate model on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:forecast_map": {
+      "name": "forecast_map",
+      "type": "function",
+      "summary": "Produces a MAP/TDM Bayesian individual forecast from prior population parameters and observed levels, storing the forecast on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:run_diagnostics": {
+      "name": "run_diagnostics",
+      "type": "function",
+      "summary": "Computes residual/goodness-of-fit diagnostics for the last fitted model and stores the diagnostic summary on PharmState."
+    },
+    "function:app/tools/pkmodel_tools.py:run_dose_sweep": {
+      "name": "run_dose_sweep",
+      "type": "function",
+      "summary": "Sweeps a range of doses through the fitted model to project exposure metrics and stores the dose-sweep table on PharmState."
+    },
+    "file:app/config.py": {
+      "name": "config.py",
+      "type": "file",
+      "summary": "Application configuration via a pydantic Settings model: Anthropic API key/model, mock-LLM toggle, data and DB paths, auth token, CORS origins, and org branding. Centralizes runtime env wiring for the backend."
+    },
+    "class:app/config.py:Settings": {
+      "name": "Settings",
+      "type": "class",
+      "summary": "pydantic settings object holding all backend runtime config; llm_is_mock decides mock vs real LLM and allowed_data_dirs returns the directory allowlist used to sandbox dataset file access."
+    },
+    "file:app/core/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker for the app.core package, which holds the orchestrator, audit chain, persistence, and supporting services."
+    },
+    "file:app/core/audit.py": {
+      "name": "audit.py",
+      "type": "file",
+      "summary": "Tamper-evident hash-chain audit trail: each AuditEntry links to the previous via SHA-256 over its inputs/outputs, and AuditChain appends, verifies, and (de)serializes the chain for Part-11-style provenance."
+    },
+    "class:app/core/audit.py:AuditEntry": {
+      "name": "AuditEntry",
+      "type": "class",
+      "summary": "Single immutable audit record (agent, tool, action, input/output hashes, actor, reason); compute_hash derives the chained entry hash and to_dict serializes it."
+    },
+    "class:app/core/audit.py:AuditChain": {
+      "name": "AuditChain",
+      "type": "class",
+      "summary": "Ordered chain of AuditEntry records with append (links new entries to the head hash), verify (re-derives every hash to detect tampering), and to_list/from_list round-tripping."
+    },
+    "file:app/core/cdisc.py": {
+      "name": "cdisc.py",
+      "type": "file",
+      "summary": "Builds CDISC ADaM-style regulatory deliverables from PharmState: ADPC (concentration records), ADPP (NCA parameters), and a define.xml metadata document, zipped together by build_package."
+    },
+    "function:app/core/cdisc.py:build_adpp": {
+      "name": "build_adpp",
+      "type": "function",
+      "summary": "Constructs ADPP (PK parameter) rows from the stored NCA summary, mapping internal parameter keys to CDISC PARAMCD/PARAM labels."
+    },
+    "function:app/core/cdisc.py:build_adpc": {
+      "name": "build_adpc",
+      "type": "function",
+      "summary": "Constructs ADPC (concentration) rows from the source dataframe using detected ID/time/DV roles, coercing numerics and skipping missing values."
+    },
+    "function:app/core/cdisc.py:build_define_xml": {
+      "name": "build_define_xml",
+      "type": "function",
+      "summary": "Generates a define.xml metadata document describing each emitted dataset and its variables, with XML-escaped study and column metadata."
+    },
+    "function:app/core/cdisc.py:build_package": {
+      "name": "build_package",
+      "type": "function",
+      "summary": "Assembles the full CDISC submission package: builds ADPP/ADPC/define.xml and writes them as CSV/XML into a single in-memory zip archive."
+    },
+    "file:app/core/exporters.py": {
+      "name": "exporters.py",
+      "type": "file",
+      "summary": "CSV exporters for every analysis result held in PharmState (NCA, BE, dose-proportionality, PK model, dose sweep, VPC, NLME) plus NONMEM/mrgsolve control-file exporters, with availability discovery helpers."
+    },
+    "function:app/core/exporters.py:_pk_model": {
+      "name": "_pk_model",
+      "type": "function",
+      "summary": "Flattens stored PK model-fit results (best model parameters, fit metrics, relative standard errors) into CSV rows."
+    },
+    "function:app/core/exporters.py:_nlme": {
+      "name": "_nlme",
+      "type": "function",
+      "summary": "Serializes NLME population-fit output (thetas with RSE, omega/shrinkage, sigma) into a tidy CSV parameter table."
+    },
+    "function:app/core/exporters.py:available": {
+      "name": "available",
+      "type": "function",
+      "summary": "Inspects PharmState and returns the list of analysis-result kinds that currently have data available for CSV export."
+    },
+    "function:app/core/exporters.py:export_csv": {
+      "name": "export_csv",
+      "type": "function",
+      "summary": "Dispatches to the matching per-kind CSV formatter, raising ValueError for unknown export kinds."
+    },
+    "function:app/core/exporters.py:export_control": {
+      "name": "export_control",
+      "type": "function",
+      "summary": "Produces NONMEM/mrgsolve control-file text for the requested kind from stored NLME results, validating availability before emitting."
+    },
+    "file:app/core/jobs.py": {
+      "name": "jobs.py",
+      "type": "file",
+      "summary": "Thread-pool background job manager for long-running tools (NLME, SCM): submit returns a job id, work runs off-request, and get polls status with bounded retention of finished jobs."
+    },
+    "class:app/core/jobs.py:JobManager": {
+      "name": "JobManager",
+      "type": "class",
+      "summary": "Manages async submission and polling of background tool runs via a thread pool, recording start/finish timestamps, results, and errors under a lock."
+    },
+    "file:app/core/llm.py": {
+      "name": "llm.py",
+      "type": "file",
+      "summary": "LLM client abstraction with an LLM protocol, a keyless MockLLM (regex/heuristic routing for tests), a RealLLM backed by the Anthropic SDK, and a get_llm factory that picks mock vs real from settings."
+    },
+    "class:app/core/llm.py:MockLLM": {
+      "name": "MockLLM",
+      "type": "class",
+      "summary": "Deterministic keyless LLM stand-in that classifies intent and selects tools via regex and keyword heuristics, enabling tests and offline runs."
+    },
+    "class:app/core/llm.py:RealLLM": {
+      "name": "RealLLM",
+      "type": "class",
+      "summary": "Anthropic-backed LLM client that performs intent classification and tool selection through the messages API using each tool's to_anthropic schema."
+    },
+    "file:app/core/logging_config.py": {
+      "name": "logging_config.py",
+      "type": "file",
+      "summary": "Structured JSON logging setup with a dependency-free JsonFormatter emitting one JSON line per record, plus configure_logging to install it from a level or env var."
+    },
+    "class:app/core/logging_config.py:JsonFormatter": {
+      "name": "JsonFormatter",
+      "type": "class",
+      "summary": "logging.Formatter that renders each record as a single JSON object including timestamp, level, message, extra fields, and formatted exceptions."
+    },
+    "file:app/core/orchestrator.py": {
+      "name": "orchestrator.py",
+      "type": "file",
+      "summary": "Central orchestrator: owns sessions, routes chat to agents, executes PK/tool runs with per-session locking, runs the adversarial review loop and workflows, captures/replays skills, and persists state plus the audit chain."
+    },
+    "class:app/core/orchestrator.py:Session": {
+      "name": "Session",
+      "type": "class",
+      "summary": "Dataclass bundling a session's PharmState, tool context, audit chain, chat history, pending review, params, owner, and command log."
+    },
+    "class:app/core/orchestrator.py:Orchestrator": {
+      "name": "Orchestrator",
+      "type": "class",
+      "summary": "Coordinates the whole backend: session lifecycle, ownership checks, chat routing, tool/PK execution, review loops, skill capture/replay, role overrides, and multi-step workflow advancement with persistence and audit verification."
+    },
+    "file:app/core/pharmstate.py": {
+      "name": "pharmstate.py",
+      "type": "file",
+      "summary": "Defines PharmState, the typed pydantic communication bus shared across agents (datasets, roles, and every analysis result), plus apply_writes which validates and merges agent-produced field writes."
+    },
+    "class:app/core/pharmstate.py:PharmState": {
+      "name": "PharmState",
+      "type": "class",
+      "summary": "Central typed pydantic model carrying dataset metadata, column roles, and all analysis outputs (NCA, BE, PK model, NLME, VPC, etc.) passed between agents."
+    },
+    "function:app/core/pharmstate.py:apply_writes": {
+      "name": "apply_writes",
+      "type": "function",
+      "summary": "Validates and applies a set of agent-produced field writes onto a PharmState, rejecting writes to undeclared fields to keep the shared bus type-safe."
+    },
+    "file:app/core/provenance.py": {
+      "name": "provenance.py",
+      "type": "file",
+      "summary": "Captures run provenance for reproducibility: key package versions, platform info, git SHA, app version, and SHA-256 content hashes of input files."
+    },
+    "function:app/core/provenance.py:collect_provenance": {
+      "name": "collect_provenance",
+      "type": "function",
+      "summary": "Assembles a provenance record combining app version, dependency versions, platform details, and the current git commit SHA."
+    },
+    "function:app/core/provenance.py:file_sha256": {
+      "name": "file_sha256",
+      "type": "function",
+      "summary": "Computes the SHA-256 hash of a file's contents in chunks for dataset content fingerprinting."
+    },
+    "file:app/core/schema_extractor.py": {
+      "name": "schema_extractor.py",
+      "type": "file",
+      "summary": "Privacy boundary that turns a raw dataframe into a non-identifying schema: detects PK column roles and emits per-column type and numeric-summary metadata without leaking row-level data."
+    },
+    "function:app/core/schema_extractor.py:detect_roles": {
+      "name": "detect_roles",
+      "type": "function",
+      "summary": "Heuristically maps dataframe columns to PK roles (subject ID, time, concentration/DV, dose, etc.) from their names."
+    },
+    "function:app/core/schema_extractor.py:extract_schema": {
+      "name": "extract_schema",
+      "type": "function",
+      "summary": "Builds the privacy-safe dataset schema: per-column dtype, role assignment, and numeric summaries, packaged with a dataset id for downstream agents."
+    },
+    "file:app/core/skills.py": {
+      "name": "skills.py",
+      "type": "file",
+      "summary": "Captured, replayable analysis workflows: distill_steps condenses a session command log into reusable steps, the Skill model serializes to dict/markdown, and SkillStore persists skills in SQLite."
+    },
+    "function:app/core/skills.py:distill_steps": {
+      "name": "distill_steps",
+      "type": "function",
+      "summary": "Condenses a session's raw command log into an ordered list of replayable skill steps, dropping non-reproducible noise."
+    },
+    "class:app/core/skills.py:Skill": {
+      "name": "Skill",
+      "type": "class",
+      "summary": "Represents a named, captured analysis workflow with ordered steps; serializes to dict and human-readable markdown."
+    },
+    "class:app/core/skills.py:SkillStore": {
+      "name": "SkillStore",
+      "type": "class",
+      "summary": "SQLite-backed repository for captured skills with save, get, list, and delete operations."
+    },
+    "file:app/tools/poppk_tools.py": {
+      "name": "poppk_tools.py",
+      "type": "file",
+      "summary": "PopPK agent tool exposing a deterministic two-stage (STS) population summary and covariate screen, deriving typical values and IIV from individual compartmental or NCA fits rather than a true NLME fit."
+    },
+    "function:app/tools/poppk_tools.py:run_poppk": {
+      "name": "run_poppk",
+      "type": "function",
+      "summary": "Tool entrypoint that builds per-subject parameter rows, computes two-stage typical value and geometric-CV IIV, and screens covariate relationships, returning a ToolResult summary."
+    },
+    "function:app/tools/poppk_tools.py:_covariate_by_subject": {
+      "name": "_covariate_by_subject",
+      "type": "function",
+      "summary": "Maps a detected covariate column to a per-subject numeric value by grouping the dataset on the subject role and taking each subject's first usable covariate observation."
+    },
+    "function:app/tools/poppk_tools.py:_from_compartmental": {
+      "name": "_from_compartmental",
+      "type": "function",
+      "summary": "Extracts per-subject CL/V/KA parameter rows from a previously stored compartmental fit in state for use as the two-stage input."
+    },
+    "file:app/tools/qc_tools.py": {
+      "name": "qc_tools.py",
+      "type": "file",
+      "summary": "Quality-control agent tool that runs a battery of pass/warn/fail checks over dataset and analysis state (record counts, data quality, parameter plausibility) and aggregates an overall QC verdict."
+    },
+    "function:app/tools/qc_tools.py:run_qc": {
+      "name": "run_qc",
+      "type": "function",
+      "summary": "Runs the full QC checklist against pharm state, appending individual check results and issues, then returns a ToolResult with counts of passed, warned, and failed checks."
+    },
+    "file:app/tools/regulatory_tools.py": {
+      "name": "regulatory_tools.py",
+      "type": "file",
+      "summary": "Generates an ICH/FDA Module 2.7.2 (Summary of Clinical Pharmacology) Word document from analysis state, assembling narrative sections (background, NCA, popPK, special populations, DDI, conclusions) and standardized tables."
+    },
+    "function:app/tools/regulatory_tools.py:generate_272": {
+      "name": "generate_272",
+      "type": "function",
+      "summary": "Tool entrypoint that assembles the full 2.7.2 document — title page, provenance, all narrative sections and summary tables — saves it to disk, and returns a ToolResult with the report path and study info."
+    },
+    "function:app/tools/regulatory_tools.py:_section_24_special_pops": {
+      "name": "_section_24_special_pops",
+      "type": "function",
+      "summary": "Builds the special-populations section by classifying selected covariates (renal, hepatic, age, weight, sex, other) into subsections and rendering each covariate effect narrative."
+    },
+    "function:app/tools/regulatory_tools.py:_section_26_conclusions": {
+      "name": "_section_26_conclusions",
+      "type": "function",
+      "summary": "Synthesizes a conclusions section, narrating the population model, IIV, selected covariates, and key exposure findings drawn from analysis state."
+    },
+    "function:app/tools/regulatory_tools.py:_section_22_poppk": {
+      "name": "_section_22_poppk",
+      "type": "function",
+      "summary": "Renders the population-PK narrative subsection covering estimation method, structural model, parameter estimates, IIV, residual error, and VPC/GOF outcomes."
+    },
+    "function:app/tools/regulatory_tools.py:_section_23_analyses": {
+      "name": "_section_23_analyses",
+      "type": "function",
+      "summary": "Renders the additional-analyses section, summarizing dose-proportionality and bioequivalence results when present in state."
+    },
+    "function:app/tools/regulatory_tools.py:_table_2722_poppk": {
+      "name": "_table_2722_poppk",
+      "type": "function",
+      "summary": "Builds Table 2.7.2.2 of population-PK parameter estimates with RSE, IIV omega, shrinkage, and residual sigma rows."
+    },
+    "function:app/tools/regulatory_tools.py:_table_2723_covariates": {
+      "name": "_table_2723_covariates",
+      "type": "function",
+      "summary": "Builds Table 2.7.2.3 listing selected covariate effects (coefficient, exponent, ΔOFV) and standalone covariate-effect screens."
+    },
+    "function:app/tools/regulatory_tools.py:_table_2721_nca": {
+      "name": "_table_2721_nca",
+      "type": "function",
+      "summary": "Builds Table 2.7.2.1 of NCA exposure parameters (Cmax, Tmax, AUClast, AUCinf, t1/2, CL/F) grouped by dose."
+    },
+    "function:app/tools/regulatory_tools.py:_section_21_background": {
+      "name": "_section_21_background",
+      "type": "function",
+      "summary": "Renders the background and overview section of the 2.7.2 document from study metadata."
+    },
+    "function:app/tools/regulatory_tools.py:_section_22_nca": {
+      "name": "_section_22_nca",
+      "type": "function",
+      "summary": "Renders the non-compartmental analysis narrative subsection describing exposure metrics and methodology."
+    },
+    "function:app/tools/regulatory_tools.py:_kv_table": {
+      "name": "_kv_table",
+      "type": "function",
+      "summary": "Shared helper that renders a headed key-value table into the document, or a placeholder line when there are no rows."
+    },
+    "file:app/tools/report_tools.py": {
+      "name": "report_tools.py",
+      "type": "file",
+      "summary": "Generates a general analysis report Word document from state, rendering per-subject and dose-summary NCA tables, extra sections for BE and dose-proportionality, and a reproducibility/provenance section."
+    },
+    "function:app/tools/report_tools.py:generate_report": {
+      "name": "generate_report",
+      "type": "function",
+      "summary": "Tool entrypoint that builds the analysis report document — NCA summary/subject tables, extra analysis sections, and reproducibility — saves it, and returns a ToolResult with the report path."
+    },
+    "function:app/tools/report_tools.py:_extra_sections": {
+      "name": "_extra_sections",
+      "type": "function",
+      "summary": "Appends optional report sections for bioequivalence and dose-proportionality results when those analyses are present in state."
+    },
+    "function:app/tools/report_tools.py:_reproducibility_section": {
+      "name": "_reproducibility_section",
+      "type": "function",
+      "summary": "Renders a reproducibility section capturing package versions, git SHA, and dataset hash via collect_provenance for audit traceability."
+    },
+    "function:app/tools/report_tools.py:_summary_table": {
+      "name": "_summary_table",
+      "type": "function",
+      "summary": "Renders the dose-grouped NCA summary statistics table into the report document."
+    },
+    "function:app/tools/report_tools.py:_subject_table": {
+      "name": "_subject_table",
+      "type": "function",
+      "summary": "Renders the per-subject NCA parameter table, sorted by a stable subject key."
+    },
+    "function:app/tools/report_tools.py:_dose_grouped_meaningfully": {
+      "name": "_dose_grouped_meaningfully",
+      "type": "function",
+      "summary": "Heuristic that decides whether the NCA summary contains more than one meaningful dose group, controlling whether a dose-grouped table is shown."
+    },
+    "file:app/tools/review_tools.py": {
+      "name": "review_tools.py",
+      "type": "file",
+      "summary": "Reviewer agent tool that wraps the adversarial compute module, running independent recomputation and consistency checks over analysis results to surface findings."
+    },
+    "function:app/tools/review_tools.py:adversarial_review": {
+      "name": "adversarial_review",
+      "type": "function",
+      "summary": "Tool entrypoint that runs the adversarial review over current state and raw data, returning findings and an overall goal-met verdict as a ToolResult."
+    },
+    "file:app/workflows.py": {
+      "name": "workflows.py",
+      "type": "file",
+      "summary": "Defines ordered workflow templates (currently the end-to-end nca_full pipeline) mapping steps to agent/tool assignments with human-review gates, plus a get_workflow lookup."
+    },
+    "file:conftest.py": {
+      "name": "conftest.py",
+      "type": "file",
+      "summary": "Pytest bootstrap that inserts the backend root onto sys.path so the app package is importable during test collection."
+    },
+    "file:pharmagent.db": {
+      "name": "pharmagent.db",
+      "type": "file",
+      "summary": "SQLite database file backing session persistence and audit storage for the PharmAgent backend."
+    },
+    "file:tests/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker making the tests directory an importable Python package."
+    },
+    "file:tests/reference/__init__.py": {
+      "name": "__init__.py",
+      "type": "file",
+      "summary": "Empty package marker making the reference-validation tests an importable Python package."
+    },
+    "document:tests/reference/README.md": {
+      "name": "README.md",
+      "type": "document",
+      "summary": "Explains the reference-validation suite: how it drives the shipping compute path on canonical public datasets (Theophylline) to assert literature concordance, cross-method consistency, and optional exact tool concordance."
+    },
+    "file:tests/reference/references.py": {
+      "name": "references.py",
+      "type": "file",
+      "summary": "Pins canonical public datasets (Theophylline) to published popPK literature consensus values with acceptance bands, plus an optional slot for the user's own NONMEM/Monolix/nlmixr2 run for exact concordance."
+    },
+    "file:tests/reference/test_theophylline.py": {
+      "name": "test_theophylline.py",
+      "type": "file",
+      "summary": "Reference-validation test that drives the shipping NCA + FOCE-I + SAEM path on the Theophylline dataset and asserts estimates fall within published literature bands and agree across methods."
+    },
+    "file:tests/test_adversarial.py": {
+      "name": "test_adversarial.py",
+      "type": "file",
+      "summary": "Tests the adversarial review compute and its HTTP endpoint: that clean state meets the goal, that data inconsistencies are flagged at correct severities, recomputation triggers, and the review loop terminates."
+    },
+    "file:tests/test_api.py": {
+      "name": "test_api.py",
+      "type": "file",
+      "summary": "FastAPI endpoint tests covering public health/models routes, the session-and-NCA workflow, auth enforcement, CSV upload validation, and background-job submission/polling."
+    },
+    "file:tests/test_audit_and_state.py": {
+      "name": "test_audit_and_state.py",
+      "type": "file",
+      "summary": "Unit tests verifying the audit hash-chain stays intact and detects tampering, and that PharmState enforces per-field ownership."
+    },
+    "file:tests/test_be_compute.py": {
+      "name": "test_be_compute.py",
+      "type": "file",
+      "summary": "Unit tests for the bioequivalence compute, checking GMR and confidence intervals against hand-computed values for paired and parallel designs and the overall BE verdict logic."
+    },
+    "file:tests/test_cdisc.py": {
+      "name": "test_cdisc.py",
+      "type": "file",
+      "summary": "Tests CDISC ADaM export: that ADPP is built in long BDS form with standard PARAMCDs and that the package zip contains valid define.xml, including the no-dataframe path."
+    },
+    "file:tests/test_compartmental_compute.py": {
+      "name": "test_compartmental_compute.py",
+      "type": "file",
+      "summary": "Unit tests for compartmental models: closed-form agreement and vectorization of 1-/2-cmt oral concentration, parameter recovery from a simulated fit, and grouped model selection."
+    },
+    "file:tests/test_diagnostics.py": {
+      "name": "test_diagnostics.py",
+      "type": "file",
+      "summary": "Unit tests for residual diagnostics and NPDE: identity fits give zero IWRES, PRED uses typical not individual parameters, and NPDE is well-calibrated, bounded, and deterministic for a fixed seed."
+    },
+    "file:tests/test_dose_sweep.py": {
+      "name": "test_dose_sweep.py",
+      "type": "file",
+      "summary": "Unit tests for the dose-sweep compute: linear PK is dose-proportional, Michaelis-Menten is super-proportional, output envelope/metadata shapes are consistent, and Cavg equals AUC over tau."
+    },
+    "file:tests/test_dp_compute.py": {
+      "name": "test_dp_compute.py",
+      "type": "file",
+      "summary": "Unit tests for dose-proportionality power-model estimation: slope recovery for proportional/sub-/super-proportional data, closed-form critical region and CI, and aggregation across parameters."
+    },
+    "file:tests/test_forecast.py": {
+      "name": "test_forecast.py",
+      "type": "file",
+      "summary": "Unit tests for MAP/TDM forecasting: Bayesian update pulls individual estimates toward truth, no-levels falls back to population typical, dose optimization hits a target, and steady-state metrics are ordered."
+    },
+    "file:tests/test_identity_audit.py": {
+      "name": "test_identity_audit.py",
+      "type": "file",
+      "summary": "Tests identity-aware tamper-evident auditing: actor/reason recording with chain verification, tampering detection, backward compatibility, provenance stamping, and signed human-review entries."
+    },
+    "file:tests/test_nca_compute.py": {
+      "name": "test_nca_compute.py",
+      "type": "file",
+      "summary": "Unit tests for non-compartmental analysis: exact lambda_z and t1/2, AUCinf against analytic truth, Cmax/Tmax, CL/V, small percent-extrapolation, and dose grouping."
+    },
+    "file:tests/test_nlme.py": {
+      "name": "test_nlme.py",
+      "type": "file",
+      "summary": "Comprehensive unit tests for the NLME estimation engine: simulates synthetic populations with known parameters and verifies FOCE-I and SAEM recover theta/omega/sigma, plus covariate models, SCM selection, parameter uncertainty (RSE), and M3 BLQ censored-likelihood handling."
+    },
+    "file:tests/test_nmexport.py": {
+      "name": "test_nmexport.py",
+      "type": "file",
+      "summary": "Unit tests for NONMEM control-stream and mrgsolve C++ code generation, asserting correct ADVAN/TRANS selection, power-model covariate THETA blocks, ALAG lag-time handling on depot, and None return for unsupported models."
+    },
+    "file:tests/test_orchestrator.py": {
+      "name": "test_orchestrator.py",
+      "type": "file",
+      "summary": "Integration tests for the agent Orchestrator and Supervisor: verifies LLM-based routing, workflow pause at the human-review gate, resume-to-report completion, privacy (metadata-only), SQLite persistence across restart, and session ownership enforcement."
+    },
+    "file:tests/test_pk_models.py": {
+      "name": "test_pk_models.py",
+      "type": "file",
+      "summary": "Unit tests for the 18-model PK/PKPD library: validates analytic closed-form agreement (IV/oral 1-2cmt), allometric scaling, Michaelis-Menten saturability, transit-compartment peak delay, Emax/IDR PKPD behavior, parameter fitting, and AIC-based model comparison."
+    },
+    "file:tests/test_poppk_compute.py": {
+      "name": "test_poppk_compute.py",
+      "type": "file",
+      "summary": "Unit tests for two-stage popPK summary statistics: closed-form verification of geometric mean, geometric CV%, typical-value/IIV summarization, and log-linear covariate-effect estimation with edge cases for nonpositive and insufficient data."
+    },
+    "file:tests/test_report_272.py": {
+      "name": "test_report_272.py",
+      "type": "file",
+      "summary": "Tests for the FDA Section 2.7.2 regulatory report generator: validates placeholder handling for empty state, NCA/NLME/SCM table population, study-info propagation, reproducibility section, and HTTP endpoints for report generation and download."
+    },
+    "file:tests/test_skills.py": {
+      "name": "test_skills.py",
+      "type": "file",
+      "summary": "Tests for the skill capture/replay subsystem: verifies step distillation (dropping I/O and profiling, collapsing duplicates), SkillStore save/get/list/delete with versioning, markdown rendering, and end-to-end replay reproducing an NCA workflow on a fresh session, including HTTP routes."
+    },
+    "file:tests/test_ss_compute.py": {
+      "name": "test_ss_compute.py",
+      "type": "file",
+      "summary": "Unit tests for steady-state PK computation: confirms SS concentration formulas match single-dose superposition and reduce correctly at large tau, SS fitting recovers parameters, multiple-dose detection, and steady-state NCA grouping by dose."
+    },
+    "file:tests/test_vpc.py": {
+      "name": "test_vpc.py",
+      "type": "file",
+      "summary": "Unit tests for VPC and goodness-of-fit diagnostics: validates CV-to-SD conversion, observed-vs-predicted GOF metrics, simulation-based VPC band ordering and lognormal spread, determinism under fixed seed, and prediction-corrected VPC (pcVPC) structure and coverage."
+    },
+    "function:tests/test_nlme.py:_make_population": {
+      "name": "_make_population",
+      "type": "function",
+      "summary": "Simulates a synthetic NLME population with known CL/V/KA typical values and lognormal IIV plus residual error, returning subject records used as ground truth for parameter-recovery assertions."
+    },
+    "function:tests/test_nlme.py:_make_cov_population": {
+      "name": "_make_cov_population",
+      "type": "function",
+      "summary": "Builds a synthetic population whose clearance depends on a weight covariate with a known exponent, used to test covariate-model recovery and stepwise covariate modeling selection."
+    },
+    "function:tests/test_nlme.py:_censored_population": {
+      "name": "_censored_population",
+      "type": "function",
+      "summary": "Generates a population with concentrations censored below an LLOQ and a parallel BLQ flag array, used to test the M3 censored-likelihood estimation path."
+    },
+    "function:tests/test_nlme.py:test_sparse_subject_is_handled": {
+      "name": "test_sparse_subject_is_handled",
+      "type": "function",
+      "summary": "Verifies FOCE-I fitting tolerates a subject with very few observations without crashing and still returns finite estimates for the full cohort."
+    },
+    "function:tests/test_nlme.py:test_scm_selects_true_covariate_and_rejects_noise": {
+      "name": "test_scm_selects_true_covariate_and_rejects_noise",
+      "type": "function",
+      "summary": "Runs stepwise covariate modeling on a synthetic population and asserts the true weight-on-CL covariate is selected while a noise covariate is rejected."
+    },
+    "function:tests/test_nmexport.py:_fit": {
+      "name": "_fit",
+      "type": "function",
+      "summary": "Helper that constructs a minimal fitted-model dict (model key, theta, IIV, covariate spec) used as input to the NONMEM and mrgsolve code builders under test."
+    },
+    "function:tests/test_orchestrator.py:test_persistence_survives_restart": {
+      "name": "test_persistence_survives_restart",
+      "type": "function",
+      "summary": "Creates a session and workflow under one Orchestrator backed by an on-disk SessionStore, then reconstructs a fresh Orchestrator and asserts the session and intact audit chain are recovered."
+    },
+    "function:tests/test_pk_models.py:test_pkpd_dual_endpoint_fit_recovers": {
+      "name": "test_pkpd_dual_endpoint_fit_recovers",
+      "type": "function",
+      "summary": "Simulates a coupled PK/PD dual-endpoint dataset and verifies the joint fitter recovers the known PK and PD parameters within tolerance."
+    },
+    "function:tests/test_pk_models.py:test_simulate_timecourse_single_and_multidose": {
+      "name": "test_simulate_timecourse_single_and_multidose",
+      "type": "function",
+      "summary": "Checks the timecourse simulator produces correct single-dose and multiple-dose accumulation profiles across the model library."
+    },
+    "function:tests/test_poppk_compute.py:test_two_stage_summary_typical_value_and_iiv": {
+      "name": "test_two_stage_summary_typical_value_and_iiv",
+      "type": "function",
+      "summary": "Verifies the two-stage summary computes the correct geometric-mean typical value and inter-individual variability from per-subject parameter estimates."
+    },
+    "function:tests/test_poppk_compute.py:test_covariate_effect_perfect_log_linear": {
+      "name": "test_covariate_effect_perfect_log_linear",
+      "type": "function",
+      "summary": "Constructs a perfect log-linear covariate relationship and asserts the covariate-effect estimator recovers the exact slope."
+    },
+    "function:tests/test_report_272.py:_nlme_state": {
+      "name": "_nlme_state",
+      "type": "function",
+      "summary": "Builds a synthetic PharmState populated with NLME results, used to test that the Section 2.7.2 report renders model tables and conclusions."
+    },
+    "function:tests/test_report_272.py:test_full_state_no_crash": {
+      "name": "test_full_state_no_crash",
+      "type": "function",
+      "summary": "Smoke test asserting the 2.7.2 report generator runs end-to-end without error on a fully populated state combining NCA, NLME, and SCM results."
+    },
+    "function:tests/test_report_272.py:test_http_272_download": {
+      "name": "test_http_272_download",
+      "type": "function",
+      "summary": "Exercises the HTTP endpoint that downloads a generated 2.7.2 report file via the FastAPI TestClient."
+    },
+    "function:tests/test_skills.py:test_http_capture_list_get_run_delete": {
+      "name": "test_http_capture_list_get_run_delete",
+      "type": "function",
+      "summary": "End-to-end HTTP test covering the full skill lifecycle: capture from a session, list, get, run (replay), and delete via the FastAPI TestClient."
+    },
+    "function:tests/test_skills.py:test_capture_then_inspect_steps": {
+      "name": "test_capture_then_inspect_steps",
+      "type": "function",
+      "summary": "Captures a skill from an executed NCA session and asserts the distilled steps reflect the tool calls performed."
+    },
+    "function:tests/test_ss_compute.py:test_extract_multiple_dose": {
+      "name": "test_extract_multiple_dose",
+      "type": "function",
+      "summary": "Verifies steady-state dosing-interval extraction correctly identifies multiple-dose regimens and partitions the profile into per-tau intervals."
+    },
+    "function:tests/test_vpc.py:_make_subject": {
+      "name": "_make_subject",
+      "type": "function",
+      "summary": "Helper that builds a single subject record with given parameters and weight covariate for use across the VPC and GOF tests."
+    },
+    "function:tests/test_vpc.py:_correct_model_population": {
+      "name": "_correct_model_population",
+      "type": "function",
+      "summary": "Simulates a population from the correct model so that pcVPC band coverage of the observed data can be validated."
+    },
+    "function:tests/test_vpc.py:test_obs_vs_pred_identity_is_perfect_fit": {
+      "name": "test_obs_vs_pred_identity_is_perfect_fit",
+      "type": "function",
+      "summary": "Asserts that when individual predictions equal observations, the observed-vs-predicted GOF metrics report a perfect fit."
+    },
+    "function:tests/test_vpc.py:test_vpc_band_lognormal_spread_matches_cv": {
+      "name": "test_vpc_band_lognormal_spread_matches_cv",
+      "type": "function",
+      "summary": "Verifies the simulated VPC band spread matches the lognormal IIV implied by the specified coefficient of variation."
+    }
+  },
+  "totalNodes": 271,
+  "totalEdges": 451
+}

@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Courses — Pharmacometrics training, taught the way we build software</title>
+  <meta name="description" content="Hands-on R and pharmacometrics courses: PK/PD modeling with mrgsolve, handling missing data in population PK, and cleaning/visualizing messy data with the tidyverse. Every lesson ships a reusable artifact." />
+  <meta name="color-scheme" content="light" />
+  <meta property="og:title" content="Courses — Pharmacometrics training, taught the way we build software" />
+  <meta property="og:description" content="Learn it. Build it. Ship it. Check it. Hands-on R courses in PK/PD modeling, missing data handling, and tidyverse data cleaning for pharmacometrics." />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="styles.v2.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <!-- Nav -->
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="index.html#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="index.html#capabilities">Product</a>
+        <a href="courses.html" aria-current="page">Courses</a>
+        <a href="index.html#compliance">Compliance</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <span id="top"></span>
+
+    <!-- Hero -->
+    <section class="hero" aria-labelledby="hero-h">
+      <div class="container">
+        <p class="eyebrow">Pharmacometrics training</p>
+        <h1 id="hero-h" style="max-width:22ch">Courses built the same way we build software.</h1>
+        <p class="hero-sub" style="max-width:56ch">No slide-deck-and-forget curriculum. Every lesson derives the concept from first principles, implements it in R, and ships an artifact you keep — a model template, a decision checklist, a diagnostic script — for use on real projects.</p>
+        <div class="hero-actions">
+          <a href="#catalog" class="btn btn-primary">Browse the catalog
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a href="#pedagogy" class="btn btn-ghost">How the lessons work</a>
+        </div>
+        <span class="hero-tagline"><span class="dot" aria-hidden="true"></span> Learn it · Build it · Ship it · Check it</span>
+      </div>
+    </section>
+
+    <!-- Pedagogy -->
+    <section id="pedagogy" class="divide" aria-labelledby="ped-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">The pedagogy</p>
+          <h2 id="ped-h">Four moves, every lesson, no exceptions.</h2>
+          <p>The same retention loop runs across every phase of every course — the math and physiology before the software button, and a keepable artifact at the end of it.</p>
+        </div>
+        <div class="flow-track">
+          <div class="flow-step"><span class="fs-n">move 1</span><h4>Learn</h4><p>The concept from first principles — the equation or mechanism before any tool touches it.</p></div>
+          <div class="flow-step"><span class="fs-n">move 2</span><h4>Build</h4><p>Implement it hands-on in R — mrgsolve, nlmixr2, or NONMEM control-stream syntax where relevant.</p></div>
+          <div class="flow-step"><span class="fs-n">move 3</span><h4>Ship</h4><p>Walk away with a reusable artifact: a model template, a decision checklist, a diagnostic script.</p></div>
+          <div class="flow-step"><span class="fs-n">move 4</span><h4>Check</h4><p>Three short questions gate the next lesson — no advancing on a false sense of understanding.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Catalog -->
+    <section id="catalog" aria-labelledby="cat-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Catalog</p>
+          <h2 id="cat-h">Three courses, one throughline: R for real pharmacometric work.</h2>
+          <p>Each course stands alone. Together they take you from tidy data to a defensible population PK/PD analysis.</p>
+        </div>
+
+        <div class="course-grid">
+
+          <!-- Course 1: PKPD Modeling and Simulation -->
+          <article class="course-card">
+            <div class="course-head">
+              <span class="tag live">Flagship</span>
+              <h3><a href="courses/pkpd-modeling-sim/index.html">PKPD Modeling and Simulation</a></h3>
+              <p class="course-sub">From Dose to Effect</p>
+            </div>
+            <p class="course-desc">A hands-on course on pharmacodynamic modeling and PK/PD integration using R and mrgsolve. Derive the math, build a working mrgsolve model, and ship a reusable template — every lesson, start to finish.</p>
+            <div class="course-meta">
+              <span class="course-meta-item">8 phases</span>
+              <span class="course-meta-item">27 lessons</span>
+              <span class="course-meta-item mono">R · mrgsolve · nlmixr2</span>
+            </div>
+            <div class="course-price-row">
+              <span class="course-price">$149<span class="course-price-note">one-time</span></span>
+              <a href="https://pharmagent-dashboard.netlify.app/checkout/pkpd-modeling-sim" class="btn btn-primary">Enroll</a>
+            </div>
+            <ul class="course-phases">
+              <li>PKPD Foundations</li>
+              <li>Direct Effect Models (Emax, Hill)</li>
+              <li>Effect Compartment &amp; Hysteresis</li>
+              <li>Indirect Response Models I–IV</li>
+              <li>Disease Progression</li>
+              <li>Tolerance &amp; Rebound</li>
+              <li>Exposure–Response Analysis</li>
+              <li>Clinical Trial Simulation</li>
+            </ul>
+            <p class="course-audience"><strong>Who it's for:</strong> pharmacometricians and clinical pharmacologists moving from PK-only work into full PK/PD integration and simulation.</p>
+            <a href="courses/pkpd-modeling-sim/index.html" class="course-explore mono">Explore lessons &rarr;</a>
+          </article>
+
+          <!-- Course 2: Handling Missing Data in R -->
+          <article class="course-card">
+            <div class="course-head">
+              <span class="tag">New</span>
+              <h3><a href="courses/handling-missing-data-r/index.html">Handling Missing Data in R</a></h3>
+              <p class="course-sub">From General Theory to Pharmacometric Practice</p>
+            </div>
+            <p class="course-desc">Starts from the MCAR/MAR/MNAR taxonomy and the general R imputation toolkit, then carries it into population PK: missing dose/time records, below-quantification-limit concentrations (Beal's M1–M7), missing covariates, and FREM.</p>
+            <div class="course-meta">
+              <span class="course-meta-item">6 phases</span>
+              <span class="course-meta-item">20 lessons</span>
+              <span class="course-meta-item mono">naniar · mice · NONMEM</span>
+            </div>
+            <div class="course-price-row">
+              <span class="course-price">$149<span class="course-price-note">one-time</span></span>
+              <a href="https://pharmagent-dashboard.netlify.app/checkout/handling-missing-data-r" class="btn btn-primary">Enroll</a>
+            </div>
+            <ul class="course-phases">
+              <li>Foundations of Missing Data</li>
+              <li>Diagnosing Missingness in R</li>
+              <li>Classical Methods — Deletion &amp; Single Imputation</li>
+              <li>Modern Imputation — Multiple &amp; Iterative</li>
+              <li>popPK Structure, Time, Dose &amp; BLQ</li>
+              <li>Missing Covariate Data &amp; FREM</li>
+            </ul>
+            <p class="course-audience"><strong>Who it's for:</strong> pharmacometricians and quantitative analysts who need a single course covering both the general missing-data toolkit and its popPK-specific methods (BLQ likelihoods, covariate imputation, FREM).</p>
+            <a href="courses/handling-missing-data-r/index.html" class="course-explore mono">Explore lessons &rarr;</a>
+          </article>
+
+          <!-- Course 3: Dealing with Messy Data in R -->
+          <article class="course-card">
+            <div class="course-head">
+              <span class="tag">New</span>
+              <h3><a href="courses/messy-data-r/index.html">Dealing with Messy Data in R</a></h3>
+              <p class="course-sub">Tidyverse, ggplot2, and Publication Figures</p>
+            </div>
+            <p class="course-desc">Turns messy real-world tables into analysis-ready data and publication-quality figures. Tidyverse import and cleaning, relational joins, the full grammar of graphics, accessible colour, and multi-panel composition — grounded in PK/PD example datasets throughout.</p>
+            <div class="course-meta">
+              <span class="course-meta-item">6 phases</span>
+              <span class="course-meta-item">18 lessons</span>
+              <span class="course-meta-item mono">tidyverse · patchwork</span>
+            </div>
+            <div class="course-price-row">
+              <span class="course-price">$149<span class="course-price-note">one-time</span></span>
+              <a href="https://pharmagent-dashboard.netlify.app/checkout/messy-data-r" class="btn btn-primary">Enroll</a>
+            </div>
+            <ul class="course-phases">
+              <li>Tidyverse Foundations &amp; Data Import</li>
+              <li>Data Transformation — dplyr &amp; tidyr</li>
+              <li>Joining &amp; Reshaping Multi-Table Data</li>
+              <li>ggplot2 Grammar of Graphics</li>
+              <li>Advanced Visualization &amp; Accessibility</li>
+              <li>Publication Figures — Multi-Panel &amp; Case Study</li>
+            </ul>
+            <p class="course-audience"><strong>Who it's for:</strong> analysts and researchers with prior R experience who are new to the tidyverse or to ggplot2-based visualization — no tidyverse background required.</p>
+            <a href="courses/messy-data-r/index.html" class="course-explore mono">Explore lessons &rarr;</a>
+          </article>
+
+        </div>
+
+        <!-- Bundle -->
+        <div class="bundle-banner">
+          <div>
+            <span class="tag live">Best value</span>
+            <h3>All-Access Bundle</h3>
+            <p>All three courses — 65 lessons, every phase, lifetime access. $349 instead of $447 buying separately.</p>
+          </div>
+          <div class="course-price-row">
+            <span class="course-price">$349<span class="course-price-note">one-time</span></span>
+            <a href="https://pharmagent-dashboard.netlify.app/checkout/all-access-bundle" class="btn btn-primary">Enroll in all three</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Delivery -->
+    <section class="divide" aria-labelledby="del-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Delivery</p>
+          <h2 id="del-h">Self-paced curriculum, or run as a cohort for your team.</h2>
+          <p>Every course is a complete, versioned package — lesson notes, runnable R scripts, quizzes, and slide decks — that a team can work through independently or that we can deliver live.</p>
+        </div>
+        <div class="comp-grid">
+          <div class="comp" style="background:var(--surface-1); border-color:var(--hairline);">
+            <h3 style="color:var(--ink)">Self-paced package</h3>
+            <p style="color:var(--ink-muted)">The full lesson set, R scripts, and artifacts, licensed for your team to work through on your own timeline.</p>
+          </div>
+          <div class="comp" style="background:var(--surface-1); border-color:var(--hairline);">
+            <h3 style="color:var(--ink)">Cohort workshop</h3>
+            <p style="color:var(--ink-muted)">Live delivery of a course or a custom subset of phases, scoped to your team's current modeling problem.</p>
+          </div>
+          <div class="comp" style="background:var(--surface-1); border-color:var(--hairline);">
+            <h3 style="color:var(--ink)">Custom curriculum</h3>
+            <p style="color:var(--ink-muted)">A new course built to the same Learn–Build–Ship–Check standard, scoped to a method or dataset specific to your program.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section id="contact" class="cta" aria-labelledby="cta-h">
+      <div class="container">
+        <div class="cta-card">
+          <p class="eyebrow" style="justify-content:center">Get started</p>
+          <h2 id="cta-h">Bring this curriculum to your team.</h2>
+          <p>Tell us which course (or which problem) and we'll scope a self-paced package or a live cohort session.</p>
+          <div class="cta-actions">
+            <a href="mailto:syedzaid@iu.edu?subject=Course%20inquiry" class="btn btn-primary">Request the curriculum
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <a href="index.html#top" class="btn btn-ghost">Back to PharmAgent</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="index.html#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="index.html#top">Product</a>
+        <a href="courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

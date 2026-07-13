@@ -1,0 +1,55 @@
+@import "tailwindcss";
+/* Fonts are loaded via <link> in index.html (Spectral/Public Sans/IBM Plex Mono) */
+
+@theme {
+  /* Clinical-Blue tokens — kept identical to pharmagent/website/styles.v2.css
+     and pmatricsai/src/index.css so all three surfaces read as one brand. */
+  --color-base:        #ECF1F7;
+  --color-surface:     #FFFFFF;
+  --color-surface-2:   #F4F7FB;
+  --color-line:        #D7E2EE;
+  --color-line-strong: #C5D4E4;
+
+  --color-ink:   #16314A;
+  --color-muted: #5E7388;
+  --color-faint: #8298AC;
+
+  --color-primary:      #1F66A6;
+  --color-primary-dim:  #17537F;
+  --color-primary-glow: rgba(31, 102, 166, 0.16);
+  --color-accent-soft:  #E3EEF9;
+  --color-accent-soft-border: #B5D4F4;
+  --color-success: #1D7A5A;
+  --color-success-dim: #16604A;
+  --color-warning: #9A5B12;
+  --color-danger:  #B23A2E;
+
+  --font-sans:  "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Spectral", Georgia, serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --radius-card: 14px;
+}
+
+*, *::before, *::after { border-color: var(--color-line); }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-base);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: var(--font-serif); font-weight: 600; letter-spacing: -0.01em; }
+
+::selection { background: var(--color-primary); color: white; }
+
+:where(a, button, input, select):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: 4px;
+}

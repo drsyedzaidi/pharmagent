@@ -1,0 +1,6 @@
+# Dev/test tooling (not installed in the production image).
+-r requirements.txt
+pytest==9.1.0
+httpx==0.28.1
+ruff
+pip-audit

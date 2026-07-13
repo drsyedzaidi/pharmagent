@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 01: Tidyverse Foundations & Data Import — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 01: Tidyverse Foundations & Data Import, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 01: Tidyverse Foundations & Data Import</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 01: Tidyverse Foundations &amp; Data Import</h1>
+<p>This phase builds the ground floor every messy-data workflow stands on: what the<br />
+tidyverse actually is, why tibbles behave differently from base data frames, how to<br />
+import real-world CSV/Excel files without silently corrupting them, and a systematic<br />
+audit you run on any new dataset before touching a single <code>dplyr</code> verb. By the end you<br />
+can import a genuinely messy pharmacometric dataset and know exactly what is wrong<br />
+with it before you try to fix it.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Explain the tidyverse's shared design philosophy and the tibble data structure, and contrast tibbles with base <code>data.frame</code></li>
+<li>Use the pipe (<code>|&gt;</code> and <code>%&gt;%</code>) to compose left-to-right data pipelines</li>
+<li>State Wickham's tidy-data definition and recognize wide-vs-long violations</li>
+<li>Import CSV, delimited, and Excel files with <code>readr</code>/<code>readxl</code>, using explicit <code>col_types</code> and <code>problems()</code> to catch silent parsing failures</li>
+<li>Recognize the common import failure modes: encoding, delimiters, thousands separators, date formats, whitespace, mixed-type columns, Excel serial dates</li>
+<li>Run a systematic pre-cleaning audit (<code>glimpse()</code>, class checks, duplicate detection, categorical-level checks, sentinel missing codes) before any transformation</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="01-tidyverse-tour/index.html">01-tidyverse-tour</a></code></td>
+<td>The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard</td>
+<td>40 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/01-tidyverse-import/02-importing-messy-data">02-importing-messy-data</a></code></td>
+<td>Importing Messy Data: readr, readxl, and Parsing Pitfalls</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/01-tidyverse-import/03-diagnosing-messiness">03-diagnosing-messiness</a></code></td>
+<td>Diagnosing a Messy Dataset Before You Touch It</td>
+<td>50 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.4 h</p>
+<h2>Prerequisites</h2>
+<p>Base R (vectors, data frames, functions, basic control flow). No tidyverse experience<br />
+required. <code>install.packages(c("tidyverse", "readxl", "skimr", "janitor"))</code>.</p>
+<h2>References</h2>
+<ul>
+<li>Wickham H, Çetinkaya-Rundel M, Grolemund G (2023). <em>R for Data Science</em>, 2nd ed. O'Reilly. https://r4ds.hadley.nz/</li>
+<li>Wickham H (2014). Tidy data. <em>Journal of Statistical Software</em> 59(10):1–23.</li>
+<li><code>readr</code> package documentation: https://readr.tidyverse.org/</li>
+<li><code>readxl</code> package documentation: https://readxl.tidyverse.org/</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="01-tidyverse-tour/index.html">Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard</a> <span class="tag live">Free preview</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/01-tidyverse-import/02-importing-messy-data">Lesson 02: Importing Messy Data: readr, readxl, and Parsing Pitfalls</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/01-tidyverse-import/03-diagnosing-messiness">Lesson 03: Diagnosing a Messy Dataset Before You Touch It</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

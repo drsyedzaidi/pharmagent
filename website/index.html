@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PharmAgent — Agentic AI for pharmacometric analysis</title>
+  <meta name="description" content="An agentic AI platform for end-to-end pharmacometric analysis. Agents decide, deterministic tools execute — with schema-only privacy, human-in-the-loop review gates, and a SHA-256 audit trail." />
+  <meta name="color-scheme" content="light" />
+  <meta property="og:title" content="PharmAgent — Agentic AI for pharmacometric analysis" />
+  <meta property="og:description" content="Agents decide, tools execute. Reproducible NCA, popPK, PK/PD and PBPK analysis with an auditable, human-in-the-loop workflow." />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="styles.v2.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <!-- Nav -->
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#capabilities">Capabilities</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#workflow">How it works</a>
+        <a href="#compliance">Compliance</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="#contact" class="btn btn-primary">Request a walkthrough</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <span id="top"></span>
+
+    <!-- Hero -->
+    <section class="hero" aria-labelledby="hero-h">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">Agentic pharmacometrics · built for PmatricsAI</p>
+          <h1 id="hero-h">Pharmacometric analysis, run by agents you can <em>audit</em>.</h1>
+          <p class="hero-sub">An AI platform for end-to-end PK/PD analysis. A supervisor routes work to domain agents; deterministic tools do every calculation. You review the science at each gate.</p>
+          <div class="hero-actions">
+            <a href="#contact" class="btn btn-primary">Request a walkthrough
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <a href="#workflow" class="btn btn-ghost">See how it works</a>
+          </div>
+          <span class="hero-tagline"><span class="dot" aria-hidden="true"></span> Agents decide, tools execute</span>
+        </div>
+
+        <!-- Concentration–time panel -->
+        <div class="hero-panel" role="img" aria-label="Plasma concentration–time profile with a linear-up log-down non-compartmental analysis fit and computed parameters.">
+          <div class="hero-panel-head">
+            <span class="hero-panel-title">nca · subject 04 · single dose</span>
+            <span class="chip">verified</span>
+          </div>
+          <svg viewBox="0 0 440 220" width="100%" height="auto" aria-hidden="true">
+            <!-- axes -->
+            <line x1="40" y1="12" x2="40" y2="188" stroke="#D7E2EE" stroke-width="1.5"/>
+            <line x1="40" y1="188" x2="424" y2="188" stroke="#D7E2EE" stroke-width="1.5"/>
+            <!-- gridlines -->
+            <line x1="40" y1="140" x2="424" y2="140" stroke="#EAF0F7" stroke-width="1"/>
+            <line x1="40" y1="92" x2="424" y2="92" stroke="#EAF0F7" stroke-width="1"/>
+            <line x1="40" y1="44" x2="424" y2="44" stroke="#EAF0F7" stroke-width="1"/>
+            <!-- curve: absorption then log-linear decline -->
+            <g class="pk-draw">
+              <path class="curve" d="M56 178 C 78 150, 96 44, 120 40 C 150 36, 172 92, 210 120 C 252 150, 300 168, 360 178 C 384 182, 404 184, 416 185"
+                    fill="none" stroke="#1F66A6" stroke-width="3" stroke-linecap="round"
+                    stroke-dasharray="900" stroke-dashoffset="900"/>
+            </g>
+            <!-- observed points -->
+            <g fill="#1F66A6">
+              <circle cx="120" cy="40" r="4.5"/><circle cx="168" cy="88" r="4.5"/>
+              <circle cx="210" cy="120" r="4.5"/><circle cx="288" cy="162" r="4.5"/>
+              <circle cx="360" cy="178" r="4.5"/>
+            </g>
+            <!-- Cmax marker -->
+            <circle cx="120" cy="40" r="8" fill="none" stroke="#B5D4F4" stroke-width="2"/>
+          </svg>
+          <div class="pk-metrics">
+            <div class="pk-metric"><div class="k">Cmax</div><div class="v">1,284<span style="font-size:11px;color:var(--ink-subtle)"> ng/mL</span></div></div>
+            <div class="pk-metric"><div class="k">AUC₀–∞</div><div class="v">8,940</div></div>
+            <div class="pk-metric"><div class="k">t½</div><div class="v">6.2<span style="font-size:11px;color:var(--ink-subtle)"> h</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Principles / trust strip -->
+    <section class="principles" aria-labelledby="prin-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Non-negotiables</p>
+          <h2 id="prin-h">Four guarantees, enforced by the system — not by trust.</h2>
+          <p>Each principle is a hard constraint in the architecture, verifiable in the code and the audit trail.</p>
+        </div>
+        <div class="principle-grid">
+          <div class="principle">
+            <span class="pnum">01 / privacy</span>
+            <h3>Schema-only</h3>
+            <p>Raw patient data never reaches the model. A SchemaExtractor passes metadata summaries only — the LLM sees structure, not subjects.</p>
+          </div>
+          <div class="principle">
+            <span class="pnum">02 / determinism</span>
+            <h3>Tools, not tokens</h3>
+            <p>Every number comes from deterministic Python — numpy, scipy, pandas. The model reasons about strategy; it never computes the result.</p>
+          </div>
+          <div class="principle">
+            <span class="pnum">03 / oversight</span>
+            <h3>Human in the loop</h3>
+            <p>Review gates sit at every scientific decision point. Nothing advances past a checkpoint without an explicit approve.</p>
+          </div>
+          <div class="principle">
+            <span class="pnum">04 / traceability</span>
+            <h3>Hash-chain audit</h3>
+            <p>Every tool call is wrapped in an append-only SHA-256 chain. The full analytical path is reconstructable, end to end.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Problem / Solution -->
+    <section aria-labelledby="ps-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Why it exists</p>
+          <h2 id="ps-h">General-purpose AI can describe a PK analysis. It can't be trusted to run one.</h2>
+        </div>
+        <div class="split">
+          <div class="panel problem">
+            <h3>The problem with chatbot pharmacometrics</h3>
+            <p class="lead">A raw LLM guesses numbers, forgets its own steps, and leaks whatever you paste in. For regulated science, that fails on day one.</p>
+            <ul class="checklist">
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg> Fabricated or non-reproducible parameter values</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg> Patient-level data sent to a third-party model</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg> No record of how a result was reached</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg> No place for a modeller to intervene</li>
+            </ul>
+          </div>
+          <div class="panel solution">
+            <h3>PharmAgent's answer</h3>
+            <p class="lead">Split the roles. Let agents plan the analysis; let validated tools carry it out; keep a person in command of the science.</p>
+            <ul class="checklist">
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Reproducibility comes from the tools, not the model</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Metadata-only summaries protect the dataset</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Every step recorded in a tamper-evident chain</li>
+              <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve or reject at each decision gate</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Capabilities -->
+    <section id="capabilities" class="divide" aria-labelledby="cap-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Method coverage</p>
+          <h2 id="cap-h">One platform across the pharmacometric workflow.</h2>
+          <p>Domain agents own each method. Load a dataset once; move from NCA through population modelling to simulation without leaving the audit chain.</p>
+        </div>
+        <div class="cap-grid">
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18M7 15l4-5 3 3 5-7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <h3>Non-compartmental analysis</h3>
+            <p>Cmax, Tmax, AUC and half-life by linear-up / log-down, with an automated QC checklist on every run.</p>
+            <span class="tag live">Available now</span>
+          </article>
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M10 7h4a3 3 0 0 1 3 3v4" stroke-linecap="round"/></svg></div>
+            <h3>Population PK</h3>
+            <p>1- and 2-compartment structural models, IIV, and a covariate screen — estimation shelled out to nlmixr2 / mrgsolve.</p>
+            <span class="tag">Phase 3</span>
+          </article>
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 17c4 0 4-10 8-10s4 10 8 10" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <h3>PK/PD &amp; exposure–response</h3>
+            <p>Emax and indirect-response models; logistic and survival exposure–response for efficacy and safety endpoints.</p>
+            <span class="tag">Phase 3</span>
+          </article>
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/></svg></div>
+            <h3>PBPK modelling</h3>
+            <p>Physiologically based models with organ compartments and tissue partitioning for mechanistic prediction.</p>
+            <span class="tag">Phase 4</span>
+          </article>
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke-linecap="round"/></svg></div>
+            <h3>Simulation</h3>
+            <p>Monte Carlo, virtual populations and target-attainment analysis for dose selection and trial design.</p>
+            <span class="tag">Phase 4</span>
+          </article>
+          <article class="cap">
+            <div class="cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 12h6M9 16h6M9 8h2M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z" stroke-linejoin="round"/></svg></div>
+            <h3>Regulatory intelligence &amp; reporting</h3>
+            <p>Cited RAG over FDA / EMA / ICH guidance, with methods sections auto-drafted from the audit trail into DOCX.</p>
+            <span class="tag live">Reporting now · RAG Phase 4</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Architecture -->
+    <section id="architecture" class="arch" aria-labelledby="arch-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Architecture</p>
+          <h2 id="arch-h">A hierarchy of agents over a single shared state.</h2>
+          <p>Agents communicate only through <span class="mono">PharmState</span> — a typed, write-access-controlled state object. Every message is bounded; nothing writes where it shouldn't.</p>
+        </div>
+        <div class="arch-diagram">
+          <div class="arch-level">
+            <div class="lvl">Level 0<small>routing</small></div>
+            <div class="node-row"><span class="node super">Supervisor — two-stage routing (keyword score → LLM fallback)</span></div>
+          </div>
+          <div class="arch-level">
+            <div class="lvl">Level 1<small>domain agents</small></div>
+            <div class="node-row">
+              <span class="node">Data Manager</span><span class="node">NCA</span><span class="node">QC</span>
+              <span class="node">Report</span><span class="node">PBPK</span><span class="node">Statistical</span>
+              <span class="node">Simulator</span><span class="node">Regulatory Intel</span><span class="node">Modeler Manager</span>
+            </div>
+          </div>
+          <div class="arch-level">
+            <div class="lvl">Level 2<small>specialists</small></div>
+            <div class="node-row">
+              <span class="node spec">PopPK Expert</span><span class="node spec">PKPD Expert</span><span class="node spec">E–R Expert</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Workflow -->
+    <section id="workflow" aria-labelledby="wf-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">How it works</p>
+          <h2 id="wf-h">Every request follows the same auditable spine.</h2>
+          <p>A user prompt is routed, executed by tools, written to shared state, and held at a review gate — with the whole path recorded as it goes.</p>
+        </div>
+        <div class="flow-track">
+          <div class="flow-step"><span class="fs-n">step 1</span><h4>User</h4><p>Asks in plain language — “run NCA on this dataset.”</p></div>
+          <div class="flow-step"><span class="fs-n">step 2</span><h4>Supervisor</h4><p>Scores intent, routes to the right domain agent.</p></div>
+          <div class="flow-step"><span class="fs-n">step 3</span><h4>Agent → tools</h4><p>Calls deterministic tools; all math runs in Python.</p></div>
+          <div class="flow-step"><span class="fs-n">step 4</span><h4>PharmState</h4><p>Results written to typed shared state, access-controlled.</p></div>
+          <div class="flow-step"><span class="fs-n">step 5</span><h4>Review gate</h4><p>You approve or reject before the next step runs.</p></div>
+        </div>
+        <div class="flow-audit" aria-label="Example audit chain entries">
+<span class="h">audit_chain › append-only › SHA-256</span>
+  0x1  load_dataset      schema_only=true    <span class="ok">✓ sealed</span>
+  0x2  nca.compute       method=lin-up/log-down   <span class="ok">✓ sealed</span>
+  0x3  qc.checklist      flags=0/15          <span class="ok">✓ sealed</span>
+  0x4  report.export     format=docx         <span class="ok">✓ sealed</span>
+  prev_hash → curr_hash  ·  chain verified   <span class="ok">✓</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Compliance -->
+    <section id="compliance" class="compliance" aria-labelledby="comp-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Compliance posture</p>
+          <h2 id="comp-h">Designed toward 21 CFR Part 11 from the first commit.</h2>
+          <p>Traceability is not correctness — a human still verifies the science. But the record is built for regulated environments by construction.</p>
+        </div>
+        <div class="comp-grid">
+          <div class="comp"><h3>Tamper-evident audit export</h3><p>The full SHA-256 hash chain exports as an append-only record of every tool call and decision.</p></div>
+          <div class="comp"><h3>Read-only raw data</h3><p>Source datasets stay read-only; the model only ever receives schema-level metadata.</p></div>
+          <div class="comp"><h3>E-signature metadata</h3><p>Review-gate approvals capture the actor and reason, ready for electronic-signature workflows.</p></div>
+          <div class="comp"><h3>Per-tool validation</h3><p>Each computational tool carries its own validation documentation and deterministic tests.</p></div>
+          <div class="comp"><h3>Reproducibility record</h3><p>Runs capture versions, dataset hashes and git provenance so any result can be reconstructed.</p></div>
+          <div class="comp"><h3>Human-in-the-loop by design</h3><p>No scientific decision advances without an explicit human approval at the gate.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Roadmap -->
+    <section id="roadmap" aria-labelledby="rm-h">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">Delivery</p>
+          <h2 id="rm-h">Shipped in phases — validated, not rushed.</h2>
+          <p>The hardest work is trustworthy estimation inside an agent loop. It lands when it's verified, not before.</p>
+        </div>
+        <div class="roadmap-list">
+          <div class="rm">
+            <span class="phase">Phase 1</span>
+            <div><h3>Vertical slice</h3><p>The full spine on NCA — state, audit chain, schema privacy, routing, QC and DOCX reporting, end to end.</p></div>
+            <span class="status now">Foundation live</span>
+          </div>
+          <div class="rm">
+            <span class="phase">Phase 2</span>
+            <div><h3>Product hardening</h3><p>Auth and projects, streamed agent steps, review-gate UX, full 15-point QC, and Plotly visualizations.</p></div>
+            <span class="status next">In progress</span>
+          </div>
+          <div class="rm">
+            <span class="phase">Phase 3</span>
+            <div><h3>Modeling specialists</h3><p>PopPK, PK/PD and exposure–response experts with estimation shelled out to R and NONMEM control-stream generation.</p></div>
+            <span class="status planned">Planned</span>
+          </div>
+          <div class="rm">
+            <span class="phase">Phase 4</span>
+            <div><h3>Regulatory &amp; simulation</h3><p>Cited RAG over FDA/EMA/ICH guidance, Monte Carlo simulation, virtual populations and PBPK.</p></div>
+            <span class="status planned">Planned</span>
+          </div>
+          <div class="rm">
+            <span class="phase">Phase 5</span>
+            <div><h3>Compliance &amp; deploy</h3><p>Full Part 11 posture, per-tool validation docs, containerized deployment and secrets management.</p></div>
+            <span class="status planned">Planned</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section id="contact" class="cta" aria-labelledby="cta-h">
+      <div class="container">
+        <div class="cta-card">
+          <p class="eyebrow" style="justify-content:center">Get started</p>
+          <h2 id="cta-h">See PharmAgent run an analysis you can audit.</h2>
+          <p>Book a walkthrough and we'll run a non-compartmental analysis on a sample dataset — schema-only, gated, and hash-chained, start to finish.</p>
+          <div class="cta-actions">
+            <a href="mailto:syedzaid@iu.edu?subject=PharmAgent%20walkthrough" class="btn btn-primary">Request a walkthrough
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <a href="#capabilities" class="btn btn-ghost">Explore capabilities</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Agents decide, tools execute. · Built for PmatricsAI.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="#architecture">Architecture</a>
+        <a href="#compliance">Compliance</a>
+        <a href="courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

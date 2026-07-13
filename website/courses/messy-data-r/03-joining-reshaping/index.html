@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 03: Joining & Reshaping Multi-Table Data — Dealing with Messy Data in R</title>
+  <meta name="description" content="Phase 03: Joining & Reshaping Multi-Table Data, part of Dealing with Messy Data in R." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../../styles.v2.css" />
+  <link rel="stylesheet" href="../../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../../index.html#capabilities">Product</a>
+        <a href="../../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../index.html">Dealing with Messy Data in R</a> <span aria-hidden="true">/</span> <span aria-current="page">Phase 03: Joining & Reshaping Multi-Table Data</span></nav>
+      
+      <p class="eyebrow">Dealing with Messy Data in R</p>
+      <article class="lesson-doc"><h1>Phase 03: Joining &amp; Reshaping Multi-Table Data</h1>
+<p>This phase moves from single-table cleaning to combining data that lives in more<br />
+than one place — the normal state of real studies, where subjects, dosing events,<br />
+and lab draws are never in the same spreadsheet. You will learn the five core<br />
+<code>dplyr</code> join verbs, learn to catch the single most common real-world join bug<br />
+(silent row multiplication from a non-unique key), and assemble a realistic<br />
+three-table popPK dataset (dosing, observations, covariates) into one<br />
+event-ordered table. One continuity set of three related tables — subjects,<br />
+dosing, and labs — runs through all three lessons with deliberate variations<br />
+(a duplicate-key labs table in Lesson 02) so each new join concept lands on<br />
+data you already recognize.</p>
+<h2>Learning Objectives</h2>
+<ul>
+<li>Use <code>left_join()</code>, <code>inner_join()</code>, <code>full_join()</code>, <code>anti_join()</code>, and <code>semi_join()</code><br />
+  correctly, and predict exactly which rows survive and which columns get<br />
+<code>NA</code>-filled for each</li>
+<li>Join on multiple keys and control matching explicitly with <code>by =</code></li>
+<li>Recognize silent row multiplication caused by a non-unique join key, and explain<br />
+  why it is the most common and most dangerous join bug</li>
+<li>Validate a join before trusting it: check <code>nrow()</code> before/after, check<br />
+<code>anyDuplicated()</code> on each side's key, and use dplyr's <code>relationship =</code> argument<br />
+  to fail loudly instead of multiplying silently</li>
+<li>Assemble a realistic popPK-style dataset from separate dosing, observations, and<br />
+  covariates tables into one ID+TIME-ordered table, with validation that no<br />
+  covariate row was duplicated or dropped in the process</li>
+</ul>
+<h2>Lessons</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Slug</th>
+<th>Title</th>
+<th>Est. Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/01-join-types">01-join-types</a></code></td>
+<td>Join Types: left_join, inner_join, full_join, anti_join</td>
+<td>50 min</td>
+</tr>
+<tr>
+<td>02</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/02-validating-joins">02-validating-joins</a></code></td>
+<td>Validating Joins: Keys, Cardinality, and Silent Row Multiplication</td>
+<td>55 min</td>
+</tr>
+<tr>
+<td>03</td>
+<td><code><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/03-relational-pk-data">03-relational-pk-data</a></code></td>
+<td>Relational popPK Data: Dosing, Observations, and Covariates as Separate Tables</td>
+<td>60 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total estimated time:</strong> 2.75 h</p>
+<h2>Prerequisites</h2>
+<p>Phase 02 (Data Transformation with dplyr &amp; tidyr) — the five dplyr verbs, grouped<br />
+operations, and <code>tidyr</code> reshaping. <code>install.packages(c("tidyverse"))</code> (uses<br />
+<code>dplyr</code> for joins; no additional packages required).</p>
+<h2>References</h2>
+<ul>
+<li>Wickham H, Çetinkaya-Rundel M, Grolemund G (2023). <em>R for Data Science</em>, 2nd ed.,<br />
+  ch. on joins. O'Reilly. https://r4ds.hadley.nz/</li>
+<li><code>dplyr</code> join documentation: https://dplyr.tidyverse.org/reference/mutate-joins.html<br />
+  and https://dplyr.tidyverse.org/reference/filter-joins.html</li>
+<li>Codd EF (1970). A relational model of data for large shared data banks.<br />
+<em>Commun ACM</em> 13(6):377–387.</li>
+</ul></article>
+      <section class="lesson-section">
+        <h2>Lessons in this phase</h2>
+        <ol class="phase-lesson-list"><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/01-join-types">Lesson 01: Join Types — left_join, inner_join, full_join, anti_join</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/02-validating-joins">Lesson 02: Validating Joins — Keys, Cardinality, and Silent Row Multiplication</a> <span class="tag">Enrolled only</span></li><li><a href="https://pharmagent-dashboard.netlify.app/learn/messy-data-r/03-joining-reshaping/03-relational-pk-data">Lesson 03: Relational popPK Data — Dosing, Observations, and Covariates as Separate Tables</a> <span class="tag">Enrolled only</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../../index.html#top">Product</a>
+        <a href="../../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

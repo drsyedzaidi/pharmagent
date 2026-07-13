@@ -1,0 +1,1462 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "louvain",
+  "totalFiles": 90,
+  "totalBatches": 6,
+  "exportsByPath": {
+    ".understand-anything/.understandignore": [],
+    "app/__init__.py": [],
+    "app/agents/__init__.py": [],
+    "app/agents/base.py": [
+      "AgentResult",
+      "Agent"
+    ],
+    "app/agents/definitions.py": [],
+    "app/agents/supervisor.py": [
+      "score",
+      "Supervisor"
+    ],
+    "app/compute/__init__.py": [],
+    "app/compute/adversarial.py": [
+      "_finding",
+      "_nca_internal",
+      "_nca_dose_monotonic",
+      "_nlme_refute",
+      "_obs_by_subject",
+      "_nca_recompute",
+      "review"
+    ],
+    "app/compute/bioequivalence.py": [
+      "_clean_logs",
+      "_null_result",
+      "_ci_from_log",
+      "be_one_parameter",
+      "_be_paired",
+      "_be_parallel",
+      "assess_bioequivalence"
+    ],
+    "app/compute/compartmental.py": [
+      "_FitData",
+      "conc_1cmt_oral",
+      "conc_2cmt_oral",
+      "_accum",
+      "conc_1cmt_oral_ss",
+      "conc_2cmt_oral_ss",
+      "_predict",
+      "_initial_estimates",
+      "fit_one_subject",
+      "fit_compartmental",
+      "fit_compartmental_ss"
+    ],
+    "app/compute/diagnostics.py": [
+      "_cv_pct_to_sd",
+      "fit_residuals",
+      "npde"
+    ],
+    "app/compute/dose_proportionality.py": [
+      "_clean_pairs",
+      "power_model",
+      "assess_dose_proportionality"
+    ],
+    "app/compute/dose_sweep.py": [
+      "_interval_metrics",
+      "dose_sweep"
+    ],
+    "app/compute/dosing.py": [
+      "_num",
+      "SSProfile",
+      "_dose_times",
+      "dose_events",
+      "is_multiple_dose",
+      "extract_ss_intervals"
+    ],
+    "app/compute/forecast.py": [
+      "_ss_metrics",
+      "_optimize_dose",
+      "forecast"
+    ],
+    "app/compute/nca_ss.py": [
+      "nca_ss_subject",
+      "run_nca_ss"
+    ],
+    "app/compute/nca.py": [
+      "Profile",
+      "_auc_intervals",
+      "_best_lambda_z",
+      "refit_lambda_z_manual",
+      "nca_subject",
+      "_geomean",
+      "_geocv",
+      "summarize_by_dose",
+      "_round",
+      "run_nca"
+    ],
+    "app/compute/nlme.py": [
+      "_Subject",
+      "_prepare_subjects",
+      "_error_components",
+      "_is_num",
+      "_CovEffect",
+      "_build_cov_effects",
+      "_PopSpec",
+      "_apply_cov",
+      "_pack",
+      "_unpack",
+      "_individual_params",
+      "_predict",
+      "_residual_variance",
+      "_make_predictor_cache",
+      "_ind_obj",
+      "_numeric_hessian",
+      "_conditional_mode",
+      "_laplace_subject",
+      "_population_ofv",
+      "_terminal_ke",
+      "_initial_theta",
+      "_cv_pct",
+      "_shrinkage_pct",
+      "_individual_records",
+      "_empty_uncertainty",
+      "_parameter_uncertainty",
+      "_post_fit_uncertainty",
+      "_covariate_records",
+      "_assemble",
+      "_resolve_iiv",
+      "focei_fit",
+      "_saem_residual_ss",
+      "_saem_estep",
+      "_saem_update_theta",
+      "saem_fit",
+      "_state_vector",
+      "population_fit",
+      "_candidate_key",
+      "_warm_init",
+      "_scm_max_workers",
+      "_fit_batch",
+      "scm",
+      "cv_pct_to_omega2",
+      "_cov_effects_from_records",
+      "map_estimate"
+    ],
+    "app/compute/nmexport.py": [
+      "_cv_to_omega2",
+      "_g",
+      "_cov_omega_sigma",
+      "_nm_cov_multiplier",
+      "build_nonmem",
+      "build_mrgsolve",
+      "_center_default",
+      "_mrg_cov_multiplier"
+    ],
+    "app/compute/pk_fit.py": [
+      "rse_from_jacobian",
+      "_terminal_ke",
+      "_init_guess",
+      "fit_subject_model",
+      "_pack",
+      "_unpack",
+      "_pkpd_init",
+      "fit_subject_pkpd",
+      "fit_pk_dataset",
+      "compare_models"
+    ],
+    "app/compute/pk_models.py": [
+      "PKModel",
+      "_allo",
+      "_iv1",
+      "_iv2",
+      "_iv3",
+      "_oral1",
+      "_oral2",
+      "_oral1_transit",
+      "_iv1_mm",
+      "_oral1_mm",
+      "_iv1_mixed",
+      "_A_iv1",
+      "_A_iv2",
+      "_A_iv3",
+      "_A_oral1",
+      "_A_oral2",
+      "_A_transit",
+      "_A_effect",
+      "_cp_v",
+      "_cp_vc",
+      "_cp_v_2",
+      "_cp_vc_2",
+      "_cp_v_3",
+      "_pkpd_pk",
+      "_pd_direct_rhs",
+      "_eff_linear",
+      "_eff_emax",
+      "_eff_sigmoid",
+      "_effect_cmt_rhs",
+      "_eff_effect_emax",
+      "_idr_init",
+      "_idr1_rhs",
+      "_idr2_rhs",
+      "_idr3_rhs",
+      "_idr4_rhs",
+      "_eff_resp",
+      "_cp_pkpd",
+      "list_models",
+      "get_model"
+    ],
+    "app/compute/pk_simulate.py": [
+      "scale_params",
+      "_initial",
+      "simulate",
+      "simulate_timecourse"
+    ],
+    "app/compute/poppk.py": [
+      "_geomean",
+      "_geocv_pct",
+      "_round",
+      "two_stage_summary",
+      "covariate_effect"
+    ],
+    "app/compute/vpc.py": [
+      "_cv_pct_to_sd",
+      "obs_vs_pred",
+      "_gof_log",
+      "vpc_band",
+      "pcvpc"
+    ],
+    "app/config.py": [
+      "Settings"
+    ],
+    "app/core/__init__.py": [],
+    "app/core/audit.py": [
+      "_sha256",
+      "hash_payload",
+      "AuditEntry",
+      "AuditChain"
+    ],
+    "app/core/cdisc.py": [
+      "_csv_bytes",
+      "build_adpp",
+      "build_adpc",
+      "build_define_xml",
+      "build_package"
+    ],
+    "app/core/exporters.py": [
+      "_csv",
+      "_nca",
+      "_be",
+      "_dose_prop",
+      "_pk_model",
+      "_dose_sweep",
+      "_vpc",
+      "_nlme",
+      "available",
+      "export_csv",
+      "control_available",
+      "export_control"
+    ],
+    "app/core/jobs.py": [
+      "JobManager"
+    ],
+    "app/core/llm.py": [
+      "LLM",
+      "MockLLM",
+      "RealLLM",
+      "get_llm"
+    ],
+    "app/core/logging_config.py": [
+      "JsonFormatter",
+      "configure_logging"
+    ],
+    "app/core/orchestrator.py": [
+      "_iso_clock",
+      "AccessError",
+      "Session",
+      "Orchestrator"
+    ],
+    "app/core/pharmstate.py": [
+      "StudyInfo",
+      "PharmStateError",
+      "PharmState",
+      "apply_writes"
+    ],
+    "app/core/provenance.py": [
+      "_pkg_version",
+      "_git_sha",
+      "collect_provenance",
+      "file_sha256"
+    ],
+    "app/core/schema_extractor.py": [
+      "detect_roles",
+      "_num_summary",
+      "_safe",
+      "extract_schema"
+    ],
+    "app/core/skills.py": [
+      "distill_steps",
+      "Skill",
+      "SkillStore"
+    ],
+    "app/core/store.py": [
+      "SessionStore"
+    ],
+    "app/db/__init__.py": [],
+    "app/main.py": [
+      "_error_body",
+      "request_context",
+      "http_exception_handler",
+      "current_owner",
+      "owned_session",
+      "actor_id",
+      "ChatRequest",
+      "WorkflowStartRequest",
+      "WorkflowRequest",
+      "ResumeRequest",
+      "RolesRequest",
+      "PkModelRequest",
+      "SimulateRequest",
+      "DoseSweepRequest",
+      "RefitLzRequest",
+      "health",
+      "list_workflows",
+      "pk_models",
+      "create_session",
+      "upload_for_session",
+      "chat",
+      "set_roles",
+      "start_workflow_v2",
+      "start_workflow",
+      "resume_workflow",
+      "refit_lz",
+      "run_pk_model",
+      "simulate_pk",
+      "run_vpc",
+      "run_diagnostics",
+      "NlmeRequest",
+      "run_nlme",
+      "ScmRequest",
+      "run_scm",
+      "ForecastRequest",
+      "run_forecast",
+      "get_job",
+      "run_dose_sweep",
+      "get_audit",
+      "get_state",
+      "list_exports",
+      "export_csv",
+      "export_control",
+      "export_cdisc",
+      "CaptureSkillRequest",
+      "RunSkillRequest",
+      "capture_skill",
+      "list_skills",
+      "get_skill",
+      "get_skill_markdown",
+      "delete_skill",
+      "run_skill",
+      "ReviewRequest",
+      "adversarial_review",
+      "generate_report",
+      "download_report",
+      "Report272Request",
+      "generate_report_272",
+      "download_report_272",
+      "_frontend_dist"
+    ],
+    "app/tools/__init__.py": [],
+    "app/tools/base.py": [
+      "ToolContext",
+      "ToolResult",
+      "Tool",
+      "ToolRegistry"
+    ],
+    "app/tools/be_tools.py": [
+      "_roles",
+      "_find_treatment_col",
+      "_exposures_by_treatment",
+      "_pick_levels",
+      "run_bioequivalence"
+    ],
+    "app/tools/builtins.py": [
+      "default_registry"
+    ],
+    "app/tools/compartmental_tools.py": [
+      "_roles",
+      "_compact",
+      "fit_compartmental_models"
+    ],
+    "app/tools/data_tools.py": [
+      "_safe_path",
+      "_read",
+      "_roles",
+      "load_dataset",
+      "profile_pk_dataset",
+      "validate_cdisc",
+      "generate_spaghetti_plot",
+      "_schema"
+    ],
+    "app/tools/dp_tools.py": [
+      "run_dose_proportionality"
+    ],
+    "app/tools/nca_tools.py": [
+      "_roles",
+      "compute_nca"
+    ],
+    "app/tools/pkmodel_tools.py": [
+      "_roles",
+      "_build_subjects",
+      "_trim_fit",
+      "fit_pk_model",
+      "_fitted_population",
+      "simulate_pk_profile",
+      "_last_fit",
+      "run_vpc",
+      "run_nlme",
+      "_covariate_candidates",
+      "run_scm",
+      "forecast_map",
+      "run_diagnostics",
+      "run_dose_sweep",
+      "list_pk_models"
+    ],
+    "app/tools/poppk_tools.py": [
+      "_roles",
+      "_from_compartmental",
+      "_covariate_by_subject",
+      "run_poppk"
+    ],
+    "app/tools/qc_tools.py": [
+      "_check",
+      "run_qc"
+    ],
+    "app/tools/regulatory_tools.py": [
+      "_fmt",
+      "_placeholder",
+      "_kv_table",
+      "_section_21_background",
+      "_section_22_nca",
+      "_section_22_poppk",
+      "_section_23_analyses",
+      "_section_24_special_pops",
+      "_section_25_ddi",
+      "_section_26_conclusions",
+      "_table_2721_nca",
+      "_table_2722_poppk",
+      "_table_2723_covariates",
+      "generate_272"
+    ],
+    "app/tools/report_tools.py": [
+      "_fmt",
+      "_subject_key",
+      "_subject_table",
+      "_dose_grouped_meaningfully",
+      "_summary_table",
+      "_kv_table",
+      "_extra_sections",
+      "_reproducibility_section",
+      "generate_report"
+    ],
+    "app/tools/review_tools.py": [
+      "_roles",
+      "adversarial_review"
+    ],
+    "app/workflows.py": [
+      "get_workflow"
+    ],
+    "conftest.py": [],
+    "pharmagent.db": [],
+    "tests/__init__.py": [],
+    "tests/reference/__init__.py": [],
+    "tests/reference/references.py": [],
+    "tests/reference/test_theophylline.py": [
+      "_gm",
+      "_in_band",
+      "subjects",
+      "nca_clf",
+      "focei",
+      "saem",
+      "test_nca_clf_matches_literature",
+      "test_nca_thalf_matches_literature",
+      "test_focei_structural_params_match_literature",
+      "test_focei_variability_matches_literature",
+      "test_saem_structural_params_match_literature",
+      "test_clearance_agrees_across_methods",
+      "test_volume_agrees_across_methods",
+      "test_matches_user_tool_reference"
+    ],
+    "tests/test_adversarial.py": [
+      "_clean_nca",
+      "_raw_df",
+      "_ids",
+      "_sev",
+      "test_clean_state_meets_goal",
+      "test_aucinf_below_auclast_is_high",
+      "test_nonpositive_clf_is_critical",
+      "test_clf_inconsistent_with_dose_over_aucinf_is_high",
+      "test_extrap_out_of_range_is_high",
+      "test_cmax_disagreement_is_critical_recompute",
+      "test_auc_band_violation_is_critical_recompute",
+      "test_recompute_skipped_without_raw_data_but_internal_still_runs",
+      "test_nlme_overparam_flags",
+      "test_nlme_not_converged_is_high",
+      "test_dose_exposure_non_monotonic_is_medium",
+      "test_findings_sorted_by_severity",
+      "client",
+      "_seed_session_with_nca",
+      "test_http_review_clean_meets_goal",
+      "test_http_review_flags_and_blocks_goal",
+      "test_http_review_writes_state",
+      "test_loop_stops_at_max_iter_without_progress"
+    ],
+    "tests/test_api.py": [
+      "client",
+      "test_health_and_models_public",
+      "test_session_and_nca_workflow",
+      "test_role_override",
+      "test_auth_required_when_token_set",
+      "test_upload_rejects_non_csv",
+      "_poll",
+      "test_nlme_runs_as_background_job",
+      "test_scm_submits_a_job",
+      "test_jobmanager_reports_done_and_error"
+    ],
+    "tests/test_audit_and_state.py": [
+      "test_audit_chain_intact",
+      "test_audit_chain_detects_tampering",
+      "test_pharmstate_allows_owned_field",
+      "test_pharmstate_blocks_foreign_field"
+    ],
+    "tests/test_be_compute.py": [
+      "test_identical_vectors_gmr_100_and_be",
+      "test_paired_gmr_matches_hand_computed",
+      "test_paired_clearly_outside_limits_not_be",
+      "test_paired_drops_nonpositive_and_none",
+      "test_paired_too_few_returns_nulls",
+      "test_parallel_identical_groups_gmr_100",
+      "test_parallel_gmr_and_ci_hand_computed",
+      "test_parallel_one_group_too_small_returns_nulls",
+      "test_assess_all_be_true",
+      "test_assess_one_param_fails_blocks_be",
+      "test_assess_only_common_params_assessed",
+      "test_assess_parallel_design_label"
+    ],
+    "tests/test_cdisc.py": [
+      "_state",
+      "test_adpp_long_bds_with_standard_paramcds",
+      "test_package_zip_contents_and_define_valid",
+      "test_package_without_dataframe"
+    ],
+    "tests/test_compartmental_compute.py": [
+      "_closed_form_1cmt",
+      "test_conc_1cmt_oral_at_t0_is_zero",
+      "test_conc_1cmt_oral_matches_closed_form",
+      "test_conc_1cmt_oral_is_vectorized",
+      "test_conc_2cmt_oral_at_t0_is_zero",
+      "test_fit_1cmt_recovers_known_params",
+      "test_fit_one_subject_too_few_points_returns_false_not_crash",
+      "test_fit_compartmental_groups_and_selects"
+    ],
+    "tests/test_diagnostics.py": [
+      "_make_subject",
+      "test_fit_residuals_identity_gives_zero_iwres",
+      "test_fit_residuals_pred_uses_typical_not_individual",
+      "test_fit_residuals_skips_subjects_without_individual_params",
+      "test_fit_residuals_empty_returns_none_summary",
+      "test_fit_residuals_standardized_has_zero_mean_unit_sd",
+      "test_npde_is_well_calibrated_against_its_own_population",
+      "test_npde_values_within_clip_bounds",
+      "test_npde_is_deterministic_for_fixed_seed",
+      "test_npde_different_seed_differs",
+      "test_npde_empty_returns_none_summary"
+    ],
+    "tests/test_dose_sweep.py": [
+      "test_linear_pk_is_dose_proportional",
+      "test_linear_pk_triple_dose_triples_exposure",
+      "test_michaelis_menten_more_than_dose_proportional",
+      "test_michaelis_menten_super_proportional_auc_ratio",
+      "test_metrics_finite_and_shapes_consistent",
+      "test_return_envelope_keys_and_metadata",
+      "test_pkpd_profile_includes_eff",
+      "test_cavg_equals_auc_over_tau"
+    ],
+    "tests/test_dp_compute.py": [
+      "test_perfectly_proportional_slope_one",
+      "test_sub_proportional_slope_half",
+      "test_super_proportional_slope_one_point_five",
+      "test_critical_region_closed_form",
+      "test_se_and_ci_closed_form_three_points",
+      "test_insufficient_data_returns_note",
+      "test_drops_nonpositive_and_none",
+      "test_assess_aggregates_all_params",
+      "test_assess_all_proportional_true"
+    ],
+    "tests/test_forecast.py": [
+      "_levels_for",
+      "test_map_pulls_individual_toward_truth",
+      "test_no_levels_returns_population_typical",
+      "test_dose_optimization_hits_target",
+      "test_ss_metrics_present_and_ordered"
+    ],
+    "tests/test_identity_audit.py": [
+      "_orch",
+      "test_actor_and_reason_recorded_and_chain_verifies",
+      "test_tampering_with_actor_breaks_the_chain",
+      "test_backward_compatible_with_pre_identity_entries",
+      "test_provenance_has_versions_and_is_constant",
+      "test_file_sha256_stable_and_missing_safe",
+      "test_session_creation_stamps_provenance_genesis",
+      "test_human_review_is_a_signed_audit_entry",
+      "test_set_roles_is_audited_with_actor"
+    ],
+    "tests/test_nca_compute.py": [
+      "_mono_profile",
+      "test_lambda_z_and_thalf_exact",
+      "test_aucinf_matches_analytic",
+      "test_cmax_tmax",
+      "test_clearance_and_volume",
+      "test_pct_extrap_small",
+      "test_run_nca_groups_by_dose"
+    ],
+    "tests/test_nlme.py": [
+      "_cv_to_omega2",
+      "_make_population",
+      "population",
+      "focei_result",
+      "saem_result",
+      "unc_pop",
+      "focei_unc",
+      "test_result_shape_focei",
+      "test_individual_ebes_length_matches_subjects",
+      "test_focei_recovers_theta",
+      "test_focei_recovers_omega",
+      "test_focei_recovers_sigma",
+      "test_focei_ofv_finite_and_converged",
+      "test_focei_shrinkage_reported",
+      "test_saem_recovers_theta",
+      "test_saem_recovers_omega",
+      "test_saem_recovers_sigma",
+      "test_saem_ofv_finite",
+      "test_saem_individual_ebes_length",
+      "test_saem_deterministic_same_seed",
+      "test_focei_and_saem_agree_on_cl",
+      "test_sparse_subject_is_handled",
+      "test_tiny_cohort_does_not_crash",
+      "test_empty_cohort_returns_unconverged",
+      "test_uncertainty_disabled_yields_empty_rse",
+      "test_theta_rse_present_for_every_structural_param",
+      "test_theta_rse_magnitudes_are_plausible",
+      "test_omega_and_sigma_rse_reported",
+      "test_condition_number_is_well_behaved",
+      "test_uncertainty_is_deterministic",
+      "_make_cov_population",
+      "test_no_covariate_model_yields_empty_effects",
+      "cov_fit",
+      "test_covariate_recovers_known_exponent",
+      "test_covariate_coefficient_rse_reported",
+      "test_scm_selects_true_covariate_and_rejects_noise",
+      "test_scm_parallel_matches_serial_selection",
+      "test_default_path_reports_no_blq",
+      "_censored_population",
+      "m3_fit",
+      "test_m3_counts_blq_records",
+      "test_m3_recovers_parameters_with_censoring"
+    ],
+    "tests/test_nmexport.py": [
+      "_fit",
+      "test_nonmem_oral_1cmt_advan2_trans2",
+      "test_nonmem_covariate_written_as_power_theta",
+      "test_nonmem_iv_2cmt_advan3_trans4",
+      "test_mrgsolve_oral_1cmt_has_ode_and_blocks",
+      "test_mrgsolve_lag_on_dosing_compartment",
+      "test_nonmem_lag_uses_alag1_on_depot",
+      "test_unsupported_model_returns_none"
+    ],
+    "tests/test_orchestrator.py": [
+      "_orch",
+      "test_supervisor_routing",
+      "test_workflow_pauses_at_review_gate",
+      "test_workflow_resume_completes_and_reports",
+      "test_privacy_metadata_only",
+      "test_persistence_survives_restart",
+      "test_session_ownership_enforced",
+      "test_chat_routes_and_loads"
+    ],
+    "tests/test_pk_models.py": [
+      "test_registry_has_18_models",
+      "test_iv_1cmt_matches_analytic_monoexp",
+      "test_oral_1cmt_matches_closed_form",
+      "test_allometric_scaling",
+      "test_fit_recovers_oral_1cmt",
+      "test_fit_recovers_iv_2cmt",
+      "test_michaelis_menten_is_saturable",
+      "test_transit_delays_peak_vs_oral_1cmt",
+      "test_pkpd_emax_effect_bounded",
+      "test_idr_starts_at_baseline",
+      "test_pkpd_dual_endpoint_fit_recovers",
+      "test_pkpd_dataset_fit_via_fit_pk_dataset",
+      "test_simulate_timecourse_single_and_multidose",
+      "test_simulate_timecourse_pkpd_returns_effect",
+      "test_compare_models_ranks_by_aic"
+    ],
+    "tests/test_poppk_compute.py": [
+      "test_geomean_cube_root_of_product",
+      "test_geomean_drops_nonpositive_and_none",
+      "test_geomean_returns_none_when_no_usable_values",
+      "test_geocv_pct_closed_form",
+      "test_geocv_pct_needs_two_values",
+      "test_two_stage_summary_typical_value_and_iiv",
+      "test_two_stage_summary_omits_key_with_no_usable_values",
+      "test_two_stage_summary_skips_nonpositive_in_n",
+      "test_covariate_effect_perfect_log_linear",
+      "test_covariate_effect_negative_relationship",
+      "test_covariate_effect_insufficient_points_returns_none",
+      "test_covariate_effect_only_counts_matched_positive_pairs"
+    ],
+    "tests/test_report_272.py": [
+      "_ctx",
+      "_orch",
+      "_base_state",
+      "_nca_state",
+      "_nlme_state",
+      "_scm_state",
+      "test_empty_state_generates_file",
+      "test_placeholders_when_no_analyses",
+      "test_nca_state_contains_table_header",
+      "test_nlme_state_table_272_populated",
+      "test_nlme_conclusions_mention_model",
+      "test_scm_selected_appears_in_special_pops",
+      "test_study_info_args_propagate",
+      "test_reproducibility_section_present",
+      "test_writes_study_info_and_report_path",
+      "test_state_study_info_merges_with_args",
+      "test_full_state_no_crash",
+      "test_http_post_272_returns_report_path",
+      "test_http_272_state_updated",
+      "test_http_272_download",
+      "test_http_272_wrong_filename_404"
+    ],
+    "tests/test_skills.py": [
+      "_orch",
+      "test_distill_drops_io_and_profiling",
+      "test_distill_collapses_consecutive_duplicates",
+      "_skill",
+      "test_store_save_get_list_delete",
+      "test_store_resave_bumps_version",
+      "test_skill_markdown_renders_steps",
+      "_run_nca_session",
+      "test_capture_requires_commands",
+      "test_capture_then_inspect_steps",
+      "test_replay_reproduces_nca_on_fresh_session",
+      "test_run_unknown_skill_raises",
+      "client",
+      "_http_nca_session",
+      "test_http_capture_list_get_run_delete",
+      "test_http_run_unknown_skill_404"
+    ],
+    "tests/test_ss_compute.py": [
+      "test_ss_reduces_to_single_dose_as_tau_large",
+      "test_ss_1cmt_matches_superposition",
+      "test_ss_2cmt_matches_superposition",
+      "test_ss_2cmt_reduces_to_single_dose",
+      "test_ss_fit_recovers_parameters",
+      "test_ss_nca_clf_equals_dose_over_auctau",
+      "test_extract_multiple_dose",
+      "test_run_nca_ss_groups_by_dose"
+    ],
+    "tests/test_vpc.py": [
+      "_make_subject",
+      "test_cv_to_sd_30_percent",
+      "test_cv_to_sd_zero_and_none",
+      "test_obs_vs_pred_identity_is_perfect_fit",
+      "test_obs_vs_pred_pred_uses_typical_not_individual",
+      "test_obs_vs_pred_skips_subjects_without_individual_params",
+      "test_obs_vs_pred_empty_returns_none_metrics",
+      "test_vpc_band_zero_iiv_collapses_band",
+      "test_vpc_band_none_cv_collapses_band",
+      "test_vpc_band_positive_iiv_is_ordered",
+      "test_vpc_band_is_deterministic_for_fixed_seed",
+      "test_vpc_band_different_seed_differs",
+      "test_vpc_band_lognormal_spread_matches_cv",
+      "_correct_model_population",
+      "test_pcvpc_structure_and_bins",
+      "test_pcvpc_correct_model_observed_within_band"
+    ]
+  },
+  "batches": [
+    {
+      "batchIndex": 1,
+      "files": [
+        {
+          "path": ".dockerignore",
+          "language": "unknown",
+          "sizeLines": 9,
+          "fileCategory": "infra"
+        },
+        {
+          "path": "Dockerfile",
+          "language": "dockerfile",
+          "sizeLines": 37,
+          "fileCategory": "infra"
+        }
+      ],
+      "batchImportData": {
+        ".dockerignore": [],
+        "Dockerfile": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 2,
+      "files": [
+        {
+          "path": ".env.example",
+          "language": "config",
+          "sizeLines": 23,
+          "fileCategory": "config"
+        },
+        {
+          "path": "requirements-dev.txt",
+          "language": "txt",
+          "sizeLines": 6,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "requirements.txt",
+          "language": "txt",
+          "sizeLines": 13,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "ruff.toml",
+          "language": "toml",
+          "sizeLines": 15,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        ".env.example": [],
+        "requirements-dev.txt": [],
+        "requirements.txt": [],
+        "ruff.toml": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 3,
+      "files": [
+        {
+          "path": ".understand-anything/.understandignore",
+          "language": "unknown",
+          "sizeLines": 9,
+          "fileCategory": "code"
+        },
+        {
+          "path": ".understand-anything/intermediate/scan-result.json",
+          "language": "json",
+          "sizeLines": 1821,
+          "fileCategory": "config"
+        },
+        {
+          "path": "app/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/agents/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/agents/base.py",
+          "language": "python",
+          "sizeLines": 73,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/agents/definitions.py",
+          "language": "python",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/agents/supervisor.py",
+          "language": "python",
+          "sizeLines": 55,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/adversarial.py",
+          "language": "python",
+          "sizeLines": 265,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/bioequivalence.py",
+          "language": "python",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/compartmental.py",
+          "language": "python",
+          "sizeLines": 399,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/diagnostics.py",
+          "language": "python",
+          "sizeLines": 281,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/dose_proportionality.py",
+          "language": "python",
+          "sizeLines": 141,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/dose_sweep.py",
+          "language": "python",
+          "sizeLines": 132,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/dosing.py",
+          "language": "python",
+          "sizeLines": 155,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/forecast.py",
+          "language": "python",
+          "sizeLines": 138,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/nca_ss.py",
+          "language": "python",
+          "sizeLines": 89,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/nca.py",
+          "language": "python",
+          "sizeLines": 268,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/nlme.py",
+          "language": "python",
+          "sizeLines": 1544,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/nmexport.py",
+          "language": "python",
+          "sizeLines": 284,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/pk_fit.py",
+          "language": "python",
+          "sizeLines": 283,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/pk_models.py",
+          "language": "python",
+          "sizeLines": 285,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/pk_simulate.py",
+          "language": "python",
+          "sizeLines": 144,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/poppk.py",
+          "language": "python",
+          "sizeLines": 156,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/compute/vpc.py",
+          "language": "python",
+          "sizeLines": 312,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        ".understand-anything/.understandignore": [],
+        ".understand-anything/intermediate/scan-result.json": [],
+        "app/__init__.py": [],
+        "app/agents/__init__.py": [],
+        "app/agents/base.py": [],
+        "app/agents/definitions.py": [],
+        "app/agents/supervisor.py": [],
+        "app/compute/__init__.py": [],
+        "app/compute/adversarial.py": [],
+        "app/compute/bioequivalence.py": [],
+        "app/compute/compartmental.py": [],
+        "app/compute/diagnostics.py": [],
+        "app/compute/dose_proportionality.py": [],
+        "app/compute/dose_sweep.py": [],
+        "app/compute/dosing.py": [],
+        "app/compute/forecast.py": [],
+        "app/compute/nca_ss.py": [],
+        "app/compute/nca.py": [],
+        "app/compute/nlme.py": [],
+        "app/compute/nmexport.py": [],
+        "app/compute/pk_fit.py": [],
+        "app/compute/pk_models.py": [],
+        "app/compute/pk_simulate.py": [],
+        "app/compute/poppk.py": [],
+        "app/compute/vpc.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 4,
+      "files": [
+        {
+          "path": "app/config.py",
+          "language": "python",
+          "sizeLines": 48,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/audit.py",
+          "language": "python",
+          "sizeLines": 118,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/cdisc.py",
+          "language": "python",
+          "sizeLines": 163,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/exporters.py",
+          "language": "python",
+          "sizeLines": 163,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/jobs.py",
+          "language": "python",
+          "sizeLines": 90,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/llm.py",
+          "language": "python",
+          "sizeLines": 104,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/logging_config.py",
+          "language": "python",
+          "sizeLines": 47,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/orchestrator.py",
+          "language": "python",
+          "sizeLines": 396,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/pharmstate.py",
+          "language": "python",
+          "sizeLines": 136,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/provenance.py",
+          "language": "python",
+          "sizeLines": 63,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/schema_extractor.py",
+          "language": "python",
+          "sizeLines": 126,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/skills.py",
+          "language": "python",
+          "sizeLines": 151,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/core/store.py",
+          "language": "python",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/db/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/main.py",
+          "language": "python",
+          "sizeLines": 626,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/base.py",
+          "language": "python",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/be_tools.py",
+          "language": "python",
+          "sizeLines": 154,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/builtins.py",
+          "language": "python",
+          "sizeLines": 27,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/compartmental_tools.py",
+          "language": "python",
+          "sizeLines": 119,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/data_tools.py",
+          "language": "python",
+          "sizeLines": 210,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/dp_tools.py",
+          "language": "python",
+          "sizeLines": 55,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/nca_tools.py",
+          "language": "python",
+          "sizeLines": 188,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/pkmodel_tools.py",
+          "language": "python",
+          "sizeLines": 660,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "app/config.py": [],
+        "app/core/__init__.py": [],
+        "app/core/audit.py": [],
+        "app/core/cdisc.py": [],
+        "app/core/exporters.py": [],
+        "app/core/jobs.py": [],
+        "app/core/llm.py": [],
+        "app/core/logging_config.py": [],
+        "app/core/orchestrator.py": [],
+        "app/core/pharmstate.py": [],
+        "app/core/provenance.py": [],
+        "app/core/schema_extractor.py": [],
+        "app/core/skills.py": [],
+        "app/core/store.py": [],
+        "app/db/__init__.py": [],
+        "app/main.py": [],
+        "app/tools/__init__.py": [],
+        "app/tools/base.py": [],
+        "app/tools/be_tools.py": [],
+        "app/tools/builtins.py": [],
+        "app/tools/compartmental_tools.py": [],
+        "app/tools/data_tools.py": [],
+        "app/tools/dp_tools.py": [],
+        "app/tools/nca_tools.py": [],
+        "app/tools/pkmodel_tools.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 5,
+      "files": [
+        {
+          "path": "app/tools/poppk_tools.py",
+          "language": "python",
+          "sizeLines": 107,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/qc_tools.py",
+          "language": "python",
+          "sizeLines": 115,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/regulatory_tools.py",
+          "language": "python",
+          "sizeLines": 497,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/report_tools.py",
+          "language": "python",
+          "sizeLines": 304,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/tools/review_tools.py",
+          "language": "python",
+          "sizeLines": 59,
+          "fileCategory": "code"
+        },
+        {
+          "path": "app/workflows.py",
+          "language": "python",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        },
+        {
+          "path": "conftest.py",
+          "language": "python",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "pharmagent.db",
+          "language": "db",
+          "sizeLines": 54,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/reference/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/reference/README.md",
+          "language": "markdown",
+          "sizeLines": 77,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "tests/reference/references.py",
+          "language": "python",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/reference/test_theophylline.py",
+          "language": "python",
+          "sizeLines": 145,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_adversarial.py",
+          "language": "python",
+          "sizeLines": 226,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_api.py",
+          "language": "python",
+          "sizeLines": 125,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_audit_and_state.py",
+          "language": "python",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_be_compute.py",
+          "language": "python",
+          "sizeLines": 164,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_cdisc.py",
+          "language": "python",
+          "sizeLines": 54,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_compartmental_compute.py",
+          "language": "python",
+          "sizeLines": 113,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_diagnostics.py",
+          "language": "python",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_dose_sweep.py",
+          "language": "python",
+          "sizeLines": 182,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_dp_compute.py",
+          "language": "python",
+          "sizeLines": 139,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_forecast.py",
+          "language": "python",
+          "sizeLines": 61,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_identity_audit.py",
+          "language": "python",
+          "sizeLines": 109,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_nca_compute.py",
+          "language": "python",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "app/tools/poppk_tools.py": [],
+        "app/tools/qc_tools.py": [],
+        "app/tools/regulatory_tools.py": [],
+        "app/tools/report_tools.py": [],
+        "app/tools/review_tools.py": [],
+        "app/workflows.py": [],
+        "conftest.py": [],
+        "pharmagent.db": [],
+        "tests/__init__.py": [],
+        "tests/reference/__init__.py": [],
+        "tests/reference/README.md": [],
+        "tests/reference/references.py": [],
+        "tests/reference/test_theophylline.py": [],
+        "tests/test_adversarial.py": [],
+        "tests/test_api.py": [],
+        "tests/test_audit_and_state.py": [],
+        "tests/test_be_compute.py": [],
+        "tests/test_cdisc.py": [],
+        "tests/test_compartmental_compute.py": [],
+        "tests/test_diagnostics.py": [],
+        "tests/test_dose_sweep.py": [],
+        "tests/test_dp_compute.py": [],
+        "tests/test_forecast.py": [],
+        "tests/test_identity_audit.py": [],
+        "tests/test_nca_compute.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 6,
+      "files": [
+        {
+          "path": "tests/test_nlme.py",
+          "language": "python",
+          "sizeLines": 494,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_nmexport.py",
+          "language": "python",
+          "sizeLines": 68,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_orchestrator.py",
+          "language": "python",
+          "sizeLines": 105,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_pk_models.py",
+          "language": "python",
+          "sizeLines": 157,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_poppk_compute.py",
+          "language": "python",
+          "sizeLines": 162,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_report_272.py",
+          "language": "python",
+          "sizeLines": 257,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_skills.py",
+          "language": "python",
+          "sizeLines": 181,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_ss_compute.py",
+          "language": "python",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_vpc.py",
+          "language": "python",
+          "sizeLines": 232,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "tests/test_nlme.py": [],
+        "tests/test_nmexport.py": [],
+        "tests/test_orchestrator.py": [],
+        "tests/test_pk_models.py": [],
+        "tests/test_poppk_compute.py": [],
+        "tests/test_report_272.py": [],
+        "tests/test_skills.py": [],
+        "tests/test_ss_compute.py": [],
+        "tests/test_vpc.py": []
+      },
+      "neighborMap": {}
+    }
+  ]
+}

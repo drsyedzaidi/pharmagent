@@ -1,0 +1,17 @@
+PK-DB loader — live run  (captured 2026-07-13T02:02Z, post-review-fixes)
+Command: python -m pharmacometricsbench.pkdb.loader --drugs caffeine paracetamol codeine midazolam omeprazole --coverage --no-verify-tls
+
+
+PK-DB harvest  (authenticated=False)
+------------------------------------------------------------
+  caffeine      studies= 13  dosing=  10 (oral   10)  pk_params=  0  —
+  paracetamol   studies= 12  dosing=  22 (oral   18)  pk_params=  0  —
+  codeine       studies=  9  dosing=  28 (oral   28)  pk_params=  0  —
+  midazolam     studies=  5  dosing=   6 (oral    5)  pk_params=  0  —
+  omeprazole    studies=  2  dosing=   2 (oral    2)  pk_params=  0  —
+------------------------------------------------------------
+  totals: dosing=68  pk_parameters=0
+
+  NOTE: 0 drug-level PK parameters — anonymous access only exposes
+  dosing/study data. Set PKDB_API_TOKEN (free PK-DB account) to
+  harvest AUC/Cmax/clearance answer keys.

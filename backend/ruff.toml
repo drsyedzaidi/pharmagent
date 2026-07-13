@@ -1,0 +1,15 @@
+# Lint config for the PharmAgent backend.
+line-length = 120
+target-version = "py313"
+
+# High-signal rules: pyflakes (F = real bugs/unused), pycodestyle (E/W),
+# import order (I), and safe pyupgrade (UP). flake8-bugbear is intentionally
+# excluded — its zip(strict=) / raise-from rules are stylistic noise across this
+# numeric codebase. The compact-numeric style (semicolons, lambda aliases) is
+# intentional and excluded.
+[lint]
+select = ["F", "E", "W", "I", "UP"]
+ignore = ["E702", "E701", "E731", "E741"]
+
+[lint.per-file-ignores]
+"tests/*" = ["E501"]   # long literal expectations in tests are fine

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dealing with Messy Data in R — Tidyverse, ggplot2, and Publication Figures</title>
+  <meta name="description" content="Dealing with Messy Data in R: Tidyverse, ggplot2, and Publication Figures." />
+  <meta name="color-scheme" content="light" />
+  <link rel="stylesheet" href="../../styles.v2.css" />
+  <link rel="stylesheet" href="../../courses/assets/lesson.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../../index.html#capabilities">Product</a>
+        <a href="../../courses.html">Courses</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../../courses.html#contact" class="btn btn-primary">Request the curriculum</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <div class="container lesson-shell">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../courses.html">Courses</a> <span aria-hidden="true">/</span> <span aria-current="page">Dealing with Messy Data in R</span></nav>
+      
+      <p class="eyebrow">Tidyverse, ggplot2, and Publication Figures</p>
+      <article class="lesson-doc"><h1>Dealing with Messy Data in R — Tidyverse, ggplot2, and Publication Figures</h1>
+<p>A hands-on course on turning messy real-world datasets into clean, analysis-ready tables<br />
+and publication-quality figures using the tidyverse. It starts from tidy data import and<br />
+dplyr/tidyr cleaning, moves through relational joins, and builds up the full grammar of<br />
+graphics in ggplot2 — colour, scales, accessibility, and multi-panel composition with<br />
+patchwork/cowplot. Every lesson is grounded in a pharmacometric/clinical dataset (dosing<br />
+records, concentration-time data, covariates, NCA summaries) so the skills transfer<br />
+directly to real popPK and PK/PD work, while remaining fully general for any tabular data.</p>
+<p>This course was built from the syllabus of the Physalia <em>Dealing with Messy Data in R</em><br />
+workshop (tidyverse import → dplyr/tidyr → joins → ggplot2 → advanced visualization →<br />
+patchwork/cowplot multi-panel figures).</p>
+<h2>Who This Is For</h2>
+<p>Analysts and researchers with prior R experience who are new to the tidyverse or to<br />
+<code>ggplot2</code>-based visualization. No tidyverse background required. Pharmacometricians will<br />
+recognize every example dataset; the material generalizes to any tabular science data.</p>
+<h2>Prerequisites</h2>
+<ul>
+<li>Base R: vectors, data frames, functions, basic control flow</li>
+<li>No tidyverse or <code>ggplot2</code> experience required</li>
+<li>Packages: <code>install.packages(c("tidyverse","patchwork","cowplot","scales","viridis","colorblindr","janitor"))</code></li>
+<li>Optional (for pharmacometric examples): <code>mrgsolve</code>, <code>PKNCA</code></li>
+</ul>
+<h2>What You Will Learn</h2>
+<ul>
+<li>Import messy CSV/Excel/text data with <code>readr</code>/<code>readxl</code>, and understand tibbles vs base data frames</li>
+<li>Clean and reshape data with <code>dplyr</code> (<code>select</code>, <code>filter</code>, <code>mutate</code>, <code>summarise</code>, <code>group_by</code>) and <code>tidyr</code> (<code>pivot_longer</code>/<code>pivot_wider</code>, <code>separate</code>, <code>unite</code>)</li>
+<li>Diagnose and fix common messy-data problems: inconsistent types, whitespace, encoding, duplicate keys, wide-vs-long structure</li>
+<li>Combine multi-table data correctly with <code>left_join</code>, <code>inner_join</code>, <code>full_join</code>, <code>anti_join</code>, and validate join keys</li>
+<li>Build any chart from the grammar of graphics: <code>aes()</code>, geoms, statistical transforms, facets, coordinate systems</li>
+<li>Choose the right plot for the data type (distribution, relationship, composition, time-series/profile)</li>
+<li>Customize colour, scale, and theme for effective and <strong>accessible</strong> (colour-blind-safe) storytelling</li>
+<li>Compose multi-panel publication figures with <code>patchwork</code> and <code>cowplot</code>, and export them at publication resolution</li>
+</ul>
+<h2>Phase Ladder</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Phase</th>
+<th>Ships</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01</td>
+<td>Tidyverse Foundations &amp; Data Import</td>
+<td>Messy-data import checklist + tibble diagnostic script</td>
+</tr>
+<tr>
+<td>02</td>
+<td>Data Transformation with dplyr &amp; tidyr</td>
+<td>Reusable data-cleaning pipeline template</td>
+</tr>
+<tr>
+<td>03</td>
+<td>Joining &amp; Reshaping Multi-Table Data</td>
+<td>Join-validation script + relational data map</td>
+</tr>
+<tr>
+<td>04</td>
+<td>ggplot2 Grammar of Graphics</td>
+<td>Chart-selection decision guide + geom cheat sheet</td>
+</tr>
+<tr>
+<td>05</td>
+<td>Advanced Visualization &amp; Accessibility</td>
+<td>Colour/theme/accessibility style guide</td>
+</tr>
+<tr>
+<td>06</td>
+<td>Publication Figures — Multi-Panel &amp; Case Study</td>
+<td>End-to-end multi-panel PK figure pipeline (capstone)</td>
+</tr>
+</tbody>
+</table>
+<h2>Key References</h2>
+<ul>
+<li>Wickham H, Çetinkaya-Rundel M, Grolemund G (2023). <em>R for Data Science</em>, 2nd ed. O'Reilly. (free online: https://r4ds.hadley.nz/)</li>
+<li>Wickham H (2016). <em>ggplot2: Elegant Graphics for Data Analysis</em>, 2nd ed. Springer.</li>
+<li>Wickham H (2014). Tidy data. <em>Journal of Statistical Software</em> 59(10):1–23.</li>
+<li>Wilke CO (2019). <em>Fundamentals of Data Visualization</em>. O'Reilly. (free online: https://clauswilke.com/dataviz/)</li>
+<li>Okabe M, Ito K (2008). Color universal design (CUD) — accessible colour palettes.</li>
+<li>Pedersen TL. <code>patchwork</code> documentation: https://patchwork.data-imaginist.com/</li>
+</ul>
+<h2>Tooling</h2>
+<ul>
+<li>R (&gt;= 4.2), full <code>tidyverse</code> (<code>readr</code>, <code>dplyr</code>, <code>tidyr</code>, <code>ggplot2</code>, <code>stringr</code>, <code>forcats</code>)</li>
+<li><code>patchwork</code>, <code>cowplot</code> for composition; <code>scales</code>, <code>viridis</code> for colour/scales</li>
+<li><code>janitor</code> for cleaning helpers; <code>colorblindr</code>/<code>colorspace</code> for accessibility checks</li>
+<li>Optional pharmacometric context: <code>mrgsolve</code>, <code>PKNCA</code></li>
+</ul>
+<h2>Pedagogy: Learn → Build → Ship → Check</h2>
+<p>Every lesson runs the same four-move loop. You derive the concept, implement it in R,<br />
+walk away with a reusable artifact, and answer 3 check questions before advancing.</p>
+<h2>Slides</h2>
+<p>Marp decks for each phase live in <code>lecture-slides/slides/</code>. See <code>lecture-slides/index.md</code>.</p></article>
+      <section class="lesson-section">
+        <h2>Phases</h2>
+        <ol class="phase-lesson-list"><li><a href="01-tidyverse-import/index.html"><strong>Phase 01: Tidyverse Foundations & Data Import</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="02-dplyr-tidyr-cleaning/index.html"><strong>Phase 02: Data Transformation with dplyr & tidyr</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="03-joining-reshaping/index.html"><strong>Phase 03: Joining & Reshaping Multi-Table Data</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="04-ggplot2-grammar/index.html"><strong>Phase 04: ggplot2 Grammar of Graphics</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="05-advanced-viz-accessibility/index.html"><strong>Phase 05: Advanced Visualization & Accessibility</strong></a> <span class="mono lesson-count">3 lessons</span></li><li><a href="06-publication-figures/index.html"><strong>Phase 06: Publication Figures — Multi-Panel & Case Study</strong></a> <span class="mono lesson-count">3 lessons</span></li></ol>
+      </section>
+    
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../../index.html" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">℞</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Learn it. Build it. Ship it. Check it.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../../index.html#top">Product</a>
+        <a href="../../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

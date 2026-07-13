@@ -1,0 +1,473 @@
+{
+  "courses": [
+    {
+      "slug": "pkpd-modeling-sim",
+      "title": "PKPD Modeling and Simulation",
+      "subtitle": "From Dose to Effect",
+      "total_lessons": 27,
+      "phases": [
+        {
+          "slug": "01-pkpd-foundations",
+          "title": "Phase 01: PKPD Foundations",
+          "lessons": [
+            {
+              "slug": "01-pkpd-paradigm",
+              "title": "Lesson 01: The PKPD Paradigm \u2014 From Dose to Effect",
+              "free": true
+            },
+            {
+              "slug": "02-concentration-effect",
+              "title": "Lesson 02: Concentration\u2013Effect Relationships: Key Concepts",
+              "free": false
+            },
+            {
+              "slug": "03-r-mrgsolve-setup",
+              "title": "Lesson 03: R + mrgsolve Setup for PKPD Work",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "02-direct-effect-models",
+          "title": "Phase 02: Direct Effect Models",
+          "lessons": [
+            {
+              "slug": "01-linear-log-linear-pd",
+              "title": "Lesson 01: Linear and Log-Linear PD Models",
+              "free": false
+            },
+            {
+              "slug": "02-emax-hill-equation",
+              "title": "Lesson 02: Emax and Sigmoidal Emax (Hill Equation)",
+              "free": false
+            },
+            {
+              "slug": "03-fitting-direct-effect-r",
+              "title": "Lesson 03: Fitting Direct Effect Models in R",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "03-effect-compartment",
+          "title": "Phase 03: Effect Compartment and Hysteresis",
+          "lessons": [
+            {
+              "slug": "01-hysteresis-pk-pd-out-of-phase",
+              "title": "Lesson 01: Hysteresis \u2014 When PK and PD Are Out of Phase",
+              "free": false
+            },
+            {
+              "slug": "02-link-model-ke0",
+              "title": "Lesson 02: The Link Model and Effect Compartment (Ke0)",
+              "free": false
+            },
+            {
+              "slug": "03-implementing-ke0-mrgsolve",
+              "title": "Lesson 03: Implementing Ke0 in mrgsolve",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "04-indirect-response-models",
+          "title": "Phase 04: Indirect Response Models",
+          "lessons": [
+            {
+              "slug": "01-idr-turnover-paradigm",
+              "title": "Turnover Pharmacodynamics \u2014 The IDR Paradigm",
+              "free": false
+            },
+            {
+              "slug": "02-idr-models-I-II-kin",
+              "title": "IDR Models I and II \u2014 Inhibition and Stimulation of Kin",
+              "free": false
+            },
+            {
+              "slug": "03-idr-models-III-IV-kout",
+              "title": "IDR Models III and IV \u2014 Inhibition and Stimulation of Kout",
+              "free": false
+            },
+            {
+              "slug": "04-fitting-idr-corticosteroid",
+              "title": "Fitting IDR Models: Corticosteroid Baseline Effect Example",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "05-disease-progression",
+          "title": "Phase 05: Disease Progression",
+          "lessons": [
+            {
+              "slug": "01-disease-progression-models",
+              "title": "Disease Progression Models and Placebo Effects",
+              "free": false
+            },
+            {
+              "slug": "02-symptomatic-vs-disease-modifying",
+              "title": "Drug Effects on Disease: Symptomatic vs Disease-Modifying",
+              "free": false
+            },
+            {
+              "slug": "03-hba1c-worked-example",
+              "title": "Worked Example: HbA1c in Type 2 Diabetes",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "06-tolerance-rebound",
+          "title": "Phase 06: Tolerance and Rebound",
+          "lessons": [
+            {
+              "slug": "01-mechanisms-of-tolerance",
+              "title": "Mechanisms of Tolerance: Classification and PD Consequences",
+              "free": false
+            },
+            {
+              "slug": "02-precursor-pool-counter-regulatory",
+              "title": "Precursor Pool and Counter-Regulatory Models",
+              "free": false
+            },
+            {
+              "slug": "03-simulating-tolerance-rebound-mrgsolve",
+              "title": "Simulating Tolerance and Rebound in mrgsolve",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "07-exposure-response",
+          "title": "Phase 07: Exposure\u2013Response Analysis",
+          "lessons": [
+            {
+              "slug": "01-continuous-er",
+              "title": "Lesson 01: Continuous Exposure\u2013Response \u2014 Regression and Emax",
+              "free": false
+            },
+            {
+              "slug": "02-binary-logistic-er",
+              "title": "Lesson 02: Binary Outcomes \u2014 Logistic Regression E-R Models",
+              "free": false
+            },
+            {
+              "slug": "03-tte-pkpd",
+              "title": "Lesson 03: Time-to-Event PKPD \u2014 Survival Models",
+              "free": false
+            },
+            {
+              "slug": "04-er-report-rmd",
+              "title": "Lesson 04: Building an E-R Analysis Report in R Markdown",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "08-clinical-trial-simulation",
+          "title": "Phase 08: Clinical Trial Simulation",
+          "lessons": [
+            {
+              "slug": "01-cts-framework",
+              "title": "CTS Framework with mrgsolve",
+              "free": false
+            },
+            {
+              "slug": "02-target-attainment",
+              "title": "Target Attainment and Dose Selection",
+              "free": false
+            },
+            {
+              "slug": "03-uncertainty-propagation",
+              "title": "Uncertainty Propagation in CTS",
+              "free": false
+            },
+            {
+              "slug": "04-capstone-cts-pipeline",
+              "title": "Capstone \u2014 Full PKPD CTS Pipeline",
+              "free": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "handling-missing-data-r",
+      "title": "Handling Missing Data in R",
+      "subtitle": "From General Theory to Pharmacometric Practice",
+      "total_lessons": 20,
+      "phases": [
+        {
+          "slug": "01-foundations",
+          "title": "Phase 01: Foundations of Missing Data",
+          "lessons": [
+            {
+              "slug": "01-missingness-taxonomy",
+              "title": "Lesson 01: Missing Data \u2014 Definition, Impact, and the MCAR/MAR/MNAR Taxonomy",
+              "free": true
+            },
+            {
+              "slug": "02-fraction-missing-information",
+              "title": "Lesson 02: Bias, Power, and the Fraction of Missing Information",
+              "free": false
+            },
+            {
+              "slug": "03-r-toolkit-setup",
+              "title": "Lesson 03: The R Missing-Data Toolkit",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "02-diagnostics-r",
+          "title": "Phase 02: Diagnosing Missingness in R",
+          "lessons": [
+            {
+              "slug": "01-descriptive-diagnostics",
+              "title": "Lesson 01: Descriptive Diagnostics and the Shadow Matrix",
+              "free": false
+            },
+            {
+              "slug": "02-visualizing-missingness",
+              "title": "Lesson 02: Visualizing Missingness",
+              "free": false
+            },
+            {
+              "slug": "03-probing-the-mechanism",
+              "title": "Lesson 03: Probing the Mechanism \u2014 Can We Tell MCAR from MAR?",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "03-classical-methods",
+          "title": "Phase 03: Classical Methods \u2014 Deletion & Single Imputation",
+          "lessons": [
+            {
+              "slug": "01-deletion-methods",
+              "title": "Lesson 01: Deletion Methods \u2014 Listwise and Pairwise",
+              "free": false
+            },
+            {
+              "slug": "02-single-imputation",
+              "title": "Lesson 02: Single (Simple) Imputation \u2014 Mean, Median, Mode, and Why It Distorts",
+              "free": false
+            },
+            {
+              "slug": "03-regression-imputation",
+              "title": "Lesson 03: Regression and Stochastic Regression Imputation",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "04-modern-imputation",
+          "title": "Phase 04: Modern Imputation \u2014 Multiple & Iterative",
+          "lessons": [
+            {
+              "slug": "01-multiple-imputation-principle",
+              "title": "Lesson 01: Multiple Imputation and Rubin's Rules",
+              "free": false
+            },
+            {
+              "slug": "02-mice-in-r",
+              "title": "Lesson 02: MICE \u2014 Multiple Imputation by Chained Equations in R",
+              "free": false
+            },
+            {
+              "slug": "03-iterative-ml-imputation",
+              "title": "Lesson 03: Iterative and Machine-Learning Imputation \u2014 EM, SoftImpute, missForest",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "05-poppk-structure-blq",
+          "title": "Phase 05: Missing Data in Population PK \u2014 Structure, Time, Dose, and BLQ",
+          "lessons": [
+            {
+              "slug": "01-poppk-event-dataset",
+              "title": "Lesson 01: The popPK Event Dataset and Where Missingness Lives",
+              "free": false
+            },
+            {
+              "slug": "02-missing-time-and-dose",
+              "title": "Lesson 02: Missing Date/Time and Dose Amount Records",
+              "free": false
+            },
+            {
+              "slug": "03-blq-as-mnar-beal-methods",
+              "title": "Lesson 03: BLQ Concentrations as MNAR \u2014 Beal's M1\u2013M7",
+              "free": false
+            },
+            {
+              "slug": "04-implementing-m3",
+              "title": "Lesson 04: Implementing the M3 Method",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "06-covariates-frem",
+          "title": "Phase 06: Missing Covariate Data & FREM",
+          "lessons": [
+            {
+              "slug": "01-time-varying-covariate-imputation",
+              "title": "Lesson 01: Imputing Time-Varying Covariates Within a Subject",
+              "free": false
+            },
+            {
+              "slug": "02-missing-covariate-methods",
+              "title": "Lesson 02: Methods for Wholly-Missing Covariates",
+              "free": false
+            },
+            {
+              "slug": "03-frem",
+              "title": "Lesson 03: FREM \u2014 Covariates as Observations",
+              "free": false
+            },
+            {
+              "slug": "04-capstone-missing-aware-covariate-workflow",
+              "title": "Lesson 04 (Capstone): An End-to-End Missing-Data-Aware Covariate Analysis",
+              "free": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "messy-data-r",
+      "title": "Dealing with Messy Data in R",
+      "subtitle": "Tidyverse, ggplot2, and Publication Figures",
+      "total_lessons": 18,
+      "phases": [
+        {
+          "slug": "01-tidyverse-import",
+          "title": "Phase 01: Tidyverse Foundations & Data Import",
+          "lessons": [
+            {
+              "slug": "01-tidyverse-tour",
+              "title": "Lesson 01: The Tidyverse: Tibbles, Pipes, and the Tidy Data Standard",
+              "free": true
+            },
+            {
+              "slug": "02-importing-messy-data",
+              "title": "Lesson 02: Importing Messy Data: readr, readxl, and Parsing Pitfalls",
+              "free": false
+            },
+            {
+              "slug": "03-diagnosing-messiness",
+              "title": "Lesson 03: Diagnosing a Messy Dataset Before You Touch It",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "02-dplyr-tidyr-cleaning",
+          "title": "Phase 02: Data Transformation with dplyr & tidyr",
+          "lessons": [
+            {
+              "slug": "01-dplyr-verbs",
+              "title": "Lesson 01: The Five dplyr Verbs \u2014 select, filter, mutate, arrange, summarise",
+              "free": false
+            },
+            {
+              "slug": "02-grouped-operations",
+              "title": "Lesson 02: Grouped Operations and group_by/summarise Pitfalls",
+              "free": false
+            },
+            {
+              "slug": "03-tidyr-reshaping",
+              "title": "Lesson 03: Reshaping with tidyr \u2014 pivot_longer, pivot_wider, separate, unite",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "03-joining-reshaping",
+          "title": "Phase 03: Joining & Reshaping Multi-Table Data",
+          "lessons": [
+            {
+              "slug": "01-join-types",
+              "title": "Lesson 01: Join Types \u2014 left_join, inner_join, full_join, anti_join",
+              "free": false
+            },
+            {
+              "slug": "02-validating-joins",
+              "title": "Lesson 02: Validating Joins \u2014 Keys, Cardinality, and Silent Row Multiplication",
+              "free": false
+            },
+            {
+              "slug": "03-relational-pk-data",
+              "title": "Lesson 03: Relational popPK Data \u2014 Dosing, Observations, and Covariates as Separate Tables",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "04-ggplot2-grammar",
+          "title": "Phase 04: ggplot2 Grammar of Graphics",
+          "lessons": [
+            {
+              "slug": "01-grammar-of-graphics",
+              "title": "Lesson 01: The Grammar of Graphics: aes(), Geoms, and Layers",
+              "free": false
+            },
+            {
+              "slug": "02-choosing-the-right-plot",
+              "title": "Lesson 02: Choosing the Right Plot for the Data",
+              "free": false
+            },
+            {
+              "slug": "03-facets-and-stats",
+              "title": "Lesson 03: Facets, Statistical Transforms, and Coordinate Systems",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "05-advanced-viz-accessibility",
+          "title": "Phase 05: Advanced Visualization & Accessibility",
+          "lessons": [
+            {
+              "slug": "01-color-scales",
+              "title": "Lesson 01: Color and Scales for Effective Storytelling",
+              "free": false
+            },
+            {
+              "slug": "02-accessibility",
+              "title": "Lesson 02: Accessibility \u2014 Colour-Blind-Safe Palettes and Perceptual Uniformity",
+              "free": false
+            },
+            {
+              "slug": "03-themes-and-export",
+              "title": "Lesson 03: Custom Themes and Publication-Ready Export",
+              "free": false
+            }
+          ]
+        },
+        {
+          "slug": "06-publication-figures",
+          "title": "Phase 06: Publication Figures \u2014 Multi-Panel & Case Study",
+          "lessons": [
+            {
+              "slug": "01-multipanel-patchwork",
+              "title": "Lesson 01: Multi-Panel Figures with patchwork",
+              "free": false
+            },
+            {
+              "slug": "02-multipanel-cowplot",
+              "title": "Lesson 02: Multi-Panel Figures with cowplot and Shared Legends",
+              "free": false
+            },
+            {
+              "slug": "03-capstone-pk-figure-panel",
+              "title": "Lesson 03: CAPSTONE \u2014 End-to-End: A Publication-Ready PK/PD Figure Panel",
+              "free": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

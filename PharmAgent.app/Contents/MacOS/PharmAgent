@@ -1,0 +1,53 @@
+#!/bin/bash
+# PharmAgent launcher — starts the single-process backend (which also serves the
+# built React UI) and opens it in the default browser. Idempotent: if a healthy
+# server is already running on :8000 it just opens the browser.
+set -u
+PORT=8000
+URL="http://127.0.0.1:${PORT}"
+
+# Backend location. Primary is the absolute install path so the .app works from
+# anywhere (Desktop, Dock, Applications). Falls back to the relative layout
+# (.app inside the project) if the absolute path is ever moved.
+BACKEND="/Users/ZaidiSahab/Desktop/Bupropion/pharmagent/backend"
+if [ ! -d "$BACKEND" ]; then
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  BACKEND="$(cd "$HERE/../../.." && pwd)/backend"
+fi
+VENV_PY="$BACKEND/.venv/bin/uvicorn"
+LOG="$BACKEND/pharmagent_app.log"
+
+note() { /usr/bin/osascript -e "display notification \"$1\" with title \"PharmAgent\"" >/dev/null 2>&1; }
+
+# Already up? just open it.
+if /usr/bin/curl -s -m 2 "${URL}/api/health" >/dev/null 2>&1; then
+  open "$URL"
+  exit 0
+fi
+
+if [ ! -x "$VENV_PY" ]; then
+  /usr/bin/osascript -e "display dialog \"PharmAgent venv not found at:
+$VENV_PY
+
+Set it up with:  python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt\" buttons {\"OK\"} with icon stop with title \"PharmAgent\""
+  exit 1
+fi
+
+note "Starting server…"
+cd "$BACKEND" || exit 1
+# Start detached so the server outlives this launcher process.
+nohup "$VENV_PY" app.main:app --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
+
+# Wait up to ~20s for health.
+for i in $(seq 1 40); do
+  if /usr/bin/curl -s -m 2 "${URL}/api/health" >/dev/null 2>&1; then
+    note "Ready — opening browser"
+    open "$URL"
+    exit 0
+  fi
+  sleep 0.5
+done
+
+/usr/bin/osascript -e "display dialog \"PharmAgent did not start within 20s. See log:
+$LOG\" buttons {\"OK\"} with icon caution with title \"PharmAgent\""
+exit 1

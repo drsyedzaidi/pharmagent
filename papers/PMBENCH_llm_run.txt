@@ -1,0 +1,28 @@
+PharmacometricsBench v0 — 3-run averages (fixed protocol: max_tokens 4096, last-fence
+parser, 'JSON last' prompt). Same 30-task set each run; 0 parse-gaps throughout.
+Deterministic references (no variance): oracle 1.000, naive/heuristic 0.778.
+
+claude-opus-4-8 run1: overall=0.928 gaps=0 {'be': 1.0, 'compartmental': 0.7222, 'dp': 0.9167, 'exposure': 1.0, 'nca': 1.0}
+claude-opus-4-8 run2: overall=0.889 gaps=0 {'be': 1.0, 'compartmental': 0.6111, 'dp': 0.8333, 'exposure': 1.0, 'nca': 1.0}
+claude-opus-4-8 run3: overall=0.967 gaps=0 {'be': 1.0, 'compartmental': 0.8889, 'dp': 1.0, 'exposure': 1.0, 'nca': 0.9444}
+
+=== claude-opus-4-8  MEAN of 3 runs ===
+  overall = 0.928  (sd 0.032)  total gaps = 0
+  nca            = 0.981  (sd 0.026)
+  be             = 1.000  (sd 0.000)
+  dp             = 0.917  (sd 0.068)
+  compartmental  = 0.741  (sd 0.114)
+  exposure       = 1.000  (sd 0.000)
+
+claude-haiku-4-5 run1: overall=0.639 gaps=0 {'be': 1.0, 'compartmental': 0.2222, 'dp': 0.4167, 'exposure': 1.0, 'nca': 0.5556}
+claude-haiku-4-5 run2: overall=0.536 gaps=0 {'be': 0.7917, 'compartmental': 0.3333, 'dp': 0.25, 'exposure': 0.75, 'nca': 0.5556}
+claude-haiku-4-5 run3: overall=0.611 gaps=0 {'be': 0.8333, 'compartmental': 0.0556, 'dp': 0.5833, 'exposure': 0.9167, 'nca': 0.6667}
+
+=== claude-haiku-4-5  MEAN of 3 runs ===
+  overall = 0.595  (sd 0.043)  total gaps = 0
+  nca            = 0.593  (sd 0.052)
+  be             = 0.875  (sd 0.090)
+  dp             = 0.417  (sd 0.136)
+  compartmental  = 0.204  (sd 0.114)
+  exposure       = 0.889  (sd 0.104)
+
