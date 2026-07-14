@@ -1,0 +1,142 @@
+/* Flexplot exploratory-visualization panel. Uses the app's design tokens so it
+   reads as native. Motion is limited to compositor-friendly properties. */
+
+.flexplot-panel {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.flexplot-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.flexplot-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+.flexplot-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.flexplot-field-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.flexplot-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.flexplot-check,
+.flexplot-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+.flexplot-inline > span:first-child {
+  color: var(--text-dim);
+}
+.flexplot-check input,
+.flexplot-inline input[type='checkbox'] {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.flexplot-check-off {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.flexplot-mini {
+  max-width: 150px;
+  font-size: 11px;
+}
+.flexplot-range-val {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 30px;
+}
+
+.flexplot-canvas {
+  min-height: 120px;
+  padding-top: 10px;
+  transition: opacity var(--duration) var(--ease);
+}
+.flexplot-canvas[aria-busy='true'] {
+  opacity: 0.55;
+}
+
+.flexplot-figure {
+  margin: 0;
+}
+.flexplot-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.flexplot-svg {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.flexplot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+.flexplot-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.flexplot-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.flexplot-caption {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.flexplot-status {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 0;
+}
+.flexplot-error {
+  font-size: 12px;
+  color: var(--red);
+  background: var(--red-bg);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin: 8px 0;
+}
+.flexplot-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 16px 0;
+}

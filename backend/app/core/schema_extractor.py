@@ -68,6 +68,7 @@ def _num_summary(s: pd.Series) -> dict[str, Any]:
         return {"n": 0}
     return {
         "n": int(s.size),
+        "n_unique": int(s.nunique()),
         "min": _safe(float(s.min())),
         "max": _safe(float(s.max())),
         "mean": _safe(float(s.mean())),

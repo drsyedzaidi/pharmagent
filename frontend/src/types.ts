@@ -577,3 +577,87 @@ export interface ContentBlock {
 }
 
 export type WorkflowStatus = 'idle' | 'running' | 'awaiting_review' | 'complete' | 'error';
+
+// ── Flexplot (exploratory visualization) ──────────────────────────────────
+export interface VariableMeta {
+  name: string;
+  dtype: string;
+  role: string;
+  type: 'continuous' | 'categorical';
+  is_numeric: boolean;
+  n_unique: number | null;
+  min: number | null;
+  max: number | null;
+}
+export interface VariablesResponse {
+  variables: VariableMeta[];
+  detected_roles: Record<string, string>;
+}
+
+export type FlexplotFitKind = 'loess' | 'linear' | 'none';
+export type FlexplotGeom = 'points' | 'line' | 'smooth' | 'density';
+export type FlexplotCenter = 'median_iqr' | 'mean_se' | 'mean_sd';
+
+export interface FlexplotSpec {
+  y: string;
+  x: string | null;
+  color_by: string | null;
+  panel_by: string | null;
+  fit: FlexplotFitKind;
+  geom: FlexplotGeom;
+  center: FlexplotCenter;
+  ghost: boolean;
+  log_y: boolean;
+  jitter: number;
+  n_bins: number;
+  ci: number;
+}
+
+export interface FlexplotPoints { x: number[]; y: number[]; }
+export interface FlexplotFit { x: number[]; y: number[]; lo: number[]; hi: number[]; }
+export interface FlexplotCrossbar {
+  group_x: string; x_index: number;
+  center: number | null; lo: number | null; hi: number | null; n: number;
+}
+export interface FlexplotBins { edges: number[]; counts: number[]; }
+export interface FlexplotDensity { x: number[]; y: number[]; }
+export interface FlexplotCell {
+  panel: string;
+  group: string;
+  points: FlexplotPoints;
+  fit: FlexplotFit | null;
+  crossbars: FlexplotCrossbar[];
+  bins: FlexplotBins | null;
+  density: FlexplotDensity | null;
+  n: number;
+}
+export interface FlexplotLegendEntry { id: string; label: string; color_index: number; }
+export interface FlexplotPanelMeta { id: string; strip: string; bin_range: [number, number] | null; }
+export interface FlexplotGhostLine { group: string; color_index: number; x: number[]; y: number[]; }
+export interface FlexplotSummary {
+  n: number;
+  x_mean: number | null; y_mean: number | null;
+  n_groups: number; n_panels: number;
+}
+export interface FlexplotData {
+  kind: 'scatter' | 'dotplot' | 'histogram' | 'density';
+  echo: Record<string, unknown>;
+  var_types: {
+    x: 'continuous' | 'categorical' | null;
+    y: 'continuous' | 'categorical';
+    color_by: 'categorical' | null;
+    panel_by: 'categorical' | 'continuous_binned' | null;
+  };
+  x_label: string;
+  y_label: string;
+  x_range: [number, number];
+  y_range: [number, number];
+  log_scale: boolean;
+  x_categories: string[] | null;
+  groups: string[];
+  legend: FlexplotLegendEntry[];
+  panels: FlexplotPanelMeta[];
+  cells: FlexplotCell[];
+  ghost_line: FlexplotGhostLine[] | null;
+  summary: FlexplotSummary;
+}

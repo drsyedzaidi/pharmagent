@@ -6,6 +6,7 @@ import {
   Download, Loader2, Activity,
 } from 'lucide-react';
 import { api, setToken, getToken } from './api';
+import { FlexplotPanel } from './flexplot';
 import type {
   Session, PharmState, AgentMessage, AuditEntry,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
@@ -1588,6 +1589,7 @@ export default function App() {
   const [showRoles, setShowRoles] = useState(false);
   const [skills, setSkills] = useState<SkillDef[]>([]);
   const [showSkills, setShowSkills] = useState(false);
+  const [showFlexplot, setShowFlexplot] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const shownMarkers = useRef(new Set<string>());
@@ -2461,6 +2463,18 @@ export default function App() {
               </button>
             </div>
             {showRoles && state && <RolesEditor state={state} onApply={applyRoles} loading={loading} />}
+          </div>
+        )}
+
+        {hasData && (
+          <div className="quick-actions" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+            <div>
+              <span className="quick-actions-label">Visualize:</span>
+              <button className="chip" disabled={loading} onClick={() => setShowFlexplot(s => !s)}>
+                {showFlexplot ? 'Hide flexplot' : 'Flexplot'}
+              </button>
+            </div>
+            {showFlexplot && session && <FlexplotPanel sessionId={session.id} />}
           </div>
         )}
 

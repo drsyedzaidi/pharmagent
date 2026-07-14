@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.core import cdisc, exporters
@@ -175,6 +175,21 @@ class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
     selected_concs: list[float]
+
+
+class FlexplotRequest(BaseModel):
+    y: str                          # outcome (required)
+    x: str | None = None            # optional predictor
+    color_by: str | None = None
+    panel_by: str | None = None
+    fit: str = "loess"              # loess | linear | none
+    geom: str = "points"           # points | line | smooth | density
+    center: str = "median_iqr"     # median_iqr | mean_se | mean_sd
+    ghost: bool = False
+    log_y: bool = False
+    jitter: float = Field(0.2, ge=0.0, le=1.0)
+    n_bins: int = Field(10, ge=1, le=200)
+    ci: float = Field(0.95, gt=0.0, lt=1.0)
 
 
 # ── public endpoints ─────────────────────────────────────────────────────────
@@ -422,6 +437,26 @@ def run_dose_sweep(sid: str, req: DoseSweepRequest, sess=Depends(owned_session),
         return orch.run_tool(sid, "run_dose_sweep", "simulator", req.model_dump(), actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/flexplot")
+def run_flexplot(sid: str, req: FlexplotRequest, sess=Depends(owned_session),
+                 actor: str = Depends(actor_id)) -> dict:
+    try:
+        return orch.run_tool(sid, "generate_flexplot", "data_manager", req.model_dump(), actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/sessions/{sid}/variables")
+def list_variables(sid: str, sess=Depends(owned_session)) -> dict:
+    """Typed variable list for the flexplot picker (metadata only, no raw rows)."""
+    from app.compute.flexplot import plottable_variables
+    meta = sess.state.dataset_metadata
+    if not meta:
+        raise HTTPException(400, "no dataset loaded")
+    return {"variables": plottable_variables(meta),
+            "detected_roles": meta.get("detected_roles", {})}
 
 
 @app.get("/api/sessions/{sid}/audit")

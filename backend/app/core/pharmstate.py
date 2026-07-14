@@ -98,6 +98,7 @@ class PharmState(BaseModel):
     # --- visualization data (pre- and post-NCA plots) ---------------------
     spaghetti_data: dict[str, Any] | None = None
     nca_plot_data: dict[str, Any] | None = None
+    flexplot_data: dict[str, Any] | None = None   # exploratory flexplot geometry
 
     # --- free-form artifacts shown in the UI ------------------------------
     widgets: list[dict[str, Any]] = Field(default_factory=list)
@@ -107,7 +108,8 @@ class PharmState(BaseModel):
 # state mutation; an agent attempting to write outside its set raises.
 AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "supervisor": {"last_agent", "workflow_name", "current_step", "session_id"},
-    "data_manager": {"dataset_id", "dataset_path", "dataset_metadata", "data_quality", "widgets", "spaghetti_data"},
+    "data_manager": {"dataset_id", "dataset_path", "dataset_metadata", "data_quality",
+                     "widgets", "spaghetti_data", "flexplot_data"},
     "nca": {"nca_parameters", "nca_summary", "widgets", "nca_plot_data"},
     "be": {"be_results", "widgets"},
     "dose_prop": {"dose_prop_results", "widgets"},

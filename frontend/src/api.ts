@@ -1,6 +1,6 @@
 import type {
   Session, ChatResponse, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
-  ReviewLoopResult, SkillDef,
+  ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
 } from './types';
 
 const BASE = '/api';
@@ -79,6 +79,16 @@ export const api = {
 
   getState: (sid: string): Promise<PharmState> =>
     req(`/sessions/${sid}/state`),
+
+  variables: (sid: string): Promise<VariablesResponse> =>
+    req(`/sessions/${sid}/variables`),
+
+  flexplot: (sid: string, body: FlexplotSpec): Promise<{ state: { flexplot_data: FlexplotData | null } }> =>
+    req(`/sessions/${sid}/flexplot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 
   setRoles: (sid: string, overrides: Record<string, string>):
     Promise<{ detected_roles: Record<string, string>; state: PharmState }> =>
