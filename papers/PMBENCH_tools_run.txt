@@ -1,0 +1,8 @@
+PharmacometricsBench v0 — TOOL-USING agents (3-run means, fixed 30-task set).
+The model calls the validated compute tools by function-calling (make_tool_agent),
+rather than reasoning to a number. Contrast with the tool-FREE llm rows in
+PMBENCH_llm_run.txt (Opus 0.93, Haiku 0.60). Both tool-using models reach 1.000.
+The ceiling is inherited from the validated tools: 1.00 means the model chose the
+right tool and marshalled the data correctly on every task (tool orchestration),
+not that it re-derived the answer.
+
