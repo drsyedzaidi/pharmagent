@@ -12,8 +12,10 @@ production operator under change control.
 - **Cadence:** on push / PR, plus opportunistic manual `/loop`.
 - **Trigger:** failing `.github/workflows/ci.yml` (ruff, pytest keyless MockLLM, frontend tsc/build).
 - **Skill:** `loop-triage` (read-only) → report; `minimal-fix` in a worktree → `loop-verifier` gates.
-- **Level:** L1 report-only for week one. Promote to L2 (assisted auto-fix) only for
-  lint + obviously-scoped test breakage. **No auto-merge.**
+- **Level:** **L2 (assisted auto-fix)** as of 2026-07-14 — owner decision, streak-1 override.
+  Assisted-fix allowed ONLY for lint + obviously-scoped test breakage. `minimal-fix` in a
+  worktree → `loop-verifier` runs ruff+pytest → **draft PR for human approval. No auto-merge.**
+  Denylist (auth/audit/e-signature/jobs/payments) stays **human-only** — L2 never touches it.
 - **State:** `STATE.md`.
 
 ### Security-Finding Triage (L1 — report-only)
@@ -74,7 +76,7 @@ cd backend && ruff check app tests && pytest -q
 ## Status (2026-07-13)
 | Loop | Level | Automation | Notes |
 |------|-------|------------|-------|
-| CI Sweeper | L1 | ⏸ manual `/loop` | ci.yml exists; promote to L2 after a clean week |
+| CI Sweeper | **L2** | ⏸ manual `/loop` | promoted 2026-07-14 (owner, streak-1); assisted-fix lint+test only, draft-PR gated |
 | Security-Finding Triage | L1 | ⏸ manual | 2026-07-13 findings fixed in c9d2658; no open queue |
 | Dependency Sweeper | L1 | ✅ pip-audit advisory in CI | npm audit not yet wired |
 

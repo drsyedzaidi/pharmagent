@@ -2,7 +2,9 @@
 
 # Loop State — PharmAgent
 
-Last run: 2026-07-14T00:24:00Z (security fixes committed + pushed in `c9d2658`)
+Last run: 2026-07-14T14:50:23Z (CI Sweeper L1 report-only — GREEN; ruff clean, 337 passed / 2 skipped)
+
+Prior run: 2026-07-14T00:24:00Z (security fixes committed + pushed in `c9d2658`)
 
 ## Security-Finding queue
 
@@ -31,7 +33,9 @@ human must approve anything on the denylist.
 
 ## Watch List
 
-- Promote CI Sweeper L1 -> L2 after one clean week of report-only runs.
+- **CI Sweeper promoted to L2 on 2026-07-14** (owner decision; streak-1 override of the
+  one-clean-week guideline — acceptable because L2 stays human-gated: verifier + draft PR,
+  no auto-merge, denylist untouched). Assisted-fix scope = lint + obviously-scoped test breakage only.
 - Wire `npm audit` into the Dependency Sweeper (only pip-audit today).
 - Correlated-IIV / Cholesky-Omega still TODO (tracked in project notes, not a loop item).
 
