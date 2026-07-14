@@ -1,0 +1,60 @@
+# Machine-readable loop registry for PharmAgent.
+# Consumed by loop-audit, loop-cost, and loop tooling.
+
+patterns:
+  - id: ci-sweeper
+    name: CI Sweeper
+    goal: Keep ci.yml green (ruff, pytest keyless, frontend tsc/build)
+    cadence: on-push
+    risk: medium
+    tools: [claude-code]
+    skills: [loop-triage, minimal-fix, loop-verifier, loop-budget, loop-constraints]
+    state: STATE.md
+    phases: [discover, triage, fix, verify, escalate]
+    human_gates: [auth, audit, e-signature, jobs-admission, payments, auto-merge]
+    week_one_mode: L1
+    token_cost: medium
+    cost:
+      tokens_noop: 3000
+      tokens_report: 60000
+      tokens_action: 200000
+      suggested_daily_cap: 400000
+      early_exit_required: true
+
+  - id: security-triage
+    name: Security-Finding Triage
+    goal: Triage scan findings; propose human-gated minimal fixes
+    cadence: post-scan
+    risk: high
+    tools: [claude-code]
+    skills: [loop-triage, minimal-fix, loop-verifier, loop-constraints]
+    state: STATE.md
+    phases: [ingest-findings, triage, propose, escalate]
+    human_gates: [all-findings]
+    week_one_mode: L1
+    token_cost: low
+    cost:
+      tokens_noop: 2000
+      tokens_report: 40000
+      tokens_action: 120000
+      suggested_daily_cap: 150000
+      early_exit_required: true
+
+  - id: dependency-sweeper
+    name: Dependency Sweeper
+    goal: Patch-only dep bumps from pip-audit / npm audit
+    cadence: 1w
+    risk: medium
+    tools: [claude-code]
+    skills: [loop-triage, minimal-fix, loop-verifier]
+    state: STATE.md
+    phases: [scan, triage, patch, verify]
+    human_gates: [majors, denylisted-packages]
+    week_one_mode: L1
+    token_cost: low
+    cost:
+      tokens_noop: 2000
+      tokens_report: 30000
+      tokens_action: 100000
+      suggested_daily_cap: 100000
+      early_exit_required: true
