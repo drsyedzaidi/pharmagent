@@ -6,6 +6,7 @@ several and selects by AIC — with a two-stage population summary.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -228,6 +229,16 @@ def simulate_pk_profile(state: PharmState, ctx: ToolContext, args: dict[str, Any
     wt = float(args.get("wt", 70.0))
     rate = float(args.get("rate", 0.0) or 0.0)
     tmax = float(args.get("tmax") or (max(tau * n_doses, 24.0) + tau))
+
+    # Boundary validation: reject non-finite / non-physical inputs before building
+    # dose lists and time grids (n_doses=1e9 -> OOM; inf/nan -> garbage output).
+    for _name, _val in (("dose", dose), ("tau", tau), ("wt", wt), ("tmax", tmax)):
+        if not math.isfinite(_val) or _val <= 0.0:
+            raise ValueError(f"{_name} must be a finite positive number, got {_val!r}")
+    if not math.isfinite(rate) or rate < 0.0:
+        raise ValueError(f"rate must be a finite non-negative number, got {rate!r}")
+    if not 1 <= n_doses <= 1000:
+        raise ValueError(f"n_doses must be between 1 and 1000, got {n_doses}")
 
     tc = simulate_timecourse(model, params, dose=dose, tau=tau, n_doses=n_doses,
                              tmax=tmax, wt=wt, rate=rate)

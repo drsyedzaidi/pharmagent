@@ -139,25 +139,29 @@ class Orchestrator:
 
     # -- free chat ---------------------------------------------------------
     def chat(self, sid: str, message: str, actor: str | None = None) -> dict[str, Any]:
-        sess = self.get_session(sid)
-        agent_name, method = self.supervisor.route(message)
-        sess.state = apply_writes(sess.state, "supervisor", {"last_agent": agent_name})
-        agent = AGENTS[agent_name]
-        res = agent.run_turn(
-            state=sess.state, message=message, llm=self.llm,
-            registry=self.registry, ctx=sess.ctx, audit=sess.audit, clock=self.clock,
-            actor=actor or "",
-        )
-        sess.state = res.state
-        payload = {
-            "agent": agent_name, "routed_by": method,
-            "messages": res.messages, "tool_calls": res.tool_calls,
-            "state": sess.state.model_dump(),
-        }
-        sess.history.append({"role": "user", "content": message})
-        sess.history.append({"role": "assistant", **payload})
-        self._persist(sess)
-        return payload
+        # Mutates state, the hash-linked audit chain, history, and persistence —
+        # take the per-session lock like every other mutating path (RLock, so the
+        # nested get_session is fine), or concurrent chats can corrupt state/audit.
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            agent_name, method = self.supervisor.route(message)
+            sess.state = apply_writes(sess.state, "supervisor", {"last_agent": agent_name})
+            agent = AGENTS[agent_name]
+            res = agent.run_turn(
+                state=sess.state, message=message, llm=self.llm,
+                registry=self.registry, ctx=sess.ctx, audit=sess.audit, clock=self.clock,
+                actor=actor or "",
+            )
+            sess.state = res.state
+            payload = {
+                "agent": agent_name, "routed_by": method,
+                "messages": res.messages, "tool_calls": res.tool_calls,
+                "state": sess.state.model_dump(),
+            }
+            sess.history.append({"role": "user", "content": message})
+            sess.history.append({"role": "assistant", **payload})
+            self._persist(sess)
+            return payload
 
     # -- direct PK model fit (UI model picker bypasses NL routing) ---------
     def run_pk_model(self, sid: str, *, model_key: str | None = None,

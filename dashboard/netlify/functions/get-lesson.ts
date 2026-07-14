@@ -23,6 +23,14 @@ export default async (req: Request) => {
     return new Response("Missing course_slug/phase_slug/lesson_slug", { status: 400 });
   }
 
+  // Strict slug allowlist BEFORE building any service-role storage key: enrollment
+  // is only checked for course_slug, so an unvalidated phase/lesson slug containing
+  // "../" could traverse to storage objects for a course the user never bought.
+  const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+  if (![courseSlug, phaseSlug, lessonSlug].every((s) => SLUG_RE.test(s))) {
+    return new Response("Invalid slug", { status: 400 });
+  }
+
   const entitled = await hasActiveEnrollment(userId, courseSlug);
   if (!entitled) {
     return new Response("Not enrolled in this course.", { status: 403 });
@@ -38,7 +46,11 @@ export default async (req: Request) => {
   const payload = JSON.parse(await file.text());
 
   const images: { name: string; url: string }[] = [];
+  const FILE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
   for (const imageName of payload.images ?? []) {
+    if (typeof imageName !== "string" || imageName.includes("..") || !FILE_RE.test(imageName)) {
+      continue; // skip unsafe asset names (no path separators / traversal)
+    }
     const assetPath = `${courseSlug}/${phaseSlug}/${lessonSlug}/${imageName}`;
     const { data: signed } = await admin.storage.from("lesson-assets").createSignedUrl(assetPath, SIGNED_URL_TTL_SECONDS);
     if (signed?.signedUrl) images.push({ name: imageName, url: signed.signedUrl });

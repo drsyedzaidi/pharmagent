@@ -25,25 +25,35 @@ export default async (req: Request) => {
     return new Response(`Webhook signature verification failed: ${err instanceof Error ? err.message : String(err)}`, { status: 400 });
   }
 
-  if (event.type === "checkout.session.completed") {
+  if (
+    event.type === "checkout.session.completed" ||
+    event.type === "checkout.session.async_payment_succeeded"
+  ) {
     const session = event.data.object as Stripe.Checkout.Session;
     const userId = session.metadata?.user_id;
     const courseSlug = session.metadata?.course_slug;
 
     if (userId && courseSlug) {
-      // Upsert on (user_id, course_slug) makes this safe against Stripe's
-      // webhook retries -- a duplicate delivery just re-writes the same row.
+      // Only grant entitlement on a CONFIRMED-paid session. Async payment methods
+      // fire `completed` with payment_status "unpaid"/"processing" and can still
+      // fail later, so gate "active" on payment_status; a later
+      // async_payment_succeeded promotes a "pending" row to "active".
+      const paid =
+        session.payment_status === "paid" ||
+        session.payment_status === "no_payment_required";
+      const status = paid ? "active" : "pending";
+      // Upsert on (user_id, course_slug) is safe against Stripe's webhook retries.
       const { error } = await supabaseAdmin()
         .from("enrollments")
         .upsert(
-          { user_id: userId, course_slug: courseSlug, status: "active", stripe_checkout_session_id: session.id },
+          { user_id: userId, course_slug: courseSlug, status, stripe_checkout_session_id: session.id },
           { onConflict: "user_id,course_slug" }
         );
       if (error) {
         console.error("Failed to record enrollment for", userId, courseSlug, error);
       }
     } else {
-      console.error("checkout.session.completed missing user_id/course_slug metadata", session.id);
+      console.error(`${event.type} missing user_id/course_slug metadata`, session.id);
     }
   }
 

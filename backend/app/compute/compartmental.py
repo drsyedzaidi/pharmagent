@@ -98,8 +98,12 @@ def conc_2cmt_oral(t: Any, dose: float, ka: float, CL: float, V1: float,
 def _accum(rate: float, tau: float) -> float:
     """Steady-state accumulation factor 1/(1 - exp(-rate*tau)) for one exponential.
     As tau -> inf this -> 1, recovering the single-dose curve."""
+    if not tau > 0:
+        # A non-positive dosing interval is not a removable singularity — fail
+        # loud rather than clamping, so a degenerate fit can't report convergence.
+        raise ValueError(f"steady-state dosing interval tau must be positive, got {tau!r}")
     denom = 1.0 - math.exp(-rate * tau)
-    if abs(denom) < _EPS:
+    if abs(denom) < _EPS:   # legitimate rate*tau ~ 0 (very frequent dosing) — clamp
         denom = _EPS
     return 1.0 / denom
 

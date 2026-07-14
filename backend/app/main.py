@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.core import cdisc, exporters
-from app.core.jobs import JobManager
+from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
 from app.workflows import WORKFLOWS
@@ -68,6 +68,14 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
                         content=_error_body(f"http_{exc.status_code}", str(exc.detail), rid))
 
 
+@app.exception_handler(JobRejected)
+async def job_rejected_handler(request: Request, exc: JobRejected) -> JSONResponse:
+    rid = getattr(request.state, "request_id", "")
+    return JSONResponse(status_code=429,
+                        headers={"X-Request-ID": rid, "Retry-After": "5"},
+                        content=_error_body("job_rejected", str(exc), rid))
+
+
 orch = Orchestrator()
 # Background-job runner for long tools (NLME, SCM). Module-level singleton; the
 # job callables look up the current `orch` global at call time (tests reassign it).
@@ -76,7 +84,13 @@ jobs = JobManager(clock=orch.clock)
 
 # ── auth ─────────────────────────────────────────────────────────────────────
 def current_owner(authorization: str | None = Header(default=None)) -> str | None:
-    """Bearer-token gate. Open (returns None) when no api_token is configured."""
+    """Bearer-token gate. Open (returns None) when no api_token is configured.
+
+    Returns a NON-SECRET, stable principal derived from the token — never the
+    token itself. The returned value is persisted as the session ``owner`` and
+    written into the audit chain as the actor, so it must not carry the raw
+    credential (a DB backup or audit export would otherwise disclose the token)."""
+    import hashlib
     if not settings.api_token:
         return None
     token = None
@@ -84,7 +98,7 @@ def current_owner(authorization: str | None = Header(default=None)) -> str | Non
         token = authorization[7:].strip()
     if token != settings.api_token:
         raise HTTPException(401, "missing or invalid bearer token")
-    return token
+    return "token:" + hashlib.sha256(token.encode()).hexdigest()[:16]
 
 
 def owned_session(sid: str, owner: str | None = Depends(current_owner)):
@@ -642,8 +656,9 @@ if _DIST is not None:
         """Serve a real static file if it exists, else index.html for client-side
         routing. /api/* is matched by the routes above before reaching here."""
         target = (_DIST / full_path).resolve()
-        # confine to the dist dir (no path traversal) and require a real file
-        if str(target).startswith(str(_DIST.resolve())) and target.is_file():
+        # confine to the dist dir via a true directory-boundary check (a string
+        # prefix would also match a sibling like ``dist-evil``) and require a real file
+        if target.is_relative_to(_DIST.resolve()) and target.is_file():
             return _FR(str(target))
         return _FR(str(_INDEX), media_type="text/html")
 

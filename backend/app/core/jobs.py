@@ -27,6 +27,14 @@ from typing import Any
 _MAX_JOBS = 200
 
 
+class JobRejected(Exception):
+    """Admission control declined a job (too many in flight). Maps to HTTP 429."""
+
+
+_MAX_INFLIGHT = 32       # global cap on concurrently live (running/queued) jobs
+_MAX_PER_SESSION = 2     # per-session cap — blocks a client flooding one session
+
+
 class JobManager:
     """Submit callables to a thread pool and poll their status/result."""
 
@@ -44,6 +52,16 @@ class JobManager:
         """Schedule ``fn`` to run in the pool; return a job id to poll."""
         job_id = f"job_{uuid.uuid4().hex[:10]}"
         with self._lock:
+            # Admission control: bound live jobs globally and per session so a
+            # client cannot flood the unbounded executor queue (memory/CPU DoS).
+            live = [j for j in self._jobs.values() if j["status"] == "running"]
+            if len(live) >= _MAX_INFLIGHT:
+                raise JobRejected(
+                    f"too many jobs in flight ({_MAX_INFLIGHT}); retry shortly")
+            if sum(1 for j in live if j["session_id"] == session_id) >= _MAX_PER_SESSION:
+                raise JobRejected(
+                    f"session already has {_MAX_PER_SESSION} jobs running; "
+                    "wait for one to finish")
             self._seq += 1
             self._jobs[job_id] = {
                 "job_id": job_id, "session_id": session_id, "kind": kind,
