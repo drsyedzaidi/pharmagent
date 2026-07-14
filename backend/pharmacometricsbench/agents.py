@@ -120,6 +120,11 @@ def _build_agents() -> dict:
     # when run; keyless import is fine because make_model_agent builds lazily.
     agents["llm-opus"] = make_model_agent("claude-opus-4-8")
     agents["llm-haiku"] = make_model_agent("claude-haiku-4-5")
+    # Tool-USING agents: the model calls the validated compute tools by
+    # function-calling (the direct test of the tool-grounding thesis).
+    from .tool_agent import make_tool_agent
+    agents["llm-opus-tools"] = make_tool_agent("claude-opus-4-8")
+    agents["llm-haiku-tools"] = make_tool_agent("claude-haiku-4-5")
     return agents
 
 
