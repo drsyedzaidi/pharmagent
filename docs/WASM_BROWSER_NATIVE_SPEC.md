@@ -6,6 +6,24 @@ jobs.py ThreadPool is the P1 drop; main.py:656 already serves frontend/dist (the
 # SPEC: PharmAgent Browser-Native (Pyodide/WASM) Migration
 *Single source of truth for the build/no-build decision. Synthesizes four subsystem audits (compute/engines, LLM/agent-loop, persistence/audit/files/exports, frontend/build). All file:line refs traced by the analysts against source.*
 
+> ## ✅ P0 RESULT (2026-07-18) — numerical-parity risk RETIRED
+> The P0 spike (`pyodide-spike/`) was built and run. PharmAgent's exact validated
+> path — `pkmodel_tools._build_subjects` → `population_fit` FOCE-I (`max_iter=40`)
+> + SAEM (`max_iter=120`, seed `20250614`) on the 12-subject Theophylline cohort,
+> plus NCA, flexplot, and scipy `expm`/`solve_ivp`/`stats` probes — ran under both
+> CPython and Pyodide/WASM and was diffed by `compare.py`.
+> **Verdict: GREEN. All 18 metrics matched, most bit-identical (`0.00e+00`), the
+> rest at last-ULP (~1e-16)** — including FOCE-I OFV `412.333`, θ CL `2.6853` / V
+> `33.085` / KA `1.563`, and SAEM CL `2.7522` — **despite Pyodide's older pins**
+> (numpy `2.0.2` / scipy `1.14.1` / pandas `2.2.3` vs the backend's `2.4.6` /
+> `1.17.1` / `3.0.3`). Quick-mode fits + a cold Pyodide load ran in **49 s**.
+> The spike also surfaced and fixed one real import-time blocker: `nlme.py`'s
+> top-level `ProcessPoolExecutor` import (pulls `_multiprocessing`, absent in
+> Pyodide) is now deferred (commit `27b189a`; 356-test suite still green).
+> **The spec's single biggest risk (§6) is now empirically retired.** The
+> remaining open decision points are the audit-anchor (§4b) and fit *latency*, not
+> numerical correctness. See §6/§7 (updated) and `pyodide-spike/README.md`.
+
 ---
 
 ## 1. VERDICT
@@ -150,7 +168,7 @@ The loop needs only the final message (no streaming — `llm.py:80,97`) and a ti
 ## 6. WHAT GETS WORSE / RISKS
 
 - **nlmixr2 independent estimator lost** (§3). Cross-engine still works native-vs-native, but the one non-PharmAgent estimator is gone unless you go WebR.
-- **WASM numerical-parity — the must-prove risk.** FOCE/SAEM *functionally* port, but **you must re-run the Theophylline reference-validation suite INSIDE Pyodide** and diff against the published/CPython numbers before trusting it. Two independent sources of drift: (i) WASM float/BLAS differences in iterative optimizers; (ii) **Pyodide ships older pins** — its numpy ~2.2 / scipy ~1.14-1.16 / pandas ~2.2 vs the backend's numpy 2.4 / scipy 1.17 / pandas 3.0. pandas 3.0→2.2 (Copy-on-Write, PyArrow-string defaults) is the likeliest behavioral divergence, concentrated in `adversarial.py`/`flexplot.py`/`dataset_io.py`. **Validate against Pyodide's actual pinned versions, not the backend's.**
+- **WASM numerical-parity — ✅ RETIRED (2026-07-18, see the P0 banner at top).** Was the must-prove risk; the P0 spike proved it. FOCE-I + SAEM (and NCA/flexplot/micro probes) reproduce **bit-identically** under Pyodide's *actual older pins* (numpy 2.0.2 / scipy 1.14.1 / pandas 2.2.3) — the feared pandas 3.0→2.2 / scipy drift did **not** materialize for this path. Keep the spike (`pyodide-spike/`) as a regression gate and re-run it whenever the pinned `pyodide` npm version (and thus the numpy/scipy/pandas pins) changes, since parity is a property of specific pins, not a permanent guarantee. Original risk retained for the record: *drift could come from (i) WASM float/BLAS in iterative optimizers or (ii) Pyodide's older pins — the likeliest suspect was pandas 3.0→2.2 (Copy-on-Write, PyArrow-string defaults) in `adversarial.py`/`flexplot.py`/`dataset_io.py`.*
 - **Performance** — interactive FOCE ~2-5 min, SAEM/SCM worse, serial SCM minutes-to-tens-of-minutes. Acceptable for a solo/desktop tool with good progress UX; not for high-throughput.
 - **Bundle** — ~12-16 MB eager wire, +12-18 MB on first fit. Mitigated by lazy scipy + SW cache, but first-ever load is heavy.
 - **No server-side compute** — huge datasets hit the browser RAM ceiling with no fallback.
@@ -163,7 +181,7 @@ The loop needs only the final message (no streaming — `llm.py:80,97`) and a ti
 
 | Phase | Scope | Exit criterion | Effort |
 |---|---|---|---|
-| **P0 — Numerical spike (DE-RISK FIRST)** | Run `compute/nca.py`, `compute/flexplot.py`, and **`compute/nlme.py` FOCE-I + SAEM** in a bare Pyodide (node or browser). Feed the **Theophylline reference dataset**. Diff every output hash + key estimates vs CPython. Note the exact Pyodide-pinned numpy/scipy/pandas versions. | NCA matches to ~2%; FOCE/SAEM parameter estimates + VPC coverage match the reference within the suite's existing tolerance. **If they don't match, stop and investigate before any UI work.** | **M** |
+| **P0 — Numerical spike (DE-RISK FIRST) ✅ DONE 2026-07-18** | Ran `nca` + `flexplot` + **`nlme` FOCE-I + SAEM** on the Theophylline cohort under CPython and Pyodide-in-node; `compare.py` diffed. Shipped as `pyodide-spike/`. | **MET (exceeded).** All 18 metrics GREEN, most **bit-identical**, under Pyodide's older pins. Also caught + fixed the `nlme.py` `ProcessPoolExecutor` import blocker (`27b189a`). | **M** (≈½-day actual) |
 | **P1 — Tool execution in Worker, MockLLM keyless** | `pyodide.worker.ts` + `worker_api.py` dispatch shim; Comlink; port `api.ts` transport (Strategy A); MockLLM default; upload→MEMFS→`load_dataset`; drop `jobs.py`; exclude nlmixr2; serial SCM guard. In-memory state only. | Full deterministic happy-path (upload → NCA → PK fit → VPC → NLME) runs end-to-end in-browser via the UI, App.tsx unchanged, no server. | **L** |
 | **P2 — Persistence + exports** | SQLite→IndexedDB blob snapshot/restore; persist CSV bytes content-addressed; build-time git-SHA + provenance constants; DOCX (`loadPackage('lxml')`) / CSV / CDISC-ZIP → Blob download. | Reload restores session + dataset; all three export formats download correctly; provenance reports real build SHA + Pyodide version. | **M** |
 | **P3 — LLM path** | `BrowserLLM` await-JS bridge; async-ify call chain; wire chosen primary (proxy or BYOK) + MockLLM fallback + optional OpenAI-compat adapter. | Real-Claude chat routes/selects tools with execution staying in WASM; keyless MockLLM tier still works; graceful with no key. | **M** |
