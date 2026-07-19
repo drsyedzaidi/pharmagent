@@ -1,0 +1,14 @@
+{
+  "name": "pharmagent-pyodide-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "P0 numerical-parity spike: run PharmAgent compute under Pyodide/WASM and diff vs CPython.",
+  "scripts": {
+    "pyodide": "node run_pyodide.mjs",
+    "pyodide:quick": "node run_pyodide.mjs --quick"
+  },
+  "dependencies": {
+    "pyodide": "^0.27.0"
+  }
+}
