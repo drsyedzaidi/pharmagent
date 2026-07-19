@@ -49,8 +49,13 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # ProcessPoolExecutor transitively imports _multiprocessing, which the
+    # Pyodide/WASM build removes; import it lazily where the SCM pool is built
+    # (never reached single-threaded) so this module imports in the browser.
+    from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from scipy.optimize import least_squares, minimize
@@ -1399,8 +1404,11 @@ def scm(model_key: str, subjects: list[dict], *, candidates: list[dict],
     # One process pool for the whole run (FOCE-I is deterministic, so parallel
     # candidate fits are order-independent). Each fit is seconds, dwarfing the
     # one-time worker startup. Falls back to serial on a single core / if disabled.
-    pool = (ProcessPoolExecutor(max_workers=_scm_max_workers(len(uniq)))
-            if parallel and (os.cpu_count() or 1) > 1 else None)
+    if parallel and (os.cpu_count() or 1) > 1:
+        from concurrent.futures import ProcessPoolExecutor  # lazy: single-core/WASM skips this
+        pool = ProcessPoolExecutor(max_workers=_scm_max_workers(len(uniq)))
+    else:
+        pool = None
     try:
         # ── forward selection ── (warm-start every candidate from the incumbent)
         included: list[dict] = []
