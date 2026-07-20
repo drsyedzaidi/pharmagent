@@ -986,33 +986,102 @@ def focei_fit(model_key: str, subjects: list[dict], *,
 
 # ──────────────────────────────── SAEM ───────────────────────────────────────
 
-def _saem_residual_ss(spec: _PopSpec, subjects: list[_Subject],
-                      theta: dict[str, float], cov_coefs: np.ndarray,
-                      etas: list[np.ndarray], sigma_prop: float, sigma_add: float
-                      ) -> tuple[float, float, int]:
-    """Aggregate residual statistics at the current (theta, etas).
+def _combined_sigma_mle(resid: np.ndarray, f: np.ndarray,
+                        var_prop0: float, var_add0: float) -> tuple[float, float]:
+    """Joint MLE of (var_prop, var_add) for the *combined* residual-error model.
 
-    Returns (sum_sq_proportional, sum_sq_additive, n_obs):
-      * proportional component: sum((y/f - 1)^2)
-      * additive component:     sum((y - f)^2)
-    so that the M-step can update whichever sigma the error model uses.
+    Given residuals ``r = y - f`` and predictions ``f`` (BLQ already excluded),
+    the two variance components maximize the residual log-likelihood
+
+        -0.5 * sum_ij [ r_ij^2 / V_ij + log(V_ij) ],   V_ij = var_add + var_prop*f_ij^2
+
+    which has **no closed form** — the additive and proportional pieces must be
+    estimated *together* because each observation's variance depends on both.
+    Estimating them independently (``var_add = mean(r^2)``,
+    ``var_prop = mean((r/f)^2)``) double-counts the residual: on data spanning a
+    wide concentration range the additive fit is dominated by the large absolute
+    residuals of the high-concentration samples (whose scatter is really
+    proportional), inflating ``sigma_add`` to values that can exceed most
+    observed concentrations.
+
+    Solved as a 2-D minimization over ``[log var_add, log var_prop]`` (keeping
+    both components positive), warm-started from the current estimates. Returns
+    ``(var_prop, var_add)`` floored at ``_SIGMA_FLOOR**2``; on solver failure the
+    warm-start values are returned unchanged so Robbins-Monro simply holds.
     """
-    ss_prop = 0.0
-    ss_add = 0.0
-    n = 0
+    f2 = f ** 2
+    r2 = resid ** 2
+    floor = _SIGMA_FLOOR ** 2
+    a0 = max(float(var_add0), floor)
+    b0 = max(float(var_prop0), floor)
+
+    def neg2ll(log_ab: np.ndarray) -> float:
+        a = math.exp(float(log_ab[0]))
+        b = math.exp(float(log_ab[1]))
+        var = np.maximum(a + b * f2, _VAR_FLOOR)
+        return float(np.sum(r2 / var + np.log(var)))
+
+    try:
+        sol = minimize(neg2ll, np.array([math.log(a0), math.log(b0)]),
+                       method="Nelder-Mead",
+                       options={"xatol": 1e-5, "fatol": 1e-5, "maxiter": 400})
+        a = math.exp(float(sol.x[0]))
+        b = math.exp(float(sol.x[1]))
+        if math.isfinite(a) and math.isfinite(b):
+            return max(b, floor), max(a, floor)
+    except Exception:
+        pass
+    return b0, a0
+
+
+def _saem_sigma_targets(spec: _PopSpec, subjects: list[_Subject],
+                        theta: dict[str, float], cov_coefs: np.ndarray,
+                        etas: list[np.ndarray], sigma_prop: float, sigma_add: float
+                        ) -> tuple[float, float, int]:
+    """Robbins-Monro *targets* for the residual variance component(s).
+
+    Returns ``(var_prop_target, var_add_target, n_obs)`` — the variances the
+    M-step drives ``sigma_prop**2`` / ``sigma_add**2`` toward at the current
+    ``(theta, etas)``. Each component's target is its maximum-likelihood value
+    under the configured error model:
+
+      * proportional only : ``var_prop = mean((y/f - 1)^2)``      (var_add unused)
+      * additive only      : ``var_add  = mean((y - f)^2)``        (var_prop unused)
+      * combined           : ``(var_prop, var_add)`` from the joint MLE
+        (:func:`_combined_sigma_mle`) — NOT the two single-component formulas,
+        which each attribute the whole residual to one component and blow up
+        ``sigma_add`` on wide-range concentration data.
+
+    BLQ records are censored, not observed, so they are excluded from the
+    residual-variance estimate (SAEM point-estimate approximation for M3).
+    """
+    resid_chunks: list[np.ndarray] = []
+    f_chunks: list[np.ndarray] = []
     for subj, eta in zip(subjects, etas):
         theta_i = _apply_cov(spec, theta, cov_coefs, subj)
         f = _predict(spec, subj, theta_i, eta)
         if not np.all(np.isfinite(f)):
             continue
-        # BLQ records are censored, not observed — exclude from the residual
-        # variance estimate (SAEM point-estimate approximation for M3).
         keep = ~subj.blq if subj.lloq is not None else slice(None)
-        c, fk = subj.c[keep], f[keep]
-        ss_prop += float(np.sum((c / np.maximum(fk, _EPS) - 1.0) ** 2))
-        ss_add += float(np.sum((c - fk) ** 2))
-        n += int(c.size)
-    return ss_prop, ss_add, n
+        c, fk = subj.c[keep], np.maximum(f[keep], _EPS)
+        resid_chunks.append(c - fk)
+        f_chunks.append(fk)
+    if not f_chunks:
+        return sigma_prop ** 2, sigma_add ** 2, 0
+    resid = np.concatenate(resid_chunks)
+    f = np.concatenate(f_chunks)
+    n = int(resid.size)
+    if n == 0:
+        return sigma_prop ** 2, sigma_add ** 2, 0
+
+    if spec.has_prop and spec.has_add:
+        var_prop, var_add = _combined_sigma_mle(
+            resid, f, sigma_prop ** 2, sigma_add ** 2)
+        return var_prop, var_add, n
+    if spec.has_prop:
+        return float(np.mean((resid / f) ** 2)), sigma_add ** 2, n
+    # additive only
+    return sigma_prop ** 2, float(np.mean(resid ** 2)), n
 
 
 def _saem_estep(spec: _PopSpec, subjects: list[_Subject],
@@ -1062,6 +1131,18 @@ def _saem_update_theta(spec: _PopSpec, subjects: list[_Subject],
     ``sum_ij (y-f)^2 / Var_ij``. The optimization is a Gauss-Newton step (scipy
     ``least_squares``) over [log-typical values, raw covariate coefs]; Omega and
     sigma are updated by Robbins-Monro in the caller. Returns (theta, cov_coefs).
+
+    For the **combined** error model the weights ``1/Var_ij`` are *frozen* at the
+    incoming theta's predictions rather than recomputed from each trial
+    prediction. Recomputing them makes ``Var`` depend on the parameters being
+    optimized, so plain weighted least squares silently drops the ``log|Var|``
+    term of the true likelihood and rewards inflating ``f`` (bigger ``f`` ->
+    bigger ``Var`` -> smaller weighted residual), biasing the typical values.
+    Freezing the weights turns the step into a one-step IRLS/GLS update whose
+    fixed point — reached across SAEM iterations, which re-weight every pass —
+    solves the unbiased estimating equation ``sum_ij g_ij (y-f)_ij / Var_ij = 0``.
+    (Proportional-only uses the exact log-scale objective; additive-only has
+    ``Var`` constant in ``f`` so freezing changes nothing.)
     """
     names = spec.param_names
     n_theta = spec.n_theta
@@ -1070,12 +1151,26 @@ def _saem_update_theta(spec: _PopSpec, subjects: list[_Subject],
         np.asarray(cov_coefs, dtype=float),
     ])
     log_scale = spec.has_prop and not spec.has_add
+    freeze_weights = spec.has_prop and spec.has_add
+
+    # Combined error: residual-error SD evaluated once at the entry theta/etas,
+    # per subject (BLQ excluded), so the Gauss-Newton weights stay fixed while
+    # the parameters move. See docstring for why recomputing them biases theta.
+    frozen_sd: list[np.ndarray] = []
+    if freeze_weights:
+        for subj, eta in zip(subjects, etas):
+            theta_i = _apply_cov(spec, theta, cov_coefs, subj)
+            f0 = _predict(spec, subj, theta_i, eta)
+            keep = ~subj.blq if subj.lloq is not None else slice(None)
+            base = f0[keep] if np.all(np.isfinite(f0)) else subj.c[keep]
+            frozen_sd.append(
+                np.sqrt(_residual_variance(spec, base, sigma_prop, sigma_add)))
 
     def residuals(x: np.ndarray) -> np.ndarray:
         th = {n: math.exp(x[k]) for k, n in enumerate(names)}
         cc = x[n_theta:]
         chunks: list[np.ndarray] = []
-        for subj, eta in zip(subjects, etas):
+        for idx, (subj, eta) in enumerate(zip(subjects, etas)):
             th_i = _apply_cov(spec, th, cc, subj)
             f = _predict(spec, subj, th_i, eta)
             if not np.all(np.isfinite(f)):
@@ -1085,6 +1180,8 @@ def _saem_update_theta(spec: _PopSpec, subjects: list[_Subject],
             c, fk = subj.c[keep], f[keep]      # exclude censored (BLQ) records
             if log_scale:
                 chunks.append(np.log(np.maximum(fk, _EPS)) - np.log(c))
+            elif freeze_weights:
+                chunks.append((c - fk) / frozen_sd[idx])
             else:
                 var = _residual_variance(spec, fk, sigma_prop, sigma_add)
                 chunks.append((c - fk) / np.sqrt(var))
@@ -1181,16 +1278,19 @@ def saem_fit(model_key: str, subjects: list[dict], *,
         omega2_vec = (1.0 - gamma) * omega2_vec + gamma * emp_omega2
         omega2_vec = np.maximum(omega2_vec, _OMEGA_FLOOR)
 
-        # M-step (sigma): Robbins-Monro on the residual SS.
-        ss_prop, ss_add, n_used = _saem_residual_ss(
+        # M-step (sigma): Robbins-Monro toward the ML variance target(s). For a
+        # combined error model prop/add are estimated jointly (a single obs's
+        # variance depends on both); estimating each alone double-counts the
+        # residual and inflates sigma_add. See _saem_sigma_targets.
+        var_prop_t, var_add_t, n_used = _saem_sigma_targets(
             spec, prepared, theta, cov_coefs, etas, sigma_prop, sigma_add)
         if n_used > 0:
             if spec.has_prop:
-                new_var = max(ss_prop / n_used, _SIGMA_FLOOR ** 2)
+                new_var = max(var_prop_t, _SIGMA_FLOOR ** 2)
                 sigma_prop = math.sqrt(
                     (1.0 - gamma) * sigma_prop ** 2 + gamma * new_var)
             if spec.has_add:
-                new_var = max(ss_add / n_used, _SIGMA_FLOOR ** 2)
+                new_var = max(var_add_t, _SIGMA_FLOOR ** 2)
                 sigma_add = math.sqrt(
                     (1.0 - gamma) * sigma_add ** 2 + gamma * new_var)
 

@@ -18,7 +18,16 @@ from typing import Any
 import numpy as np
 import pytest
 
-from app.compute.nlme import focei_fit, population_fit, saem_fit
+from app.compute.nlme import (
+    _build_cov_effects,
+    _combined_sigma_mle,
+    _PopSpec,
+    _prepare_subjects,
+    _saem_update_theta,
+    focei_fit,
+    population_fit,
+    saem_fit,
+)
 
 # ── truth used to generate the synthetic population ──────────────────────────
 MODEL_KEY = "oral_1cmt"
@@ -492,3 +501,207 @@ def test_m3_recovers_parameters_with_censoring(m3_fit):
     assert abs(th["CL"] - 5.0) / 5.0 < 0.20, th["CL"]
     assert abs(th["V"] - 50.0) / 50.0 < 0.25, th["V"]
     assert m3_fit["converged"] is True
+
+
+# ── combined residual error: the two variance components must be separated ────
+#
+# Regression guard. The SAEM M-step used to estimate each component as if it
+# alone explained the whole residual:
+#
+#     sigma_prop^2 <- mean((y/f - 1)^2)        sigma_add^2 <- mean((y - f)^2)
+#
+# Under the combined model Var = sigma_add^2 + (sigma_prop*f)^2 those two
+# formulas are each the MLE only when that component is the *sole* error source;
+# applied together they double-count the residual. On data spanning a wide
+# concentration range, mean((y-f)^2) is dominated by the large *absolute*
+# residuals of the high-concentration samples — whose scatter is really
+# proportional — so sigma_add inflates past most of the observed concentrations.
+# On a real 120-subject/1943-obs oral 2-cmt dataset this drove SAEM to
+# sigma_add = 247 (FOCE-I on the same data: 4.64; NONMEM 7.5.0: 3.71) and cost
+# ~3100 OFV units. The components must be estimated *jointly*.
+
+TRUE_COMB_ADD = 0.5
+TRUE_COMB_PROP = 0.15
+COMB_DOSE = 5000.0
+COMB_TIMES = np.array([0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0,
+                       18.0, 24.0, 36.0, 48.0, 72.0])
+
+
+def _combined_residuals(seed: int = 99, n: int = 4000
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Residuals from a known combined error model over a 3000-fold prediction
+    range (0.05 -> 150) — the regime that forces the components apart."""
+    rng = np.random.default_rng(seed)
+    f = np.exp(np.linspace(math.log(0.05), math.log(150.0), n))
+    sd = np.sqrt(TRUE_COMB_ADD ** 2 + (TRUE_COMB_PROP * f) ** 2)
+    return rng.normal(0.0, 1.0, f.size) * sd, f
+
+
+def test_combined_sigma_mle_recovers_both_components() -> None:
+    """The joint solve separates additive from proportional scatter."""
+    resid, f = _combined_residuals()
+    var_prop, var_add = _combined_sigma_mle(
+        resid, f, TRUE_COMB_PROP ** 2, TRUE_COMB_ADD ** 2)
+    assert math.sqrt(var_add) == pytest.approx(TRUE_COMB_ADD, abs=0.10)
+    assert math.sqrt(var_prop) == pytest.approx(TRUE_COMB_PROP, abs=0.03)
+
+
+def test_independent_component_estimates_are_biased() -> None:
+    """Pins the defect itself: estimating each component alone (the pre-fix
+    M-step) inflates *both* many-fold on the same residuals the joint solve
+    handles correctly."""
+    resid, f = _combined_residuals()
+    naive_add = math.sqrt(float(np.mean(resid ** 2)))
+    naive_prop = math.sqrt(float(np.mean((resid / f) ** 2)))
+    assert naive_add > 5.0 * TRUE_COMB_ADD
+    assert naive_prop > 5.0 * TRUE_COMB_PROP
+
+    var_prop, var_add = _combined_sigma_mle(
+        resid, f, TRUE_COMB_PROP ** 2, TRUE_COMB_ADD ** 2)
+    assert math.sqrt(var_add) < 0.25 * naive_add
+    assert math.sqrt(var_prop) < 0.25 * naive_prop
+
+
+def test_combined_sigma_mle_is_warm_start_invariant() -> None:
+    """The M-step warm-starts from the running estimates, so the optimum must
+    not depend on where it starts — otherwise Robbins-Monro would drift with
+    its own history instead of converging on the likelihood."""
+    resid, f = _combined_residuals()
+    starts = [(1e-8, 1e-8), (10.0, 100.0), (1.0, 0.0025)]   # (var_prop0, var_add0)
+    out = [_combined_sigma_mle(resid, f, vp, va) for vp, va in starts]
+    for var_prop, var_add in out[1:]:
+        assert var_prop == pytest.approx(out[0][0], rel=1e-3)
+        assert var_add == pytest.approx(out[0][1], rel=1e-3)
+
+
+def _make_combined_population(seed: int = 2024, n: int = 24) -> list[dict[str, Any]]:
+    """Seeded cohort with *combined* residual error and a wide concentration
+    range (peak ~100, 72 h tail well under 1)."""
+    from app.compute.pk_models import get_model
+    from app.compute.pk_simulate import simulate
+
+    rng = np.random.default_rng(seed)
+    model = get_model(MODEL_KEY)
+    sd = {p: math.sqrt(_cv_to_omega2(cv)) for p, cv in TRUE_CV.items()}
+    subjects: list[dict[str, Any]] = []
+    for i in range(n):
+        params = {
+            "CL": TRUE_THETA["CL"] * math.exp(rng.normal(0.0, sd["CL"])),
+            "V": TRUE_THETA["V"] * math.exp(rng.normal(0.0, sd["V"])),
+            "KA": TRUE_THETA["KA"],
+        }
+        doses = [{"time": 0.0, "amt": COMB_DOSE}]
+        f = simulate(model, params, doses, COMB_TIMES, wt=70.0)["cp"]
+        noise_sd = np.sqrt(TRUE_COMB_ADD ** 2 + (TRUE_COMB_PROP * f) ** 2)
+        obs_c = f + rng.normal(0.0, 1.0, size=f.size) * noise_sd
+        subjects.append({
+            "subject": f"C{i + 1:02d}",
+            "doses": doses,
+            "obs_t": COMB_TIMES.copy(),
+            "obs_c": np.maximum(obs_c, 1e-4),
+            "wt": 70.0,
+        })
+    return subjects
+
+
+@pytest.fixture(scope="module")
+def combined_pop() -> list[dict[str, Any]]:
+    return _make_combined_population()
+
+
+@pytest.fixture(scope="module")
+def saem_combined(combined_pop: list[dict[str, Any]]) -> dict[str, Any]:
+    return population_fit(MODEL_KEY, combined_pop, method="saem",
+                          iiv_params=["CL", "V"], error_model="combined",
+                          max_iter=100, seed=20250614, compute_uncertainty=False)
+
+
+def test_saem_combined_recovers_both_sigmas(saem_combined: dict[str, Any]) -> None:
+    sigma = saem_combined["sigma"]
+    assert sigma["prop"] == pytest.approx(TRUE_COMB_PROP, abs=0.07)
+    assert sigma["add"] == pytest.approx(TRUE_COMB_ADD, abs=0.40)
+
+
+def test_saem_combined_additive_sigma_is_not_degenerate(
+        saem_combined: dict[str, Any],
+        combined_pop: list[dict[str, Any]]) -> None:
+    """The headline symptom of the defect: an additive SD on the order of — or
+    above — the observed concentrations."""
+    sigma_add = saem_combined["sigma"]["add"]
+    max_obs = max(float(np.max(s["obs_c"])) for s in combined_pop)
+    assert 0.05 < sigma_add < 3.0, sigma_add
+    assert sigma_add < 0.05 * max_obs, (sigma_add, max_obs)
+
+
+def test_saem_combined_keeps_structural_params_and_shrinkage_sane(
+        saem_combined: dict[str, Any]) -> None:
+    """A degenerate sigma_add flattens the individual objective (near-constant,
+    huge residual variance), which over-shrinks the etas and drags the typical
+    values with it — so these travel with the sigma fix."""
+    th = saem_combined["theta"]
+    assert th["CL"] == pytest.approx(TRUE_THETA["CL"], rel=0.25)
+    assert th["V"] == pytest.approx(TRUE_THETA["V"], rel=0.25)
+    shr = saem_combined["shrinkage_pct"]
+    for p in ("CL", "V"):
+        assert abs(shr[p]) < 40.0, (p, shr[p])
+
+
+# ── combined error: the theta M-step must weight on the LIKELIHOOD ────────────
+#
+# Second regression guard, same defect class as the sigma one. The structural
+# M-step (`_saem_update_theta`) weights each residual by 1/Var. Under the
+# combined model Var = sigma_add^2 + (sigma_prop*f)^2 depends on the prediction f
+# and hence on the parameters being fit. Recomputing the weight from every trial
+# f — as the code used to — silently drops the log|Var| term of the likelihood
+# and pays the optimizer to inflate predictions (bigger f -> bigger Var ->
+# smaller weighted residual), biasing the typical values (CL low). The fix
+# freezes the weights at the entry prediction (one-step IRLS/GLS), whose fixed
+# point solves the unbiased score sum g*(y-f)/Var = 0. Verified independently:
+# at sigma_prop=0.30 the old trial-weight step recovers CL ~= 4.7 (-6%), the
+# frozen-weight step ~= 5.1 (unbiased).
+
+THETA_MSTEP_PROP = 0.30       # large enough that the log|Var| omission bites
+
+
+def _combined_at_truth(seed: int, n: int = 60) -> list[dict[str, Any]]:
+    """Cohort simulated at the TRUE typical values (eta = 0) with combined error
+    over a wide concentration range — isolates the structural M-step's bias."""
+    from app.compute.pk_models import get_model
+    from app.compute.pk_simulate import simulate
+
+    rng = np.random.default_rng(seed)
+    model = get_model(MODEL_KEY)
+    doses = [{"time": 0.0, "amt": COMB_DOSE}]
+    subjects: list[dict[str, Any]] = []
+    for i in range(n):
+        f = simulate(model, TRUE_THETA, doses, COMB_TIMES, wt=70.0)["cp"]
+        noise_sd = np.sqrt(TRUE_COMB_ADD ** 2 + (THETA_MSTEP_PROP * f) ** 2)
+        obs_c = f + rng.normal(0.0, 1.0, size=f.size) * noise_sd
+        subjects.append({
+            "subject": f"T{i + 1:02d}", "doses": doses,
+            "obs_t": COMB_TIMES.copy(),
+            "obs_c": np.maximum(obs_c, 1e-4), "wt": 70.0,
+        })
+    return subjects
+
+
+def test_combined_theta_mstep_is_unbiased_from_truth() -> None:
+    """One `_saem_update_theta` step started AT the truth must not systematically
+    pull CL below it. The old (trial-weight) M-step drove CL to ~-6%; the
+    frozen-weight step keeps it centered. Averaged over seeds to beat noise."""
+    from app.compute.pk_models import get_model
+
+    cls: list[float] = []
+    for seed in (1, 7, 42):
+        prepared = _prepare_subjects(_combined_at_truth(seed))
+        spec = _PopSpec(get_model(MODEL_KEY), ["CL", "V"], "combined",
+                        _build_cov_effects(None, prepared))
+        etas = [np.zeros(spec.n_omega) for _ in prepared]
+        new_theta, _ = _saem_update_theta(
+            spec, prepared, dict(TRUE_THETA), np.zeros(spec.n_cov),
+            etas, THETA_MSTEP_PROP, TRUE_COMB_ADD)
+        cls.append(new_theta["CL"])
+        # Per-seed: never biased low the way the trial-weight step was (~4.7).
+        assert new_theta["CL"] > 4.85, (seed, new_theta["CL"])
+    mean_cl = float(np.mean(cls))
+    assert TRUE_THETA["CL"] * 0.99 < mean_cl < TRUE_THETA["CL"] * 1.06, (mean_cl, cls)
