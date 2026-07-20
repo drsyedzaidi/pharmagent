@@ -10,7 +10,7 @@ import { FlexplotPanel } from './flexplot';
 import type {
   Session, PharmState, AgentMessage, AuditEntry,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
-  SpaghettiData, NcaPlotData, LzSubject,
+  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -826,87 +826,302 @@ function ForecastCard({ r }: { r: PharmState['forecast_results'] }) {
   );
 }
 
+// Small reusable residual-vs-x scatter panel, shared by the legacy two-stage
+// IWRES plot and the NLME-provenance grid (IWRES/CWRES/npd x PRED/TIME/TAD).
+// `tad` arrays carry `null` for observations before any dose — those pairs
+// are dropped rather than plotted at a fabricated x=0.
+function residualScatterSVG(
+  x: (number | null | undefined)[], y: (number | null | undefined)[],
+  xlabel: string, ylabel: string, refKey: string,
+) {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const xi = x[i], yi = y[i];
+    if (xi != null && yi != null && Number.isFinite(xi) && Number.isFinite(yi)) pairs.push([xi, yi]);
+  }
+  if (!pairs.length) return null;
+  const W = 168, H = 132, m = 26;
+  const xmax = Math.max(...pairs.map(p => p[0])) * 1.05 || 1;
+  const yabs = Math.max(2, ...pairs.map(p => Math.abs(p[1]))) * 1.1;
+  const sx = (v: number) => m + (v / xmax) * (W - m - 6);
+  const sy = (v: number) => (H - m) / 2 + 4 - (v / yabs) * ((H - m - 10) / 2);
+  return (
+    <svg key={refKey} viewBox={`0 0 ${W} ${H}`} width="150px" role="img" aria-label={`${ylabel} vs ${xlabel}`}>
+      <line x1={m} y1={sy(0)} x2={W - 6} y2={sy(0)} stroke="var(--text-dim)" strokeDasharray="2 2" />
+      <line x1={m} y1={9} x2={m} y2={H - m} stroke="var(--border)" />
+      {pairs.map(([xi, yi], i) => (
+        <circle key={i} cx={sx(xi)} cy={sy(yi)} r="1.7"
+          fill={Math.abs(yi) > 1.96 ? 'var(--yellow)' : 'var(--accent)'} fillOpacity="0.6" />
+      ))}
+      <text x={(m + W) / 2} y={H - 4} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)">{xlabel}</text>
+      <text x={8} y={(9 + H - m) / 2} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)"
+        transform={`rotate(-90 8 ${(9 + H - m) / 2})`}>{ylabel}</text>
+    </svg>
+  );
+}
+
+// Distribution histogram with an N(0,1) overlay, shared by every residual row.
+function residualHistSVG(y: (number | null | undefined)[], label: string, refKey: string) {
+  const vals = y.filter((v): v is number => v != null && Number.isFinite(v));
+  if (!vals.length) return null;
+  const W = 168, H = 132, m = 26;
+  const bins = 11, lo = -3.25, hi = 3.25, bw = (hi - lo) / bins;
+  const counts = new Array(bins).fill(0);
+  vals.forEach(v => { const b = Math.min(bins - 1, Math.max(0, Math.floor((v - lo) / bw))); counts[b]++; });
+  const cmax = Math.max(...counts, 1);
+  const bx = (i: number) => m + (i / bins) * (W - m - 6);
+  const bwid = (W - m - 6) / bins;
+  const by = (c: number) => H - m - (c / cmax) * (H - m - 10);
+  const norm = (z: number) => Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
+  const peak = norm(0) * vals.length * bw;
+  const curve = Array.from({ length: 31 }, (_, k) => {
+    const z = lo + (k / 30) * (hi - lo);
+    return `${k ? 'L' : 'M'}${bx((z - lo) / bw).toFixed(1)} ${by(norm(z) * vals.length * bw / peak * cmax).toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg key={refKey} viewBox={`0 0 ${W} ${H}`} width="150px" role="img" aria-label={`${label} distribution`}>
+      {counts.map((c, i) => <rect key={i} x={bx(i) + 1} y={by(c)} width={bwid - 2} height={H - m - by(c)}
+        fill="var(--accent)" fillOpacity="0.3" />)}
+      <path d={curve} fill="none" stroke="var(--green)" strokeWidth="1.3" />
+      <line x1={m} y1={H - m} x2={W - 6} y2={H - m} stroke="var(--border)" />
+      <text x={(m + W) / 2} y={H - 4} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)">{label} (vs N(0,1))</text>
+    </svg>
+  );
+}
+
 function DiagnosticsCard({ r }: { r: PharmState['diagnostics_results'] }) {
   if (!r || r.status !== 'ok') {
     return <div className="qc-card conditional"><div className="qc-title">Diagnostics — not run</div>
       <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
   }
-  const W = 270, H = 210, m = 36;
-  const res = r.residuals, np = r.npde;
-  // IWRES vs IPRED
-  let iwresPlot = null;
-  if (res && res.ipred.length) {
-    const x = res.ipred, y = res.iwres;
-    const xmax = Math.max(...x) * 1.05 || 1;
-    const ymax = Math.max(2, ...y.map(Math.abs)) * 1.1;
-    const sx = (v: number) => m + (v / xmax) * (W - m - 8);
-    const sy = (v: number) => (H - m) / 2 + 6 - (v / ymax) * ((H - m - 12) / 2);
-    iwresPlot = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="IWRES vs predicted">
-        <line x1={m} y1={sy(0)} x2={W - 8} y2={sy(0)} stroke="var(--text-dim)" strokeDasharray="3 3" />
-        <line x1={m} y1={12} x2={m} y2={H - m} stroke="var(--border)" />
-        {x.map((xi, i) => <circle key={i} cx={sx(xi)} cy={sy(y[i])} r="2" fill="var(--accent)" fillOpacity="0.6" />)}
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">IPRED</text>
-        <text x={11} y={(12 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-          transform={`rotate(-90 11 ${(12 + H - m) / 2})`}>IWRES</text>
-      </svg>
-    );
-  }
-  // NPDE vs time
-  let npdeTime = null, npdeHist = null;
-  if (np && np.time.length) {
-    const x = np.time, y = np.npde;
-    const xmax = Math.max(...x) || 1;
-    const yabs = Math.max(3, ...y.map(Math.abs));
-    const sx = (v: number) => m + (v / xmax) * (W - m - 8);
-    const sy = (v: number) => (H - m) / 2 + 6 - (v / yabs) * ((H - m - 12) / 2);
-    npdeTime = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="NPDE vs time">
-        {[1.96, 0, -1.96].map((v, i) => (
-          <line key={i} x1={m} y1={sy(v)} x2={W - 8} y2={sy(v)} stroke="var(--text-dim)"
-            strokeDasharray={v === 0 ? '3 3' : '1 3'} />
-        ))}
-        <line x1={m} y1={12} x2={m} y2={H - m} stroke="var(--border)" />
-        {x.map((xi, i) => <circle key={i} cx={sx(xi)} cy={sy(y[i])} r="2"
-          fill={Math.abs(y[i]) > 1.96 ? 'var(--yellow)' : 'var(--green)'} fillOpacity="0.65" />)}
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">time (h)</text>
-        <text x={11} y={(12 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-          transform={`rotate(-90 11 ${(12 + H - m) / 2})`}>NPDE</text>
-      </svg>
-    );
-    // histogram of NPDE with N(0,1) overlay
-    const bins = 13, lo = -3.25, hi = 3.25, bw = (hi - lo) / bins;
-    const counts = new Array(bins).fill(0);
-    y.forEach(v => { const b = Math.min(bins - 1, Math.max(0, Math.floor((v - lo) / bw))); counts[b]++; });
-    const cmax = Math.max(...counts, 1);
-    const bx = (i: number) => m + (i / bins) * (W - m - 8);
-    const bwid = (W - m - 8) / bins;
-    const by = (c: number) => H - m - (c / cmax) * (H - m - 12);
-    const norm = (z: number) => Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
-    const peak = norm(0) * y.length * bw;
-    const curve = Array.from({ length: 41 }, (_, k) => {
-      const z = lo + (k / 40) * (hi - lo);
-      return `${k ? 'L' : 'M'}${bx((z - lo) / bw).toFixed(1)} ${by(norm(z) * y.length * bw / peak * cmax).toFixed(1)}`;
-    }).join(' ');
-    npdeHist = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="NPDE distribution">
-        {counts.map((c, i) => <rect key={i} x={bx(i) + 1} y={by(c)} width={bwid - 2} height={H - m - by(c)}
-          fill="var(--accent)" fillOpacity="0.3" />)}
-        <path d={curve} fill="none" stroke="var(--green)" strokeWidth="1.4" />
-        <line x1={m} y1={H - m} x2={W - 8} y2={H - m} stroke="var(--border)" />
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">NPDE (vs N(0,1))</text>
-      </svg>
-    );
-  }
-  const g = np?.summary;
+  const res = r.residuals;
+  const cw = r.cwres, np = r.npde;
+  // Single-provenance grid (IWRES/CWRES/npd, all from the SAME converged NLME
+  // fit) renders only when both blocks are available — otherwise a figure
+  // would mix panels from two different estimators. `status` present on
+  // either block (needs_nlme / blq_unsupported) means it isn't.
+  const gridAvailable = !!(cw && !cw.status && np && !np.status);
+
+  // Legacy two-stage IWRES panel (unweighted log residual): always shown when
+  // present, since it needs only a structural fit, not NLME.
+  const legacyIwres = res && res.ipred.length
+    ? residualScatterSVG(res.ipred, res.iwres, 'IPRED', 'log residual (two-stage)', 'legacy-iwres')
+    : null;
+
+  const npdLine = np?.status
+    ? `npd unavailable — ${np.message ?? np.status}`
+    : `npd mean ${fmt(np?.summary?.mean ?? undefined, 3)} sd ${fmt(np?.summary?.sd ?? undefined, 2)} · `
+      + `${fmt(np?.summary?.pct_outside_1_96 ?? undefined, 1)}% outside ±1.96 (ideal ~5%)`;
+  const cwresLine = cw?.status
+    ? `CWRES unavailable — ${cw.message ?? cw.status}`
+    : `CWRES mean ${fmt(cw?.summary?.cwres_mean ?? undefined, 3)} sd ${fmt(cw?.summary?.cwres_sd ?? undefined, 2)} `
+      + `(${cw?.summary?.cwres_variant ?? 'focei'})`;
+
   return (
     <div>
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
-        {r.label} · IWRES mean {fmt(res?.summary.iwres_mean ?? undefined, 3)} sd {fmt(res?.summary.iwres_sd ?? undefined, 2)} ·
-        {' '}NPDE mean {fmt(g?.mean ?? undefined, 3)} sd {fmt(g?.sd ?? undefined, 2)} ·
-        {' '}{fmt(g?.pct_outside_1_96 ?? undefined, 1)}% outside ±1.96 (ideal ~5%)
+        {r.label} · two-stage IWRES mean {fmt(res?.summary.iwres_mean ?? undefined, 3)} sd {fmt(res?.summary.iwres_sd ?? undefined, 2)} ·
+        {' '}{cwresLine} · {npdLine}
       </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{iwresPlot}{npdeTime}{npdeHist}</div>
+      {!gridAvailable && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
+            Run a population fit (run_nlme) on {r.label} to unlock the CWRES/npd grid below (vs PRED/TIME/TAD).
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{legacyIwres}</div>
+        </>
+      )}
+      {gridAvailable && cw && np && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, auto)', gap: 8, marginBottom: 8 }}>
+            {residualScatterSVG(cw.ipred ?? [], cw.iwres ?? [], 'IPRED', 'IWRES', 'iwres-pred')}
+            {residualScatterSVG(cw.time ?? [], cw.iwres ?? [], 'time (h)', 'IWRES', 'iwres-time')}
+            {residualScatterSVG(cw.tad ?? [], cw.iwres ?? [], 'TAD (h)', 'IWRES', 'iwres-tad')}
+
+            {residualScatterSVG(cw.cpred ?? [], cw.cwres ?? [], 'CPRED', 'CWRES', 'cwres-pred')}
+            {residualScatterSVG(cw.time ?? [], cw.cwres ?? [], 'time (h)', 'CWRES', 'cwres-time')}
+            {residualScatterSVG(cw.tad ?? [], cw.cwres ?? [], 'TAD (h)', 'CWRES', 'cwres-tad')}
+
+            {residualScatterSVG(np.pred ?? [], np.npde ?? [], 'sim. median', 'npd', 'npd-pred')}
+            {residualScatterSVG(np.time ?? [], np.npde ?? [], 'time (h)', 'npd', 'npd-time')}
+            {residualScatterSVG(np.tad ?? [], np.npde ?? [], 'TAD (h)', 'npd', 'npd-tad')}
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {residualHistSVG(cw.iwres ?? [], 'IWRES', 'iwres-hist')}
+            {residualHistSVG(cw.cwres ?? [], 'CWRES', 'cwres-hist')}
+            {residualHistSVG(np.npde ?? [], 'npd', 'npd-hist')}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ForestCard({ r }: { r: PharmState['forest_results'] }) {
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Covariate forest — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.rows ?? [];
+  if (!rows.length) {
+    return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+      {r.label} ({r.source}) — no covariate effects in the fitted model.
+    </div>;
+  }
+  const W = 560, rowH = 26, top = 26, left = 190, right = 90;
+  const H = top + rows.length * rowH + 24;
+  // Log-scale x-axis over GMR/CI (x_range already spans 0.9x-1.1x the data,
+  // widened further to include a bounds band if present and outside it).
+  let [xlo, xhi] = r.x_range ?? [0.5, 2.0];
+  if (r.bounds) { xlo = Math.min(xlo, r.bounds[0] * 0.9); xhi = Math.max(xhi, r.bounds[1] * 1.1); }
+  const lnLo = Math.log(Math.max(xlo, 1e-6)), lnHi = Math.log(Math.max(xhi, xlo * 1.01));
+  const sx = (v: number) => left + ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo)) * (W - left - right);
+  const ticks = [xlo, xlo * Math.sqrt(xhi / xlo), 1.0, xhi / Math.sqrt(xhi / xlo), xhi]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} ({r.source}) · {r.summary?.n_rows} row(s) across {r.summary?.n_effects} effect(s) ·
+        {' '}{Math.round((r.ci_level ?? 0.9) * 100)}% CI
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img" aria-label="Covariate forest plot">
+        {r.bounds && (
+          <rect x={sx(r.bounds[0])} y={top - 10} width={Math.max(0, sx(r.bounds[1]) - sx(r.bounds[0]))}
+            height={rows.length * rowH + 14} fill="var(--text-dim)" fillOpacity="0.08" />
+        )}
+        <line x1={sx(1.0)} y1={top - 10} x2={sx(1.0)} y2={top + rows.length * rowH + 4}
+          stroke="var(--text-dim)" strokeDasharray="3 3" />
+        {ticks.map((t, i) => (
+          <text key={i} x={sx(t)} y={top + rows.length * rowH + 18} textAnchor="middle"
+            fontSize="9" fill="var(--text-dim)">{t.toFixed(t < 1 ? 2 : 1)}</text>
+        ))}
+        {rows.map((row, i) => {
+          const y = top + i * rowH + rowH / 2;
+          const unavailable = row.gmr == null;
+          return (
+            <g key={i}>
+              <text x={4} y={y + 3} fontSize="10" fill="var(--text)">{row.eval_label}</text>
+              {unavailable ? (
+                <text x={left} y={y + 3} fontSize="9.5" fill="var(--yellow)">
+                  unavailable ({row.ci_source})
+                </text>
+              ) : (
+                <>
+                  {row.ci_lo != null && row.ci_hi != null && (
+                    <line x1={sx(row.ci_lo)} y1={y} x2={sx(row.ci_hi)} y2={y}
+                      stroke={row.outside_reference_band ? 'var(--yellow)' : 'var(--accent)'} strokeWidth="1.6" />
+                  )}
+                  <circle cx={sx(row.gmr as number)} cy={y} r="3.2"
+                    fill={row.outside_reference_band ? 'var(--yellow)' : 'var(--accent)'} />
+                  <text x={W - right + 6} y={y + 3} fontSize="9.5" fill="var(--text-dim)">
+                    {(row.gmr as number).toFixed(2)}
+                    {row.ci_lo != null && row.ci_hi != null ? ` [${row.ci_lo.toFixed(2)}, ${row.ci_hi.toFixed(2)}]` : ''}
+                  </text>
+                </>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {!!r.notes?.length && (
+        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '4px 0 0', paddingLeft: 16 }}>
+          {r.notes.map((n, i) => <li key={i}>{n}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SimestReplicatePlot({ replicates, param }: { replicates: SimestReplicate[]; param: string }) {
+  const pts = replicates
+    .map(r => ({ theta: r.theta[param], ci: r.ci?.[param] ?? null }))
+    .filter(p => p.theta != null);
+  if (!pts.length) return null;
+  const W = 260, rowH = 22, top = 8, left = 8, right = 8;
+  const H = top + pts.length * rowH + 18;
+  const allVals = pts.flatMap(p => (p.ci ? [p.ci[0], p.ci[1]] : [p.theta]));
+  const lo = Math.min(...allVals) * 0.95, hi = Math.max(...allVals) * 1.05;
+  const sx = (v: number) => left + ((v - lo) / Math.max(hi - lo, 1e-9)) * (W - left - right);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img"
+      aria-label={`${param} across replicates`}>
+      {pts.map((p, i) => {
+        const y = top + i * rowH + rowH / 2;
+        return (
+          <g key={i}>
+            {p.ci && <line x1={sx(p.ci[0])} y1={y} x2={sx(p.ci[1])} y2={y} stroke="var(--accent)" strokeWidth="1.6" />}
+            <circle cx={sx(p.theta)} cy={y} r="3" fill="var(--accent)" />
+          </g>
+        );
+      })}
+      <text x={left} y={H - 4} fontSize="9" fill="var(--text-dim)">{lo.toFixed(2)}</text>
+      <text x={W - right} y={H - 4} fontSize="9" fill="var(--text-dim)" textAnchor="end">{hi.toFixed(2)}</text>
+    </svg>
+  );
+}
+
+function SimestCard({ r }: { r: PharmState['simest_results'] }) {
+  if (!r || !['ok', 'partial', 'not_evaluable'].includes(r.status)) {
+    return <div className="qc-card conditional"><div className="qc-title">Trial-design check — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const params = r.params ?? [];
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.n_rep_completed}/{r.n_rep_planned} replicate(s) completed · {r.n_point_evaluable} point-evaluable ·
+        {' '}{r.n_ci_evaluable} CI-evaluable ({r.ci_validity}) ·
+        {' '}strict pass rate {r.criterion?.pct_within_60_140_strict}%
+        {r.criterion?.target_pct != null && (
+          <> vs target {r.criterion.target_pct}% — {r.criterion.criterion_met ? 'MET' : 'NOT MET'}</>
+        )}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%' }}>
+          <thead>
+            <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+              <th>param</th><th>truth</th><th>GM est.</th><th>bias%</th><th>RMSE%</th>
+              <th>CV%</th><th>pass (strict)</th><th>coverage 95% CI</th>
+            </tr>
+          </thead>
+          <tbody>
+            {params.map(p => {
+              const s = r.per_param?.[p];
+              if (!s) return null;
+              return (
+                <tr key={p} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td>{p}</td>
+                  <td>{fmt(s.truth ?? undefined, 3)}</td>
+                  <td>{fmt(s.gm_point_estimate ?? undefined, 3)}</td>
+                  <td>{fmt(s.rel_bias_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.rmse_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.cv_across_replicates_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.pct_within_60_140_strict ?? undefined, 0)}%</td>
+                  <td>[{fmt(s.coverage_wilson_ci_pct?.[0] ?? undefined, 0)}, {fmt(s.coverage_wilson_ci_pct?.[1] ?? undefined, 0)}]</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {!!r.replicates?.length && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+          {params.map(p => (
+            <div key={p}>
+              <div style={{ fontSize: 10.5, color: 'var(--text-dim)' }}>{p} per replicate</div>
+              <SimestReplicatePlot replicates={r.replicates!} param={p} />
+            </div>
+          ))}
+        </div>
+      )}
+      {!!r.design_limitations?.length && (
+        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
+          {r.design_limitations.map((n, i) => <li key={i}>{n}</li>)}
+          {r.citation && <li>{r.citation}</li>}
+        </ul>
+      )}
     </div>
   );
 }
@@ -1585,6 +1800,11 @@ export default function App() {
   const [fcLevels, setFcLevels] = useState('');
   const [fcTarget, setFcTarget] = useState('');
   const [fcMetric, setFcMetric] = useState('cmin');
+  const [seN, setSeN] = useState(20);
+  const [seObsT, setSeObsT] = useState('0.5,1,2,4,8,12,24');
+  const [seDose, setSeDose] = useState(100);
+  const [seNRep, setSeNRep] = useState(5);
+  const [seShowConfirm, setSeShowConfirm] = useState(false);
   const [token, setTokenState] = useState(getToken());
   const [showRoles, setShowRoles] = useState(false);
   const [skills, setSkills] = useState<SkillDef[]>([]);
@@ -1951,6 +2171,30 @@ export default function App() {
     } finally { setJobNote(''); setLoading(false); }
   }
 
+  async function runSimest() {
+    if (!session) return;
+    const obs_t = seObsT.split(',').map(s => Number(s.trim())).filter(Number.isFinite);
+    if (!obs_t.length || seN < 2) return;
+    setSeShowConfirm(false);
+    setLoading(true);
+    pushMsg({ role: 'user', content: `Simulation-estimation design check — N=${seN}, ${seNRep} replicate(s)`, id: '' });
+    try {
+      const { job_id } = await api.simest(session.id, {
+        confirm: true,
+        design: { n_subjects: seN, obs_t, dose: seDose, n_doses: 1 },
+        n_rep: seNRep,
+      });
+      const res = await api.pollJob(session.id, job_id,
+        s => setJobNote(`Simulation-estimation running… ${s}s (several real fits — this can take minutes)`));
+      setJobNote('');
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__SIMEST__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setJobNote(''); setLoading(false); }
+  }
+
   async function runEngineComparison() {
     if (!session) return;
     setLoading(true);
@@ -2001,6 +2245,20 @@ export default function App() {
       setState(res.state);
       pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
       pushMsg({ role: 'assistant', content: '__DIAG__', agent: 'modeler', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runCovariateForest() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Covariate forest plot', id: '' });
+    try {
+      const res = await api.forest(session.id);
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
+      pushMsg({ role: 'assistant', content: '__FOREST__', agent: 'modeler', id: '', snap: res.state });
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
     } finally { setLoading(false); }
@@ -2415,6 +2673,28 @@ export default function App() {
                 </div>
               );
             }
+            if (m.content === '__FOREST__' && st?.forest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CF</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Covariate forest plot</div>
+                    <ForestCard r={st.forest_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__SIMEST__' && st?.simest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SE</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Trial-design precision check</div>
+                    <SimestCard r={st.simest_results} />
+                  </div>
+                </div>
+              );
+            }
             if (m.content === '__SWEEP__' && st?.dose_sweep_results) {
               return (
                 <div key={m.id} className="msg agent">
@@ -2584,11 +2864,60 @@ export default function App() {
           </div>
         )}
 
+        {state?.nlme_results?.status === 'ok' && !(state.nlme_results.covariate_effects?.length) && (
+          <div className="quick-actions">
+            <span className="quick-actions-label">Trial-design precision check:</span>
+            {!seShowConfirm ? (
+              <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(true)}
+                title="Simulate replicate trials under a proposed design and re-fit each — checks whether the 95% CI lands within 60-140% of its own estimate (up to 10 replicates; runs several real NLME fits, several minutes)">
+                Simulation-estimation…
+              </button>
+            ) : (
+              <>
+                <label className="sim-field">N subjects
+                  <input type="number" value={seN} disabled={loading}
+                    onChange={e => setSeN(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">sample times (h)
+                  <input type="text" style={{ width: 160 }} value={seObsT} disabled={loading}
+                    onChange={e => setSeObsT(e.target.value)} />
+                </label>
+                <label className="sim-field">dose
+                  <input type="number" value={seDose} disabled={loading}
+                    onChange={e => setSeDose(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">replicates (≤10)
+                  <input type="number" min={1} max={10} value={seNRep} disabled={loading}
+                    onChange={e => setSeNRep(Math.max(1, Math.min(10, Number(e.target.value))))} />
+                </label>
+                <button className="chip" disabled={loading} onClick={runSimest}
+                  title="Confirms and runs — several real NLME fits, several minutes to tens of minutes; holds this session while running">
+                  Confirm &amp; run
+                </button>
+                <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(false)}>
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {state?.nlme_results?.status === 'ok' && !!(state.nlme_results.covariate_effects?.length) && (
+          <div className="quick-actions">
+            <span className="quick-actions-label" style={{ color: 'var(--text-dim)' }}>
+              Trial-design precision check unavailable: not supported for models with covariate effects.
+            </span>
+          </div>
+        )}
+
         {state?.pk_model_results?.status === 'ok' && (
           <div className="quick-actions">
             <span className="quick-actions-label">Diagnostics:</span>
             <button className="chip" disabled={loading} onClick={runVpc}>VPC / goodness-of-fit</button>
             <button className="chip" disabled={loading} onClick={runDiagnostics}>Residual diagnostics</button>
+            <button className="chip" disabled={loading} onClick={runCovariateForest}
+              title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">
+              Covariate forest
+            </button>
             <label className="sim-field">doses
               <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"
                 value={sweepDoses} disabled={loading}

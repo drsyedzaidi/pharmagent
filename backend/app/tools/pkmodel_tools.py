@@ -507,6 +507,15 @@ def forecast_map(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
 
 
 def run_diagnostics(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Residual diagnostics: legacy two-stage IWRES (always available once a
+    structural model is fitted) plus a single-provenance CWRES/npd block built
+    ENTIRELY from a converged NLME fit of the SAME structural model (theta,
+    Omega, sigma, and stored EBEs all sourced from ``nlme_results`` — never
+    mixed with the two-stage fit). CWRES/npd report ``{"status":
+    "needs_nlme"}`` until ``run_nlme`` has converged; a figure combining rows
+    from two different estimators is a reviewer-flaggable defect this
+    single-provenance rule exists to prevent.
+    """
     model_key, fits, pop, typical = _last_fit(state)
     if not model_key:
         status = {"status": "no_fit", "message": "Fit a PK model first to run residual diagnostics."}
@@ -516,23 +525,209 @@ def run_diagnostics(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
     model = get_model(model_key)
     typical = {**model.defaults, **typical}
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+    # with_blq=True for parity with run_nlme: flags censored (BLQ) rows via
+    # obs_blq/lloq so the residual diagnostics can drop them. Without it, BLQ
+    # rows carry the LLOQ in DV, survive the c>0 mask, and are silently scored
+    # as quantified observations (a structured positive-residual artefact).
+    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
     indiv = {f["subject"]: f["params"] for f in fits if f.get("converged") and f.get("params")}
-    iiv = {k: v.get("iiv_cv_pct") for k, v in (pop.get("parameters") or {}).items()}
 
+    # Legacy two-stage IWRES (unweighted log residual; kept for the no-NLME
+    # fallback and any other consumer of "residuals"). NOT part of the
+    # single-provenance CWRES/npd block below.
     res = fit_residuals(model_key, subjects, indiv, typical)
-    npde_res = npde(model_key, subjects, typical, iiv)
+
+    n_blq = sum(int(sum(1 for b in (s.get("obs_blq") or []) if b)) for s in subjects)
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    if nl is not None and nl.get("model_key") != model_key:
+        nl = None
+
+    if nl is None:
+        needs_nlme = {"status": "needs_nlme",
+                      "message": (f"Needs a converged NLME fit of {model.label} (run_nlme) to "
+                                  "supply theta/Omega/sigma; the two-stage fit alone cannot "
+                                  "calibrate a single-provenance residual model.")}
+        cwres_res: dict[str, Any] = dict(needs_nlme)
+        npde_res: dict[str, Any] = dict(needs_nlme)
+    else:
+        from app.compute.nlme import cv_pct_to_omega2, posthoc_residuals  # lazy: heavy + optional dep
+
+        theta_nl = nl.get("theta") or {}
+        omega_cv = nl.get("omega_cv_pct") or {}
+        omega2 = {p: cv_pct_to_omega2(cv) for p, cv in omega_cv.items()}
+        sig = nl.get("sigma") or {}
+        sigma_prop = float(sig.get("prop") or 0.0)
+        sigma_add = float(sig.get("add") or 0.0)
+        etas = {r["subject"]: r["eta"] for r in (nl.get("individual") or [])}
+        interaction = bool(args.get("cwres_interaction", True))
+
+        cwres_res = posthoc_residuals(
+            model_key, subjects, theta=theta_nl, omega2=omega2,
+            sigma_prop=sigma_prop, sigma_add=sigma_add,
+            iiv_params=list(nl.get("iiv_params") or []),
+            error_model=nl.get("error_model", "proportional"),
+            covariate_effects=nl.get("covariate_effects"),
+            etas=etas, interaction=interaction)
+
+        if n_blq > 0:
+            npde_res = {"status": "blq_unsupported", "n_blq": n_blq,
+                        "message": ("Prediction-discrepancy diagnostics are not computed when the "
+                                    "dataset has BLQ (censored) observations: widening the simulated "
+                                    "cloud with residual error while BLQ rows are excluded on the "
+                                    "observed side creates a spurious trend near the LLOQ.")}
+        else:
+            npde_res = npde(model_key, subjects, theta_nl, omega_cv,
+                            sigma_prop=sigma_prop, sigma_add=sigma_add)
+
     payload = {"status": "ok", "model_key": model_key, "label": model.label,
-               "residuals": res, "npde": npde_res}
-    g = npde_res.get("summary", {})
+               "residuals": res, "cwres": cwres_res, "npde": npde_res,
+               "nlme_provenance": (nl.get("model_key") if nl else None)}
+    npg = npde_res.get("summary") or {}
+    cwg = cwres_res.get("summary") or {}
+    cwres_bit = (f"CWRES mean={cwg.get('cwres_mean')}, sd={cwg.get('cwres_sd')}."
+                if "cwres_mean" in cwg else f"CWRES unavailable ({cwres_res.get('status')}).")
+    npd_bit = (f"npd mean={npg.get('mean')}, sd={npg.get('sd')} "
+              f"({npg.get('pct_outside_1_96')}% outside ±1.96)."
+              if "mean" in npg else f"npd unavailable ({npde_res.get('status')}).")
     return ToolResult(
-        summary=(f"Residual diagnostics for {model.label}: IWRES n={res['summary']['n']}; "
-                 f"NPDE mean={g.get('mean')}, sd={g.get('sd')} "
-                 f"({g.get('pct_outside_1_96')}% outside ±1.96)."),
+        summary=(f"Residual diagnostics for {model.label}: two-stage IWRES n={res['summary']['n']}; "
+                 f"{cwres_bit} {npd_bit}"),
         action=f"run_diagnostics({model_key})",
         writes={"diagnostics_results": payload},
-        result={"status": "ok", "model_key": model_key, "npde_summary": g,
+        result={"status": "ok", "model_key": model_key,
+                "npde_status": npde_res.get("status", "ok"), "npde_summary": npg,
+                "cwres_status": cwres_res.get("status", "ok"), "cwres_summary": cwg,
                 "iwres_summary": res["summary"]})
+
+
+_MIN_N_FOR_COV_PERCENTILE = 5  # below this, a percentile is not trustworthy -> center-only row
+
+
+def _num_or_none(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cov_eval_points(subjects: list[dict], effects: list[dict], percentiles: list[float]
+                     ) -> tuple[dict[str, list], dict[str, str], dict[str, dict]]:
+    """Evaluation points + reference-level recovery for `covariate_forest`,
+    from the CURRENT dataset's subjects (never from the fit result, which
+    carries no raw covariate distribution).
+
+    Categorical reference level mirrors `app.compute.nlme._build_cov_effects`
+    exactly (`max(uniq, key=vals.count)`, over `str(subject.cov[covariate])`
+    for subjects with a non-null value) — the fitted result never stores
+    which level was chosen as reference, so this is the only way to recover
+    a meaningful row label. Continuous percentiles are skipped (falling back
+    to a center-only row inside `covariate_forest`) below a minimum sample
+    size, since a percentile from a handful of subjects is not trustworthy.
+    """
+    cov_values: dict[str, list] = {}
+    ref_levels: dict[str, str] = {}
+    cov_stats: dict[str, dict] = {}
+    for eff in effects:
+        cov = eff["covariate"]
+        if cov in cov_values:
+            continue
+        if eff["kind"] == "categorical":
+            vals = [str(s.get("cov", {}).get(cov)) for s in subjects
+                    if s.get("cov", {}).get(cov) is not None]
+            if not vals:
+                continue
+            uniq = sorted(set(vals))
+            ref_levels[cov] = max(uniq, key=vals.count)
+            cov_values[cov] = uniq
+            cov_stats[cov] = {"n_cov": len(vals), "levels": uniq}
+        else:
+            nums = [n for n in (_num_or_none(s.get("cov", {}).get(cov)) for s in subjects)
+                    if n is not None]
+            if len(nums) < _MIN_N_FOR_COV_PERCENTILE:
+                continue
+            lo, hi = np.percentile(nums, percentiles)
+            cov_values[cov] = [float(lo), float(hi)]
+            cov_stats[cov] = {"n_cov": len(nums), "cov_min": float(min(nums)), "cov_max": float(max(nums))}
+    return cov_values, ref_levels, cov_stats
+
+
+def run_covariate_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Covariate GMR forest plot from a converged NLME or SCM covariate model.
+
+    Single-provenance selection mirrors `run_diagnostics`: `source="auto"`
+    (default) prefers a converged SCM result that actually selected covariate
+    effects, else falls back to a plain NLME fit's covariate model; either can
+    be forced via `source="nlme"`/`"scm"`. SCM's `final` sub-result carries no
+    `status` key of its own (only the outer `scm_results` dict does) — it is
+    explicitly wrapped with `{"status": "ok", **final}` here so an SCM-sourced
+    forest does not silently report `no_fit`.
+    """
+    from app.compute.forest import covariate_forest
+
+    source_arg = args.get("source", "auto")
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
+    scm_final = None
+    if scm_outer is not None:
+        final = scm_outer.get("final") or {}
+        if final.get("covariate_effects"):
+            scm_final = {"status": "ok", **final}
+
+    if source_arg == "nlme":
+        chosen, chosen_src = nl, "nlme"
+    elif source_arg == "scm":
+        chosen, chosen_src = scm_final, "scm"
+    else:
+        chosen, chosen_src = (scm_final, "scm") if scm_final is not None else (nl, "nlme")
+
+    if not chosen or not chosen.get("covariate_effects"):
+        status = {"status": "no_fit",
+                  "message": ("Need a converged run_nlme fit, or run_scm with at least one "
+                              "selected covariate effect, before a covariate forest plot can "
+                              "be built.")}
+        return ToolResult(summary="Covariate forest skipped: no covariate model available.",
+                          action="run_covariate_forest(no_fit)",
+                          writes={"forest_results": status}, result=status)
+
+    model_key = chosen.get("model_key")
+    df = ctx.dataset_store[state.dataset_id]
+    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+
+    pct = args.get("percentiles")
+    percentiles = [float(pct[0]), float(pct[1])] if isinstance(pct, (list, tuple)) and len(pct) == 2 \
+        else [5.0, 95.0]
+    cov_values, ref_levels, cov_stats = _cov_eval_points(
+        subjects, chosen["covariate_effects"], percentiles)
+
+    bnd = args.get("bounds")
+    bounds = (float(bnd[0]), float(bnd[1])) if isinstance(bnd, (list, tuple)) and len(bnd) == 2 else None
+
+    try:
+        out = covariate_forest(chosen, cov_values=cov_values, ref_levels=ref_levels,
+                               ci_level=float(args.get("ci_level", 0.90)), bounds=bounds)
+    except ValueError as e:
+        status = {"status": "invalid_args", "message": str(e)}
+        return ToolResult(summary=f"Covariate forest skipped: {e}",
+                          action="run_covariate_forest(invalid_args)",
+                          writes={"forest_results": status}, result=status)
+
+    notes = list(out["notes"])
+    if chosen_src == "scm":
+        caveat = (scm_outer or {}).get("selection_caveat")
+        if caveat:
+            notes.append(caveat)
+
+    payload = {"status": "ok", "model_key": model_key, "label": chosen.get("label"),
+               "source": chosen_src, "percentiles": percentiles, "rows": out["rows"],
+               "x_range": out["x_range"], "bounds": out["bounds"], "ci_level": out["ci_level"],
+               "notes": notes, "summary": out["summary"], "cov_stats": cov_stats}
+    return ToolResult(
+        summary=(f"Covariate forest for {chosen.get('label')} ({chosen_src}): "
+                 f"{out['summary']['n_rows']} row(s) across {out['summary']['n_effects']} effect(s)."),
+        action=f"run_covariate_forest({model_key})",
+        writes={"forest_results": payload},
+        result={"status": "ok", "model_key": model_key, "source": chosen_src,
+                "n_rows": out["summary"]["n_rows"]})
 
 
 def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -615,12 +810,41 @@ TOOLS = [
          {"type": "object", "properties": {}, "required": []},
          run_vpc),
     Tool("run_diagnostics",
-         "Residual diagnostics for the fitted PK model: individual weighted "
-         "residuals (IWRES) vs time/prediction and simulation-based NPDE "
-         "(normality of prediction-distribution errors).",
+         "Residual diagnostics for the fitted PK model: legacy two-stage IWRES "
+         "(unweighted log residual, always available), plus a single-provenance "
+         "CWRES (conditional weighted residuals, Hooker 2007) and CPRED, and "
+         "simulation-based npd (Comets normalized prediction discrepancy). CWRES "
+         "and npd require a converged run_nlme fit of the SAME structural model "
+         "(theta/Omega/sigma/EBEs) and report status='needs_nlme' until then — "
+         "never mixed with the two-stage fit. `cwres_interaction` (default true) "
+         "selects FOCE-I-style (residual variance at the conditional mode) vs "
+         "literal Hooker 2007 FOCE (at eta=0) weighting.",
          "modeler",
-         {"type": "object", "properties": {}, "required": []},
+         {"type": "object",
+          "properties": {"cwres_interaction": {"type": "boolean"}},
+          "required": []},
          run_diagnostics),
+    Tool("run_covariate_forest",
+         "Covariate forest plot: geometric mean ratio (GMR) of a structural "
+         "parameter at a covariate value vs the model's own reference, with a "
+         "Wald confidence interval, from a converged run_nlme fit or run_scm "
+         "covariate model (`source`='auto'|'nlme'|'scm', default auto: prefers "
+         "SCM when it selected any effect). Continuous covariates are evaluated "
+         "at `percentiles` (default 5th/95th) of the loaded dataset; categorical "
+         "covariates at every observed level. `bounds` is an OPTIONAL "
+         "user-supplied reference band — never defaulted, since an unjustified "
+         "band (e.g. the bioequivalence 0.8-1.25 interval) would misrepresent "
+         "clinical significance.",
+         "modeler",
+         {"type": "object",
+          "properties": {
+              "source": {"type": "string", "enum": ["auto", "nlme", "scm"]},
+              "percentiles": {"type": "array", "items": {"type": "number"}},
+              "ci_level": {"type": "number"},
+              "bounds": {"type": "array", "items": {"type": "number"}},
+          },
+          "required": []},
+         run_covariate_forest),
     Tool("run_nlme",
          "True population (mixed-effects) fit of a structural PK model by FOCE-I "
          "or SAEM: typical values (theta) with RSE%, between-subject variability "

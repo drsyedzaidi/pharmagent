@@ -13,6 +13,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 
 def _num(v: Any) -> float | None:
     """Coerce a cell to float; '.', '', NA -> None."""
@@ -72,6 +74,39 @@ def dose_events(rows: list[dict], *, time_col: str, amt_col: str,
     if dose is None:
         return []
     return [{"time": t, "amt": dose} for t in times]
+
+
+def time_after_dose(obs_t, doses: list[dict]) -> list[float | None]:
+    """Time-after-dose (TAD) for each observation: elapsed time since the most
+    recent PRIOR dose administration, not the dose amount or column semantics.
+
+    Unlike ``extract_ss_intervals`` (last-interval-only, for steady-state
+    profiles), this is defined at every observation against whichever dose
+    preceded it — the diagnostic-plot convention (pmplots' TAD, NONMEM's
+    ``$INPUT TAD``), useful across an entire multiple-dose record, not just
+    the final interval.
+
+    ``doses``: ``[{"time": ..., "amt": ...}, ...]`` — the same shape consumed
+    by ``app.compute.pk_simulate.simulate`` (typically ``dose_events()``
+    output, or a subject's own ``doses`` list). Only ``"time"`` is read here.
+    A dose record's ``amt`` is trusted to already be a real administration:
+    this function does not itself filter by amount, so passing raw dataset
+    rows (which may repeat AMT on observation rows) rather than expanded
+    dose events would inject spurious dose times and understate TAD.
+
+    Returns one value per ``obs_t``, ``None`` for an observation at or before
+    every dose (nothing yet administered) rather than a negative TAD.
+    """
+    t = np.asarray(obs_t, dtype=float)
+    dose_times = sorted(float(d["time"]) for d in doses if d.get("time") is not None)
+    if t.size == 0 or not dose_times:
+        return [None] * t.size
+    dt = np.asarray(dose_times, dtype=float)
+    idx = np.searchsorted(dt, t, side="right") - 1
+    out: list[float | None] = []
+    for i, ti in zip(idx, t):
+        out.append(None if i < 0 else float(ti - dt[i]))
+    return out
 
 
 def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,

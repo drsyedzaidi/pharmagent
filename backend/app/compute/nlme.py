@@ -42,7 +42,7 @@ covariates (power/linear/exponential for continuous, categorical for discrete);
 elimination) on top of the FOCE-I OFV.
 
 Public API:
-    population_fit, focei_fit, saem_fit, scm
+    population_fit, focei_fit, saem_fit, scm, map_estimate, posthoc_residuals
 """
 from __future__ import annotations
 
@@ -61,6 +61,7 @@ import numpy as np
 from scipy.optimize import least_squares, minimize
 from scipy.stats import chi2, norm
 
+from app.compute.dosing import time_after_dose
 from app.compute.pk_models import PKModel, get_model
 from app.compute.pk_simulate import simulate
 
@@ -75,6 +76,23 @@ _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covar
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
 _RSE_CAP = 1e3             # RSE% above this -> report None (parameter unidentified)
 _MIN_OBS_PER_SUBJECT = 1     # subjects with fewer usable obs are skipped
+_ROUND_DP = 6                # decimal places for all CWRES/IWRES payload floats
+
+# CWRES (Hooker, Staatz & Karlsson 2007, Pharm Res 24:2187-2197): finite-
+# difference step for G = df/deta at the conditional mode. Far above the 1e-7
+# rounding granularity of `_make_predictor_cache`'s memo key, so `_jacobian`
+# calls `_predict` directly rather than through that cache -- a step below the
+# cache's rounding would silently collide eta+h with eta-h and return a zero
+# Jacobian column, degrading CWRES to IWRES without any error.
+_CWRES_FD_STEP = 1e-3
+# Below this multiple of the prediction/variance floor (_EPS, _VAR_FLOOR), a
+# row is a numerically degenerate (under/overflowed) simulation, not a real
+# observation, and is dropped before G/Cov are formed.
+_CWRES_FLOOR_MULT = 10.0
+# Eigenvalues of Cov = G*Omega*G' + diag(R) are floored RELATIVE to the
+# largest eigenvalue (not an absolute constant): this is scale-invariant
+# across concentration units, unlike an absolute floor.
+_CWRES_EIG_REL_FLOOR = 1e-12
 
 
 # ─────────────────────────── subject preprocessing ──────────────────────────
@@ -383,6 +401,150 @@ def _residual_variance(spec: _PopSpec, f: np.ndarray, sigma_prop: float,
     if spec.has_prop:
         var = var + (sigma_prop * f) ** 2
     return np.maximum(var, _VAR_FLOOR)
+
+
+# ───────────────────── post-hoc residual diagnostics (CWRES) ─────────────────
+#
+# Conditional weighted residuals (Hooker, Staatz & Karlsson 2007): a linear
+# (FOCE) approximation to the marginal distribution of y_i around the
+# conditional mode eta_hat, evaluated at an ALREADY-FITTED population result
+# (theta, Omega, sigma, eta_hat) -- never a new fit. Given
+#
+#   G_i        = df_i/deta at eta_hat                    (n_obs x n_omega)
+#   E_FOCE(y_i)  = f_i(eta_hat) - G_i @ eta_hat
+#   Cov(y_i)     = G_i @ Omega @ G_i.T + diag(R_i)
+#
+# CWRES_i = Cov(y_i)^{-1/2} (y_i - E_FOCE(y_i)). R_i (the residual-error
+# variance) is evaluated at f_i(eta_hat) when `interaction=True` (matching
+# NONMEM's FOCE-I / METH=1 INTER) or at f_i(eta=0) when False (the literal
+# Hooker 2007 "FOCE" without interaction).
+
+def _sid(x: Any) -> str:
+    """Coerce a subject id to a stable join key.
+
+    Subject ids reach this module from two different paths that do not agree
+    on type: `_build_subjects` groups a DataFrame by the ID column (pandas
+    gives back numpy scalars, e.g. `np.int64`), while a fitted result that has
+    been persisted and reloaded has been through `json.dumps(..., default=str)`
+    (numpy ints are NOT a subclass of `int`, so they fall through the default
+    string-encoding path). `str()` on an int, `np.int64`, or a `str` all agree
+    on the same decimal text, so it is a safe, order-independent join key
+    regardless of which path a given sid came from.
+    """
+    return str(x)
+
+
+def _jacobian(spec: _PopSpec, subj: _Subject, theta_i: dict[str, float],
+             eta_hat: np.ndarray, *, step: float = _CWRES_FD_STEP) -> np.ndarray:
+    """Central finite-difference G = df/deta at eta_hat (n_obs x n_omega).
+
+    Calls `_predict` directly (never `_make_predictor_cache`): that cache
+    rounds eta to 7 decimal places for memoization, and `step` here is fixed
+    well above that granularity so an FD step never collides with the cache
+    key by construction, but reaching for the cache anyway would be a latent
+    footgun for any future change to `step`.
+    """
+    n_obs = subj.t.size
+    n_eta = eta_hat.size
+    g = np.zeros((n_obs, n_eta), dtype=float)
+    for k in range(n_eta):
+        eta_p = eta_hat.copy(); eta_p[k] += step
+        eta_m = eta_hat.copy(); eta_m[k] -= step
+        f_p = _predict(spec, subj, theta_i, eta_p)
+        f_m = _predict(spec, subj, theta_i, eta_m)
+        g[:, k] = (f_p - f_m) / (2.0 * step)
+    return g
+
+
+def _whiten(resid: np.ndarray, g: np.ndarray, omega2_vec: np.ndarray,
+           r_var: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Symmetric (eigendecomposition) inverse square root of
+    ``Cov = G @ diag(omega2) @ G.T + diag(r_var)``, applied to ``resid``.
+
+    The symmetric ("Loewdin") root is used rather than a Cholesky root because
+    it is independent of observation order within a subject, and because it
+    was verified empirically against a real NONMEM 7.5.0 FOCE-I+INTER fit (the
+    IU PopPK course 2-compartment reference, 120 subjects / 1943 observations,
+    ``$TABLE ... CWRES``): the symmetric root reproduces NONMEM's own CWRES
+    column at correlation 1.000000 / rmse 0.00048, whereas a Cholesky root on
+    the identical inputs gives correlation only 0.894 for subjects with more
+    than one observation (Cholesky and the symmetric root coincide only when
+    Cov is diagonal, i.e. exactly one observation per subject -- multi-dose
+    subjects here have up to 12). Neither Hooker (2007) nor Nguyen (2017)
+    specifies which root to use; this choice is grounded in matching the tool
+    this feature is meant to be comparable with, not a documentation reading.
+
+    Small or negative eigenvalues (numerical noise on a near-singular Cov,
+    e.g. nearly collinear Jacobian columns) are floored RELATIVE to the
+    largest eigenvalue -- scale-invariant across concentration units, unlike
+    an absolute floor. Returns whether the floor engaged, so the caller can
+    exclude the affected subject from pooled statistics rather than report a
+    residual against a covariance that was not really positive definite.
+    """
+    cov = g @ np.diag(omega2_vec) @ g.T + np.diag(r_var)
+    cov = 0.5 * (cov + cov.T)
+    w, v = np.linalg.eigh(cov)
+    floor = max(float(w.max()), 0.0) * _CWRES_EIG_REL_FLOOR
+    floor = max(floor, _VAR_FLOOR)
+    used_fallback = bool(np.any(w < floor))
+    w_c = np.maximum(w, floor)
+    inv_sqrt = v @ np.diag(w_c ** -0.5) @ v.T
+    return inv_sqrt @ resid, used_fallback
+
+
+def _cwres_subject(spec: _PopSpec, subj: _Subject, theta_i: dict[str, float],
+                   eta_hat: np.ndarray, omega2_vec: np.ndarray,
+                   sigma_prop: float, sigma_add: float, *,
+                   interaction: bool) -> dict[str, Any] | None:
+    """CWRES/IWRES for one subject at a FIXED eta_hat (never re-optimized).
+
+    BLQ (censored) rows and rows where the prediction or its variance sits at
+    the numerical floor (an under/overflowed simulation -- see `_predict`,
+    `_residual_variance`) are dropped before G/Cov are formed, so a single
+    degenerate row cannot blow up the whole subject's CWRES. Returns `None`
+    when no rows survive, the Jacobian is non-finite, or the structural
+    prediction failed outright (never raises).
+    """
+    keep_obs = ~subj.blq if subj.lloq is not None else np.ones(subj.t.size, dtype=bool)
+    n_blq_dropped = int(np.count_nonzero(~keep_obs))
+
+    f_hat_full = _predict(spec, subj, theta_i, eta_hat)
+    if interaction:
+        f_var_full = f_hat_full
+    else:
+        f_var_full = _predict(spec, subj, theta_i, np.zeros_like(eta_hat))
+    if not (np.all(np.isfinite(f_hat_full)) and np.all(np.isfinite(f_var_full))):
+        return None
+    r_var_full = _residual_variance(spec, f_var_full, sigma_prop, sigma_add)
+
+    floor_ok = ((f_hat_full > _EPS * _CWRES_FLOOR_MULT)
+                & (r_var_full > _VAR_FLOOR * _CWRES_FLOOR_MULT))
+    keep = keep_obs & floor_ok
+    n_floored_dropped = int(np.count_nonzero(keep_obs & ~floor_ok))
+    if int(np.count_nonzero(keep)) == 0:
+        return None
+
+    g_full = _jacobian(spec, subj, theta_i, eta_hat)
+    if not np.all(np.isfinite(g_full)):
+        return None
+
+    t = subj.t[keep]
+    y = subj.c[keep]
+    f_hat = f_hat_full[keep]
+    r_var = r_var_full[keep]
+    g = g_full[keep, :]
+
+    e_foce = f_hat - g @ eta_hat
+    resid = y - e_foce
+    cwres, used_fallback = _whiten(resid, g, omega2_vec, r_var)
+    iwres_var = _residual_variance(spec, f_hat, sigma_prop, sigma_add)
+    iwres = (y - f_hat) / np.sqrt(iwres_var)
+
+    return {
+        "time": t, "obs": y, "ipred": f_hat, "cpred": e_foce,
+        "cwres": cwres, "iwres": iwres, "g": g, "cov_fallback": used_fallback,
+        "n_blq_dropped": n_blq_dropped, "n_floored_dropped": n_floored_dropped,
+    }
 
 
 # ─────────────────────────── inner (conditional) problem ─────────────────────
@@ -1653,4 +1815,233 @@ def map_estimate(model_key: str, *, theta: dict[str, float],
         "typical_params": {n: round(float(theta_i[n]), 6) for n in spec.param_names},
         "n_obs": int(subj.t.size),
         "objective": None if not math.isfinite(obj) else round(obj, 4),
+    }
+
+
+def posthoc_residuals(model_key: str, subjects: list[dict], *,
+                      theta: dict[str, float], omega2: dict[str, float],
+                      sigma_prop: float, sigma_add: float,
+                      iiv_params: list[str], error_model: str = "proportional",
+                      covariate_effects: list[dict] | None = None,
+                      etas: dict[Any, dict[str, float]] | None = None,
+                      interaction: bool = True) -> dict[str, Any]:
+    """Conditional weighted residuals (CWRES; Hooker, Staatz & Karlsson 2007)
+    and standardized IWRES from an ALREADY-FITTED population result.
+
+    Never runs a new fit and never re-optimizes a subject's conditional mode
+    when its empirical Bayes estimate (EBE) is available in ``etas`` (keyed by
+    subject id, joined via `_sid` so the join is robust to a persisted result's
+    ids having round-tripped through JSON). A subject missing from ``etas``
+    falls back to solving its conditional mode here (the same inner solver
+    `population_fit` uses) -- this keeps the function usable even without a
+    stored fit, at the cost of one Nelder-Mead solve per such subject.
+
+    Parameters
+    ----------
+    model_key, iiv_params, error_model, covariate_effects:
+        As reported by a converged `population_fit` result (`model_key`,
+        `iiv_params`, `error_model`, `covariate_effects`).
+    theta, omega2, sigma_prop, sigma_add:
+        The fitted population parameters (`theta`, `omega_cv_pct` converted to
+        variance via `cv_pct_to_omega2`, `sigma["prop"]`, `sigma["add"]`).
+    etas:
+        ``{subject_id: {iiv_param: eta_value}}``, typically a fitted result's
+        ``individual`` records reshaped to ``{r["subject"]: r["eta"] for r in
+        individual}``. May be ``None``/incomplete; missing subjects are
+        resolved locally.
+    interaction:
+        ``True`` (default): the residual-error variance in CWRES is evaluated
+        at the conditional-mode prediction (NONMEM's FOCE-I / METH=1 INTER;
+        empirically verified against the IU PopPK course NONMEM 7.5.0
+        reference to correlation 1.000000). ``False``: evaluated at the
+        population prediction (eta=0) -- the literal Hooker (2007) "FOCE"
+        variant without interaction.
+
+    Returns
+    -------
+    dict with parallel arrays ``"time"``, ``"obs"``, ``"ipred"``, ``"cpred"``
+    (the FOCE-linearized expectation E_FOCE(y), Hooker's "CPRED"), ``"cwres"``,
+    ``"iwres"`` (standardized, R^-1/2 weighted -- NOT the unweighted log
+    residual `fit_residuals` returns), ``"tad"``, plus ``"skipped_subjects"``
+    and ``"cov_fallback_subjects"`` (subject ids, as strings) and a
+    ``"summary"`` dict of counts and moments. Subjects whose whitening
+    covariance required the relative eigenvalue floor (`_whiten`) are excluded
+    from the pooled arrays and counted in ``cov_fallback_n`` rather than
+    reported against a covariance that was not really positive definite.
+    """
+    model = get_model(model_key)
+    iiv = _resolve_iiv(model, iiv_params)
+    cov_effects, cov_coefs = _cov_effects_from_records(covariate_effects)
+    spec = _PopSpec(model, iiv, error_model, cov_effects)
+    omega2_vec = np.array([max(omega2.get(p, _OMEGA_FLOOR), _OMEGA_FLOOR)
+                           for p in spec.iiv_params], dtype=float)
+    full_theta = {**model.defaults, **theta}
+
+    eta_by_sid = {_sid(k): v for k, v in (etas or {}).items()}
+    subs = _prepare_subjects(subjects)
+
+    time: list[float] = []
+    obs: list[float] = []
+    ipred: list[float] = []
+    cpred: list[float] = []
+    cwres: list[float] = []
+    iwres: list[float] = []
+    tad: list[float | None] = []
+
+    n_etas_reused = 0
+    n_etas_resolved = 0
+    n_blq_dropped = 0
+    n_floored_dropped = 0
+    cov_fallback_n = 0
+    cov_fallback_subjects: list[Any] = []
+    skipped_subjects: list[Any] = []
+
+    for subj in subs:
+        theta_i = _apply_cov(spec, full_theta, cov_coefs, subj)
+        eta_map = eta_by_sid.get(_sid(subj.sid))
+        if eta_map is not None:
+            eta_hat = np.array([float(eta_map.get(p, 0.0)) for p in spec.iiv_params],
+                               dtype=float)
+            n_etas_reused += 1
+        else:
+            eta_hat, _obj, _pred = _conditional_mode(
+                spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add)
+            n_etas_resolved += 1
+
+        out = _cwres_subject(spec, subj, theta_i, eta_hat, omega2_vec,
+                             sigma_prop, sigma_add, interaction=interaction)
+        if out is None:
+            skipped_subjects.append(subj.sid)
+            continue
+        n_blq_dropped += out["n_blq_dropped"]
+        n_floored_dropped += out["n_floored_dropped"]
+        if out["cov_fallback"]:
+            cov_fallback_n += 1
+            cov_fallback_subjects.append(subj.sid)
+            continue
+
+        tad_sub = time_after_dose(out["time"], subj.doses)
+        time.extend(float(v) for v in out["time"])
+        obs.extend(float(v) for v in out["obs"])
+        ipred.extend(float(v) for v in out["ipred"])
+        cpred.extend(float(v) for v in out["cpred"])
+        cwres.extend(float(v) for v in out["cwres"])
+        iwres.extend(float(v) for v in out["iwres"])
+        tad.extend(tad_sub)
+
+    n = len(cwres)
+    cwres_arr = np.asarray(cwres, dtype=float)
+    iwres_arr = np.asarray(iwres, dtype=float)
+    # ε-shrinkage (Karlsson & Savic 2007): how much of the assumed residual
+    # variability is "eaten" by conditioning on the individual data.
+    eps_shrinkage = (100.0 * (1.0 - float(np.std(iwres_arr))) if n else None)
+
+    summary = {
+        "n": n,
+        "n_subjects_used": len(subs) - len(skipped_subjects) - cov_fallback_n,
+        "n_subjects_skipped": len(skipped_subjects),
+        "n_blq_dropped": n_blq_dropped,
+        "n_floored_dropped": n_floored_dropped,
+        "n_tad_null": sum(1 for v in tad if v is None),
+        "cov_fallback_n": cov_fallback_n,
+        "n_etas_reused": n_etas_reused,
+        "n_etas_resolved": n_etas_resolved,
+        "cwres_mean": round(float(np.mean(cwres_arr)), _ROUND_DP) if n else None,
+        "cwres_sd": round(float(np.std(cwres_arr)), _ROUND_DP) if n else None,
+        "cwres_pct_outside_1_96": (
+            round(100.0 * float(np.count_nonzero(np.abs(cwres_arr) > 1.96)) / n, _ROUND_DP)
+            if n else None),
+        "eps_shrinkage_pct": round(eps_shrinkage, _ROUND_DP) if eps_shrinkage is not None else None,
+        "interaction": bool(interaction),
+        "cwres_variant": "focei" if interaction else "foce",
+    }
+    return {
+        "time": [round(v, _ROUND_DP) for v in time],
+        "obs": [round(v, _ROUND_DP) for v in obs],
+        "ipred": [round(v, _ROUND_DP) for v in ipred],
+        "cpred": [round(v, _ROUND_DP) for v in cpred],
+        "cwres": [round(v, _ROUND_DP) for v in cwres],
+        "iwres": [round(v, _ROUND_DP) for v in iwres],
+        "tad": [None if v is None else round(v, _ROUND_DP) for v in tad],
+        "skipped_subjects": [str(s) for s in skipped_subjects],
+        "cov_fallback_subjects": [str(s) for s in cov_fallback_subjects],
+        "summary": summary,
+    }
+
+
+def simulate_replicate_subject(model_key: str, theta: dict[str, float],
+                               omega2: dict[str, float], sigma_prop: float, sigma_add: float,
+                               iiv_params: list[str], error_model: str,
+                               doses: list[dict], obs_t: Any, wt: float,
+                               rng: np.random.Generator, *,
+                               lloq: float | None = None,
+                               max_resample: int = 20) -> dict[str, Any]:
+    """Simulate one subject's observations under the population model: draw
+    eta, realize the individual prediction, and add a residual-error draw --
+    for SIMULATION-ESTIMATION replicate generation (`app.compute.simest`),
+    never for the estimators themselves (which condition on observed data,
+    never simulate it).
+
+    Residual draws are resampled (bounded, ``max_resample`` attempts) so the
+    simulated concentration stays positive under the SAME error model the
+    downstream estimator will assume -- an unbounded draw can go negative
+    under combined/additive error, which is not a valid concentration and
+    would otherwise inject a high-leverage outlier into the replicate.
+    ``lloq`` (if given) censors resampled-positive draws below it into an M3
+    BLQ flag, matching ``_Subject``'s own censoring convention, rather than
+    dropping them.
+
+    No covariate model: this function realizes ``theta`` unmodified (plus
+    IIV) at every call. Simulation-estimation with covariate effects is out
+    of scope (see ``app.compute.simest.run_simest``); callers needing a
+    covariate-adjusted typical value must apply ``_apply_cov`` before calling.
+
+    Returns ``{"obs_t", "obs_c", "eta", "obs_blq", "lloq", "n_resampled",
+    "n_negative_draws", "ok"}``. ``ok=False`` (with empty arrays) signals a
+    failed structural simulation (e.g. a numerically pathological draw) --
+    the caller should treat that replicate-subject as unusable, not crash.
+    """
+    model = get_model(model_key)
+    full_theta = {**model.defaults, **theta}
+    spec = _PopSpec(model, list(iiv_params), error_model)
+    subj = _Subject({"subject": "SIM", "doses": doses, "obs_t": obs_t,
+                     "obs_c": [1.0] * len(obs_t), "wt": wt})
+    if subj.t.size == 0:
+        return {"obs_t": [], "obs_c": [], "eta": {}, "obs_blq": None, "lloq": lloq,
+                "n_resampled": 0, "n_negative_draws": 0, "ok": False}
+
+    omega2_vec = np.array([max(omega2.get(p, _OMEGA_FLOOR), _OMEGA_FLOOR) for p in spec.iiv_params],
+                          dtype=float)
+    eta = (rng.normal(0.0, np.sqrt(omega2_vec)) if omega2_vec.size
+          else np.zeros(0, dtype=float))
+    f = _predict(spec, subj, full_theta, eta)
+    if not np.all(np.isfinite(f)):
+        return {"obs_t": [], "obs_c": [], "eta": {}, "obs_blq": None, "lloq": lloq,
+                "n_resampled": 0, "n_negative_draws": 0, "ok": False}
+
+    sd = np.sqrt(_residual_variance(spec, f, sigma_prop, sigma_add))
+    y = np.array(f, dtype=float)
+    blq = np.zeros(f.size, dtype=bool)
+    n_resampled = 0
+    n_negative_draws = 0
+    for j in range(f.size):
+        draw = None
+        for attempt in range(max_resample):
+            candidate = float(f[j] + sd[j] * rng.standard_normal())
+            if candidate > 0.0:
+                draw = candidate
+                if attempt > 0:
+                    n_resampled += 1
+                break
+            n_negative_draws += 1
+        y[j] = draw if draw is not None else float(f[j])  # exhausted -> noiseless fallback
+        if lloq is not None and y[j] < lloq:
+            blq[j] = True
+
+    eta_map = {p: float(eta[k]) for k, p in enumerate(spec.iiv_params)}
+    return {
+        "obs_t": [float(t) for t in subj.t], "obs_c": [float(v) for v in y],
+        "eta": eta_map, "obs_blq": (blq.tolist() if lloq is not None else None),
+        "lloq": lloq, "n_resampled": n_resampled, "n_negative_draws": n_negative_draws,
+        "ok": True,
     }

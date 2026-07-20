@@ -22,22 +22,39 @@ Two public functions:
         observation/prediction pairs contribute.
 
     npde
-        Simulation-based prediction-distribution errors (PDE). For each subject
-        a predictive distribution of concentrations is built by drawing
-        ``n_sim`` virtual parameter sets from independent log-normal
-        between-subject distributions (``p_i = typical * exp(eta)``,
-        ``eta ~ N(0, sd_p)``) and simulating each at the subject's own regimen
-        and observation times. The empirical (mid-rank) cumulative probability
-        of each observation within its simulated column is mapped through the
-        standard-normal quantile function to give the PDE.
+        Simulation-based *normalized prediction discrepancies* (npd; Comets
+        et al. 2008, CMPB 90:154-166, Eqs. 4 and 7). For each subject a
+        predictive distribution of concentrations is built by drawing ``n_sim``
+        virtual parameter sets from independent log-normal between-subject
+        distributions (``p_i = typical * exp(eta)``, ``eta ~ N(0, sd_p)``),
+        simulating each at the subject's own regimen and observation times, and
+        adding a residual-error draw so each simulated concentration is a full
+        predictive observation
 
-        NOTE: this implements the per-observation *prediction discrepancy /
-        prediction-distribution error* (PDE). It is NOT the fully decorrelated
-        NPDE of Brendel et al. (2006): the within-subject decorrelation step
-        (using the empirical mean and covariance of each subject's simulated
-        observations) is intentionally omitted. The returned values are exact
-        NPDE only when each subject contributes a single observation; with
-        multiple correlated observations per subject they remain valid PDEs.
+            y_sim = f(theta_i) + eps,
+            eps ~ N(0, sigma_add^2 + (sigma_prop * f)^2).
+
+        The empirical (mid-rank) cumulative probability of each observation
+        within its simulated column is mapped through the standard-normal
+        quantile function to give the discrepancy.
+
+        The residual-error term is REQUIRED, not optional: the reference
+        distribution is the distribution of an *observation*, not of the latent
+        individual curve. Omitting it narrows the cloud, pushes real
+        observations into the tails, and spuriously inflates ``|npd|`` for a
+        correctly specified model (empirically, sd ~ 1.26 and ~12% beyond
+        +/-1.96 instead of ~1.0 and ~5%). This mirrors ``app.compute.vpc.pcvpc``.
+
+        NOTE: this is the *uncorrelated* discrepancy (npd), NOT the fully
+        decorrelated NPDE of Brendel et al. (2006): the within-subject
+        decorrelation step (whitening each subject's residual vector by the
+        empirical mean and covariance of its simulated observations) is
+        intentionally omitted. Nguyen et al. 2017 (CPT:PSP 6:87-109, Table 1
+        footnote e) note npd is often preferred for graphical diagnostics
+        because decorrelation can create or mask trends. npd equals NPDE exactly
+        when each subject contributes a single observation; with multiple
+        observations per subject they remain valid but still-correlated
+        discrepancies.
 
 All returned floats are rounded to 6 decimal places. Non-finite pairs are
 dropped pairwise so degenerate simulations never poison the summary statistics.
@@ -47,6 +64,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import norm
 
+from app.compute.dosing import time_after_dose
 from app.compute.pk_models import get_model
 from app.compute.pk_simulate import simulate
 
@@ -54,6 +72,21 @@ from app.compute.pk_simulate import simulate
 _ROUND_DP = 6
 # Outlier threshold for the |NPDE| > 1.96 fraction (central 95% of N(0,1)).
 _NPDE_OUTLIER = 1.96
+
+
+def _keep_mask(subject: dict, n_obs: int) -> np.ndarray:
+    """Boolean keep-mask over a subject's observations, dropping BLQ (censored)
+    rows so a below-quantitation value (which carries the LLOQ in DV) is never
+    scored as a quantified observation. Subjects without an ``obs_blq`` flag are
+    unaffected (all-True), so every existing caller keeps its behaviour.
+    """
+    blq = subject.get("obs_blq")
+    if not blq:
+        return np.ones(n_obs, dtype=bool)
+    m = ~np.asarray(blq, dtype=bool)
+    if m.size != n_obs:  # length mismatch => be conservative, keep all
+        return np.ones(n_obs, dtype=bool)
+    return m
 
 
 def _cv_pct_to_sd(cv_pct: float | None) -> float:
@@ -95,9 +128,11 @@ def fit_residuals(model_key: str, subjects: list[dict],
     Returns
     -------
     dict with keys ``"time"``, ``"obs"``, ``"ipred"``, ``"pred"``, ``"iwres"``,
-    ``"iwres_std"`` (parallel lists of paired values, rounded to 6 dp) and
-    ``"summary"`` = ``{"n", "iwres_mean", "iwres_sd"}``. ``iwres_mean`` and
-    ``iwres_sd`` are ``None`` when there are no contributing pairs.
+    ``"iwres_std"``, ``"tad"`` (parallel lists of paired values, rounded to 6
+    dp; ``tad`` entries are ``None`` for an observation before any dose) and
+    ``"summary"`` = ``{"n", "iwres_mean", "iwres_sd", "n_tad_null"}``.
+    ``iwres_mean`` and ``iwres_sd`` are ``None`` when there are no
+    contributing pairs.
     """
     model = get_model(model_key)
 
@@ -106,6 +141,7 @@ def fit_residuals(model_key: str, subjects: list[dict],
     ipred: list[float] = []
     pred: list[float] = []
     iwres: list[float] = []
+    tad: list[float | None] = []
 
     for subject in subjects:
         sid = subject.get("subject")
@@ -118,13 +154,21 @@ def fit_residuals(model_key: str, subjects: list[dict],
         if obs_t.size == 0 or obs_c.size == 0 or obs_t.size != obs_c.size:
             continue
 
+        keep = _keep_mask(subject, obs_t.size)  # drop BLQ (censored) rows
+        obs_t = obs_t[keep]
+        obs_c = obs_c[keep]
+        if obs_t.size == 0:
+            continue
+
         doses = list(subject.get("doses", []))
         wt = float(subject.get("wt", wt_default))
 
         sim_ipred = simulate(model, dict(indiv), doses, obs_t, wt=wt)["cp"]
         sim_pred = simulate(model, dict(typical_params), doses, obs_t, wt=wt)["cp"]
+        tad_all = time_after_dose(obs_t, doses)
 
-        for t_val, obs_val, ip_val, pr_val in zip(obs_t, obs_c, sim_ipred, sim_pred):
+        for t_val, obs_val, ip_val, pr_val, tad_val in zip(
+                obs_t, obs_c, sim_ipred, sim_pred, tad_all):
             obs_f = float(obs_val)
             ip_f = float(ip_val)
             pr_f = float(pr_val)
@@ -139,13 +183,14 @@ def fit_residuals(model_key: str, subjects: list[dict],
             ipred.append(ip_f)
             pred.append(pr_f)
             iwres.append(np.log(obs_f) - np.log(ip_f))
+            tad.append(tad_val)
 
     n = len(iwres)
     if n == 0:
         return {
             "time": [], "obs": [], "ipred": [], "pred": [],
-            "iwres": [], "iwres_std": [],
-            "summary": {"n": 0, "iwres_mean": None, "iwres_sd": None},
+            "iwres": [], "iwres_std": [], "tad": [],
+            "summary": {"n": 0, "iwres_mean": None, "iwres_sd": None, "n_tad_null": 0},
         }
 
     iwres_arr = np.asarray(iwres, dtype=float)
@@ -163,18 +208,21 @@ def fit_residuals(model_key: str, subjects: list[dict],
         "pred": [round(v, _ROUND_DP) for v in pred],
         "iwres": [round(float(v), _ROUND_DP) for v in iwres_arr],
         "iwres_std": [round(float(v), _ROUND_DP) for v in iwres_std],
+        "tad": [None if v is None else round(v, _ROUND_DP) for v in tad],
         "summary": {
             "n": n,
             "iwres_mean": round(mean, _ROUND_DP),
             "iwres_sd": round(sd, _ROUND_DP),
+            "n_tad_null": sum(1 for v in tad if v is None),
         },
     }
 
 
 def npde(model_key: str, subjects: list[dict], typical_params: dict,
-         iiv_cv_by_param: dict, *, n_sim: int = 500, seed: int = 20250614,
+         iiv_cv_by_param: dict, *, sigma_prop: float, sigma_add: float,
+         n_sim: int = 500, seed: int = 20250614,
          wt_default: float = 70.0) -> dict:
-    """Simulation-based prediction-distribution errors (PDE; see module docs).
+    """Simulation-based normalized prediction discrepancies (npd; see module docs).
 
     Parameters
     ----------
@@ -187,6 +235,13 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
     iiv_cv_by_param:
         ``{param: cv_percent}`` between-subject CV% per structural parameter.
         Missing / non-positive entries imply no variability on that parameter.
+    sigma_prop:
+        Proportional residual-error coefficient (natural scale). Contributes
+        ``(sigma_prop * f)`` to the residual SD of each simulated concentration.
+        REQUIRED — omitting the residual term biases ``|npd|`` upward (see the
+        module docstring); pass ``0.0`` only for a residual-error-free model.
+    sigma_add:
+        Additive residual-error SD (natural scale, concentration units).
     n_sim:
         Number of virtual subjects drawn per real subject.
     seed:
@@ -196,14 +251,18 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
 
     Returns
     -------
-    dict with keys ``"time"``, ``"pred"`` (per-observation simulated median),
-    ``"npde"`` (parallel lists, rounded to 6 dp) and ``"summary"`` =
-    ``{"n", "mean", "sd", "pct_outside_1_96"}``. The summary floats are
-    ``None`` when there are no contributing observations.
+    dict with keys ``"metric"`` (``"npd"``), ``"time"``, ``"pred"``
+    (per-observation simulated median), ``"npde"``, ``"tad"`` (parallel lists,
+    rounded to 6 dp; ``tad`` entries are ``None`` for an observation before
+    any dose) and ``"summary"`` = ``{"n", "mean", "sd", "pct_outside_1_96",
+    "n_tad_null", "sigma_prop", "sigma_add"}``. The moment floats are ``None``
+    when there are no contributing observations.
     """
     model = get_model(model_key)
     rng = np.random.default_rng(seed)
     n_sim = int(n_sim)
+    sigma_prop = float(sigma_prop)
+    sigma_add = float(sigma_add)
 
     param_names = model.params
     sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
@@ -216,6 +275,7 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
     times: list[float] = []
     pred: list[float] = []
     pde: list[float] = []
+    tad: list[float | None] = []
 
     for subject in subjects:
         obs_t = np.asarray(subject.get("obs_t", []), dtype=float)
@@ -223,10 +283,21 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
         if obs_t.size == 0 or obs_c.size == 0 or obs_t.size != obs_c.size:
             continue
 
+        keep = _keep_mask(subject, obs_t.size)  # drop BLQ (censored) rows
+        obs_t = obs_t[keep]
+        obs_c = obs_c[keep]
+        if obs_t.size == 0:
+            continue
+
         doses = list(subject.get("doses", []))
         wt = float(subject.get("wt", wt_default))
+        tad_all = time_after_dose(obs_t, doses)
 
-        # Predictive matrix: n_sim virtual subjects x n_obs concentrations.
+        # Predictive matrix: n_sim virtual subjects x n_obs. Each row is the
+        # FULL predictive draw y_sim = f(theta_i) + eps (between-subject
+        # parameter draw plus a residual-error draw), mirroring
+        # app.compute.vpc.pcvpc. The structural rows are filled first, then the
+        # residual noise is added vectorized over the whole matrix.
         sim = np.empty((n_sim, obs_t.size), dtype=float)
         for i in range(n_sim):
             params_i: dict[str, float] = {}
@@ -236,6 +307,10 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
                 eta = rng.normal(0.0, sd) if sd > 0.0 else 0.0
                 params_i[p] = base * float(np.exp(eta))
             sim[i, :] = simulate(model, params_i, list(doses), obs_t, wt=wt)["cp"]
+
+        # Residual error: SD = sqrt(sigma_add^2 + (sigma_prop * f)^2) per cell.
+        resid_var = sigma_add ** 2 + (sigma_prop * sim) ** 2
+        sim = sim + np.sqrt(np.maximum(resid_var, 0.0)) * rng.standard_normal(sim.shape)
 
         col_median = np.median(sim, axis=0)
 
@@ -254,13 +329,17 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
             times.append(float(obs_t[j]))
             pred.append(float(col_median[j]))
             pde.append(float(norm.ppf(f)))
+            tad.append(tad_all[j])
 
     n = len(pde)
     if n == 0:
         return {
-            "time": [], "pred": [], "npde": [],
+            "metric": "npd",
+            "time": [], "pred": [], "npde": [], "tad": [],
             "summary": {"n": 0, "mean": None, "sd": None,
-                        "pct_outside_1_96": None},
+                        "pct_outside_1_96": None, "n_tad_null": 0,
+                        "sigma_prop": round(sigma_prop, _ROUND_DP),
+                        "sigma_add": round(sigma_add, _ROUND_DP)},
         }
 
     pde_arr = np.asarray(pde, dtype=float)
@@ -269,13 +348,18 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
     pct_outside = 100.0 * float(np.count_nonzero(np.abs(pde_arr) > _NPDE_OUTLIER)) / n
 
     return {
+        "metric": "npd",
         "time": [round(v, _ROUND_DP) for v in times],
         "pred": [round(v, _ROUND_DP) for v in pred],
         "npde": [round(float(v), _ROUND_DP) for v in pde_arr],
+        "tad": [None if v is None else round(v, _ROUND_DP) for v in tad],
         "summary": {
             "n": n,
             "mean": round(mean, _ROUND_DP),
             "sd": round(sd, _ROUND_DP),
             "pct_outside_1_96": round(pct_outside, _ROUND_DP),
+            "n_tad_null": sum(1 for v in tad if v is None),
+            "sigma_prop": round(sigma_prop, _ROUND_DP),
+            "sigma_add": round(sigma_add, _ROUND_DP),
         },
     }

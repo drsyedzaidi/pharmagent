@@ -124,6 +124,9 @@ export const api = {
   diagnostics: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
     req(`/sessions/${sid}/diagnostics`, { method: 'POST' }),
 
+  forest: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/forest`, { method: 'POST' }),
+
   nlme: (sid: string, body: { method: string; model_key?: string; error_model?: string }):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/nlme`, {
@@ -135,6 +138,20 @@ export const api = {
   scm: (sid: string, body: { model_key?: string; error_model?: string; iiv_params?: string[] }):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/scm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  simest: (sid: string, body: {
+    confirm: boolean;
+    design: {
+      n_subjects: number; obs_t: number[]; dose?: number; dose_per_kg?: number;
+      n_doses?: number; tau?: number; wt_mean?: number; wt_cv_pct?: number; lloq?: number;
+    };
+    n_rep?: number; params?: string[]; ci_target_pct?: number; method?: string;
+  }): Promise<{ job_id: string; status: string; kind: string }> =>
+    req(`/sessions/${sid}/simest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

@@ -103,8 +103,10 @@ export interface PharmState {
   simulation_results: SimulationResults | null;
   vpc_results: VpcResults | null;
   diagnostics_results: DiagnosticsResults | null;
+  forest_results: ForestResults | null;
   engine_comparison_results: EngineComparisonResults | null;
   dose_sweep_results: DoseSweepResults | null;
+  simest_results: SimestResults | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
   qc_checklist: QcCheck[] | null;
@@ -380,13 +382,115 @@ export interface DiagnosticsResults {
   message?: string;
   residuals?: {
     time: number[]; obs: number[]; ipred: number[]; pred: number[];
-    iwres: number[]; iwres_std: number[];
-    summary: { n: number; iwres_mean: number | null; iwres_sd: number | null };
+    iwres: number[]; iwres_std: number[]; tad: (number | null)[];
+    summary: { n: number; iwres_mean: number | null; iwres_sd: number | null; n_tad_null?: number };
   };
   npde?: {
-    time: number[]; pred: number[]; npde: number[];
-    summary: { n: number; mean: number | null; sd: number | null; pct_outside_1_96: number | null };
+    status?: 'needs_nlme' | 'blq_unsupported';
+    message?: string;
+    n_blq?: number;
+    metric?: 'npd';
+    time?: number[]; pred?: number[]; npde?: number[]; tad?: (number | null)[];
+    summary?: {
+      n: number; mean: number | null; sd: number | null; pct_outside_1_96: number | null;
+      n_tad_null?: number; sigma_prop?: number; sigma_add?: number;
+    };
   };
+  cwres?: {
+    status?: 'needs_nlme';
+    message?: string;
+    time?: number[]; obs?: number[]; ipred?: number[]; cpred?: number[];
+    cwres?: number[]; iwres?: number[]; tad?: (number | null)[];
+    skipped_subjects?: string[]; cov_fallback_subjects?: string[];
+    summary?: {
+      n: number; n_subjects_used?: number; n_subjects_skipped?: number;
+      n_blq_dropped?: number; n_floored_dropped?: number; n_tad_null?: number;
+      cov_fallback_n?: number; n_etas_reused?: number; n_etas_resolved?: number;
+      cwres_mean: number | null; cwres_sd: number | null;
+      cwres_pct_outside_1_96: number | null; eps_shrinkage_pct?: number | null;
+      interaction?: boolean; cwres_variant?: 'focei' | 'foce';
+    };
+  };
+  nlme_provenance?: string | null;
+}
+
+export interface ForestRow {
+  param: string;
+  covariate: string;
+  kind: 'power' | 'linear' | 'exponential' | 'categorical';
+  eval_label: string;
+  eval_value: number | string | null;
+  gmr: number | null;
+  ci_lo: number | null;
+  ci_hi: number | null;
+  ci_source: 'wald_loglinear' | 'delta_nonlinear' | 'undefined_extrapolation' | 'unavailable' | 'reference';
+  omega_cv_pct: number | null;
+  allometric_note: boolean;
+  outside_reference_band: boolean;
+}
+
+export interface ForestResults {
+  status: string;
+  message?: string;
+  model_key?: string;
+  label?: string;
+  source?: 'nlme' | 'scm';
+  percentiles?: number[];
+  rows?: ForestRow[];
+  x_range?: [number, number] | null;
+  bounds?: [number, number] | null;
+  ci_level?: number;
+  notes?: string[];
+  summary?: { n_rows: number; n_effects: number };
+  cov_stats?: Record<string, { n_cov: number; cov_min?: number; cov_max?: number; levels?: string[] }>;
+}
+
+export interface SimestPerParam {
+  truth: number | null;
+  gm_point_estimate: number | null;
+  rel_bias_pct: number | null;
+  rmse_pct: number | null;
+  cv_across_replicates_pct: number | null;
+  n_pass_precision_criterion: number;
+  pct_within_60_140_of_own_estimate: number | null;
+  pct_within_60_140_strict: number | null;
+  coverage_wilson_ci_pct: [number | null, number | null];
+  mean_theta_se_log: number | null;
+}
+
+export interface SimestReplicate {
+  theta: Record<string, number>;
+  ci: Record<string, [number, number]> | null;
+}
+
+export interface SimestResults {
+  status: string;
+  message?: string;
+  model_key?: string;
+  params?: string[];
+  rse_convention?: 'log_scale_se';
+  citation?: string;
+  design_limitations?: string[];
+  n_rep_requested?: number;
+  n_rep_planned?: number;
+  n_rep_completed?: number;
+  n_point_evaluable?: number;
+  n_ci_evaluable?: number;
+  n_excluded?: number;
+  excluded_reasons?: Record<string, number>;
+  n_resampled_total?: number;
+  n_negative_draws_total?: number;
+  ci_validity?: 'assessable' | 'unassessable';
+  criterion?: {
+    pct_within_60_140_strict: number | null;
+    pct_within_60_140_of_own_estimate: number | null;
+    target_pct: number | null;
+    criterion_met: boolean | null;
+  };
+  per_param?: Record<string, SimestPerParam>;
+  replicates?: SimestReplicate[];
+  est_minutes_rough?: number | null;
+  elapsed_seconds?: number;
 }
 
 export interface VpcResults {

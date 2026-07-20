@@ -336,6 +336,15 @@ def run_diagnostics(sid: str, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/sessions/{sid}/forest")
+def run_covariate_forest(sid: str, sess=Depends(owned_session),
+                         actor: str = Depends(actor_id)) -> dict:
+    try:
+        return orch.run_tool(sid, "run_covariate_forest", "modeler", {}, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 class NlmeRequest(BaseModel):
     model_config = {"protected_namespaces": ()}
     method: str = "focei"
@@ -352,6 +361,30 @@ def run_nlme(sid: str, req: NlmeRequest, sess=Depends(owned_session),
     job_id = jobs.submit(session_id=sid, kind="nlme",
                          fn=lambda: orch.run_tool(sid, "run_nlme", "modeler", body, actor=actor))
     return {"job_id": job_id, "status": "running", "kind": "nlme"}
+
+
+class SimestRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    confirm: bool = False
+    design: dict = Field(default_factory=dict)
+    n_rep: int = 5
+    params: list[str] | None = None
+    ci_target_pct: float | None = None
+    method: str = "focei"
+
+
+@app.post("/api/sessions/{sid}/simest")
+def run_simest(sid: str, req: SimestRequest, sess=Depends(owned_session),
+               actor: str = Depends(actor_id)) -> dict:
+    """Submit the simulation-estimation precision check as a background job;
+    poll /jobs/{id}. `agent="simulator"` (never "modeler") -- this tool is not
+    LLM-reachable from chat; see app.tools.simest_tools for why that matters.
+    Runs several real NLME fits (minutes to tens of minutes) -- requires
+    `confirm=true` in the request body."""
+    body = req.model_dump()
+    job_id = jobs.submit(session_id=sid, kind="simest",
+                         fn=lambda: orch.run_tool(sid, "run_simest", "simulator", body, actor=actor))
+    return {"job_id": job_id, "status": "running", "kind": "simest"}
 
 
 class EngineComparisonRequest(BaseModel):
