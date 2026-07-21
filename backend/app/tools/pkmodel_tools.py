@@ -378,10 +378,32 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
 
 
 _MAX_AUTO_CANDIDATES = 6
+# Collinearity screen: two covariates correlated beyond this must not be offered
+# as simultaneous candidates on the SAME parameter. 0.3 is the conventional
+# PopPK threshold (e.g. two measures of body size, or ALT/AST as two measures of
+# hepatic function, are near-interchangeable and cannot both be identified).
+_COLLINEAR_R = 0.3
+
+
+def _pearson(a: list[float], b: list[float]) -> float | None:
+    """Pearson r over the subjects where BOTH covariates are numeric.
+
+    Returns None when it cannot be computed (fewer than 3 pairs, or either
+    covariate constant), so an undefined correlation never silently reads as 0.
+    """
+    if len(a) < 3:
+        return None
+    va = np.asarray(a, dtype=float)
+    vb = np.asarray(b, dtype=float)
+    sa, sb = float(va.std()), float(vb.std())
+    if sa <= 0.0 or sb <= 0.0:
+        return None
+    r = float(np.mean((va - va.mean()) * (vb - vb.mean())) / (sa * sb))
+    return max(-1.0, min(1.0, r))
 
 
 def _covariate_candidates(subjects: list[dict], iiv_params: list[str]
-                          ) -> list[dict[str, Any]]:
+                          ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Auto-build SCM candidates: each usable covariate column x each IIV param.
 
     A covariate is continuous (power model) if numeric with >=3 distinct values,
@@ -390,23 +412,70 @@ def _covariate_candidates(subjects: list[dict], iiv_params: list[str]
     Candidates are ordered param-major (all effects on the first IIV parameter —
     usually clearance — first) so that, under the count cap, the most relevant
     clearance covariates are screened before volume covariates.
+
+    Continuous candidates are then screened for collinearity: on any one
+    parameter, a covariate correlated |r| > ``_COLLINEAR_R`` with an
+    already-accepted candidate is dropped, because two near-collinear covariates
+    cannot both be identified and the stepwise search would arbitrarily pick
+    whichever happened to be tested first.
+
+    Which member of a collinear group survives is decided by name order, which
+    is deterministic but otherwise arbitrary — there is no data-driven reason to
+    prefer AST over ALT. That is precisely why the choice is reported rather
+    than hidden: a caller who cares should pre-specify ``candidates`` (the
+    pre-specified covariate plan this screen is only a fallback for).
+
+    Returns ``(candidates, dropped)``. ``dropped`` records every covariate that
+    was screened out and why, so the caller can report it — a silently shortened
+    candidate list reads as "these covariates were tested and rejected" when in
+    fact they were never tested at all.
     """
     cols: dict[str, set] = {}
     for s in subjects:
         for c, v in (s.get("cov") or {}).items():
             cols.setdefault(c, set()).add(v)
+
+    # Per-subject numeric series, used for the pairwise correlation screen.
+    series: dict[str, list[float]] = {}
+    for c in cols:
+        vals = [(s.get("cov") or {}).get(c) for s in subjects]
+        if all(isinstance(v, (int, float)) for v in vals):
+            series[c] = [float(v) for v in vals]
+
     cands: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
     for p in iiv_params:
+        kept_cont: list[str] = []
         for c, vals in sorted(cols.items()):
             if c.strip().lower() in _WT_NAMES:
+                dropped.append({"param": p, "covariate": c, "reason": "weight_builtin_allometry",
+                                "detail": "structural model already scales this parameter allometrically"})
                 continue
             nums = [v for v in vals if isinstance(v, (int, float))]
             is_cont = len(nums) == len(vals) and len(vals) >= 3
             if len(vals) < 2:                   # no variation -> not testable
+                dropped.append({"param": p, "covariate": c, "reason": "no_variation",
+                                "detail": "single distinct value across subjects"})
                 continue
-            kind = "power" if is_cont else "categorical"
-            cands.append({"param": p, "covariate": c, "kind": kind})
-    return cands[:_MAX_AUTO_CANDIDATES]
+            if is_cont and c in series:
+                clash = next(((k, r) for k in kept_cont
+                              if (r := _pearson(series[c], series[k])) is not None
+                              and abs(r) > _COLLINEAR_R), None)
+                if clash is not None:
+                    other, r = clash
+                    dropped.append({"param": p, "covariate": c, "reason": "collinear",
+                                    "detail": f"|r| {abs(r):.2f} with {other} (> {_COLLINEAR_R})"})
+                    continue
+                kept_cont.append(c)
+            cands.append({"param": p, "covariate": c,
+                          "kind": "power" if is_cont else "categorical"})
+
+    if len(cands) > _MAX_AUTO_CANDIDATES:
+        for cand in cands[_MAX_AUTO_CANDIDATES:]:
+            dropped.append({"param": cand["param"], "covariate": cand["covariate"],
+                            "reason": "candidate_cap",
+                            "detail": f"beyond the {_MAX_AUTO_CANDIDATES}-candidate automatic cap"})
+    return cands[:_MAX_AUTO_CANDIDATES], dropped
 
 
 def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -435,7 +504,12 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                           writes={"scm_results": status}, result=status)
 
     iiv = args.get("iiv_params") or ["CL", "V"]
-    candidates = args.get("candidates") or _covariate_candidates(subjects, iiv)
+    # Explicit candidates from the caller bypass the automatic screen (the user
+    # has pre-specified the covariate plan); only the auto path is screened.
+    dropped: list[dict[str, Any]] = []
+    candidates = args.get("candidates")
+    if not candidates:
+        candidates, dropped = _covariate_candidates(subjects, iiv)
     if not candidates:
         status = {"status": "no_covariates",
                   "message": ("No usable covariate columns found in the dataset "
@@ -456,8 +530,17 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
               "pre-specified covariate set or validate by resampling."
               ) if res.get("selected") else None
     res["selection_caveat"] = caveat
+    # Never-tested covariates are reported explicitly: a shortened candidate list
+    # otherwise reads as "tested and rejected" when it was never tested at all.
+    res["screened_out"] = dropped
+    screened = ""
+    if dropped:
+        shown = "; ".join(f"{d['covariate']} on {d['param']} ({d['reason']})"
+                          for d in dropped[:4])
+        more = f" +{len(dropped) - 4} more" if len(dropped) > 4 else ""
+        screened = f" Not tested: {shown}{more}."
     summary = (f"SCM on {res.get('label')}: tested {res.get('n_candidates')} candidate(s), "
-               f"selected {sel}; OFV {res.get('base_ofv')} -> {res.get('final_ofv')}.")
+               f"selected {sel}; OFV {res.get('base_ofv')} -> {res.get('final_ofv')}.{screened}")
     if caveat:
         summary += f" NOTE: {caveat}"
     return ToolResult(

@@ -195,3 +195,70 @@ def test_payload_is_json_safe(loaded):
     res = run_covariate_forest(state, ctx, {})
     json.dumps(res.writes["forest_results"])
     json.dumps(res.result)
+
+
+# ── SCM candidate screening (collinearity + never-tested reporting) ──────────
+# Lecture rule (IU PopPK Week 9): avoid simultaneous inclusion of covariates
+# correlated beyond |r| > 0.3 -- two near-collinear covariates cannot both be
+# identified, and a stepwise search would arbitrarily keep whichever happened to
+# be tested first. Covariates that are screened out must be reported, because a
+# silently shortened candidate list reads as "tested and rejected".
+
+def _subjects_with_cov(covs: list[dict]) -> list[dict]:
+    """Minimal subject dicts carrying only the covariate payload under test."""
+    return [{"subject": i, "doses": [{"time": 0.0, "amt": 100.0}],
+             "obs_t": [1.0, 4.0], "obs_c": [5.0, 2.0], "wt": 70.0, "cov": c}
+            for i, c in enumerate(covs)]
+
+
+def test_collinear_covariate_is_screened_out_and_reported():
+    from app.tools.pkmodel_tools import _covariate_candidates
+    # AST and ALT are near-perfectly correlated (two measures of hepatic
+    # function); EGFR is independent of both. Only one of AST/ALT may be offered.
+    rng = np.random.default_rng(11)
+    egfr = rng.normal(90.0, 20.0, 12)
+    ast = np.linspace(20.0, 40.0, 12)
+    covs = [{"EGFR": float(g), "AST": float(a), "ALT": float(2.0 * a + 1.0)}
+            for g, a in zip(egfr, ast)]
+    cands, dropped = _covariate_candidates(_subjects_with_cov(covs), ["CL"])
+    names = [c["covariate"] for c in cands]
+    assert "EGFR" in names, "independent covariate must survive the screen"
+    assert not ("AST" in names and "ALT" in names), "collinear pair both offered"
+    collinear = [d for d in dropped if d["reason"] == "collinear"]
+    assert collinear, "screened-out covariate was not reported"
+    assert collinear[0]["covariate"] in {"AST", "ALT"}
+    assert "|r|" in collinear[0]["detail"]
+
+
+def test_independent_covariates_all_survive_the_screen():
+    from app.tools.pkmodel_tools import _covariate_candidates
+    rng = np.random.default_rng(4)
+    covs = [{"EGFR": float(v), "AGE": float(a), "ALB": float(b)}
+            for v, a, b in zip(rng.normal(90, 20, 30), rng.normal(45, 15, 30),
+                               rng.normal(4, 0.5, 30))]
+    cands, dropped = _covariate_candidates(_subjects_with_cov(covs), ["CL"])
+    names = {c["covariate"] for c in cands}
+    assert names == {"EGFR", "AGE", "ALB"}
+    assert not [d for d in dropped if d["reason"] == "collinear"]
+
+
+def test_weight_and_constant_covariates_are_reported_not_silently_dropped():
+    from app.tools.pkmodel_tools import _covariate_candidates
+    covs = [{"WT": 70.0 + i, "EGFR": 90.0 + i, "SITE": 1.0} for i in range(10)]
+    cands, dropped = _covariate_candidates(_subjects_with_cov(covs), ["CL"])
+    names = {c["covariate"] for c in cands}
+    assert "WT" not in names        # built-in allometry would double-count
+    assert "SITE" not in names      # no variation
+    reasons = {d["covariate"]: d["reason"] for d in dropped}
+    assert reasons.get("WT") == "weight_builtin_allometry"
+    assert reasons.get("SITE") == "no_variation"
+
+
+def test_screening_is_deterministic():
+    from app.tools.pkmodel_tools import _covariate_candidates
+    covs = [{"EGFR": 90.0 + i, "AST": 20.0 + i, "ALT": 40.0 + 2.0 * i}
+            for i in range(12)]
+    subs = _subjects_with_cov(covs)
+    a_c, a_d = _covariate_candidates(subs, ["CL"])
+    b_c, b_d = _covariate_candidates(subs, ["CL"])
+    assert a_c == b_c and a_d == b_d
