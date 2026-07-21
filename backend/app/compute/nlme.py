@@ -76,6 +76,7 @@ _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covar
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
 _RSE_CAP = 1e3             # RSE% above this -> report None (parameter unidentified)
 _MIN_OBS_PER_SUBJECT = 1     # subjects with fewer usable obs are skipped
+_SAEM_SEED_ITER = 100        # SAEM burn-in length when seeding FOCE-I (basin-finding only)
 _ROUND_DP = 6                # decimal places for all CWRES/IWRES payload floats
 
 # CWRES (Hooker, Staatz & Karlsson 2007, Pharm Res 24:2187-2197): finite-
@@ -1510,12 +1511,20 @@ def population_fit(model_key: str, subjects: list[dict], *,
         model_key: key into the PK model registry (``app.compute.pk_models``).
         subjects: list of {"subject", "doses":[{time,amt}], "obs_t", "obs_c",
             "wt", "cov"}; sparse subjects are skipped gracefully.
-        method: "focei" (FOCE-I / Laplace) or "saem" (stochastic approx. EM).
+        method: "focei" (FOCE-I / Laplace), "saem" (stochastic approx. EM), or
+            "focei_saem" (FOCE-I started from a short SAEM burn-in). Prefer
+            "focei_saem" on harder models — many structural parameters, several
+            IIV terms, covariates, or allometric scaling switched off — where
+            cold-start Powell can settle in the wrong basin; see
+            ``_focei_saem_fit``.
         iiv_params: structural parameters carrying IIV; default ["CL","V"] ∩
             model params, with a first-two-params fallback.
         error_model: "proportional" (default), "additive", or "combined".
-        max_iter: iteration cap forwarded to the chosen estimator.
-        seed: RNG seed (SAEM only; FOCE-I is deterministic regardless).
+        max_iter: iteration cap forwarded to the chosen estimator (for
+            "focei_saem" this caps the FOCE-I stage; the SAEM seed is capped
+            separately at ``_SAEM_SEED_ITER``).
+        seed: RNG seed for the stochastic stage ("saem", and the seed run of
+            "focei_saem"); plain FOCE-I is deterministic regardless.
         compute_uncertainty: compute asymptotic SE/RSE% after convergence.
         covariate_model: optional covariate-effect specs (see focei_fit).
 
@@ -1528,7 +1537,7 @@ def population_fit(model_key: str, subjects: list[dict], *,
     """
     model = get_model(model_key)
     iiv = _resolve_iiv(model, iiv_params)
-    m = method.lower()
+    m = method.lower().replace("-", "_")
     if m == "focei":
         return focei_fit(model_key, subjects, iiv_params=iiv,
                          error_model=error_model, max_iter=max_iter,
@@ -1539,7 +1548,78 @@ def population_fit(model_key: str, subjects: list[dict], *,
                         error_model=error_model, max_iter=max(max_iter, 1),
                         seed=seed, compute_uncertainty=compute_uncertainty,
                         covariate_model=covariate_model)
-    raise ValueError(f"unknown method: {method!r} (expected 'focei' or 'saem')")
+    if m == "focei_saem":
+        return _focei_saem_fit(model_key, subjects, iiv_params=iiv,
+                               error_model=error_model, max_iter=max_iter,
+                               seed=seed,
+                               compute_uncertainty=compute_uncertainty,
+                               covariate_model=covariate_model)
+    raise ValueError(
+        f"unknown method: {method!r} (expected 'focei', 'saem' or 'focei_saem')")
+
+
+def _focei_saem_fit(model_key: str, subjects: list[dict], *,
+                    iiv_params: list[str], error_model: str, max_iter: int,
+                    seed: int, compute_uncertainty: bool,
+                    covariate_model: list[dict] | None) -> dict[str, Any]:
+    """FOCE-I started from a short SAEM burn-in ("SAEM-seeded FOCE-I").
+
+    FOCE-I's outer problem is minimized by Powell, a local derivative-free
+    method: on a rough or multimodal surface it converges to whichever basin
+    the cold, data-derived starting values happen to fall in. On harder models
+    (many structural parameters + several IIV terms + covariates, especially
+    when allometric scaling is switched off so WT no longer anchors CL/V) that
+    basin can be the wrong one, and simply raising ``max_iter`` does not help —
+    it can even land in a *worse* local minimum, since more iterations only
+    search the same basin harder.
+
+    SAEM's stochastic E-step explores the parameter space instead of descending
+    it, so it is far less sensitive to starting values. Running a short SAEM
+    first and handing its estimates to FOCE-I as ``init`` combines SAEM's
+    basin-finding with FOCE-I's sharper terminal convergence and its exact
+    Laplace OFV / asymptotic standard errors.
+
+    The seed run is deliberately cheap and throwaway: capped at
+    ``_SAEM_SEED_ITER`` iterations with no uncertainty computation. It only has
+    to identify the right basin, not converge. If it fails to produce a usable
+    warm start the fit degrades gracefully to an ordinary cold-start FOCE-I,
+    and the returned ``method`` says so rather than claiming a seed that did
+    not happen.
+
+    Determinism is preserved: the SAEM stage is driven by ``seed`` and FOCE-I
+    is deterministic, so identical inputs give identical estimates.
+    """
+    seed_iter = max(1, min(int(max_iter), _SAEM_SEED_ITER))
+    seed_res = saem_fit(model_key, subjects, iiv_params=iiv_params,
+                        error_model=error_model, max_iter=seed_iter,
+                        seed=seed, compute_uncertainty=False,
+                        covariate_model=covariate_model)
+
+    # A seed is only usable if SAEM actually produced a fit: a warm-start dict
+    # AND a finite objective below the failure sentinel. (A degenerate seed —
+    # empty/all-BLQ data — still returns default theta with ofv == _BIG, which
+    # must NOT be dressed up as a warm start.) A non-converged but finite seed
+    # IS usable: 100 SAEM iterations are meant to find the basin, not converge.
+    init = _warm_init(seed_res)
+    seed_ofv = seed_res.get("ofv")
+    seed_usable = (init is not None and isinstance(seed_ofv, (int, float))
+                   and math.isfinite(seed_ofv) and seed_ofv < _BIG)
+
+    res = focei_fit(model_key, subjects, iiv_params=iiv_params,
+                    error_model=error_model, max_iter=max_iter,
+                    compute_uncertainty=compute_uncertainty,
+                    covariate_model=covariate_model,
+                    init=init if seed_usable else None)
+
+    if not seed_usable:
+        # Degrade honestly to a cold start rather than claim a seed.
+        res["seeded_by"] = None
+        return res
+    res["method"] = "FOCE-I (SAEM-seeded)"
+    res["seeded_by"] = {"method": "SAEM", "iterations": seed_iter,
+                        "ofv": seed_ofv,
+                        "converged": seed_res.get("converged")}
+    return res
 
 
 # ───────────────────────── stepwise covariate modeling ───────────────────────

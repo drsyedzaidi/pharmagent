@@ -705,3 +705,75 @@ def test_combined_theta_mstep_is_unbiased_from_truth() -> None:
         assert new_theta["CL"] > 4.85, (seed, new_theta["CL"])
     mean_cl = float(np.mean(cls))
     assert TRUE_THETA["CL"] * 0.99 < mean_cl < TRUE_THETA["CL"] * 1.06, (mean_cl, cls)
+
+
+# ── SAEM-seeded FOCE-I ───────────────────────────────────────────────────────
+# Plain FOCE-I minimizes its outer problem with Powell, a LOCAL derivative-free
+# method: on a rough/multimodal surface it converges to whichever basin the cold
+# data-derived start falls in, and raising max_iter only searches that same
+# basin harder. Seeding it with a short SAEM run (whose stochastic E-step
+# explores rather than descends) supplies a basin that FOCE-I then sharpens.
+# These tests pin the mechanism; the basin-rescue itself is validated offline
+# against the IU PopPK Week-8 benchmark (too expensive for the suite).
+
+@pytest.fixture(scope="module")
+def focei_saem_result(population: list[dict[str, Any]]) -> dict[str, Any]:
+    return population_fit(MODEL_KEY, population, method="focei_saem", max_iter=30,
+                          seed=20250614, compute_uncertainty=False)
+
+
+def test_focei_saem_reports_seeded_provenance(focei_saem_result: dict[str, Any]) -> None:
+    r = focei_saem_result
+    assert _REQUIRED_KEYS.issubset(r.keys())
+    # Relabelled so a reader can never mistake a seeded fit for a cold one.
+    assert r["method"] == "FOCE-I (SAEM-seeded)"
+    seeded = r["seeded_by"]
+    assert seeded["method"] == "SAEM"
+    # Seed length is min(max_iter, _SAEM_SEED_ITER); max_iter=30 binds here.
+    assert seeded["iterations"] == 30
+    assert isinstance(seeded["ofv"], float)
+
+
+def test_focei_saem_recovers_truth(focei_saem_result: dict[str, Any]) -> None:
+    """Seeding must not degrade the easy case: same recovery as plain FOCE-I."""
+    theta = focei_saem_result["theta"]
+    assert TRUE_THETA["CL"] * 0.80 < theta["CL"] < TRUE_THETA["CL"] * 1.20
+    assert TRUE_THETA["V"] * 0.80 < theta["V"] < TRUE_THETA["V"] * 1.20
+
+
+def test_focei_saem_is_deterministic(population: list[dict[str, Any]]) -> None:
+    """The SAEM stage is the only stochastic part, so a fixed seed must give
+    bit-identical estimates -- otherwise the audit trail is not reproducible."""
+    kw = dict(method="focei_saem", max_iter=20, seed=7, compute_uncertainty=False)
+    a = population_fit(MODEL_KEY, population, **kw)
+    b = population_fit(MODEL_KEY, population, **kw)
+    assert a["theta"] == b["theta"]
+    assert a["ofv"] == b["ofv"]
+
+
+def test_focei_saem_seed_length_is_capped(population: list[dict[str, Any]]) -> None:
+    """A large max_iter must not make the throwaway seed run unboundedly long:
+    it is capped at _SAEM_SEED_ITER because the seed only has to find the basin."""
+    from app.compute.nlme import _SAEM_SEED_ITER
+
+    r = population_fit(MODEL_KEY, population, method="focei_saem",
+                       max_iter=_SAEM_SEED_ITER + 500, seed=3,
+                       compute_uncertainty=False)
+    assert r["seeded_by"]["iterations"] == _SAEM_SEED_ITER
+
+
+def test_focei_saem_degrades_gracefully_without_a_usable_seed() -> None:
+    """No usable data -> no warm start. The fit must still return the standard
+    contract and must NOT claim a seed that never happened."""
+    r = population_fit(MODEL_KEY, [], method="focei_saem", max_iter=5,
+                       compute_uncertainty=False)
+    assert _REQUIRED_KEYS.issubset(r.keys())
+    assert r["seeded_by"] is None
+    assert r["method"] == "FOCE-I"      # honest: this was a cold start
+
+
+def test_plain_focei_is_unchanged_by_the_seeding_feature(
+        focei_result: dict[str, Any]) -> None:
+    """Guard: method='focei' must stay a cold start with no seed provenance."""
+    assert focei_result["method"] == "FOCE-I"
+    assert focei_result.get("seeded_by") is None

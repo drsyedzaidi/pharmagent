@@ -849,10 +849,14 @@ TOOLS = [
          "True population (mixed-effects) fit of a structural PK model by FOCE-I "
          "or SAEM: typical values (theta) with RSE%, between-subject variability "
          "(Omega/IIV CV%), residual error, OFV, condition number, eta-shrinkage, "
-         "and optional covariate effects.",
+         "and optional covariate effects. method='focei_saem' starts FOCE-I from "
+         "a short SAEM burn-in — prefer it on harder models (many parameters, "
+         "several IIV terms, covariates) where plain FOCE-I can converge to the "
+         "wrong basin from its cold starting values.",
          "modeler",
          {"type": "object",
-          "properties": {"method": {"type": "string", "enum": ["focei", "saem"]},
+          "properties": {"method": {"type": "string",
+                                    "enum": ["focei", "saem", "focei_saem"]},
                          "model_key": {"type": "string"},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
