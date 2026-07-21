@@ -18,11 +18,19 @@ between-subject variability (IIV) model and residual-error model:
     For comparability, the reported ``ofv`` is the FOCE/Laplace OFV evaluated at
     the final SAEM estimates.
 
-Population model (lognormal IIV, diagonal Omega):
+Population model (lognormal IIV):
 
     param_p_i = theta_p * exp(eta_{p,i})   for p in iiv_params
     param_p_i = theta_p                     otherwise
-    eta_i ~ N(0, Omega),  Omega = diag(omega2_p)
+    eta_i ~ N(0, Omega),  Omega = diag(omega2_p) by default
+
+Omega is diagonal unless a *block* is requested, which makes a named subset of
+the IIV parameters correlated (NONMEM's ``$OMEGA BLOCK``). A block is carried
+in the outer vector as a Cholesky factor so it is positive-definite for any
+parameter value; see "correlated IIV" below. The diagonal path is untouched by
+that machinery -- every affected expression branches on ``spec.omega_block is
+None`` and keeps its original scalar arithmetic, because the "equivalent"
+matrix rewrite is not bitwise-identical.
 
 Residual error on concentration f_ij = simulate(...)["cp"]:
 
@@ -49,7 +57,7 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     # ProcessPoolExecutor transitively imports _multiprocessing, which the
@@ -287,16 +295,232 @@ def _build_cov_effects(model_spec: list[dict] | None,
     return effects
 
 
+# ── correlated IIV (block Omega) ─────────────────────────────────────────────
+# Omega is diagonal by default. A *block* makes a named subset of the IIV
+# parameters correlated (the NONMEM `$OMEGA BLOCK` construct), which matters
+# whenever two random effects genuinely move together -- e.g. CL and Vc, where
+# a published 2-cmt oral reference estimates r = 0.54.
+#
+# The block is carried in the outer vector as a CHOLESKY FACTOR, never as the
+# covariance directly: Omega = L L' with L lower-triangular is positive-definite
+# for ANY value of the free parameters, so the optimizer cannot wander to an
+# invalid Omega and no post-hoc repair is ever needed. The free parameters are
+# the log-diagonal of L (positivity, and uniqueness of the factorization) and
+# its strictly-lower entries raw (they may be negative).
+#
+# Segment layout, appended in place of the block members' log-variances:
+#     [log omega2_p for each NON-block param, in iiv order]
+#     [log L_00 ... log L_(k-1)(k-1)]          k log-diagonal entries
+#     [L_10, L_20, L_21, ...]                  k(k-1)/2 strictly-lower, row-major
+#
+# With every strictly-lower entry at 0 this reproduces diag(omega2) EXACTLY, so
+# a block fit can be seeded neutrally from a converged diagonal fit.
+
+def _resolve_block(iiv_params: list[str],
+                   omega_block: list[str] | tuple[str, ...] | None
+                   ) -> tuple[int, ...] | None:
+    """Map block member names to ASCENDING indices into ``iiv_params``.
+
+    Ascending order is required, not cosmetic: the segment is decoded by
+    writing the free parameters straight into a lower-triangular L, which is
+    only a Cholesky factor of the intended Omega under that ordering.
+
+    Returns None for "no block" (unset, or fewer than 2 usable members, which
+    carries no correlation and must stay on the diagonal path).
+    """
+    if not omega_block:
+        return None
+    idx: set[int] = set()
+    for name in omega_block:
+        if name not in iiv_params:
+            raise ValueError(
+                f"omega_block member {name!r} is not an IIV parameter "
+                f"(have {iiv_params})")
+        idx.add(iiv_params.index(name))
+    if len(idx) < 2:
+        return None
+    return tuple(sorted(idx))
+
+
+def _omega_layout(n_omega: int, block_idx: tuple[int, ...] | None
+                  ) -> tuple[int, tuple[int, ...]]:
+    """``(n_omega_par, omega_slot)`` for an Omega segment.
+
+    ``omega_slot[j]`` is the offset, WITHIN the Omega segment, of parameter
+    ``j``'s own log-variance -- or -1 when ``j`` is a block member, whose
+    marginal variance is a function of several Cholesky entries rather than a
+    single slot. Consumers that index the segment per-parameter must go through
+    this map: with a non-trailing block (say a block on [CL, KA] of
+    [CL, V, KA]) the naive ``enumerate(iiv_params)`` offset silently reads a
+    different parameter's slot and mislabels its %CV / %RSE.
+
+    Diagonal case returns ``(n_omega, (0, 1, ..., n_omega-1))`` -- the identity
+    map, so existing literal indexing is unchanged.
+    """
+    if block_idx is None:
+        return n_omega, tuple(range(n_omega))
+    k = len(block_idx)
+    n_par = (n_omega - k) + k + k * (k - 1) // 2
+    slot: list[int] = []
+    nxt = 0
+    for j in range(n_omega):
+        if j in block_idx:
+            slot.append(-1)
+        else:
+            slot.append(nxt)
+            nxt += 1
+    return n_par, tuple(slot)
+
+
+def _chol_from_seg(seg: np.ndarray, k: int) -> np.ndarray:
+    """Lower-triangular L from ``[log diag] + [strictly-lower, row-major]``."""
+    L = np.zeros((k, k), dtype=float)
+    L[np.diag_indices(k)] = np.exp(np.asarray(seg[:k], dtype=float))
+    if k > 1:
+        L[np.tril_indices(k, -1)] = np.asarray(seg[k:], dtype=float)
+    return L
+
+
+def _seg_from_chol(L: np.ndarray) -> np.ndarray:
+    """Inverse of :func:`_chol_from_seg`."""
+    k = L.shape[0]
+    diag = np.log(np.maximum(np.diag(L), _EPS))
+    if k == 1:
+        return np.asarray(diag, dtype=float)
+    return np.concatenate([diag, L[np.tril_indices(k, -1)]])
+
+
+def _omega_full_from_seg(spec: _PopSpec, seg: np.ndarray) -> np.ndarray:
+    """Full ``n_omega x n_omega`` Omega from its packed segment.
+
+    Block-diagonal by construction: independent variances on the diagonal for
+    non-block parameters, the reconstructed ``L L'`` for the block members.
+    """
+    n = spec.n_omega
+    om = np.zeros((n, n), dtype=float)
+    block = spec.block_idx or ()
+    for j in range(n):
+        s = spec.omega_slot[j]
+        if s >= 0:
+            om[j, j] = max(math.exp(float(seg[s])), _OMEGA_FLOOR)
+    if block:
+        k = len(block)
+        off = n - k                       # non-block log-variances precede it
+        L = _chol_from_seg(np.asarray(seg[off:], dtype=float), k)
+        blk = L @ L.T
+        for a, ja in enumerate(block):
+            for b, jb in enumerate(block):
+                om[ja, jb] = float(blk[a, b])
+    return om
+
+
+def _seg_from_omega_full(spec: _PopSpec, om: np.ndarray) -> np.ndarray:
+    """Inverse of :func:`_omega_full_from_seg` (encode Omega to its segment)."""
+    n = spec.n_omega
+    block = spec.block_idx or ()
+    parts: list[float] = []
+    for j in range(n):
+        if spec.omega_slot[j] >= 0:
+            parts.append(math.log(max(float(om[j, j]), _OMEGA_FLOOR)))
+    if block:
+        sub = np.asarray([[float(om[a, b]) for b in block] for a in block], dtype=float)
+        sub = 0.5 * (sub + sub.T)                       # enforce exact symmetry
+        sub[np.diag_indices(len(block))] = np.maximum(
+            np.diag(sub), _OMEGA_FLOOR)
+        parts.extend(_seg_from_chol(np.linalg.cholesky(sub)).tolist())
+    return np.asarray(parts, dtype=float)
+
+
+def _project_block(spec: _PopSpec, om: np.ndarray) -> np.ndarray:
+    """Impose the spec's Omega structure on an unstructured covariance.
+
+    The SAEM M-step's empirical second moment ``E'E/n`` is dense, but only the
+    covariances *within* the declared block are free parameters. Everything
+    outside it is structurally zero and must be projected away each iteration,
+    or the model silently drifts to a full Omega that the packed vector cannot
+    represent and the reported degrees of freedom do not account for.
+    """
+    n = spec.n_omega
+    out = np.zeros((n, n), dtype=float)
+    out[np.diag_indices(n)] = np.maximum(np.diag(om), _OMEGA_FLOOR)
+    for a in (spec.block_idx or ()):
+        for b in (spec.block_idx or ()):
+            if a != b:
+                out[a, b] = float(om[a, b])
+    return out
+
+
+def _shrink_to_pd(om: np.ndarray, *, floor: float = 1e-8) -> np.ndarray:
+    """Nudge a covariance back inside the PD cone if sampling noise left it out.
+
+    The empirical second moment of a finite eta sample can be singular (or
+    indefinite after Robbins-Monro mixing) when two etas are nearly collinear
+    -- exactly the regime a correlation block invites. Shrinking toward its own
+    diagonal is the minimal repair that preserves the variances, and the
+    subsequent Cholesky encode would otherwise raise.
+    """
+    sym = 0.5 * (om + om.T)
+    if np.all(np.linalg.eigvalsh(sym) > floor):
+        return sym
+    d = np.diag(np.diag(sym))
+    for w in (0.05, 0.1, 0.25, 0.5, 0.9):          # increasing shrinkage
+        cand = (1.0 - w) * sym + w * d
+        if np.all(np.linalg.eigvalsh(cand) > floor):
+            return cand
+    return d
+
+
+class _OmegaPrior(NamedTuple):
+    """Everything the conditional objective needs from a non-diagonal Omega.
+
+    Carried as a pair so the Cholesky factorization is done ONCE per objective
+    evaluation rather than once per subject per inner iteration (the inner
+    Nelder-Mead runs up to 40 iterations for each of n_subjects).
+
+    ``prec`` is Omega^-1 and ``logdet`` is log|Omega|. A value of None anywhere
+    downstream means "diagonal", and every consumer then takes its original
+    scalar branch untouched.
+    """
+    prec: np.ndarray
+    logdet: float
+
+
+def _omega_prior(om: np.ndarray) -> _OmegaPrior:
+    """Precision and log-determinant of a covariance matrix, via Cholesky.
+
+    Uses the Cholesky factor for both quantities so they are mutually
+    consistent and the determinant cannot go negative through round-off:
+    log|Omega| = 2*sum(log diag(L)).
+    """
+    L = np.linalg.cholesky(0.5 * (om + om.T))
+    logdet = 2.0 * float(np.sum(np.log(np.maximum(np.diag(L), _EPS))))
+    Li = np.linalg.inv(L)
+    return _OmegaPrior(prec=Li.T @ Li, logdet=logdet)
+
+
+def _block_corr(om: np.ndarray) -> np.ndarray:
+    """Correlation matrix of a covariance matrix (0 where a variance is 0)."""
+    d = np.sqrt(np.maximum(np.diag(om), 0.0))
+    safe = np.where(d > 0.0, d, 1.0)
+    corr = om / np.outer(safe, safe)
+    corr[d <= 0.0, :] = 0.0
+    corr[:, d <= 0.0] = 0.0
+    np.fill_diagonal(corr, 1.0)
+    return np.clip(corr, -1.0, 1.0)
+
+
 class _PopSpec:
     """Static layout describing how a parameter vector maps to named values."""
 
     __slots__ = ("model", "param_names", "iiv_params", "error_model",
                  "has_prop", "has_add", "n_theta", "n_omega",
-                 "cov_effects", "n_cov")
+                 "cov_effects", "n_cov",
+                 "omega_block", "block_idx", "n_omega_par", "omega_slot")
 
     def __init__(self, model: PKModel, iiv_params: list[str],
                  error_model: str,
-                 cov_effects: list[_CovEffect] | None = None) -> None:
+                 cov_effects: list[_CovEffect] | None = None,
+                 *, omega_block: list[str] | tuple[str, ...] | None = None) -> None:
         self.model = model
         self.param_names: tuple[str, ...] = tuple(model.params)
         self.iiv_params: list[str] = list(iiv_params)
@@ -306,6 +530,12 @@ class _PopSpec:
         self.n_omega = len(self.iiv_params)
         self.cov_effects: list[_CovEffect] = list(cov_effects or [])
         self.n_cov = sum(e.n_coef for e in self.cov_effects)
+        self.block_idx = _resolve_block(self.iiv_params, omega_block)
+        self.omega_block: tuple[str, ...] | None = (
+            tuple(self.iiv_params[j] for j in self.block_idx)
+            if self.block_idx else None)
+        self.n_omega_par, self.omega_slot = _omega_layout(
+            self.n_omega, self.block_idx)
 
 
 def _apply_cov(spec: _PopSpec, theta: dict[str, float], cov_coefs: np.ndarray,
@@ -327,16 +557,30 @@ def _apply_cov(spec: _PopSpec, theta: dict[str, float], cov_coefs: np.ndarray,
 
 def _pack(spec: _PopSpec, theta: dict[str, float], cov_coefs: np.ndarray,
           omega2: dict[str, float], sigma_prop: float,
-          sigma_add: float) -> np.ndarray:
+          sigma_add: float, *, omega_matrix: np.ndarray | None = None) -> np.ndarray:
     """Encode named population values into the unconstrained outer vector.
 
-    Layout: [log theta] [covariate coefs (raw)] [log omega2] [log sigma_*].
+    Layout: [log theta] [covariate coefs (raw)] [Omega segment] [log sigma_*].
     Covariate coefficients are stored raw (not logged) since they may be
-    negative.
+    negative. The Omega segment is ``[log omega2]`` for a diagonal spec, or the
+    Cholesky layout documented above when ``spec.omega_block`` is set.
+
+    ``omega_matrix`` is REQUIRED for a block spec and raises otherwise: the
+    off-diagonals cannot be recovered from ``omega2`` (marginal variances)
+    alone, and silently falling back to a diagonal encode here would corrupt
+    the point the Hessian is taken around on the standard-error path.
     """
     parts: list[float] = [math.log(max(theta[p], _EPS)) for p in spec.param_names]
     parts += [float(c) for c in (cov_coefs if cov_coefs is not None else ())]
-    parts += [math.log(max(omega2[p], _OMEGA_FLOOR)) for p in spec.iiv_params]
+    if spec.omega_block is None:
+        parts += [math.log(max(omega2[p], _OMEGA_FLOOR)) for p in spec.iiv_params]
+    else:
+        if omega_matrix is None:
+            raise ValueError(
+                "omega_matrix is required to pack a spec with omega_block="
+                f"{spec.omega_block}; marginal variances cannot encode the "
+                "off-diagonals")
+        parts += [float(v) for v in _seg_from_omega_full(spec, omega_matrix)]
     if spec.has_prop:
         parts.append(math.log(max(sigma_prop, _SIGMA_FLOOR)))
     if spec.has_add:
@@ -353,14 +597,37 @@ def _unpack(spec: _PopSpec, x: np.ndarray
     i += spec.n_theta
     cov_coefs = np.asarray(x[i:i + spec.n_cov], dtype=float)
     i += spec.n_cov
-    omega2 = {p: max(math.exp(x[i + k]), _OMEGA_FLOOR)
-              for k, p in enumerate(spec.iiv_params)}
-    i += spec.n_omega
+    if spec.omega_block is None:
+        omega2 = {p: max(math.exp(x[i + k]), _OMEGA_FLOOR)
+                  for k, p in enumerate(spec.iiv_params)}
+        i += spec.n_omega
+    else:
+        # Marginal variances = diag(Omega), so every diagonal consumer of
+        # omega2 (%CV, shrinkage, reporting) keeps working unchanged; callers
+        # that need the off-diagonals use _omega_matrix(spec, x).
+        _om = _omega_full_from_seg(spec, x[i:i + spec.n_omega_par])
+        omega2 = {p: max(float(_om[k, k]), _OMEGA_FLOOR)
+                  for k, p in enumerate(spec.iiv_params)}
+        i += spec.n_omega_par
     sigma_prop = math.exp(x[i]) if spec.has_prop else 0.0
     if spec.has_prop:
         i += 1
     sigma_add = math.exp(x[i]) if spec.has_add else 0.0
     return theta, cov_coefs, omega2, max(sigma_prop, 0.0), max(sigma_add, 0.0)
+
+
+def _omega_matrix(spec: _PopSpec, x: np.ndarray) -> np.ndarray | None:
+    """Full Omega from an outer vector, or None for a diagonal spec.
+
+    Returning None (rather than ``np.diag(omega2)``) for the diagonal case is
+    deliberate: it keeps the diagonal hot path on its original scalar
+    arithmetic instead of silently routing it through matrix algebra, which is
+    NOT bitwise-equivalent.
+    """
+    if spec.omega_block is None:
+        return None
+    i = spec.n_theta + spec.n_cov
+    return _omega_full_from_seg(spec, x[i:i + spec.n_omega_par])
 
 
 # ───────────────────────────── prediction helpers ───────────────────────────
@@ -576,10 +843,15 @@ def _make_predictor_cache(spec: _PopSpec, subj: _Subject,
 
 def _ind_obj(eta: np.ndarray, predict: Callable[[np.ndarray], np.ndarray],
              subj: _Subject, spec: _PopSpec, omega2_vec: np.ndarray,
-             sigma_prop: float, sigma_add: float) -> float:
+             sigma_prop: float, sigma_add: float,
+             prior: _OmegaPrior | None = None) -> float:
     """Individual conditional objective (the quantity minimized for the EBE).
 
     ind_obj(eta) = sum_j[(y-f)^2 / Var + log(2*pi*Var)] + eta' Omega^-1 eta
+
+    ``prior`` supplies Omega^-1 when Omega is not diagonal; when it is None the
+    penalty keeps its original elementwise form (which is NOT bitwise-equal to
+    the matrix expression, so the branch is required, not cosmetic).
 
     The ``log(2*pi*Var)`` term carries the interaction (Var depends on f, which
     depends on eta). When the subject has below-quantification-limit records
@@ -603,7 +875,10 @@ def _ind_obj(eta: np.ndarray, predict: Callable[[np.ndarray], np.ndarray],
     else:
         resid = subj.c - f
         data_term = float(np.sum(resid ** 2 / var + np.log(2.0 * math.pi * var)))
-    penalty = float(np.sum(eta ** 2 / omega2_vec))
+    if prior is None:
+        penalty = float(np.sum(eta ** 2 / omega2_vec))
+    else:
+        penalty = float(eta @ prior.prec @ eta)
     val = data_term + penalty
     return val if math.isfinite(val) else _BIG
 
@@ -641,7 +916,8 @@ def _numeric_hessian(fun: Callable[[np.ndarray], float], x: np.ndarray,
 
 def _conditional_mode(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
                       omega2_vec: np.ndarray, sigma_prop: float,
-                      sigma_add: float, eta0: np.ndarray | None = None
+                      sigma_add: float, eta0: np.ndarray | None = None,
+                      prior: _OmegaPrior | None = None
                       ) -> tuple[np.ndarray, float, Callable[[np.ndarray], np.ndarray]]:
     """Find a subject's conditional mode eta_hat (the inner minimization).
 
@@ -657,7 +933,7 @@ def _conditional_mode(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
 
     def obj(eta: np.ndarray) -> float:
         return _ind_obj(eta, predict, subj, spec, omega2_vec,
-                        sigma_prop, sigma_add)
+                        sigma_prop, sigma_add, prior)
 
     # Inner solves are warm-started across outer iterations, so a modest
     # iteration cap is sufficient and keeps the population OFV affordable.
@@ -669,7 +945,8 @@ def _conditional_mode(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
 
 def _laplace_subject(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
                      omega2_vec: np.ndarray, sigma_prop: float,
-                     sigma_add: float, eta0: np.ndarray | None = None
+                     sigma_add: float, eta0: np.ndarray | None = None,
+                     prior: _OmegaPrior | None = None
                      ) -> tuple[float, np.ndarray]:
     """Subject -2*log marginal likelihood by Laplace at the conditional mode.
 
@@ -685,14 +962,26 @@ def _laplace_subject(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
     reused for the Hessian's finite differences.
     """
     eta_hat, obj_at_mode, predict = _conditional_mode(
-        spec, subj, theta, omega2_vec, sigma_prop, sigma_add, eta0)
+        spec, subj, theta, omega2_vec, sigma_prop, sigma_add, eta0, prior)
 
+    # NOTE: `prior` must reach BOTH _ind_obj consumers in this function. The
+    # mode above comes from the block prior; if this closure were left on the
+    # diagonal penalty the Hessian would carry prior curvature diag(1/omega2)
+    # while the mode came from Omega^-1, making log_det_H -- and therefore the
+    # OFV, AIC/BIC, every SCM delta-OFV decision and _auto_fit's basin
+    # arbitration -- wrong for block fits only. The correlation itself would
+    # still come out right (Omega enters the M-step through the sampled etas),
+    # so recovery tests would pass while the number that justifies the feature
+    # was silently corrupt.
     def half_obj(eta: np.ndarray) -> float:
         return 0.5 * _ind_obj(eta, predict, subj, spec, omega2_vec,
-                              sigma_prop, sigma_add)
+                              sigma_prop, sigma_add, prior)
 
     H = _numeric_hessian(half_obj, eta_hat)
-    log_det_omega = float(np.sum(np.log(omega2_vec)))
+    if prior is None:
+        log_det_omega = float(np.sum(np.log(omega2_vec)))
+    else:
+        log_det_omega = prior.logdet
 
     # Symmetrize and take the (clipped) eigenvalues for a robust log|det H|.
     Hs = 0.5 * (H + H.T)
@@ -709,23 +998,27 @@ def _laplace_subject(spec: _PopSpec, subj: _Subject, theta: dict[str, float],
 def _population_ofv(spec: _PopSpec, subjects: list[_Subject],
                     theta: dict[str, float], cov_coefs: np.ndarray,
                     omega2: dict[str, float], sigma_prop: float, sigma_add: float,
-                    eta_inits: list[np.ndarray] | None = None
+                    eta_inits: list[np.ndarray] | None = None,
+                    omega_matrix: np.ndarray | None = None
                     ) -> tuple[float, list[np.ndarray]]:
     """FOCE/Laplace population OFV = sum_i(-2LL_i), with per-subject EBEs.
 
     Each subject's typical values are covariate-adjusted (``_apply_cov``) before
     the conditional problem. Returns (ofv, eta_hats); ``eta_inits`` warm-starts
-    each inner problem.
+    each inner problem. ``omega_matrix`` (block specs only) switches the prior
+    from diag(omega2) to the full Omega; its factorization is hoisted here so it
+    happens once per OFV evaluation rather than once per inner iteration.
     """
     omega2_vec = np.array([omega2[p] for p in spec.iiv_params], dtype=float)
     omega2_vec = np.maximum(omega2_vec, _OMEGA_FLOOR)
+    prior = _omega_prior(omega_matrix) if omega_matrix is not None else None
     total = 0.0
     eta_hats: list[np.ndarray] = []
     for idx, subj in enumerate(subjects):
         eta0 = eta_inits[idx] if eta_inits is not None else None
         theta_i = _apply_cov(spec, theta, cov_coefs, subj)
         m2ll, eta_hat = _laplace_subject(
-            spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add, eta0)
+            spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add, eta0, prior)
         total += m2ll
         eta_hats.append(eta_hat)
     if not math.isfinite(total):
@@ -818,7 +1111,10 @@ def _empty_uncertainty(note: str = "") -> dict[str, Any]:
     """Uncertainty payload when standard errors are unavailable."""
     return {"theta_rse_pct": {}, "omega_rse_pct": {},
             "sigma_rse_pct": {"prop": None, "add": None},
-            "cov_rse_pct": [], "condition_number": None, "cov_note": note}
+            "cov_rse_pct": [], "condition_number": None, "cov_note": note,
+            # Block-Omega only; present unconditionally so _assemble can read
+            # them by subscript on every path, including non-converged fits.
+            "omega_cov_rse_pct": {}, "omega_corr": None}
 
 
 def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float],
@@ -908,8 +1204,18 @@ def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float]
         cov_rse.append(_rse(100.0 * float(se[i + k]) / abs(coef))
                        if abs(coef) > 1e-8 else None)
     i += spec.n_cov
-    out_omega = {p: _rse(float(rse[i + k])) for k, p in enumerate(spec.iiv_params)}
-    i += spec.n_omega
+    if spec.omega_block is None:
+        out_omega = {p: _rse(float(rse[i + k])) for k, p in enumerate(spec.iiv_params)}
+        i += spec.n_omega
+    else:
+        # Block members' marginal variances are functions of several Cholesky
+        # entries, so they have no single slot: their RSE needs the delta
+        # method and is reported as None until that lands, rather than reading
+        # a neighbouring parameter's slot and mislabelling it.
+        out_omega = {p: (_rse(float(rse[i + spec.omega_slot[k]]))
+                         if spec.omega_slot[k] >= 0 else None)
+                     for k, p in enumerate(spec.iiv_params)}
+        i += spec.n_omega_par
     sig = {"prop": None, "add": None}
     if spec.has_prop:
         sig["prop"] = _rse(float(rse[i]))
@@ -933,7 +1239,8 @@ def _post_fit_uncertainty(spec: _PopSpec, subjects: list[_Subject],
                           theta: dict[str, float], cov_coefs: np.ndarray,
                           omega2: dict[str, float], sigma_prop: float,
                           sigma_add: float, eta_hats: list[np.ndarray], *,
-                          enabled: bool, converged: bool
+                          enabled: bool, converged: bool,
+                          omega_matrix: np.ndarray | None = None
                           ) -> dict[str, Any] | None:
     """Compute asymptotic uncertainty at the final estimates (FOCE-I & SAEM).
 
@@ -948,10 +1255,15 @@ def _post_fit_uncertainty(spec: _PopSpec, subjects: list[_Subject],
 
     def ofv_at(xv: np.ndarray) -> float:
         th, cc, om, sp, sa = _unpack(spec, xv)
-        val, _ = _population_ofv(spec, subjects, th, cc, om, sp, sa, final_etas)
+        # The perturbed Omega must be rebuilt from the perturbed vector, or the
+        # Hessian would be taken with the off-diagonals held fixed and every
+        # block standard error would be wrong.
+        val, _ = _population_ofv(spec, subjects, th, cc, om, sp, sa, final_etas,
+                                 _omega_matrix(spec, xv))
         return val
 
-    x_hat = _pack(spec, theta, cov_coefs, omega2, sigma_prop, sigma_add)
+    x_hat = _pack(spec, theta, cov_coefs, omega2, sigma_prop, sigma_add,
+                  omega_matrix=omega_matrix)
     return _parameter_uncertainty(spec, ofv_at, x_hat)
 
 
@@ -988,7 +1300,8 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
               sigma_prop: float, sigma_add: float, ofv: float,
               eta_hats: list[np.ndarray], subjects: list[_Subject],
               n_obs: int, converged: bool, iterations: int,
-              uncertainty: dict[str, Any] | None = None) -> dict[str, Any]:
+              uncertainty: dict[str, Any] | None = None,
+              omega_matrix: np.ndarray | None = None) -> dict[str, Any]:
     """Build the public result dict shared by FOCE-I and SAEM."""
     omega2_vec = np.array([omega2[p] for p in spec.iiv_params], dtype=float)
     sigma = {
@@ -1022,6 +1335,20 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
         "converged": bool(converged),
         "individual": _individual_records(spec, subjects, theta, cov_coefs, eta_hats),
         "iterations": int(iterations),
+        # Block-Omega keys. Emitted only when a block was actually fitted, so
+        # every diagonal payload keeps its exact previous key set.
+        **({} if (spec.omega_block is None or omega_matrix is None) else {
+            "omega_block": list(spec.omega_block),
+            "omega_matrix": [[round(float(v), 8) for v in row]
+                             for row in np.asarray(omega_matrix, dtype=float)],
+            "omega_corr": [[round(float(v), 6) for v in row]
+                           for row in _block_corr(np.asarray(omega_matrix, dtype=float))],
+            "omega_block_corr": {
+                f"{spec.iiv_params[a]}~{spec.iiv_params[b]}": round(
+                    float(_block_corr(np.asarray(omega_matrix, dtype=float))[a, b]), 6)
+                for i, a in enumerate(spec.block_idx or ())
+                for b in (spec.block_idx or ())[i + 1:]},
+        }),
     }
 
 
@@ -1101,7 +1428,13 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         omega2_0 = {p: 0.09 for p in iiv}            # ~30 %CV start
         sigma_prop0 = 0.15 if spec.has_prop else 0.0
         sigma_add0 = 0.5 if spec.has_add else 0.0
-    x0 = _pack(spec, theta0, cov0, omega2_0, sigma_prop0, sigma_add0)
+    # A block spec starts NEUTRAL: diag(omega2_0) encodes to zero off-diagonal
+    # Cholesky entries, so the block fit begins at exactly the diagonal model
+    # and any OFV gain it reports is attributable to the correlation alone.
+    omega_m0 = (np.diag([omega2_0[p] for p in spec.iiv_params])
+                if spec.omega_block is not None else None)
+    x0 = _pack(spec, theta0, cov0, omega2_0, sigma_prop0, sigma_add0,
+               omega_matrix=omega_m0)
 
     # Warm-start cache: reuse the previous EBEs to seed each inner solve.
     warm: dict[str, list[np.ndarray]] = {"eta": None}
@@ -1121,7 +1454,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     # ``maxfev`` bounds the total objective evaluations (each is a full
     # population Laplace pass), keeping wall-time predictable on large cohorts.
     # A handful of Powell sweeps suffice because the inner EBEs are warm-started.
-    n_par = (spec.n_theta + spec.n_cov + spec.n_omega
+    n_par = (spec.n_theta + spec.n_cov + spec.n_omega_par
              + int(spec.has_prop) + int(spec.has_add))
     res = minimize(outer_obj, x0, method="Powell",
                    options={"maxiter": max_iter,
@@ -1254,27 +1587,35 @@ def _saem_estep(spec: _PopSpec, subjects: list[_Subject],
                 theta: dict[str, float], cov_coefs: np.ndarray,
                 etas: list[np.ndarray],
                 omega2_vec: np.ndarray, sigma_prop: float, sigma_add: float,
-                rng: np.random.Generator, n_walk: int, scale: float
+                rng: np.random.Generator, n_walk: int, scale: float,
+                omega_matrix: np.ndarray | None = None
                 ) -> list[np.ndarray]:
     """One E-step: random-walk Metropolis update of every subject's eta.
 
     The target is the unnormalized conditional posterior
     ``p(eta|y) ∝ exp(-0.5 * ind_obj(eta))``. ``n_walk`` proposals per subject
-    are drawn from N(0, (scale^2) * diag(Omega)); the last accepted eta is kept.
+    are drawn from N(0, (scale^2) * Omega) -- diag(Omega) by default, the full
+    Omega for a block spec, so the proposal follows the correlation instead of
+    fighting it. Both forms consume exactly ``cur.size`` normal draws per
+    proposal, so the diagonal path's RNG stream is bit-for-bit unchanged.
     """
     new_etas: list[np.ndarray] = []
     prop_sd = scale * np.sqrt(omega2_vec)
+    prior = _omega_prior(omega_matrix) if omega_matrix is not None else None
+    prop_chol = (scale * np.linalg.cholesky(0.5 * (omega_matrix + omega_matrix.T))
+                 if omega_matrix is not None else None)
     for subj, eta in zip(subjects, etas):
         theta_i = _apply_cov(spec, theta, cov_coefs, subj)
         predict = _make_predictor_cache(spec, subj, theta_i)
         cur = eta.copy()
         cur_obj = _ind_obj(cur, predict, subj, spec, omega2_vec,
-                           sigma_prop, sigma_add)
+                           sigma_prop, sigma_add, prior)
         for _ in range(n_walk):
-            step = rng.normal(0.0, 1.0, size=cur.size) * prop_sd
+            z = rng.normal(0.0, 1.0, size=cur.size)
+            step = z * prop_sd if prop_chol is None else prop_chol @ z
             cand = cur + step
             cand_obj = _ind_obj(cand, predict, subj, spec, omega2_vec,
-                                sigma_prop, sigma_add)
+                                sigma_prop, sigma_add, prior)
             # Metropolis acceptance on -0.5*ind_obj (log target).
             log_accept = -0.5 * (cand_obj - cur_obj)
             if math.log(rng.random() + _EPS) < log_accept:
@@ -1369,7 +1710,8 @@ def saem_fit(model_key: str, subjects: list[dict], *,
              iiv_params: list[str], error_model: str,
              max_iter: int = 300, seed: int = 20250614,
              compute_uncertainty: bool = True,
-             covariate_model: list[dict] | None = None) -> dict[str, Any]:
+             covariate_model: list[dict] | None = None,
+             omega_block: list[str] | None = None) -> dict[str, Any]:
     """Fit a population PK model by SAEM (stochastic approximation EM).
 
     Exploratory burn-in (gain = 1) for the first ~60% of iterations, then a
@@ -1387,7 +1729,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     iiv = _resolve_iiv(model, iiv_params)
     prepared = _prepare_subjects(subjects)
     cov_effects = _build_cov_effects(covariate_model, prepared)
-    spec = _PopSpec(model, iiv, error_model, cov_effects)
+    spec = _PopSpec(model, iiv, error_model, cov_effects, omega_block=omega_block)
     n_obs = int(sum(s.t.size for s in prepared))
     rng = np.random.default_rng(seed)
     cov_coefs = np.zeros(spec.n_cov, dtype=float)
@@ -1398,11 +1740,16 @@ def saem_fit(model_key: str, subjects: list[dict], *,
         return _assemble(spec, "SAEM", model_key, theta0, cov_coefs, omega2,
                          0.1 if spec.has_prop else 0.0,
                          0.1 if spec.has_add else 0.0,
-                         _BIG, [], prepared, 0, False, 0)
+                         _BIG, [], prepared, 0, False, 0,
+                         omega_matrix=(np.diag([omega2[p] for p in spec.iiv_params])
+                                       if spec.omega_block else None))
 
     # ── initialization ──
     theta = _initial_theta(spec, prepared)
     omega2_vec = np.full(spec.n_omega, 0.09, dtype=float)   # ~30 %CV
+    # A block starts NEUTRAL (zero off-diagonals) so it begins at exactly the
+    # diagonal model and any OFV gain is attributable to the correlation.
+    omega_m = (np.diag(omega2_vec.copy()) if spec.omega_block else None)
     sigma_prop = 0.15 if spec.has_prop else 0.0
     sigma_add = 0.5 if spec.has_add else 0.0
     etas = [np.zeros(spec.n_omega, dtype=float) for _ in prepared]
@@ -1411,7 +1758,8 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     n_walk = 2                                              # Metropolis steps/iter
     walk_scale = 0.4                                        # proposal scale
 
-    prev_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add, spec)
+    prev_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add,
+                             spec, omega_m)
     iterations_run = 0
     converged = False
     stable_streak = 0
@@ -1422,7 +1770,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
 
         # E-step: sample etas from their conditional posteriors.
         etas = _saem_estep(spec, prepared, theta, cov_coefs, etas, omega2_vec,
-                           sigma_prop, sigma_add, rng, n_walk, walk_scale)
+                           sigma_prop, sigma_add, rng, n_walk, walk_scale, omega_m)
 
         # Identifiability constraint E[eta] = 0: fold the sampled eta mean into
         # the typical values (theta_p *= exp(mean_eta_p)) and re-center the etas.
@@ -1439,10 +1787,20 @@ def saem_fit(model_key: str, subjects: list[dict], *,
                                               etas, sigma_prop, sigma_add)
 
         # M-step (Omega): Robbins-Monro on the (centered) empirical 2nd moment.
+        # For a block the moment is the FULL matrix E'E/n -- the closed-form
+        # MLE of Omega given the sampled etas -- projected back onto the
+        # declared block structure. This is the one place a correlation can
+        # enter the model, and it needs no optimizer.
         E = np.vstack(etas)
-        emp_omega2 = np.maximum(np.mean(E ** 2, axis=0), _OMEGA_FLOOR)
-        omega2_vec = (1.0 - gamma) * omega2_vec + gamma * emp_omega2
-        omega2_vec = np.maximum(omega2_vec, _OMEGA_FLOOR)
+        if omega_m is None:
+            emp_omega2 = np.maximum(np.mean(E ** 2, axis=0), _OMEGA_FLOOR)
+            omega2_vec = (1.0 - gamma) * omega2_vec + gamma * emp_omega2
+            omega2_vec = np.maximum(omega2_vec, _OMEGA_FLOOR)
+        else:
+            emp = _project_block(spec, (E.T @ E) / float(E.shape[0]))
+            omega_m = _shrink_to_pd(
+                _project_block(spec, (1.0 - gamma) * omega_m + gamma * emp))
+            omega2_vec = np.maximum(np.diag(omega_m), _OMEGA_FLOOR)
 
         # M-step (sigma): Robbins-Monro toward the ML variance target(s). For a
         # combined error model prop/add are estimated jointly (a single obs's
@@ -1461,7 +1819,8 @@ def saem_fit(model_key: str, subjects: list[dict], *,
                     (1.0 - gamma) * sigma_add ** 2 + gamma * new_var)
 
         # Convergence: small relative change in the smoothing phase.
-        cur_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add, spec)
+        cur_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add,
+                                spec, omega_m)
         if k > k1:
             rel = float(np.max(np.abs(cur_vec - prev_vec)
                                / (np.abs(prev_vec) + 1e-8)))
@@ -1475,25 +1834,44 @@ def saem_fit(model_key: str, subjects: list[dict], *,
 
     # Final E-step -> conditional-mode EBEs and a comparable Laplace OFV.
     final_ofv, eta_hats = _population_ofv(
-        spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas)
+        spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas,
+        omega_m)
     converged = converged or (math.isfinite(final_ofv) and final_ofv < _BIG)
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, eta_hats,
-        enabled=compute_uncertainty, converged=converged)
+        enabled=compute_uncertainty, converged=converged, omega_matrix=omega_m)
 
     return _assemble(spec, "SAEM", model_key, theta, cov_coefs, omega2,
                      sigma_prop, sigma_add, final_ofv, eta_hats, prepared, n_obs,
-                     converged, iterations_run, uncertainty=uncertainty)
+                     converged, iterations_run, uncertainty=uncertainty,
+                     omega_matrix=omega_m)
 
 
 def _state_vector(theta: dict[str, float], cov_coefs: np.ndarray,
                   omega2_vec: np.ndarray, sigma_prop: float, sigma_add: float,
-                  spec: _PopSpec) -> np.ndarray:
-    """Flatten the current SAEM estimates into a vector for change tracking."""
+                  spec: _PopSpec, omega_matrix: np.ndarray | None = None
+                  ) -> np.ndarray:
+    """Flatten the current SAEM estimates into a vector for change tracking.
+
+    A block contributes its CORRELATIONS, not its raw covariances. The caller's
+    convergence test is purely relative -- ``|cur-prev| / (|prev| + 1e-8)`` --
+    and a covariance legitimately sits near zero under the null of no
+    correlation, which collapses that denominator and makes the relative change
+    explode forever. The run would then never satisfy the stability criterion,
+    burn every iteration, and STILL be reported as converged (the caller falls
+    back to a finite-OFV check), so the failure would be invisible. A
+    correlation is bounded in [-1, 1] and moves on the same relative scale as
+    the variances already in this vector.
+    """
     parts = [theta[p] for p in spec.param_names]
     parts += list(cov_coefs)
     parts += list(omega2_vec)
+    if omega_matrix is not None and spec.block_idx:
+        corr = _block_corr(omega_matrix)
+        blk = spec.block_idx
+        parts += [float(corr[a, b])
+                  for i, a in enumerate(blk) for b in blk[i + 1:]]
     if spec.has_prop:
         parts.append(sigma_prop)
     if spec.has_add:
@@ -1507,7 +1885,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
                    method: str = "focei", iiv_params: list[str] | None = None,
                    error_model: str = "proportional", max_iter: int = 200,
                    seed: int = 20250614, compute_uncertainty: bool = True,
-                   covariate_model: list[dict] | None = None) -> dict[str, Any]:
+                   covariate_model: list[dict] | None = None,
+                   omega_block: list[str] | None = None) -> dict[str, Any]:
     """Estimate a population PK model by the requested NLME method.
 
     Args:
@@ -1541,6 +1920,14 @@ def population_fit(model_key: str, subjects: list[dict], *,
     model = get_model(model_key)
     iiv = _resolve_iiv(model, iiv_params)
     m = method.lower().replace("-", "_")
+    if omega_block and m != "saem":
+        # Fail loudly rather than silently returning a DIAGONAL fit: a caller
+        # who asked for a correlation and got a diagonal Omega back with no
+        # error would report "no correlation" as a finding.
+        raise ValueError(
+            f"omega_block is currently supported only by method='saem'; got "
+            f"{method!r}. SAEM estimates the block in closed form from the "
+            "sampled etas; the FOCE-I block path is not implemented yet.")
     if m == "focei":
         return focei_fit(model_key, subjects, iiv_params=iiv,
                          error_model=error_model, max_iter=max_iter,
@@ -1550,7 +1937,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
         return saem_fit(model_key, subjects, iiv_params=iiv,
                         error_model=error_model, max_iter=max(max_iter, 1),
                         seed=seed, compute_uncertainty=compute_uncertainty,
-                        covariate_model=covariate_model)
+                        covariate_model=covariate_model,
+                        omega_block=omega_block)
     if m == "focei_saem":
         return _focei_saem_fit(model_key, subjects, iiv_params=iiv,
                                error_model=error_model, max_iter=max_iter,
