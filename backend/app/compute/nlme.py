@@ -77,6 +77,9 @@ _COND_RED_FLAG = 1e3        # condition number above this signals over-parameter
 _RSE_CAP = 1e3             # RSE% above this -> report None (parameter unidentified)
 _MIN_OBS_PER_SUBJECT = 1     # subjects with fewer usable obs are skipped
 _SAEM_SEED_ITER = 100        # SAEM burn-in length when seeding FOCE-I (basin-finding only)
+_AUTO_TOL_ABS = 1.0          # OFV units: two starts closer than this agree (same basin)
+_AUTO_TOL_REL = 1e-3         # ...or within this fraction of |OFV|, whichever is larger
+_AUTO_MAX_STARTS = 6         # cap on SAEM-seeded starts tried by method="auto"
 _ROUND_DP = 6                # decimal places for all CWRES/IWRES payload floats
 
 # CWRES (Hooker, Staatz & Karlsson 2007, Pharm Res 24:2187-2197): finite-
@@ -1554,8 +1557,104 @@ def population_fit(model_key: str, subjects: list[dict], *,
                                seed=seed,
                                compute_uncertainty=compute_uncertainty,
                                covariate_model=covariate_model)
+    if m == "auto":
+        return _auto_fit(model_key, subjects, iiv_params=iiv,
+                         error_model=error_model, max_iter=max_iter, seed=seed,
+                         compute_uncertainty=compute_uncertainty,
+                         covariate_model=covariate_model)
     raise ValueError(
-        f"unknown method: {method!r} (expected 'focei', 'saem' or 'focei_saem')")
+        f"unknown method: {method!r} "
+        "(expected 'focei', 'saem', 'focei_saem' or 'auto')")
+
+
+def _auto_fit(model_key: str, subjects: list[dict], *,
+              iiv_params: list[str], error_model: str, max_iter: int, seed: int,
+              compute_uncertainty: bool,
+              covariate_model: list[dict] | None) -> dict[str, Any]:
+    """Escalating FOCE-I: probe for multimodality, multi-start only if found.
+
+    Neither plain FOCE-I nor a single SAEM-seeded fit is reliable on a
+    multimodal surface. Measured on the IU PopPK Week-8 case (2-cmt oral, IIV
+    KA/CL/VC, allometry off), against a reference Vc of 64.6: cold FOCE-I
+    converges cleanly to Vc 33.6, and SAEM seeding lands in the wrong basin in
+    3 of 5 seeds (Vc 82-90). Neither failure announces itself — both report
+    ``converged=True``.
+
+    What IS reliable is the objective itself: the OFVs separate the basins
+    unambiguously (23832 at the true optimum, 24443 cold, 26400+ for a bad
+    seed). Every candidate here is a fully converged FOCE-I fit of the same
+    model on the same data, so their OFVs are directly comparable and the
+    lowest one wins.
+
+    Strategy, cheapest-first:
+
+    1. Cold FOCE-I.
+    2. One SAEM-seeded probe — an independent start.
+    3. If the two agree on OFV (within ``_AUTO_TOL_ABS`` / ``_AUTO_TOL_REL``),
+       two independent starts found the same optimum: accept the better of the
+       two. Cost: 2 fits.
+    4. If they disagree, the surface is multimodal: run further SAEM-seeded
+       starts (up to ``_AUTO_MAX_STARTS`` total) and return the global minimum
+       OFV over every candidate, cold included.
+
+    Agreement between two starts is evidence of a unique basin, not proof — two
+    starts can in principle converge to the same wrong optimum. The guarantee
+    this method does make is weaker but exact: the result is never worse (by
+    OFV) than any candidate it evaluated, and never worse than plain FOCE-I.
+
+    Deterministic: the cold fit is deterministic and every seeded start uses a
+    seed derived from ``seed``, so identical inputs give identical estimates.
+    """
+    kw = dict(iiv_params=iiv_params, error_model=error_model,
+              max_iter=max_iter, covariate_model=covariate_model)
+
+    cold = focei_fit(model_key, subjects, compute_uncertainty=compute_uncertainty,
+                     **kw)
+    probe = _focei_saem_fit(model_key, subjects, seed=seed,
+                            compute_uncertainty=compute_uncertainty, **kw)
+    candidates: list[tuple[str, dict[str, Any]]] = [
+        ("cold", cold), (f"saem_seed:{seed}", probe)]
+
+    def _ofv(r: dict[str, Any]) -> float:
+        v = r.get("ofv")
+        return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else _BIG
+
+    cold_ofv, probe_ofv = _ofv(cold), _ofv(probe)
+    tol = max(_AUTO_TOL_ABS, _AUTO_TOL_REL * min(abs(cold_ofv), abs(probe_ofv)))
+    both_converged = bool(cold.get("converged")) and bool(probe.get("converged"))
+    disagree = abs(cold_ofv - probe_ofv) > tol
+    # Escalate on EITHER signal. Disagreement means multiple basins; a start
+    # that stopped on the iteration cap has not identified any optimum, and its
+    # OFV gap would otherwise be read as multimodality when it is really
+    # under-convergence. Both are reasons to spend more starts.
+    escalated = disagree or not both_converged
+
+    if escalated:
+        # Multimodal: spend more starts. Seeds are derived from `seed` so the
+        # whole escalation stays reproducible.
+        for i in range(1, _AUTO_MAX_STARTS):
+            s = seed + 7919 * i          # arbitrary large stride -> distinct streams
+            candidates.append((f"saem_seed:{s}", _focei_saem_fit(
+                model_key, subjects, seed=s,
+                compute_uncertainty=compute_uncertainty, **kw)))
+
+    winner_name, winner = min(candidates, key=lambda kv: _ofv(kv[1]))
+    if escalated:
+        reason = ("starts disagreed on OFV" if disagree
+                  else "a start hit the iteration cap without converging")
+    else:
+        reason = "two independent starts converged and agreed"
+    winner["method"] = f"FOCE-I (auto: {winner_name})"
+    winner["auto"] = {
+        "escalated": escalated,
+        "reason": reason,
+        "tol": round(tol, 6),
+        "n_candidates": len(candidates),
+        "winner": winner_name,
+        "candidate_ofv": {name: (None if _ofv(r) >= _BIG else _ofv(r))
+                          for name, r in candidates},
+    }
+    return winner
 
 
 def _focei_saem_fit(model_key: str, subjects: list[dict], *,

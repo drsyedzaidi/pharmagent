@@ -777,3 +777,108 @@ def test_plain_focei_is_unchanged_by_the_seeding_feature(
     """Guard: method='focei' must stay a cold start with no seed provenance."""
     assert focei_result["method"] == "FOCE-I"
     assert focei_result.get("seeded_by") is None
+
+
+# ── method="auto": escalating FOCE-I with OFV arbitration ────────────────────
+# Neither cold FOCE-I nor a single SAEM seed is reliable on a multimodal
+# surface, and neither failure announces itself (both report converged=True).
+# What IS reliable is the objective: every candidate is a converged FOCE-I fit
+# of the same model on the same data, so OFVs are comparable and the minimum
+# wins. `auto` probes with two independent starts and only pays for a
+# multi-start search when they disagree.
+
+@pytest.fixture(scope="module")
+def auto_result(population: list[dict[str, Any]]) -> dict[str, Any]:
+    return population_fit(MODEL_KEY, population, method="auto", max_iter=200,
+                          seed=1, compute_uncertainty=False)
+
+
+def test_auto_skips_escalation_when_starts_agree() -> None:
+    """The fast path: when two independent starts land on the same optimum,
+    `auto` stops at 2 candidates instead of paying for a multi-start search.
+
+    Uses a deliberately small cohort. Measured cold-vs-seeded OFV gap by cohort
+    size (max_iter=200): n=8 -> 0.09, n=10 -> 0.34, n=12 -> 2.0, n=16 -> 11.5
+    against a tolerance of 1.0. Agreement is only reachable on small cohorts
+    because this FOCE-I really is start-dependent at realistic sizes -- which is
+    the very reason `auto` exists. See
+    test_auto_escalates_on_a_realistic_cohort for the other side of that."""
+    small = _make_population(n=8)
+    r = population_fit(MODEL_KEY, small, method="auto", max_iter=200, seed=1,
+                       compute_uncertainty=False)
+    a = r["auto"]
+    assert a["escalated"] is False
+    assert a["n_candidates"] == 2
+    assert a["reason"] == "two independent starts converged and agreed"
+    assert _REQUIRED_KEYS.issubset(r.keys())
+
+
+def test_auto_escalates_on_a_realistic_cohort(auto_result: dict[str, Any]) -> None:
+    """On the 30-subject cohort the two starts disagree, so `auto` escalates.
+
+    Both starts report converged=True after 0-1 outer iterations yet land ~4 OFV
+    apart: Powell's convergence test fires early enough that the stopping point
+    depends on where it began. The escalation is not wasted work -- it buys a
+    genuinely lower OFV (asserted in test_auto_never_worse_than_plain_focei)."""
+    a = auto_result["auto"]
+    assert a["escalated"] is True
+    assert a["reason"] == "starts disagreed on OFV"
+    assert a["n_candidates"] > 2
+
+
+def test_auto_selects_the_minimum_ofv_candidate(auto_result: dict[str, Any]) -> None:
+    """The returned fit must BE the best candidate, not merely near it."""
+    a = auto_result["auto"]
+    ofvs = {k: v for k, v in a["candidate_ofv"].items() if v is not None}
+    assert ofvs, "no finite candidate"
+    best_name = min(ofvs, key=lambda k: ofvs[k])
+    assert a["winner"] == best_name
+    assert auto_result["ofv"] == pytest.approx(ofvs[best_name])
+    assert auto_result["method"] == f"FOCE-I (auto: {best_name})"
+
+
+def test_auto_never_worse_than_plain_focei(
+        auto_result: dict[str, Any], population: list[dict[str, Any]]) -> None:
+    """The guarantee `auto` actually makes: it evaluates cold FOCE-I as one of
+    its candidates and returns the OFV minimum, so it can never come back worse
+    than plain FOCE-I on the same data."""
+    cold_ofv = auto_result["auto"]["candidate_ofv"]["cold"]
+    assert cold_ofv is not None
+    assert auto_result["ofv"] <= cold_ofv + 1e-9
+
+
+def test_auto_recovers_truth(auto_result: dict[str, Any]) -> None:
+    theta = auto_result["theta"]
+    assert TRUE_THETA["CL"] * 0.80 < theta["CL"] < TRUE_THETA["CL"] * 1.20
+    assert TRUE_THETA["V"] * 0.80 < theta["V"] < TRUE_THETA["V"] * 1.20
+
+
+def test_auto_is_deterministic(population: list[dict[str, Any]]) -> None:
+    """Cold FOCE-I is deterministic and every seeded start derives its seed from
+    `seed`, so the whole escalation is reproducible -- required for the audit
+    trail."""
+    kw = dict(method="auto", max_iter=200, seed=5, compute_uncertainty=False)
+    a = population_fit(MODEL_KEY, population, **kw)
+    b = population_fit(MODEL_KEY, population, **kw)
+    assert a["theta"] == b["theta"]
+    assert a["ofv"] == b["ofv"]
+    assert a["auto"]["candidate_ofv"] == b["auto"]["candidate_ofv"]
+
+
+def test_auto_escalates_when_a_start_fails_to_converge(
+        population: list[dict[str, Any]]) -> None:
+    """A start stopped by the iteration cap has not identified any optimum. Its
+    OFV gap would otherwise read as multimodality, so `auto` treats
+    non-convergence as its own escalation trigger."""
+    r = population_fit(MODEL_KEY, population, method="auto", max_iter=2, seed=2,
+                       compute_uncertainty=False)
+    a = r["auto"]
+    assert a["escalated"] is True
+    assert a["n_candidates"] > 2
+
+
+def test_auto_handles_degenerate_input() -> None:
+    r = population_fit(MODEL_KEY, [], method="auto", max_iter=5,
+                       compute_uncertainty=False)
+    assert _REQUIRED_KEYS.issubset(r.keys())
+    assert r["auto"]["n_candidates"] >= 2

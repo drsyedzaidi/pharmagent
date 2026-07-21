@@ -301,6 +301,17 @@ export interface NlmeResults {
   sigma?: { prop: number | null; add: number | null };
   sigma_rse_pct?: { prop: number | null; add: number | null };
   covariate_effects?: CovariateEffect[];
+  /** Present only for method="auto": which starts were tried and why. */
+  auto?: {
+    escalated: boolean;
+    reason: string;
+    tol: number;
+    n_candidates: number;
+    winner: string;
+    candidate_ofv: Record<string, number | null>;
+  };
+  /** Present only for method="focei_saem": the SAEM burn-in that seeded the fit. */
+  seeded_by?: { method: string; iterations: number; ofv: number; converged: boolean } | null;
   ofv?: number;
   condition_number?: number | null;
   cov_note?: string;

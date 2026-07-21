@@ -596,6 +596,21 @@ function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
           </span></>
         )}
       </div>
+      {r.auto && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}
+          title="Every candidate is a converged FOCE-I fit of the same model on the same data, so their OFVs are directly comparable and the lowest wins.">
+          {r.auto.escalated
+            ? `Auto: escalated (${r.auto.reason}) — ${r.auto.n_candidates} starts compared, kept ${r.auto.winner}`
+            : `Auto: no escalation (${r.auto.reason}) — kept ${r.auto.winner}`}
+          {r.auto.escalated && (
+            <> · OFV {Object.entries(r.auto.candidate_ofv)
+              .filter(([, v]) => v != null)
+              .sort((a, b) => (a[1] as number) - (b[1] as number))
+              .map(([k, v]) => `${k} ${fmt(v as number, 1)}`)
+              .join(' | ')}</>
+          )}
+        </div>
+      )}
       <table className="nca-table">
         <thead><tr><th>Parameter</th><th>Typical (θ)</th><th>RSE%</th><th>IIV CV% (RSE%)</th><th>η-shrinkage%</th></tr></thead>
         <tbody>
@@ -2139,8 +2154,12 @@ export default function App() {
 
   async function runNlme(method: string) {
     if (!session) return;
+    const label: Record<string, string> = {
+      focei: 'FOCE-I only', saem: 'SAEM',
+      focei_saem: 'FOCE-I (SAEM-seeded)', auto: 'Auto (escalating)',
+    };
     setLoading(true);
-    pushMsg({ role: 'user', content: `NLME fit — ${method.toUpperCase()} (${errorModel} error)`, id: '' });
+    pushMsg({ role: 'user', content: `NLME fit — ${label[method] ?? method} (${errorModel} error)`, id: '' });
     try {
       const { job_id } = await api.nlme(session.id, { method, error_model: errorModel });
       const res = await api.pollJob(session.id, job_id,
@@ -2810,8 +2829,18 @@ export default function App() {
         {state?.pk_model_results?.status === 'ok' && (
           <div className="quick-actions">
             <span className="quick-actions-label">Population (NLME):</span>
-            <button className="chip" disabled={loading} onClick={() => runNlme('focei')}>FOCE-I</button>
-            <button className="chip" disabled={loading} onClick={() => runNlme('saem')}>SAEM</button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('focei')}
+              title="Single cold start — fastest and fully reproducible. On harder models (several IIV terms, covariates) a cold start can converge to the wrong optimum while still reporting success.">
+              FOCE-I only
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('saem')}
+              title="Stochastic EM — explores rather than descends, so it is far less sensitive to starting values, but gives no exact Laplace OFV or asymptotic standard errors.">
+              SAEM
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('auto')}
+              title="Runs FOCE-I, then probes with an independent SAEM-seeded start. If the two agree it stops there; if they disagree it escalates to a multi-start search and returns the lowest-OFV fit. Never worse than FOCE-I alone, but much slower whenever it escalates.">
+              Auto
+            </button>
             <label className="sim-field">error
               <select className="model-select" style={{ maxWidth: 130 }} value={errorModel}
                 disabled={loading} onChange={e => setErrorModel(e.target.value)}>

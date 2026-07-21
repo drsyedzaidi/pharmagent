@@ -850,13 +850,16 @@ TOOLS = [
          "or SAEM: typical values (theta) with RSE%, between-subject variability "
          "(Omega/IIV CV%), residual error, OFV, condition number, eta-shrinkage, "
          "and optional covariate effects. method='focei_saem' starts FOCE-I from "
-         "a short SAEM burn-in — prefer it on harder models (many parameters, "
-         "several IIV terms, covariates) where plain FOCE-I can converge to the "
-         "wrong basin from its cold starting values.",
+         "a short SAEM burn-in; method='auto' additionally probes for multiple "
+         "optima and escalates to a multi-start search only when it finds them, "
+         "returning the lowest-OFV fit. Prefer 'auto' on harder models (many "
+         "parameters, several IIV terms, covariates), where a single start — cold "
+         "OR seeded — can converge to the wrong optimum while reporting success.",
          "modeler",
          {"type": "object",
           "properties": {"method": {"type": "string",
-                                    "enum": ["focei", "saem", "focei_saem"]},
+                                    "enum": ["focei", "saem", "focei_saem",
+                                             "auto"]},
                          "model_key": {"type": "string"},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
