@@ -10,7 +10,7 @@ import { FlexplotPanel } from './flexplot';
 import type {
   Session, PharmState, AgentMessage, AuditEntry,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
-  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate,
+  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -64,6 +64,12 @@ const WORKFLOW_UI: Record<WorkflowName, { title: string; steps: readonly { key: 
   poppk_modeling: { title: 'Modeling Workflow',   steps: MODELING_STEPS },
   poppk_full:     { title: 'Population PK Workflow', steps: POPPK_FULL_STEPS },
 };
+
+/** Steps that submit a real population fit — minutes of compute, so resuming
+ *  into one is polled as a background job rather than awaited inline. */
+const HEAVY_STEPS = new Set<string>([
+  'run_nlme', 'run_scm', 'run_engine_comparison', 'run_simest',
+]);
 
 const WF_LABEL: Record<WorkflowName, string> = {
   nca_full: 'NCA',
@@ -1995,8 +2001,24 @@ export default function App() {
     if (!session) return;
     setLoading(true);
     setWfStatus('running');
-    pushMsg({ role: 'user', content: approve ? 'Approved — generating report.' : 'Rejected — workflow stopped.', id: '' });
+    // Approving runs every remaining step in one call. If any of them is a real
+    // population fit, poll a job instead of holding the request open — and say
+    // what actually happens next rather than assuming the NCA shape.
+    const remaining = WORKFLOW_UI[activeWorkflow].steps.slice(Math.max(currentStep, 0));
+    const isLongLeg = approve && remaining.some(s => HEAVY_STEPS.has(s.key));
+    const note = !approve ? 'Rejected — workflow stopped.'
+      : isLongLeg ? 'Approved — running the population fit (NLME → SCM → diagnostics → forest → VPC).'
+      : 'Approved — generating report.';
+    pushMsg({ role: 'user', content: note, id: '' });
     try {
+      if (isLongLeg) {
+        const { job_id } = await api.resumeWorkflowAsync(session.id);
+        const res = await api.pollJob<WorkflowResponse>(session.id, job_id,
+          s => setJobNote(`Population fit running… ${s}s (several real fits — this can take minutes)`));
+        setJobNote('');
+        handleWorkflowResponse(res);
+        return;
+      }
       const res = await api.resumeWorkflow(session.id, approve);
       handleWorkflowResponse(res);
     } catch (e) {

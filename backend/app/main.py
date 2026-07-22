@@ -135,6 +135,12 @@ class WorkflowRequest(BaseModel):
 class ResumeRequest(BaseModel):
     approve: bool = True
     reason: str = ""          # reason-for-change / approval note (audited)
+    # Approving a gate runs every remaining step in one call. For a template
+    # whose remainder is a population fit (poppk_full: NLME -> SCM -> VPC) that
+    # is minutes of compute, so the client can ask for a job id to poll instead
+    # of holding the connection open. Default False keeps existing callers
+    # byte-identical.
+    background: bool = False
 
 
 class RolesRequest(BaseModel):
@@ -283,6 +289,15 @@ def start_workflow(sid: str, req: WorkflowRequest, sess=Depends(owned_session),
 @app.post("/api/sessions/{sid}/workflow/resume")
 def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
                     actor: str = Depends(actor_id)) -> dict:
+    # A rejection does no compute — it records the signed decision and returns,
+    # so it always runs inline. Only an approval can start a long leg.
+    if req.background and req.approve:
+        if not orch.get_session(sid).pending_review:
+            raise HTTPException(400, "no pending review to resume")
+        job_id = jobs.submit(
+            session_id=sid, kind="workflow_resume",
+            fn=lambda: orch.resume_workflow(sid, True, actor=actor, reason=req.reason))
+        return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
     try:
         return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason)
     except (KeyError, ValueError) as e:

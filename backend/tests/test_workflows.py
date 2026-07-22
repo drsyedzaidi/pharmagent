@@ -7,12 +7,19 @@ so each tool's prerequisites are already in state. They deliberately do NOT run
 """
 from __future__ import annotations
 
+import itertools
+import time
 from pathlib import Path
 
+import pytest
 from docx import Document
+from fastapi.testclient import TestClient
 
 from app.agents.definitions import AGENTS
+from app.core.llm import MockLLM
+from app.core.orchestrator import Orchestrator
 from app.core.pharmstate import PharmState
+from app.core.store import SessionStore
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
 from app.tools.report_tools import generate_report
@@ -106,12 +113,6 @@ def test_poppk_full_runs_to_the_structural_gate_and_stops(tmp_path):
     """The structural gate must actually hold at runtime: starting the workflow
     reaches it in seconds and executes NO population fit until a human resumes.
     """
-    import itertools
-
-    from app.core.llm import MockLLM
-    from app.core.orchestrator import Orchestrator
-    from app.core.store import SessionStore
-
     sample = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
     orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
                         store=SessionStore(":memory:"))
@@ -132,6 +133,70 @@ def test_poppk_full_runs_to_the_structural_gate_and_stops(tmp_path):
     rej = orch.resume_workflow(sid, approve=False, actor="alice", reason="wrong model")
     assert rej["status"] == "rejected"
     assert rej["state"]["nlme_results"] is None
+
+
+# ── backgrounded gate resume ──────────────────────────────────────────────────
+
+@pytest.fixture
+def client():
+    import app.main as main
+    main.orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
+                             store=SessionStore(":memory:"))
+    return TestClient(main.app)
+
+
+def _sample() -> str:
+    return str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
+
+
+def test_background_resume_returns_a_job_that_completes_the_workflow(client):
+    """Exercised on nca_full, whose post-gate remainder is just the report — the
+    branch under test is the endpoint's job handoff, not the NLME compute."""
+    sid = client.post("/api/sessions").json()["id"]
+    started = client.post(f"/api/sessions/{sid}/workflow/start",
+                          json={"workflow": "nca_full", "params": {"path": _sample()}}).json()
+    assert started["status"] == "awaiting_review"
+
+    r = client.post(f"/api/sessions/{sid}/workflow/resume",
+                    json={"approve": True, "background": True}).json()
+    assert r["kind"] == "workflow_resume" and r["status"] == "running"
+
+    for _ in range(200):
+        job = client.get(f"/api/sessions/{sid}/jobs/{r['job_id']}").json()
+        if job["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done", job.get("error")
+    assert job["result"]["status"] == "complete"
+    assert job["result"]["audit_ok"]
+    # The signed approval still landed in the chain, just from the job thread.
+    audit = client.get(f"/api/sessions/{sid}/audit").json()
+    assert audit["verified"] is True
+
+
+def test_background_resume_without_a_pending_review_is_rejected(client):
+    sid = client.post("/api/sessions").json()["id"]
+    r = client.post(f"/api/sessions/{sid}/workflow/resume",
+                    json={"approve": True, "background": True})
+    assert r.status_code == 400
+
+
+def test_background_flag_defaults_off_so_existing_callers_are_unchanged(client):
+    sid = client.post("/api/sessions").json()["id"]
+    client.post(f"/api/sessions/{sid}/workflow/start",
+                json={"workflow": "nca_full", "params": {"path": _sample()}})
+    r = client.post(f"/api/sessions/{sid}/workflow/resume", json={"approve": True}).json()
+    assert r["status"] == "complete" and "job_id" not in r
+
+
+def test_rejection_is_never_backgrounded(client):
+    """A rejection does no compute; it must return the signed decision inline."""
+    sid = client.post("/api/sessions").json()["id"]
+    client.post(f"/api/sessions/{sid}/workflow/start",
+                json={"workflow": "nca_full", "params": {"path": _sample()}})
+    r = client.post(f"/api/sessions/{sid}/workflow/resume",
+                    json={"approve": False, "background": True}).json()
+    assert r["status"] == "rejected" and "job_id" not in r
 
 
 # ── the report end of the story ───────────────────────────────────────────────

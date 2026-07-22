@@ -77,6 +77,17 @@ export const api = {
       body: JSON.stringify({ approve }),
     }),
 
+  // Approving a gate runs every remaining step in one call. When that remainder
+  // is a population fit (poppk_full), ask for a job id and poll it rather than
+  // holding the request open for minutes.
+  resumeWorkflowAsync: (sid: string, reason = ''):
+    Promise<{ job_id: string; status: string; kind: string }> =>
+    req(`/sessions/${sid}/workflow/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve: true, reason, background: true }),
+    }),
+
   getState: (sid: string): Promise<PharmState> =>
     req(`/sessions/${sid}/state`),
 
@@ -199,12 +210,12 @@ export const api = {
     req(`/sessions/${sid}/jobs/${jobId}`),
 
   // Poll a background job to completion. onTick fires each poll with elapsed seconds.
-  pollJob: async (sid: string, jobId: string,
-                  onTick?: (elapsedSec: number) => void): Promise<JobResult> => {
+  pollJob: async <T = JobResult>(sid: string, jobId: string,
+                  onTick?: (elapsedSec: number) => void): Promise<T> => {
     const start = Date.now();
     for (;;) {
       const j = await api.getJob(sid, jobId);
-      if (j.status === 'done' && j.result) return j.result;
+      if (j.status === 'done' && j.result) return j.result as unknown as T;
       if (j.status === 'error') throw new Error(j.error || 'job failed');
       onTick?.(Math.round((Date.now() - start) / 1000));
       await new Promise(r => setTimeout(r, 1500));
