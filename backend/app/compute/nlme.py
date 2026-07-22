@@ -431,6 +431,64 @@ def _seg_from_omega_full(spec: _PopSpec, om: np.ndarray) -> np.ndarray:
     return np.asarray(parts, dtype=float)
 
 
+def _omega_delta_se(spec: _PopSpec, seg: np.ndarray, cov_seg: np.ndarray,
+                    *, step: float = 1e-5
+                    ) -> tuple[dict[str, float], dict[str, float]]:
+    """Delta-method standard errors for quantities derived from a block Omega.
+
+    Every other population parameter in this module is log-linked, which makes
+    the relative SE on the natural scale equal to the SE on the estimation
+    scale -- the ``RSE% = 100*SE`` shortcut used above. That shortcut does NOT
+    apply here: the packed block parameters are Cholesky entries, a MIX of
+    log-scale (the diagonal of L) and raw-scale (its strictly-lower entries),
+    and each reported quantity is a nonlinear function of several of them. So
+    each needs its own gradient, and
+
+        Var(g) = grad(g)' Cov(phi) grad(g).
+
+    Gradients are central finite differences on the same decode the fit uses,
+    so they cannot drift from it.
+
+    Returns ``(var_se, corr_se)``: the SE of each block member's MARGINAL
+    variance, and the ABSOLUTE SE of each pairwise correlation. The correlation
+    deliberately gets an absolute SE rather than an RSE%, because r may sit
+    arbitrarily close to zero -- exactly the null case the block is tested
+    against -- where a relative error is meaningless and a CI is what a reader
+    actually needs.
+    """
+    seg = np.asarray(seg, dtype=float)
+    blk = spec.block_idx or ()
+
+    def quantities(s: np.ndarray) -> np.ndarray:
+        om = _omega_full_from_seg(spec, s)
+        corr = _block_corr(om)
+        vals = [float(om[j, j]) for j in blk]
+        vals += [float(corr[a, b])
+                 for i, a in enumerate(blk) for b in blk[i + 1:]]
+        return np.asarray(vals, dtype=float)
+
+    base = quantities(seg)
+    jac = np.zeros((base.size, seg.size), dtype=float)
+    for k in range(seg.size):
+        h = step * max(abs(float(seg[k])), 1.0)
+        sp, sm = seg.copy(), seg.copy()
+        sp[k] += h
+        sm[k] -= h
+        jac[:, k] = (quantities(sp) - quantities(sm)) / (2.0 * h)
+
+    var_g = np.einsum("ij,jk,ik->i", jac, cov_seg, jac)
+    se_g = np.sqrt(np.maximum(var_g, 0.0))
+
+    var_se = {spec.iiv_params[j]: float(se_g[i]) for i, j in enumerate(blk)}
+    corr_se: dict[str, float] = {}
+    pos = len(blk)
+    for i, a in enumerate(blk):
+        for b in blk[i + 1:]:
+            corr_se[f"{spec.iiv_params[a]}~{spec.iiv_params[b]}"] = float(se_g[pos])
+            pos += 1
+    return var_se, corr_se
+
+
 def _project_block(spec: _PopSpec, om: np.ndarray) -> np.ndarray:
     """Impose the spec's Omega structure on an unstructured covariance.
 
@@ -1113,8 +1171,8 @@ def _empty_uncertainty(note: str = "") -> dict[str, Any]:
             "sigma_rse_pct": {"prop": None, "add": None},
             "cov_rse_pct": [], "condition_number": None, "cov_note": note,
             # Block-Omega only; present unconditionally so _assemble can read
-            # them by subscript on every path, including non-converged fits.
-            "omega_cov_rse_pct": {}, "omega_corr": None}
+            # it by subscript on every path, including non-converged fits.
+            "omega_corr_se": {}}
 
 
 def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float],
@@ -1204,17 +1262,28 @@ def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float]
         cov_rse.append(_rse(100.0 * float(se[i + k]) / abs(coef))
                        if abs(coef) > 1e-8 else None)
     i += spec.n_cov
+    omega_corr_se: dict[str, float | None] = {}
     if spec.omega_block is None:
         out_omega = {p: _rse(float(rse[i + k])) for k, p in enumerate(spec.iiv_params)}
         i += spec.n_omega
     else:
         # Block members' marginal variances are functions of several Cholesky
-        # entries, so they have no single slot: their RSE needs the delta
-        # method and is reported as None until that lands, rather than reading
-        # a neighbouring parameter's slot and mislabelling it.
-        out_omega = {p: (_rse(float(rse[i + spec.omega_slot[k]]))
-                         if spec.omega_slot[k] >= 0 else None)
-                     for k, p in enumerate(spec.iiv_params)}
+        # entries, so they have no single slot to read: they need the delta
+        # method. Non-block members still have their own log-variance slot and
+        # keep the ordinary log-scale shortcut.
+        seg = np.asarray(x_hat[i:i + spec.n_omega_par], dtype=float)
+        cov_seg = cov[i:i + spec.n_omega_par, i:i + spec.n_omega_par]
+        var_se, corr_se = _omega_delta_se(spec, seg, cov_seg)
+        om_hat = _omega_full_from_seg(spec, seg)
+        out_omega = {}
+        for k, p in enumerate(spec.iiv_params):
+            if spec.omega_slot[k] >= 0:
+                out_omega[p] = _rse(float(rse[i + spec.omega_slot[k]]))
+            else:
+                v = float(om_hat[k, k])
+                out_omega[p] = (_rse(100.0 * var_se[p] / v) if v > 0.0 else None)
+        omega_corr_se = {k: (round(v, 6) if math.isfinite(v) else None)
+                         for k, v in corr_se.items()}
         i += spec.n_omega_par
     sig = {"prop": None, "add": None}
     if spec.has_prop:
@@ -1232,7 +1301,8 @@ def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float]
         note = ""
     return {"theta_rse_pct": out_theta, "omega_rse_pct": out_omega,
             "sigma_rse_pct": sig, "cov_rse_pct": cov_rse,
-            "condition_number": cond, "cov_note": note}
+            "condition_number": cond, "cov_note": note,
+            "omega_corr_se": omega_corr_se}
 
 
 def _post_fit_uncertainty(spec: _PopSpec, subjects: list[_Subject],
@@ -1348,6 +1418,10 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
                     float(_block_corr(np.asarray(omega_matrix, dtype=float))[a, b]), 6)
                 for i, a in enumerate(spec.block_idx or ())
                 for b in (spec.block_idx or ())[i + 1:]},
+            # Absolute SE of each correlation (delta method). Absolute rather
+            # than RSE% because r may sit near zero, where a relative error is
+            # meaningless; this is what a Wald CI for r needs.
+            "omega_corr_se": unc["omega_corr_se"],
         }),
     }
 

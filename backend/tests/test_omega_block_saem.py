@@ -230,3 +230,115 @@ def test_shrink_to_pd_repairs_an_indefinite_matrix():
 def test_shrink_to_pd_leaves_a_valid_matrix_untouched():
     ok = np.array([[0.093, 0.042], [0.042, 0.065]])
     np.testing.assert_allclose(_shrink_to_pd(ok), ok, rtol=0, atol=1e-15)
+
+
+# ── delta-method standard errors for the block ──────────────────────────────
+# The packed block parameters are Cholesky entries -- log-scale on the diagonal,
+# raw-scale below it -- so the "RSE% = 100*SE" shortcut that holds for every
+# other population parameter does not apply, and each reported quantity needs
+# its own gradient.
+
+@pytest.fixture(scope="module")
+def recovered_se():
+    """Same cohort as `recovered`, fitted WITH the uncertainty pass."""
+    return population_fit(MODEL_KEY, _cohort(R_TRUE, seed=20250614), method="saem",
+                          iiv_params=["CL", "V"], error_model="proportional",
+                          max_iter=250, seed=7, compute_uncertainty=True,
+                          omega_block=["CL", "V"])
+
+
+def _delta_se(spec, om, cov_seg):
+    from app.compute.nlme import _omega_delta_se, _seg_from_omega_full
+    return _omega_delta_se(spec, _seg_from_omega_full(spec, om), cov_seg)
+
+
+def test_delta_se_matches_monte_carlo_through_the_same_decode():
+    """The delta method is a FIRST-ORDER approximation, so this pins how good
+    it actually is rather than asserting it is exact: sample the Cholesky
+    parameters from their own covariance, push each draw through the same
+    decode the fit uses, and compare the empirical spread.
+    """
+    from app.compute.nlme import _block_corr, _omega_full_from_seg, _seg_from_omega_full
+    spec = _PopSpec(MODEL, ["CL", "V"], "proportional", omega_block=["CL", "V"])
+    om = np.array([[0.093, 0.042], [0.042, 0.065]])
+    seg = _seg_from_omega_full(spec, om)
+    cov_seg = np.diag([0.09 ** 2, 0.09 ** 2, 0.09 ** 2 * 0.35])
+    _var_se, corr_se = _delta_se(spec, om, cov_seg)
+
+    rng = np.random.default_rng(4)
+    chol = np.linalg.cholesky(cov_seg)
+    draws = seg[None, :] + (chol @ rng.normal(0.0, 1.0, (seg.size, 40000))).T
+    r = np.array([_block_corr(_omega_full_from_seg(spec, s))[0, 1] for s in draws])
+    ratio = corr_se["CL~V"] / float(r.std(ddof=1))
+    # First-order truncation makes the analytic SE slightly SMALL; it must not
+    # be wild in either direction.
+    assert 0.90 < ratio < 1.05, f"delta/MC = {ratio}"
+
+
+def test_delta_se_converges_to_monte_carlo_as_uncertainty_tightens():
+    """Sharper check on the same approximation: shrinking the covariance must
+    drive the ratio toward 1, because the linearization becomes exact."""
+    from app.compute.nlme import _block_corr, _omega_full_from_seg, _seg_from_omega_full
+    spec = _PopSpec(MODEL, ["CL", "V"], "proportional", omega_block=["CL", "V"])
+    om = np.array([[0.093, 0.042], [0.042, 0.065]])
+    seg = _seg_from_omega_full(spec, om)
+    rng = np.random.default_rng(5)
+    ratios = []
+    for scale in (0.09, 0.03):
+        cov_seg = np.diag([scale ** 2, scale ** 2, scale ** 2 * 0.35])
+        _v, corr_se = _delta_se(spec, om, cov_seg)
+        chol = np.linalg.cholesky(cov_seg)
+        draws = seg[None, :] + (chol @ rng.normal(0.0, 1.0, (seg.size, 40000))).T
+        r = np.array([_block_corr(_omega_full_from_seg(spec, s))[0, 1] for s in draws])
+        ratios.append(corr_se["CL~V"] / float(r.std(ddof=1)))
+    assert abs(ratios[1] - 1.0) < abs(ratios[0] - 1.0), ratios
+    assert ratios[1] > 0.97
+
+
+def test_block_members_get_a_real_rse_not_none(recovered_se):
+    """Before the delta method these were None because a block member's
+    marginal variance has no single slot in the packed vector."""
+    for p in ("CL", "V"):
+        rse = recovered_se["omega_rse_pct"][p]
+        assert rse is not None, f"{p} RSE still missing"
+        assert 0.0 < rse < 100.0, f"{p} RSE implausible: {rse}"
+
+
+def test_correlation_has_a_standard_error(recovered_se):
+    se = recovered_se["omega_corr_se"]["CL~V"]
+    assert se is not None and math.isfinite(se) and se > 0.0
+
+
+def test_correlation_confidence_interval_covers_the_truth(recovered_se):
+    """The point of an SE: a Wald interval that behaves."""
+    r_hat = recovered_se["omega_block_corr"]["CL~V"]
+    se = recovered_se["omega_corr_se"]["CL~V"]
+    lo, hi = r_hat - 1.96 * se, r_hat + 1.96 * se
+    assert lo < R_TRUE < hi, f"95% CI [{lo}, {hi}] misses r={R_TRUE}"
+    assert -1.0 <= lo and hi <= 1.5          # sane magnitude, not a runaway
+
+
+def test_correlation_interval_excludes_zero_when_correlation_is_real(recovered_se):
+    r_hat = recovered_se["omega_block_corr"]["CL~V"]
+    se = recovered_se["omega_corr_se"]["CL~V"]
+    assert abs(r_hat) > 1.96 * se, "a true r=0.6 should be distinguishable from 0"
+
+
+def test_diagonal_fit_reports_no_correlation_se():
+    """The key must not leak into a diagonal payload."""
+    diag = population_fit(MODEL_KEY, _cohort(0.0, seed=8), method="saem",
+                          iiv_params=["CL", "V"], error_model="proportional",
+                          max_iter=60, seed=7, compute_uncertainty=True)
+    assert "omega_corr_se" not in diag
+    for p in ("CL", "V"):
+        assert p in diag["omega_rse_pct"]
+
+
+def test_delta_se_is_zero_when_the_parameters_are_certain():
+    """Degenerate but load-bearing: a zero covariance must give zero SE, not
+    a NaN out of the square root."""
+    spec = _PopSpec(MODEL, ["CL", "V"], "proportional", omega_block=["CL", "V"])
+    om = np.array([[0.093, 0.042], [0.042, 0.065]])
+    var_se, corr_se = _delta_se(spec, om, np.zeros((3, 3)))
+    assert corr_se["CL~V"] == 0.0
+    assert all(v == 0.0 for v in var_se.values())
