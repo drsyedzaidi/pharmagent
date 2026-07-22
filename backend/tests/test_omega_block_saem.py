@@ -197,15 +197,19 @@ def test_omega_cv_pct_uses_the_marginal_variances(recovered):
         assert recovered["omega_cv_pct"][p] == pytest.approx(expect, rel=1e-3)
 
 
-def test_unsupported_method_with_a_block_raises():
-    """Silently returning a diagonal fit would let a caller report 'no
-    correlation' as a finding."""
+@pytest.mark.parametrize("method", ["saem", "focei", "focei_saem", "auto"])
+def test_every_method_honours_omega_block(method):
+    """A method that accepted omega_block but returned a DIAGONAL fit would let
+    a caller report 'no correlation' as a finding. Each path must actually
+    carry the block through to the result."""
     subs = _cohort(0.0, seed=3)
-    for method in ("focei", "focei_saem", "auto"):
-        with pytest.raises(ValueError, match="omega_block is currently supported"):
-            population_fit(MODEL_KEY, subs, method=method, iiv_params=["CL", "V"],
-                           error_model="proportional", max_iter=5,
-                           compute_uncertainty=False, omega_block=["CL", "V"])
+    r = population_fit(MODEL_KEY, subs, method=method, iiv_params=["CL", "V"],
+                       error_model="proportional", max_iter=25, seed=3,
+                       compute_uncertainty=False, omega_block=["CL", "V"])
+    assert r["omega_block"] == ["CL", "V"]
+    om = np.asarray(r["omega_matrix"], dtype=float)
+    assert om.shape == (2, 2)
+    np.testing.assert_allclose(om, om.T, rtol=0, atol=1e-12)
 
 
 # ── structural helpers ──────────────────────────────────────────────────────
@@ -342,3 +346,78 @@ def test_delta_se_is_zero_when_the_parameters_are_certain():
     var_se, corr_se = _delta_se(spec, om, np.zeros((3, 3)))
     assert corr_se["CL~V"] == 0.0
     assert all(v == 0.0 for v in var_se.values())
+
+
+# ── FOCE-I block (the Cholesky entries move in the outer Powell vector) ──────
+
+@pytest.fixture(scope="module")
+def focei_block():
+    """n=40 keeps the outer optimization affordable in CI."""
+    om = np.array([[ETA_SD[0] ** 2, R_TRUE * ETA_SD[0] * ETA_SD[1]],
+                   [R_TRUE * ETA_SD[0] * ETA_SD[1], ETA_SD[1] ** 2]])
+    chol = np.linalg.cholesky(om)
+    rng = np.random.default_rng(20250614)
+    subs = []
+    for i in range(40):
+        e = chol @ rng.normal(0.0, 1.0, 2)
+        p = {"CL": TRUE["CL"] * math.exp(e[0]),
+             "V": TRUE["V"] * math.exp(e[1]), "KA": TRUE["KA"]}
+        cp = np.asarray(simulate(MODEL, p, DOSES, OBS_T, wt=70.0)["cp"], dtype=float)
+        subs.append({"subject": i, "doses": list(DOSES), "obs_t": list(OBS_T),
+                     "obs_c": (cp * (1 + rng.normal(0.0, 0.08, cp.size))).tolist(),
+                     "wt": 70.0})
+    return subs
+
+
+def test_focei_recovers_a_known_correlation(focei_block):
+    r = population_fit(MODEL_KEY, focei_block, method="focei",
+                       iiv_params=["CL", "V"], error_model="proportional",
+                       max_iter=200, compute_uncertainty=False,
+                       omega_block=["CL", "V"])
+    r_hat = r["omega_block_corr"]["CL~V"]
+    assert abs(r_hat - R_TRUE) < 2.6 * _se_r(R_TRUE, 40)
+
+
+def test_focei_block_beats_its_own_diagonal_on_ofv(focei_block):
+    """The block nests the diagonal, so on data that really is correlated the
+    extra parameter must buy a materially better objective -- this is the
+    likelihood-ratio evidence that justifies fitting a block at all."""
+    kw = dict(iiv_params=["CL", "V"], error_model="proportional",
+              max_iter=200, compute_uncertainty=False)
+    diag = population_fit(MODEL_KEY, focei_block, method="focei", **kw)
+    blk = population_fit(MODEL_KEY, focei_block, method="focei",
+                         omega_block=["CL", "V"], **kw)
+    # chi-square(1) at p=0.05 is 3.84; require a clearly significant drop.
+    assert blk["ofv"] < diag["ofv"] - 3.84
+
+
+def test_focei_block_is_deterministic(focei_block):
+    kw = dict(method="focei", iiv_params=["CL", "V"], error_model="proportional",
+              max_iter=120, compute_uncertainty=False, omega_block=["CL", "V"])
+    a = population_fit(MODEL_KEY, focei_block, **kw)
+    b = population_fit(MODEL_KEY, focei_block, **kw)
+    assert a["omega_matrix"] == b["omega_matrix"]
+    assert a["ofv"] == b["ofv"]
+
+
+def test_warm_start_carries_the_off_diagonals():
+    """_warm_init builds omega2 from omega_cv_pct, which holds only MARGINAL
+    variances; without the matrix a seeded block fit would silently restart
+    from an uncorrelated Omega and throw away what the seed found."""
+    from app.compute.nlme import _warm_init
+    res = {"theta": {"CL": 4.0, "V": 40.0}, "omega_cv_pct": {"CL": 30.0, "V": 25.0},
+           "sigma": {"prop": 0.1, "add": None}, "covariate_effects": [],
+           "omega_matrix": [[0.093, 0.042], [0.042, 0.065]]}
+    init = _warm_init(res)
+    assert init["omega_matrix"] == [[0.093, 0.042], [0.042, 0.065]]
+
+
+def test_focei_block_reports_a_correlation_standard_error(focei_block):
+    r = population_fit(MODEL_KEY, focei_block, method="focei",
+                       iiv_params=["CL", "V"], error_model="proportional",
+                       max_iter=200, compute_uncertainty=True,
+                       omega_block=["CL", "V"])
+    se = r["omega_corr_se"]["CL~V"]
+    assert se is not None and math.isfinite(se) and se > 0.0
+    for p in ("CL", "V"):
+        assert r["omega_rse_pct"][p] is not None

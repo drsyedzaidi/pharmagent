@@ -1445,7 +1445,8 @@ def focei_fit(model_key: str, subjects: list[dict], *,
               iiv_params: list[str], error_model: str,
               max_iter: int = 200, compute_uncertainty: bool = True,
               covariate_model: list[dict] | None = None,
-              init: dict[str, Any] | None = None) -> dict[str, Any]:
+              init: dict[str, Any] | None = None,
+              omega_block: list[str] | None = None) -> dict[str, Any]:
     """Fit a population PK model by FOCE-I (Laplace conditional estimation).
 
     Inner problem: per-subject conditional modes (EBEs). Outer problem: minimize
@@ -1476,7 +1477,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     iiv = _resolve_iiv(model, iiv_params)
     prepared = _prepare_subjects(subjects)
     cov_effects = _build_cov_effects(covariate_model, prepared)
-    spec = _PopSpec(model, iiv, error_model, cov_effects)
+    spec = _PopSpec(model, iiv, error_model, cov_effects, omega_block=omega_block)
     n_obs = int(sum(s.t.size for s in prepared))
     cov0 = np.zeros(spec.n_cov, dtype=float)
 
@@ -1487,7 +1488,9 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         return _assemble(spec, "FOCE-I", model_key, theta0, cov0, omega2,
                          0.1 if spec.has_prop else 0.0,
                          0.1 if spec.has_add else 0.0,
-                         _BIG, [], prepared, 0, False, 0)
+                         _BIG, [], prepared, 0, False, 0,
+                         omega_matrix=(np.diag([omega2[p] for p in spec.iiv_params])
+                                       if spec.omega_block else None))
 
     if init:
         theta0 = {**dict(model.defaults), **(init.get("theta") or {})}
@@ -1505,8 +1508,12 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     # A block spec starts NEUTRAL: diag(omega2_0) encodes to zero off-diagonal
     # Cholesky entries, so the block fit begins at exactly the diagonal model
     # and any OFV gain it reports is attributable to the correlation alone.
-    omega_m0 = (np.diag([omega2_0[p] for p in spec.iiv_params])
-                if spec.omega_block is not None else None)
+    # A warm start that already carries a fitted Omega keeps its off-diagonals.
+    omega_m0 = None
+    if spec.omega_block is not None:
+        warm_om = (init or {}).get("omega_matrix")
+        omega_m0 = (np.asarray(warm_om, dtype=float) if warm_om is not None
+                    else np.diag([omega2_0[p] for p in spec.iiv_params]))
     x0 = _pack(spec, theta0, cov0, omega2_0, sigma_prop0, sigma_add0,
                omega_matrix=omega_m0)
 
@@ -1517,8 +1524,13 @@ def focei_fit(model_key: str, subjects: list[dict], *,
 
     def outer_obj(x: np.ndarray) -> float:
         theta, cc, omega2, s_prop, s_add = _unpack(spec, x)
+        # For a block, Powell is moving the Cholesky entries themselves, so the
+        # prior has to be rebuilt from the CURRENT x on every evaluation --
+        # reusing a fixed Omega would hold the correlation constant and the
+        # off-diagonals would never actually be estimated.
         ofv, eta_hats = _population_ofv(
-            spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"])
+            spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"],
+            _omega_matrix(spec, x))
         warm["eta"] = eta_hats
         if start_ofv["v"] is None:
             start_ofv["v"] = ofv
@@ -1535,9 +1547,11 @@ def focei_fit(model_key: str, subjects: list[dict], *,
                             "maxfev": min(max(12 * n_par, 24), 25 * max_iter),
                             "xtol": 1e-3, "ftol": 1e-3})
 
-    theta, cc, omega2, s_prop, s_add = _unpack(spec, np.asarray(res.x, dtype=float))
+    x_final = np.asarray(res.x, dtype=float)
+    theta, cc, omega2, s_prop, s_add = _unpack(spec, x_final)
+    omega_m = _omega_matrix(spec, x_final)
     final_ofv, eta_hats = _population_ofv(
-        spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"])
+        spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"], omega_m)
     # Converged if the optimizer reports success, OR it exhausted its evaluation
     # budget at a finite OFV that improved on the starting value (a stabilized
     # optimum that simply did not trip Powell's strict tolerance test).
@@ -1549,11 +1563,12 @@ def focei_fit(model_key: str, subjects: list[dict], *,
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cc, omega2, s_prop, s_add, eta_hats,
-        enabled=compute_uncertainty, converged=converged)
+        enabled=compute_uncertainty, converged=converged, omega_matrix=omega_m)
 
     return _assemble(spec, "FOCE-I", model_key, theta, cc, omega2, s_prop, s_add,
                      final_ofv, eta_hats, prepared, n_obs, converged,
                      int(res.nit) if hasattr(res, "nit") else eval_count["n"],
+                     omega_matrix=omega_m,
                      uncertainty=uncertainty)
 
 
@@ -1994,19 +2009,12 @@ def population_fit(model_key: str, subjects: list[dict], *,
     model = get_model(model_key)
     iiv = _resolve_iiv(model, iiv_params)
     m = method.lower().replace("-", "_")
-    if omega_block and m != "saem":
-        # Fail loudly rather than silently returning a DIAGONAL fit: a caller
-        # who asked for a correlation and got a diagonal Omega back with no
-        # error would report "no correlation" as a finding.
-        raise ValueError(
-            f"omega_block is currently supported only by method='saem'; got "
-            f"{method!r}. SAEM estimates the block in closed form from the "
-            "sampled etas; the FOCE-I block path is not implemented yet.")
     if m == "focei":
         return focei_fit(model_key, subjects, iiv_params=iiv,
                          error_model=error_model, max_iter=max_iter,
                          compute_uncertainty=compute_uncertainty,
-                         covariate_model=covariate_model)
+                         covariate_model=covariate_model,
+                         omega_block=omega_block)
     if m == "saem":
         return saem_fit(model_key, subjects, iiv_params=iiv,
                         error_model=error_model, max_iter=max(max_iter, 1),
@@ -2018,12 +2026,14 @@ def population_fit(model_key: str, subjects: list[dict], *,
                                error_model=error_model, max_iter=max_iter,
                                seed=seed,
                                compute_uncertainty=compute_uncertainty,
-                               covariate_model=covariate_model)
+                               covariate_model=covariate_model,
+                               omega_block=omega_block)
     if m == "auto":
         return _auto_fit(model_key, subjects, iiv_params=iiv,
                          error_model=error_model, max_iter=max_iter, seed=seed,
                          compute_uncertainty=compute_uncertainty,
-                         covariate_model=covariate_model)
+                         covariate_model=covariate_model,
+                         omega_block=omega_block)
     raise ValueError(
         f"unknown method: {method!r} "
         "(expected 'focei', 'saem', 'focei_saem' or 'auto')")
@@ -2032,7 +2042,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
 def _auto_fit(model_key: str, subjects: list[dict], *,
               iiv_params: list[str], error_model: str, max_iter: int, seed: int,
               compute_uncertainty: bool,
-              covariate_model: list[dict] | None) -> dict[str, Any]:
+              covariate_model: list[dict] | None,
+              omega_block: list[str] | None = None) -> dict[str, Any]:
     """Escalating FOCE-I: probe for multimodality, multi-start only if found.
 
     Neither plain FOCE-I nor a single SAEM-seeded fit is reliable on a
@@ -2068,7 +2079,8 @@ def _auto_fit(model_key: str, subjects: list[dict], *,
     seed derived from ``seed``, so identical inputs give identical estimates.
     """
     kw = dict(iiv_params=iiv_params, error_model=error_model,
-              max_iter=max_iter, covariate_model=covariate_model)
+              max_iter=max_iter, covariate_model=covariate_model,
+              omega_block=omega_block)
 
     cold = focei_fit(model_key, subjects, compute_uncertainty=compute_uncertainty,
                      **kw)
@@ -2122,7 +2134,8 @@ def _auto_fit(model_key: str, subjects: list[dict], *,
 def _focei_saem_fit(model_key: str, subjects: list[dict], *,
                     iiv_params: list[str], error_model: str, max_iter: int,
                     seed: int, compute_uncertainty: bool,
-                    covariate_model: list[dict] | None) -> dict[str, Any]:
+                    covariate_model: list[dict] | None,
+                    omega_block: list[str] | None = None) -> dict[str, Any]:
     """FOCE-I started from a short SAEM burn-in ("SAEM-seeded FOCE-I").
 
     FOCE-I's outer problem is minimized by Powell, a local derivative-free
@@ -2154,7 +2167,8 @@ def _focei_saem_fit(model_key: str, subjects: list[dict], *,
     seed_res = saem_fit(model_key, subjects, iiv_params=iiv_params,
                         error_model=error_model, max_iter=seed_iter,
                         seed=seed, compute_uncertainty=False,
-                        covariate_model=covariate_model)
+                        covariate_model=covariate_model,
+                        omega_block=omega_block)
 
     # A seed is only usable if SAEM actually produced a fit: a warm-start dict
     # AND a finite objective below the failure sentinel. (A degenerate seed —
@@ -2170,7 +2184,8 @@ def _focei_saem_fit(model_key: str, subjects: list[dict], *,
                     error_model=error_model, max_iter=max_iter,
                     compute_uncertainty=compute_uncertainty,
                     covariate_model=covariate_model,
-                    init=init if seed_usable else None)
+                    init=init if seed_usable else None,
+                    omega_block=omega_block)
 
     if not seed_usable:
         # Degrade honestly to a cold start rather than claim a seed.
@@ -2203,7 +2218,7 @@ def _warm_init(result: dict | None, n_new_coefs: int = 0) -> dict | None:
     cov_coefs = (np.concatenate([inc_coefs, np.zeros(n_new_coefs)])
                  if n_new_coefs else inc_coefs)
     sig = result.get("sigma") or {}
-    return {
+    out = {
         "theta": dict(result.get("theta") or {}),
         "omega2": {p: cv_pct_to_omega2(v)
                    for p, v in (result.get("omega_cv_pct") or {}).items()},
@@ -2211,6 +2226,13 @@ def _warm_init(result: dict | None, n_new_coefs: int = 0) -> dict | None:
         "sigma_add": float(sig.get("add") or 0.5),
         "cov_coefs": [float(c) for c in cov_coefs],
     }
+    # omega_cv_pct carries only MARGINAL variances, so a block incumbent would
+    # otherwise be warm-started as if it were uncorrelated -- throwing away the
+    # correlation the seed run existed to find.
+    if result.get("omega_matrix") is not None:
+        out["omega_matrix"] = [list(map(float, row))
+                               for row in result["omega_matrix"]]
+    return out
 
 
 def _scm_max_workers(n_tasks: int) -> int:
