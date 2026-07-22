@@ -81,6 +81,7 @@ class PharmState(BaseModel):
     simest_results: dict[str, Any] | None = None
     bootstrap_results: dict[str, Any] | None = None       # non-parametric bootstrap CIs
     sir_results: dict[str, Any] | None = None             # sampling importance resampling CIs
+    profile_results: dict[str, Any] | None = None         # log-likelihood profile CIs
 
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
@@ -126,7 +127,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
-                  "bootstrap_results", "sir_results", "widgets"},
+                  "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
 }
 

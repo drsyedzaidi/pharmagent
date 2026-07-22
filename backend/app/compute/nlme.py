@@ -88,6 +88,12 @@ _SAEM_SEED_ITER = 100        # SAEM burn-in length when seeding FOCE-I (basin-fi
 _AUTO_TOL_ABS = 1.0          # OFV units: two starts closer than this agree (same basin)
 _AUTO_TOL_REL = 1e-3         # ...or within this fraction of |OFV|, whichever is larger
 _AUTO_MAX_STARTS = 6         # cap on SAEM-seeded starts tried by method="auto"
+# Inner budget for one constrained re-optimization during likelihood profiling.
+# Deliberately tight: profiling makes tens of these calls per parameter and each
+# objective evaluation is a full population Laplace pass. The inner solve only
+# has to track a nearby optimum from a warm start, not find one cold.
+_PROFILE_INNER_ITER = 8
+_PROFILE_INNER_FEV = 30
 _ROUND_DP = 6                # decimal places for all CWRES/IWRES payload floats
 
 # CWRES (Hooker, Staatz & Karlsson 2007, Pharm Res 24:2187-2197): finite-
@@ -2840,3 +2846,80 @@ def sir_inputs(model_key: str, subjects: list[dict], nlme_result: dict[str, Any]
             "n_floored_directions": n_floored,
             "condition_number": round(cond, 1) if cond and math.isfinite(cond) else None,
             "fit_condition_number": nlme_result.get("condition_number")}
+
+
+def profile_ofv_factory(model_key: str, subjects: list[dict],
+                        nlme_result: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the constrained-reoptimization closure log-likelihood profiling needs.
+
+    Profiling fixes ONE parameter and lets every other re-optimize. Rather than
+    teaching the fitter to hold a parameter (which would mean editing the
+    validated estimator), this fixes one coordinate of the PACKED vector and
+    minimizes the same objective over the remaining coordinates. The objective
+    is identical to the one the fit minimized, so the resulting dOFV is
+    directly comparable to the fit's own OFV — which is the entire premise of
+    the chi-square cut-off.
+
+    Only the log-linked structural THETAs are offered. The packed vector also
+    holds omega and sigma, but profiling a variance means re-optimizing across
+    a boundary-constrained parameter whose chi-square reference is not 1 df,
+    and reporting it as though it were would be wrong.
+
+    Returns ``{"profile_ofv_fn", "estimates", "ofv_hat", "initial_step"}``, or
+    None when the fit cannot support it.
+    """
+    inp = sir_inputs(model_key, subjects, nlme_result)
+    if inp is None:
+        return None
+
+    model = get_model(model_key)
+    names = list(model.params)
+    x_hat = np.asarray(inp["x_hat"], dtype=float)
+    ofv_fn = inp["ofv_fn"]
+    idx = {p: k for k, p in enumerate(names)}          # thetas lead the vector
+
+    # Warm-start cache, per profiled parameter. Consecutive profile points sit
+    # close together, so re-optimizing from the PREVIOUS point's solution
+    # converges in a handful of iterations instead of restarting from the
+    # global estimate every time. Without this a single parameter costs
+    # thousands of population Laplace passes and is unusable in practice.
+    warm: dict[str, np.ndarray] = {}
+
+    def profile_ofv_fn(param: str, value: float) -> float:
+        """Fix `param` at `value` and re-optimize every other parameter."""
+        j = idx.get(param)
+        if j is None or value <= 0.0:
+            return float(_BIG)
+        free = [k for k in range(x_hat.size) if k != j]
+        fixed_log = math.log(max(float(value), _EPS))
+
+        def obj(free_vals: np.ndarray) -> float:
+            xv = x_hat.copy()
+            xv[free] = free_vals
+            xv[j] = fixed_log
+            return float(ofv_fn(xv))
+
+        if not free:
+            return obj(np.array([]))
+        start = warm.get(param)
+        if start is None or start.size != len(free):
+            start = x_hat[free]
+        res = minimize(obj, start, method="Powell",
+                       options={"maxiter": _PROFILE_INNER_ITER,
+                                "maxfev": _PROFILE_INNER_FEV,
+                                "xtol": 1e-2, "ftol": 1e-2})
+        warm[param] = np.asarray(res.x, dtype=float)
+        return float(res.fun)
+
+    theta = {p: float(v) for p, v in (nlme_result.get("theta") or {}).items()
+             if p in idx}
+    # Asymptotic SE on the natural scale is the natural first step: it is
+    # roughly where the crossing sits when the likelihood is near-quadratic.
+    rse = nlme_result.get("theta_rse_pct") or {}
+    step = {p: (abs(theta[p]) * float(rse[p]) / 100.0)
+            for p in theta if rse.get(p) and math.isfinite(float(rse[p]))}
+
+    return {"profile_ofv_fn": profile_ofv_fn, "estimates": theta,
+            "ofv_hat": float(inp["ofv_hat"]), "initial_step": step,
+            "near_singular": inp.get("near_singular", False),
+            "fit_condition_number": inp.get("fit_condition_number")}
