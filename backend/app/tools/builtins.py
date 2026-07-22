@@ -16,6 +16,7 @@ from app.tools import (
     report_tools,
     review_tools,
     simest_tools,
+    sir_tools,
     viz_tools,
 )
 from app.tools.base import ToolRegistry
@@ -24,7 +25,7 @@ from app.tools.base import ToolRegistry
 def default_registry() -> ToolRegistry:
     reg = ToolRegistry()
     for mod in (data_tools, nca_tools, be_tools, dp_tools, compartmental_tools,
-                bootstrap_tools,
+                bootstrap_tools, sir_tools,
                 poppk_tools, pkmodel_tools, engine_tools, qc_tools, report_tools,
                 regulatory_tools, review_tools, viz_tools, simest_tools):
         for tool in mod.TOOLS:

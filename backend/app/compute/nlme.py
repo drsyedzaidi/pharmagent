@@ -2708,3 +2708,135 @@ def simulate_replicate_subject(model_key: str, theta: dict[str, float],
         "lloq": lloq, "n_resampled": n_resampled, "n_negative_draws": n_negative_draws,
         "ok": True,
     }
+
+
+def sir_inputs(model_key: str, subjects: list[dict], nlme_result: dict[str, Any],
+               *, step: float = _COV_STEP) -> dict[str, Any] | None:
+    """Assemble what :func:`app.compute.sir.run_sir` needs from a fitted result.
+
+    SIR samples on the PACKED (estimation) scale and decodes afterwards, which
+    is what lets it produce asymmetric natural-scale intervals. It therefore
+    needs the packed point estimate, the packed covariance used as the proposal,
+    the objective there, and closures to evaluate and decode.
+
+    The covariance is recomputed here rather than carried on the fit result: it
+    is an n x n matrix that would bloat every payload and the audit hash, and
+    almost no consumer wants it. Cost is one numeric Hessian (~2*n_par^2
+    objective passes) -- large next to nothing, negligible next to the hundreds
+    of full refits a bootstrap needs.
+
+    Returns None when the fit cannot support SIR (no result, or a degenerate
+    information matrix), rather than a half-built input set.
+    """
+    if not nlme_result or nlme_result.get("status") not in (None, "ok"):
+        return None
+    if "theta" not in nlme_result:
+        return None
+
+    model = get_model(model_key)
+    iiv = list(nlme_result.get("iiv_params") or [])
+    prepared = _prepare_subjects(subjects)
+    if not prepared or not iiv:
+        return None
+
+    cov_effects, cov_coefs = _cov_effects_from_records(
+        nlme_result.get("covariate_effects"))
+    spec = _PopSpec(model, iiv, nlme_result.get("error_model", "proportional"),
+                    cov_effects,
+                    omega_block=nlme_result.get("omega_block"))
+
+    theta = {**dict(model.defaults), **(nlme_result.get("theta") or {})}
+    omega2 = {p: cv_pct_to_omega2(v)
+              for p, v in (nlme_result.get("omega_cv_pct") or {}).items()}
+    for p in spec.iiv_params:                      # every IIV term must be present
+        omega2.setdefault(p, 0.09)
+    sig = nlme_result.get("sigma") or {}
+    s_prop = float(sig.get("prop") or 0.0)
+    s_add = float(sig.get("add") or 0.0)
+    om_mat = (np.asarray(nlme_result["omega_matrix"], dtype=float)
+              if nlme_result.get("omega_matrix") is not None else None)
+
+    x_hat = _pack(spec, theta, cov_coefs, omega2, s_prop, s_add, omega_matrix=om_mat)
+
+    # Warm-start the inner EBEs once, then reuse them so every perturbed pass
+    # starts at its mode -- the same discipline _post_fit_uncertainty uses, and
+    # what keeps the objective surface smooth enough to sample against.
+    ofv_hat, eta_hats = _population_ofv(
+        spec, prepared, theta, cov_coefs, omega2, s_prop, s_add, None, om_mat)
+    if not math.isfinite(ofv_hat) or ofv_hat >= _BIG:
+        return None
+
+    def ofv_fn(xv: np.ndarray) -> float:
+        th, cc, om, sp, sa = _unpack(spec, np.asarray(xv, dtype=float))
+        val, _ = _population_ofv(spec, prepared, th, cc, om, sp, sa, eta_hats,
+                                 _omega_matrix(spec, np.asarray(xv, dtype=float)))
+        return val
+
+    def decode_fn(xv: np.ndarray) -> dict[str, float]:
+        th, _cc, om, sp, sa = _unpack(spec, np.asarray(xv, dtype=float))
+        out = {p: float(th[p]) for p in spec.param_names}
+        out.update({f"omega_{p}": _cv_pct(om[p]) for p in spec.iiv_params})
+        if spec.has_prop:
+            out["sigma_prop"] = float(sp)
+        if spec.has_add:
+            out["sigma_add"] = float(sa)
+        return out
+
+    try:
+        H = _numeric_hessian(ofv_fn, x_hat, step=step)
+    except Exception:
+        return None
+    if not np.all(np.isfinite(H)):
+        return None
+    Hs = 0.5 * (H + H.T)
+    eig, vec = np.linalg.eigh(Hs)
+    emax = float(np.max(eig)) if eig.size else 0.0
+    if not math.isfinite(emax) or emax <= 0.0:
+        return None
+    # OFV = -2 log L, so Cov = 2 * Hess^-1. Floor the eigenvalues so a
+    # near-singular direction yields a wide (not infinite) proposal — SIR can
+    # down-weight an over-wide proposal, which is the safer failure here.
+    floor = emax * 1e-10
+    n_floored = int(np.sum(eig < floor))
+    cov = 2.0 * (vec @ np.diag(1.0 / np.clip(eig, floor, None)) @ vec.T)
+    # Condition number of the CORRELATION matrix of the estimates -- the same
+    # quantity _parameter_uncertainty reports, so this flag is comparable with
+    # the fit's own verdict and _COND_RED_FLAG is the threshold it was
+    # calibrated for. (The Hessian's own condition number is a different scale
+    # entirely and would make the flag meaningless.)
+    dg = np.diag(cov)
+    cond = None
+    if np.all(np.isfinite(dg)) and np.all(dg > 0.0):
+        dinv = 1.0 / np.sqrt(dg)
+        corr = cov * np.outer(dinv, dinv)
+        reig = np.linalg.eigvalsh(0.5 * (corr + corr.T))
+        rmin = float(np.min(reig))
+        cond = (float(np.max(reig)) / rmin) if rmin > 0 else None
+
+    # Flooring makes a degenerate direction WIDE rather than infinite, which is
+    # the safe direction for a proposal (SIR can down-weight an over-wide
+    # proposal; it cannot invent samples in a region never visited). But the
+    # result then LOOKS well-conditioned when the fit itself refused to stand
+    # behind it -- `_parameter_uncertainty` suppresses those SEs entirely. The
+    # caller is told, so it can say so rather than reporting confident
+    # intervals built on a regularized singularity.
+    # The FIT's own verdict is authoritative and is ORed in. Its Hessian is
+    # taken at the converged EBEs and at the unrounded internal estimates,
+    # whereas this one is rebuilt from the PUBLISHED (rounded) values with
+    # re-optimized EBEs, so the two can disagree sharply -- observed 1.4e9 vs
+    # 21.7 on an over-parameterized fit. Letting the rosier recomputation win
+    # would silently overturn a refusal the fit was right to make.
+    fit_flagged = (nlme_result.get("condition_number") is not None
+                   and nlme_result["condition_number"] > _COND_RED_FLAG) \
+        or bool(nlme_result.get("cov_note")) \
+        or any(v is None for v in (nlme_result.get("theta_rse_pct") or {}).values())
+    return {"x_hat": x_hat, "cov": cov, "ofv_hat": float(ofv_hat),
+            "ofv_fn": ofv_fn, "decode_fn": decode_fn,
+            "n_par": int(x_hat.size),
+            "near_singular": (bool(n_floored)
+                              or (cond is not None and cond > _COND_RED_FLAG)
+                              or fit_flagged),
+            "fit_flagged_uncertainty": fit_flagged,
+            "n_floored_directions": n_floored,
+            "condition_number": round(cond, 1) if cond and math.isfinite(cond) else None,
+            "fit_condition_number": nlme_result.get("condition_number")}
