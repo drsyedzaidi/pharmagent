@@ -41,7 +41,35 @@ const MODELING_STEPS = [
   { key: 'adversarial_review',    label: 'Adversarial review', gate: true },
 ] as const;
 
-type WorkflowName = 'nca_full' | 'poppk_modeling';
+const POPPK_FULL_STEPS = [
+  { key: 'load_dataset',         label: 'Load dataset' },
+  { key: 'profile_pk_dataset',   label: 'Profile PK data' },
+  { key: 'validate_cdisc',       label: 'Validate format' },
+  { key: 'spaghetti_plot',       label: 'Spaghetti plot' },
+  { key: 'fit_pk_model',         label: 'Compare structural models', gate: true },
+  { key: 'run_nlme',             label: 'Population (NLME) fit' },
+  { key: 'run_scm',              label: 'Covariate model (SCM)' },
+  { key: 'run_diagnostics',      label: 'Residual diagnostics' },
+  { key: 'run_covariate_forest', label: 'Covariate forest' },
+  { key: 'run_vpc',              label: 'VPC / goodness-of-fit' },
+  { key: 'adversarial_review',   label: 'Adversarial review', gate: true },
+  { key: 'generate_report',      label: 'Generate report' },
+] as const;
+
+type WorkflowName = 'nca_full' | 'poppk_modeling' | 'poppk_full';
+
+/** Sidebar presentation per workflow — keeps the step tracker in one place. */
+const WORKFLOW_UI: Record<WorkflowName, { title: string; steps: readonly { key: string; label: string; gate?: boolean }[] }> = {
+  nca_full:       { title: 'NCA Workflow',        steps: STEPS },
+  poppk_modeling: { title: 'Modeling Workflow',   steps: MODELING_STEPS },
+  poppk_full:     { title: 'Population PK Workflow', steps: POPPK_FULL_STEPS },
+};
+
+const WF_LABEL: Record<WorkflowName, string> = {
+  nca_full: 'NCA',
+  poppk_modeling: 'population modeling',
+  poppk_full: 'full population PK',
+};
 
 function fmt(v: number | undefined, d = 2) {
   if (v == null || isNaN(v)) return '–';
@@ -1942,7 +1970,7 @@ export default function App() {
     setLoading(true);
     setWfStatus('running');
     setCurrentStep(0);
-    const wfLabel = workflow === 'poppk_modeling' ? 'population modeling' : 'NCA';
+    const wfLabel = WF_LABEL[workflow];
     pushMsg({ role: 'user', content: `Starting ${wfLabel} workflow on: ${file.name}`, id: '' });
     try {
       const up = await api.uploadDataset(session.id, file);
@@ -2419,9 +2447,9 @@ export default function App() {
         </div>
 
         <div className="sidebar-section">
-          <div className="sidebar-label">{activeWorkflow === 'poppk_modeling' ? 'Modeling Workflow' : 'NCA Workflow'}</div>
+          <div className="sidebar-label">{WORKFLOW_UI[activeWorkflow].title}</div>
           <ul className="step-list">
-            {(activeWorkflow === 'poppk_modeling' ? MODELING_STEPS : STEPS).map((s, i) => {
+            {WORKFLOW_UI[activeWorkflow].steps.map((s, i) => {
               const done = currentStep > i || wfStatus === 'complete';
               const active = currentStep === i && wfStatus === 'running';
               const gate = 'gate' in s && s.gate && wfStatus === 'awaiting_review';
@@ -2450,6 +2478,13 @@ export default function App() {
             {loading && wfStatus === 'running' && activeWorkflow === 'poppk_modeling'
               ? <><div className="spinner" /> Running…</>
               : <><Activity size={13} /> Run Modeling + Engines</>}
+          </button>
+          <button className="workflow-btn" disabled={!canRunWorkflow} onClick={() => uploadAndRun('poppk_full')}
+            style={{ marginTop: 8 }}
+            title="Full population PK: structural comparison (gated), NLME fit, SCM covariate build, residual diagnostics, covariate forest, VPC, adversarial review (gated), report">
+            {loading && wfStatus === 'running' && activeWorkflow === 'poppk_full'
+              ? <><div className="spinner" /> Running…</>
+              : <><Activity size={13} /> Run Full PopPK</>}
           </button>
         </div>
       </aside>
