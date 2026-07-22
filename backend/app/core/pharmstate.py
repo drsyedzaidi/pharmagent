@@ -78,7 +78,8 @@ class PharmState(BaseModel):
     forest_results: dict[str, Any] | None = None       # covariate GMR forest plot
     engine_comparison_results: dict[str, Any] | None = None  # cross-engine model comparison
     dose_sweep_results: dict[str, Any] | None = None   # dose-comparison simulation
-    simest_results: dict[str, Any] | None = None       # simulation-estimation design check
+    simest_results: dict[str, Any] | None = None
+    bootstrap_results: dict[str, Any] | None = None       # non-parametric bootstrap CIs
 
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
@@ -123,7 +124,8 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections"},
-    "simulator": {"simulation_results", "dose_sweep_results", "simest_results", "widgets"},
+    "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
+                  "bootstrap_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
 }
 
