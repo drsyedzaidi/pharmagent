@@ -66,3 +66,93 @@ def test_nonmem_lag_uses_alag1_on_depot():
 def test_unsupported_model_returns_none():
     assert build_nonmem(_fit("oral_1cmt_transit")) is None
     assert build_mrgsolve(_fit("iv_1cmt_mm")) is None
+
+
+# ── correlated (block) Omega export ─────────────────────────────────────────
+# A block model exported as a diagonal Omega is a silent misrepresentation: the
+# control stream would look valid and fit, just without the correlation the
+# model was built to carry.
+
+_BLOCK_NL = {
+    "model_key": "oral_1cmt", "label": "1-cmt oral",
+    "iiv_params": ["CL", "V", "KA"],
+    "theta": {"CL": 3.0, "V": 60.0, "KA": 1.5},
+    "omega_cv_pct": {"CL": 31.0, "V": 26.0, "KA": 40.0},
+    "sigma": {"prop": 0.2, "add": 2.0}, "error_model": "combined",
+    # NON-contiguous on purpose: CL and KA, with V between them.
+    "omega_block": ["CL", "KA"],
+    "omega_matrix": [[0.093, 0.0, 0.042],
+                     [0.0, 0.065, 0.0],
+                     [0.042, 0.0, 0.15]],
+}
+
+
+def _lines(text):
+    return [ln.rstrip() for ln in text.splitlines()]
+
+
+def test_nonmem_emits_omega_block_with_the_lower_triangle():
+    out = _lines(build_nonmem(_BLOCK_NL))
+    assert "$OMEGA BLOCK(2)" in out
+    i = out.index("$OMEGA BLOCK(2)")
+    assert out[i + 1].split(";")[0].split() == ["0.093"]
+    assert out[i + 2].split(";")[0].split() == ["0.042", "0.15"]
+
+
+def test_nonmem_renumbers_etas_so_the_block_is_contiguous():
+    """$OMEGA BLOCK(n) describes n CONSECUTIVE etas, so a block on CL and KA
+    of [CL, V, KA] is only writable if the etas are re-ordered. $PK must agree
+    with that re-ordering or the covariance lands on the wrong pair."""
+    out = _lines(build_nonmem(_BLOCK_NL))
+    pk = {ln.split("=")[0].strip(): ln for ln in out if "EXP(ETA(" in ln}
+    assert "ETA(1)" in pk["CL"]
+    assert "ETA(2)" in pk["KA"]      # block member, moved next to CL
+    assert "ETA(3)" in pk["V"]       # non-block, pushed after
+
+
+def test_nonmem_writes_remaining_etas_as_a_separate_diagonal():
+    out = _lines(build_nonmem(_BLOCK_NL))
+    assert out.count("$OMEGA") == 1                  # the plain one for V
+    tail = out[out.index("$OMEGA") + 1]
+    assert tail.split(";")[0].strip() == "0.065"     # V, from omega_matrix
+
+
+def test_mrgsolve_emits_a_block_omega():
+    out = _lines(build_mrgsolve(_BLOCK_NL))
+    hdr = next(ln for ln in out if ln.startswith("$OMEGA @block"))
+    assert "ECL" in hdr and "EKA" in hdr
+    tri = out[out.index(hdr) + 1].split()
+    assert tri == ["0.093", "0.042", "0.15"]         # lower triangle, row-major
+
+
+def test_block_diagonal_entries_come_from_the_matrix_not_a_rounded_cv():
+    """Mixing exact covariances with %CV-derived variances in one Omega would
+    make the exported matrix inconsistent with the fitted one."""
+    out = build_nonmem(_BLOCK_NL)
+    assert "0.065" in out                             # exact V variance
+    assert "0.0654131" not in out                     # the %CV-derived value
+
+
+def test_a_single_member_block_falls_back_to_diagonal():
+    nl = dict(_BLOCK_NL, omega_block=["CL"])
+    out = _lines(build_nonmem(nl))
+    assert not any(ln.startswith("$OMEGA BLOCK") for ln in out)
+
+
+def test_block_without_a_matrix_falls_back_to_diagonal():
+    """omega_block alone cannot be written -- the covariances live in the
+    matrix, and guessing them would be fabrication."""
+    nl = {k: v for k, v in _BLOCK_NL.items() if k != "omega_matrix"}
+    out = _lines(build_nonmem(nl))
+    assert not any(ln.startswith("$OMEGA BLOCK") for ln in out)
+
+
+def test_diagonal_export_is_unchanged_by_the_block_feature():
+    nl = {k: v for k, v in _BLOCK_NL.items()
+          if k not in ("omega_block", "omega_matrix")}
+    out = _lines(build_nonmem(nl))
+    i = out.index("$OMEGA")
+    assert [ln.split(";")[0].strip() for ln in out[i + 1:i + 4]] == \
+        ["0.0917584", "0.0654131", "0.14842"]        # all %CV-derived, in order
+    pk = {ln.split("=")[0].strip(): ln for ln in out if "EXP(ETA(" in ln}
+    assert "ETA(1)" in pk["CL"] and "ETA(2)" in pk["V"] and "ETA(3)" in pk["KA"]

@@ -68,6 +68,54 @@ def _cov_omega_sigma(nl: dict) -> tuple[list[str], float, float, str]:
         (nl.get("error_model") or "proportional").lower()
 
 
+def _omega_export_order(nl: dict, iiv: list[str]) -> tuple[list[str], list[str]]:
+    """Eta order for export, with any correlated block made CONTIGUOUS.
+
+    Both target formats describe a correlated Omega as a square block over
+    *consecutive* etas -- NONMEM's ``$OMEGA BLOCK(n)``, mrgsolve's ``@block``
+    -- so a block on non-adjacent parameters (say CL and KA of [CL, V, KA])
+    cannot be written in the fitted order. The exporter generates ``$PK`` /
+    ``$MAIN`` itself and derives every eta index from this list, so re-ordering
+    is purely internal and keeps the two consistent.
+
+    Returns ``(eta_order, block_names)``; ``block_names`` is empty when there is
+    no usable block, in which case the caller writes a plain diagonal.
+    """
+    blk = [p for p in (nl.get("omega_block") or []) if p in iiv]
+    if len(blk) < 2 or not nl.get("omega_matrix"):
+        return list(iiv), []
+    return blk + [p for p in iiv if p not in blk], blk
+
+
+def _omega_var(nl: dict, p: str, omega_cv: dict) -> float:
+    """Variance of one eta for export.
+
+    Prefers the fitted ``omega_matrix`` when it exists so that, on a block fit,
+    the diagonal entries written outside the block come from the same source as
+    the ones inside it -- rather than mixing exact covariances with variances
+    re-derived from a rounded %CV.
+    """
+    om = nl.get("omega_matrix")
+    order = list(nl.get("iiv_params") or [])
+    if om and p in order:
+        return float(om[order.index(p)][order.index(p)])
+    return _cv_to_omega2(omega_cv.get(p, 30.0))
+
+
+def _omega_lower_rows(nl: dict, blk: list[str]) -> list[list[float]]:
+    """Lower-triangular rows of the fitted block covariance, in ``blk`` order.
+
+    Indices come from ``iiv_params`` because that is the order
+    ``omega_matrix`` was written in; reading it positionally against a
+    re-ordered eta list would transpose the covariances onto the wrong pair.
+    """
+    om = nl.get("omega_matrix") or []
+    order = list(nl.get("iiv_params") or [])
+    idx = {p: order.index(p) for p in blk}
+    return [[float(om[idx[p]][idx[q]]) for q in blk[:i + 1]]
+            for i, p in enumerate(blk)]
+
+
 def _nm_cov_multiplier(ce: dict, theta_idx: int) -> str | None:
     """NONMEM $PK multiplier string for a continuous covariate effect, or None
     (categorical -> handled by the caller as a manual-coding note)."""
@@ -92,6 +140,9 @@ def build_nonmem(nl: dict) -> str | None:
     iiv, sprop, sadd, emodel = _cov_omega_sigma(nl)
     omega_cv = nl.get("omega_cv_pct") or {}
     cov_effects = nl.get("covariate_effects") or []
+    # Re-order BEFORE numbering: every eta index below derives from `iiv`, so a
+    # block made contiguous here stays consistent with $PK automatically.
+    iiv, blk = _omega_export_order(nl, iiv)
     eta_no = {p: k + 1 for k, p in enumerate(iiv)}
 
     # THETA indices: structural params, then continuous covariate coefficients.
@@ -151,8 +202,20 @@ def build_nonmem(nl: dict) -> str | None:
         sigma = [f"  {_g(sprop ** 2)}   ; proportional variance",
                  f"  {_g(sadd ** 2)}   ; additive variance"]
 
-    omega = [f"  {_g(_cv_to_omega2(omega_cv.get(p, 30.0)))}"
-             f"   ; IIV {p} (variance)" for p in iiv]
+    if blk:
+        omega = [f"$OMEGA BLOCK({len(blk)})"]
+        for i, row in enumerate(_omega_lower_rows(nl, blk)):
+            note = (f"; IIV {blk[i]} (variance)" if i == 0
+                    else "; cov(" + ", ".join(blk[:i]) + f") , IIV {blk[i]}")
+            omega.append("  " + " ".join(_g(v) for v in row) + f"   {note}")
+        rest = [p for p in iiv if p not in blk]
+        if rest:
+            omega.append("$OMEGA")
+            omega += [f"  {_g(_omega_var(nl, p, omega_cv))}"
+                      f"   ; IIV {p} (variance)" for p in rest]
+    else:
+        omega = [f"  {_g(_cv_to_omega2(omega_cv.get(p, 30.0)))}"
+                 f"   ; IIV {p} (variance)" for p in iiv]
 
     inp = "ID TIME DV AMT EVID MDV" + ("".join(f" {c}" for c in cov_cols))
     label = nl.get("label", nl.get("model_key", "model"))
@@ -164,7 +227,8 @@ def build_nonmem(nl: dict) -> str | None:
         "$PK", *pk,
         "$ERROR", *err,
         "$THETA", *theta_lines,
-        "$OMEGA", *(omega or ["  0.09   ; (no IIV estimated)"]),
+        # The block form emits its own $OMEGA BLOCK(n) / $OMEGA headers.
+        *(omega if blk else ["$OMEGA", *(omega or ["  0.09   ; (no IIV estimated)"])]),
         "$SIGMA", *sigma,
         "$ESTIMATION METHOD=1 INTERACTION MAXEVAL=9999 PRINT=5",
         "$COVARIANCE",
@@ -181,6 +245,7 @@ def build_mrgsolve(nl: dict) -> str | None:
     theta = nl.get("theta") or {}
     iiv, sprop, sadd, emodel = _cov_omega_sigma(nl)
     omega_cv = nl.get("omega_cv_pct") or {}
+    iiv, blk = _omega_export_order(nl, iiv)   # block first; see NONMEM note
     cov_effects = nl.get("covariate_effects") or []
     n, depot = spec["n"], spec.get("depot", False)
 
@@ -251,14 +316,28 @@ def build_mrgsolve(nl: dict) -> str | None:
                "  double Y = IPRED*(1 + EPS(1)) + EPS(2);"]
         sigma = f"$SIGMA {_g(sprop ** 2)} {_g(sadd ** 2)}  // prop, add"
 
-    omega_vals = " ".join(
-        _g(_cv_to_omega2(omega_cv.get(p, 30.0))) for p in iiv)
+    if blk:
+        # mrgsolve @block takes the lower triangle, row-major.
+        tri = " ".join(_g(v) for row in _omega_lower_rows(nl, blk) for v in row)
+        omega_lines = ["$OMEGA @block @labels " + " ".join(f"E{p}" for p in blk),
+                       tri]
+        rest = [p for p in iiv if p not in blk]
+        if rest:
+            omega_lines += [
+                "$OMEGA @labels " + " ".join(f"E{p}" for p in rest),
+                " ".join(_g(_omega_var(nl, p, omega_cv)) for p in rest)]
+        omega_block_str = "\n".join(omega_lines)
+    else:
+        omega_vals = " ".join(
+            _g(_cv_to_omega2(omega_cv.get(p, 30.0))) for p in iiv)
+        omega_block_str = ("$OMEGA @labels " + " ".join(eta_lab) + "\n"
+                           + (omega_vals or "0.09"))
     label = nl.get("label", nl.get("model_key", "model"))
     out = [
         f"// PharmAgent export — {label}",
         "$PARAM " + ", ".join(param_kv),
         "$CMT " + " ".join(cmts),
-        "$OMEGA @labels " + " ".join(eta_lab) + "\n" + (omega_vals or "0.09"),
+        omega_block_str,
         sigma,
         "$MAIN", *main,
         "$ODE", *ode,
