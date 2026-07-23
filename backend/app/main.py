@@ -334,10 +334,21 @@ def simulate_pk(sid: str, req: SimulateRequest, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+class VpcRequest(BaseModel):
+    """Optional VPC options; all-default reproduces the plain pooled VPC."""
+    stratify_by: str | None = None
+    dose_normalize: bool = False
+    x_by: str = "time"
+    exposure_check: bool = False
+    blq_check: bool = False
+
+
 @app.post("/api/sessions/{sid}/vpc")
-def run_vpc(sid: str, sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+def run_vpc(sid: str, req: VpcRequest | None = None, sess=Depends(owned_session),
+            actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
     try:
-        return orch.run_tool(sid, "run_vpc", "modeler", {}, actor=actor)
+        return orch.run_tool(sid, "run_vpc", "modeler", args, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

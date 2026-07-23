@@ -515,17 +515,80 @@ export interface VpcResults {
   vpc_dose?: number | null;
   obs_t?: number[];
   obs_c?: number[];
-  pcvpc?: {
+  pcvpc?: PcVpcResult;
+  /** Present only when run_vpc was called with stratify_by / dose_normalize / x_by. */
+  stratified?: {
     status: string;
-    n_bins: number;
-    n_sim: number;
-    bins: {
-      t: number | null; n: number;
-      obs_p05: number | null; obs_p50: number | null; obs_p95: number | null;
-      sim_p05: number | null; sim_p50: number | null; sim_p95: number | null;
-      sim_med_lo: number | null; sim_med_hi: number | null;
-    }[];
+    stratify_by?: string | null;
+    kind?: string;
+    correction?: 'pred' | 'dose' | 'none';
+    x_by?: 'time' | 'tad';
+    message?: string;
+    available?: string[];
+    strata?: { label: string; n: number; bins: PcVpcBin[] }[];
+    skipped?: { label: string; n: number; reason: string }[];
   };
+  /** Present only when run_vpc was called with exposure_check. */
+  exposure_pc?: ExposurePc;
+  /** Present only when run_vpc was called with blq_check. */
+  blq_vpc?: BlqVpc;
+}
+
+export interface ExposureMetric {
+  observed: number;
+  sim_median: number;
+  sim_lo: number;
+  sim_hi: number;
+  within: boolean;
+  hist: { edges: number[]; counts: number[] };
+}
+
+export interface ExposurePc {
+  status: string;
+  group_by?: string | null;
+  kind?: string;
+  n_sim?: number;
+  ci?: number[];
+  message?: string;
+  multiple_dose?: boolean;
+  groups?: { label: string; n: number; auc: ExposureMetric; cmax: ExposureMetric }[];
+  skipped?: { label: string; n: number; reason: string }[];
+}
+
+export interface BlqBin {
+  x: number | null;
+  n: number;
+  obs_frac: number | null;
+  sim_med: number | null;
+  sim_lo: number | null;
+  sim_hi: number | null;
+}
+
+export interface BlqVpc {
+  status: string;
+  n_bins?: number;
+  n_sim?: number;
+  lloq?: number;
+  x_by?: 'time' | 'tad';
+  n_blq?: number;
+  message?: string;
+  bins?: BlqBin[];
+}
+
+export interface PcVpcBin {
+  t: number | null; n: number;
+  obs_p05: number | null; obs_p50: number | null; obs_p95: number | null;
+  sim_p05: number | null; sim_p50: number | null; sim_p95: number | null;
+  sim_med_lo: number | null; sim_med_hi: number | null;
+}
+
+export interface PcVpcResult {
+  status: string;
+  n_bins: number;
+  n_sim: number;
+  correction?: 'pred' | 'dose' | 'none';
+  x_by?: 'time' | 'tad';
+  bins: PcVpcBin[];
 }
 
 export interface DoseProfile {

@@ -11,6 +11,7 @@ import type {
   Session, PharmState, AgentMessage, AuditEntry,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
+  PcVpcBin,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -1503,7 +1504,253 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
   );
 }
 
-function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
+/** Inline-SVG prediction-corrected VPC panel. Shared by the main VPC card and
+ * the per-stratum grid. Observed 5/50/95 (solid green) over the simulated
+ * 5/50/95 band (dashed) plus the simulated-median 90% CI ribbon. */
+function pcvpcSvg(bins: PcVpcBin[] | undefined, opts?: {
+  width?: number; height?: number; xLabel?: string; ariaLabel?: string;
+  yMax?: number;
+}) {
+  if (!bins) return null;
+  const pts = bins.filter(b => b.t != null);
+  if (!pts.length) return null;
+  const PW = opts?.width ?? 580, PH = opts?.height ?? 230, pm = 44, pr = 12, pt = 12, pb = 28;
+  const ts = pts.map(b => b.t as number);
+  const tmin = Math.min(...ts), tmax = Math.max(...ts);
+  const vals = pts.flatMap(b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[];
+  const cmax = opts?.yMax ?? ((Math.max(...vals) || 1) * 1.05);
+  const sx = (v: number) => pm + ((v - tmin) / (tmax - tmin || 1)) * (PW - pm - pr);
+  const sy = (v: number) => PH - pb - (v / cmax) * (PH - pt - pb);
+  const linePts = (key: 'obs_p05' | 'obs_p50' | 'obs_p95' | 'sim_p05' | 'sim_p50' | 'sim_p95') =>
+    pts.filter(b => b[key] != null)
+      .map((b, i) => `${i ? 'L' : 'M'}${sx(b.t as number).toFixed(1)} ${sy(b[key] as number).toFixed(1)}`).join(' ');
+  const ci = pts.filter(b => b.sim_med_lo != null && b.sim_med_hi != null);
+  const up = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_hi as number).toFixed(1)}`).join(' ');
+  const dn = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_lo as number).toFixed(1)}`).reverse().join(' ');
+  return (
+    <svg viewBox={`0 0 ${PW} ${PH}`} style={{ width: '100%', maxWidth: PW, marginTop: 8 }}
+      role="img" aria-label={opts?.ariaLabel ?? 'Prediction-corrected VPC'}>
+      {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
+      {(['sim_p05', 'sim_p95'] as const).map(k =>
+        <path key={k} d={linePts(k)} fill="none" stroke="var(--text-dim)" strokeWidth="1" strokeDasharray="4 3" />)}
+      <path d={linePts('sim_p50')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
+      {(['obs_p05', 'obs_p95'] as const).map(k =>
+        <path key={k} d={linePts(k)} fill="none" stroke="var(--green)" strokeWidth="1.1" />)}
+      <path d={linePts('obs_p50')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
+      {pts.filter(b => b.obs_p50 != null).map((b, i) =>
+        <circle key={i} cx={sx(b.t as number)} cy={sy(b.obs_p50 as number)} r="2.4" fill="var(--green)" />)}
+      <line x1={pm} y1={PH - pb} x2={PW - pr} y2={PH - pb} stroke="var(--border)" />
+      <line x1={pm} y1={pt} x2={pm} y2={PH - pb} stroke="var(--border)" />
+      <text x={(pm + PW) / 2} y={PH - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">
+        {opts?.xLabel ?? 'time (h)'}</text>
+      <text x={12} y={(pt + PH - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
+        transform={`rotate(-90 12 ${(pt + PH - pb) / 2})`}>prediction-corrected conc.</text>
+    </svg>
+  );
+}
+
+const _VPC_STRUCTURAL_ROLES = new Set(
+  ['ID', 'TIME', 'TAD', 'DV', 'AMT', 'EVID', 'MDV', 'CMT', 'II', 'ADDL', 'DVID', 'CENS', 'ROUTE', 'PD']);
+
+/** Covariate columns eligible for VPC stratification: dataset columns without a
+ * structural NONMEM role, plus DOSE (which the backend always accepts). The
+ * backend's `available` list is authoritative — this is a best-effort menu. */
+function vpcStrataOptions(
+  meta: { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null | undefined,
+): string[] {
+  const cols = meta?.columns ?? [];
+  const roles = meta?.detected_roles ?? {};
+  const covs = cols.map(c => c.name)
+    .filter(n => !_VPC_STRUCTURAL_ROLES.has((roles[n] ?? '').toUpperCase()));
+  return Array.from(new Set(['DOSE', ...covs]));
+}
+
+/** Small-multiples grid of per-stratum pcVPC panels, mirroring the flexplot
+ * facet layout. A shared y-axis makes the strata directly comparable. */
+function StratifiedVpcPanels({ s }: { s: NonNullable<PharmState['vpc_results']>['stratified'] }) {
+  if (!s) return null;
+  if (s.status !== 'ok' || !s.strata?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      Stratified VPC unavailable: {s.message ?? s.status}
+      {s.available && <> · available: {s.available.join(', ')}</>}
+    </div>;
+  }
+  const xLabel = s.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  const label = (s.stratify_by || 'dose (normalized)');
+  // Shared y-domain across panels so the strata are directly comparable.
+  const yMax = Math.max(1, ...s.strata.flatMap(st => st.bins.flatMap(
+    b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[])) * 1.05;
+  const tile = s.strata.length > 1 ? 380 : 560;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Prediction-corrected VPC stratified by <b>{label}</b>
+        {s.correction === 'dose' && ' · dose-normalized'} · {s.strata.length} strata · shared y-axis
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {s.strata.map(st => (
+          <div key={st.label} style={{ width: tile, maxWidth: '100%' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+              {label} = {st.label} <span style={{ opacity: 0.7 }}>(n = {st.n})</span>
+            </div>
+            {pcvpcSvg(st.bins, { width: tile, height: 200, xLabel, yMax,
+              ariaLabel: `pcVPC for ${label} = ${st.label}` })}
+          </div>
+        ))}
+      </div>
+      {!!s.skipped?.length && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+          Skipped: {s.skipped.map(k => `${k.label} (${k.reason})`).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ExpMetricT = NonNullable<NonNullable<PharmState['vpc_results']>['exposure_pc']>['groups'];
+
+/** One histogram of the simulated group-mean exposure, with the observed mean
+ * (solid) and the simulated 2.5-97.5% interval (dashed) overlaid. */
+function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', gb: string) {
+  const m = g[metric];
+  const edges = m.hist.edges, counts = m.hist.counts;
+  if (edges.length < 2) return null;
+  const W = 250, H = 150, ml = 8, mr = 8, mt = 6, mb = 24;
+  const lo = Math.min(edges[0], m.observed), hi = Math.max(edges[edges.length - 1], m.observed);
+  const sx = (v: number) => ml + ((v - lo) / (hi - lo || 1)) * (W - ml - mr);
+  const cmax = Math.max(1, ...counts);
+  const sy = (c: number) => H - mb - (c / cmax) * (H - mt - mb);
+  const vline = (v: number, color: string, dash: boolean) =>
+    <line x1={sx(v)} y1={mt} x2={sx(v)} y2={H - mb} stroke={color}
+      strokeWidth={dash ? 1 : 1.7} strokeDasharray={dash ? '4 3' : undefined} />;
+  return (
+    <div key={g.label} style={{ width: W, maxWidth: '100%' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+        {gb} = {g.label} <span style={{ opacity: 0.7 }}>(n = {g.n})</span>{' '}
+        <span style={{ color: m.within ? 'var(--green)' : 'var(--red, #c0392b)' }}>
+          {m.within ? '✓ within' : '✗ outside'}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label={`Exposure predictive check ${metric} for ${gb} ${g.label}`}>
+        {counts.map((c, i) => (
+          <rect key={i} x={sx(edges[i])} y={sy(c)} width={Math.max(0.5, sx(edges[i + 1]) - sx(edges[i]) - 0.5)}
+            height={H - mb - sy(c)} fill="var(--accent)" fillOpacity="0.5" />
+        ))}
+        {vline(m.sim_lo, 'var(--text-dim)', true)}
+        {vline(m.sim_hi, 'var(--text-dim)', true)}
+        {vline(m.observed, 'var(--green)', false)}
+        <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+        <text x={W / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">
+          {metric === 'auc' ? 'mean AUC (conc·h)' : 'mean Cmax (conc)'}</text>
+      </svg>
+    </div>
+  );
+}
+
+/** Exposure predictive check: for AUC and Cmax, one simulated-mean histogram per
+ * group with the observed mean and the simulated interval overlaid. */
+function ExposurePcPanel({ e }: { e: NonNullable<PharmState['vpc_results']>['exposure_pc'] }) {
+  if (!e) return null;
+  if (e.status !== 'ok' || !e.groups?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      Exposure predictive check unavailable: {e.message ?? e.status}</div>;
+  }
+  const gb = e.group_by || 'group';
+  const ci = e.ci && e.ci.length === 2 ? Math.round(e.ci[1] - e.ci[0]) : 95;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Exposure predictive check — observed group mean (—) vs simulated-mean distribution
+        ({ci}% interval dashed), by <b>{gb}</b>{e.multiple_dose && ' · last-interval exposure'}
+      </div>
+      {(['auc', 'cmax'] as const).map(metric => (
+        <div key={metric} style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+            {metric === 'auc' ? 'Mean AUC' : 'Mean Cmax'}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {e.groups!.map(g => expHistSvg(g, metric, gb))}
+          </div>
+        </div>
+      ))}
+      {!!e.skipped?.length && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+          Skipped: {e.skipped.map(k => `${k.label} (n = ${k.n}, ${k.reason})`).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** BLQ-incidence VPC: observed fraction below LLOQ per bin vs the simulated
+ * median and 5-95% band — the categorical companion to the concentration VPC. */
+function BlqVpcPanel({ b }: { b: NonNullable<PharmState['vpc_results']>['blq_vpc'] }) {
+  if (!b) return null;
+  if (b.status !== 'ok' || !b.bins?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      BLQ-incidence VPC unavailable: {b.message ?? b.status}</div>;
+  }
+  const pts = b.bins.filter(p => p.x != null);
+  if (!pts.length) return null;
+  const W = 580, H = 220, pm = 44, pr = 12, pt = 12, pb = 28;
+  const xs = pts.map(p => p.x as number);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const sx = (v: number) => pm + ((v - xmin) / (xmax - xmin || 1)) * (W - pm - pr);
+  const sy = (v: number) => H - pb - Math.max(0, Math.min(1, v)) * (H - pt - pb);
+  const ci = pts.filter(p => p.sim_lo != null && p.sim_hi != null);
+  const up = ci.map(p => `${sx(p.x as number).toFixed(1)},${sy(p.sim_hi as number).toFixed(1)}`).join(' ');
+  const dn = ci.map(p => `${sx(p.x as number).toFixed(1)},${sy(p.sim_lo as number).toFixed(1)}`).reverse().join(' ');
+  const linePts = (key: 'sim_med' | 'obs_frac') =>
+    pts.filter(p => p[key] != null)
+      .map((p, i) => `${i ? 'L' : 'M'}${sx(p.x as number).toFixed(1)} ${sy(p[key] as number).toFixed(1)}`).join(' ');
+  const xLabel = b.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        BLQ-incidence VPC — fraction below LLOQ ({b.lloq}) over {xLabel}; {b.n_blq} censored obs
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }}
+        role="img" aria-label="BLQ-incidence VPC">
+        {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
+        <path d={linePts('sim_med')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
+        <path d={linePts('obs_frac')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
+        {pts.filter(p => p.obs_frac != null).map((p, i) =>
+          <circle key={i} cx={sx(p.x as number)} cy={sy(p.obs_frac as number)} r="2.4" fill="var(--green)" />)}
+        {[0, 0.5, 1].map((f, i) => (
+          <g key={i}>
+            <line x1={pm} y1={sy(f)} x2={W - pr} y2={sy(f)} stroke="var(--border)" strokeOpacity="0.5" />
+            <text x={pm - 6} y={sy(f) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">
+              {(f * 100).toFixed(0)}%</text>
+          </g>
+        ))}
+        <line x1={pm} y1={pt} x2={pm} y2={H - pb} stroke="var(--border)" />
+        <text x={(pm + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">{xLabel}</text>
+        <text x={12} y={(pt + H - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
+          transform={`rotate(-90 12 ${(pt + H - pb) / 2})`}>fraction &lt; LLOQ</text>
+      </svg>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', display: 'flex', gap: 14 }}>
+        <span><span style={{ color: 'var(--green)' }}>—</span> observed fraction BLQ</span>
+        <span><span style={{ color: 'var(--accent)' }}>– –</span> simulated median</span>
+        <span style={{ color: 'var(--accent)' }}>▦ simulated 5–95%</span>
+      </div>
+    </div>
+  );
+}
+
+function VpcCard({ r, onRerun, busy, covariates }: {
+  r: PharmState['vpc_results'];
+  onRerun?: (o: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }) => void;
+  busy?: boolean;
+  covariates?: string[];
+}) {
+  // Controls state is seeded from the run that produced this card, so the knobs
+  // reflect what is actually plotted (each rerun mounts a fresh VpcCard).
+  const [stratifyBy, setStratifyBy] = useState(() => r?.stratified?.stratify_by ?? '');
+  const [doseNorm, setDoseNorm] = useState(() => r?.stratified?.correction === 'dose');
+  const [xTad, setXTad] = useState(() => r?.stratified?.x_by === 'tad');
+  const [expCheck, setExpCheck] = useState(() => !!r?.exposure_pc);
+  const [blqCheck, setBlqCheck] = useState(() => !!r?.blq_vpc);
   if (!r || r.status !== 'ok') {
     return <div className="qc-card conditional"><div className="qc-title">VPC / GOF — not run</div>
       <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
@@ -1555,46 +1802,11 @@ function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
       </svg>
     );
   }
-  // prediction-corrected VPC: binned observed vs simulated 5/50/95 + median CI band
+  // prediction-corrected VPC — rendered by the shared pcvpcSvg helper, which
+  // is reused for the per-stratum small-multiples below (single drawing idiom).
   const pc = r.pcvpc;
-  let pcChart = null;
-  if (pc && pc.status === 'ok' && pc.bins.length) {
-    const bins = pc.bins.filter(b => b.t != null);
-    if (bins.length) {
-      const PW = 580, PH = 230, pm = 44, pr = 12, pt = 12, pb = 28;
-      const ts = bins.map(b => b.t as number);
-      const tmin = Math.min(...ts), tmax = Math.max(...ts);
-      const vals = bins.flatMap(b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[];
-      const cmax = (Math.max(...vals) || 1) * 1.05;
-      const sx = (v: number) => pm + ((v - tmin) / (tmax - tmin || 1)) * (PW - pm - pr);
-      const sy = (v: number) => PH - pb - (v / cmax) * (PH - pt - pb);
-      const linePts = (key: 'obs_p05' | 'obs_p50' | 'obs_p95' | 'sim_p05' | 'sim_p50' | 'sim_p95') =>
-        bins.filter(b => b[key] != null)
-          .map((b, i) => `${i ? 'L' : 'M'}${sx(b.t as number).toFixed(1)} ${sy(b[key] as number).toFixed(1)}`).join(' ');
-      const ci = bins.filter(b => b.sim_med_lo != null && b.sim_med_hi != null);
-      const up = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_hi as number).toFixed(1)}`).join(' ');
-      const dn = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_lo as number).toFixed(1)}`).reverse().join(' ');
-      pcChart = (
-        <svg viewBox={`0 0 ${PW} ${PH}`} style={{ width: '100%', maxWidth: PW, marginTop: 8 }}
-          role="img" aria-label="Prediction-corrected VPC">
-          {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
-          {(['sim_p05', 'sim_p95'] as const).map(k =>
-            <path key={k} d={linePts(k)} fill="none" stroke="var(--text-dim)" strokeWidth="1" strokeDasharray="4 3" />)}
-          <path d={linePts('sim_p50')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
-          {(['obs_p05', 'obs_p95'] as const).map(k =>
-            <path key={k} d={linePts(k)} fill="none" stroke="var(--green)" strokeWidth="1.1" />)}
-          <path d={linePts('obs_p50')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
-          {bins.filter(b => b.obs_p50 != null).map((b, i) =>
-            <circle key={i} cx={sx(b.t as number)} cy={sy(b.obs_p50 as number)} r="2.4" fill="var(--green)" />)}
-          <line x1={pm} y1={PH - pb} x2={PW - pr} y2={PH - pb} stroke="var(--border)" />
-          <line x1={pm} y1={pt} x2={pm} y2={PH - pb} stroke="var(--border)" />
-          <text x={(pm + PW) / 2} y={PH - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">time (h)</text>
-          <text x={12} y={(pt + PH - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-            transform={`rotate(-90 12 ${(pt + PH - pb) / 2})`}>prediction-corrected conc.</text>
-        </svg>
-      );
-    }
-  }
+  const pcXLabel = pc?.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  const pcChart = pc && pc.status === 'ok' ? pcvpcSvg(pc.bins, { xLabel: pcXLabel }) : null;
 
   return (
     <div>
@@ -1621,6 +1833,47 @@ function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
           </div>
         </>
       )}
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          margin: '12px 0 0', paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <span style={{ color: 'var(--text-dim)' }}>Pooling across dose groups misleads —
+            stratify or dose-normalize:</span>
+          <label style={{ color: 'var(--text-dim)' }}>
+            by{' '}
+            <select className="model-select" style={{ maxWidth: 150 }} value={stratifyBy} disabled={busy}
+              onChange={e => setStratifyBy(e.target.value)}>
+              <option value="">none (pooled)</option>
+              {(covariates ?? []).map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="checkbox" checked={doseNorm} disabled={busy}
+              onChange={e => setDoseNorm(e.target.checked)} /> dose-normalize
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="checkbox" checked={xTad} disabled={busy}
+              onChange={e => setXTad(e.target.checked)} /> time-after-dose
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Observed group-mean AUC/Cmax vs the simulated-mean distribution">
+            <input type="checkbox" checked={expCheck} disabled={busy}
+              onChange={e => setExpCheck(e.target.checked)} /> exposure PC
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Fraction of observations below the LLOQ over time vs the simulated band (needs censored data)">
+            <input type="checkbox" checked={blqCheck} disabled={busy}
+              onChange={e => setBlqCheck(e.target.checked)} /> BLQ VPC
+          </label>
+          <button className="chip" disabled={busy}
+            onClick={() => onRerun({ stratify_by: stratifyBy || null, dose_normalize: doseNorm,
+              x_by: xTad ? 'tad' : 'time', exposure_check: expCheck, blq_check: blqCheck })}>
+            {busy ? 'Running…' : 'Recompute VPC'}
+          </button>
+        </div>
+      )}
+      {r.stratified && <StratifiedVpcPanels s={r.stratified} />}
+      {r.exposure_pc && <ExposurePcPanel e={r.exposure_pc} />}
+      {r.blq_vpc && <BlqVpcPanel b={r.blq_vpc} />}
     </div>
   );
 }
@@ -2108,12 +2361,17 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
-  async function runVpc() {
+  async function runVpc(opts?: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }) {
     if (!session) return;
     setLoading(true);
-    pushMsg({ role: 'user', content: 'VPC / goodness-of-fit', id: '' });
+    const label = opts?.exposure_check ? ' — exposure predictive check'
+      : opts?.blq_check ? ' — BLQ-incidence VPC'
+      : opts?.stratify_by ? ` — stratified by ${opts.stratify_by}`
+      : opts?.dose_normalize ? ' — dose-normalized' : '';
+    pushMsg({ role: 'user', content: `VPC / goodness-of-fit${label}`, id: '' });
     try {
-      const res = await api.vpc(session.id);
+      const res = await api.vpc(session.id, opts);
       setState(res.state);
       pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
       pushMsg({ role: 'assistant', content: '__VPC__', agent: 'modeler', id: '', snap: res.state });
@@ -2684,12 +2942,16 @@ export default function App() {
               );
             }
             if (m.content === '__VPC__' && st?.vpc_results) {
+              const wide = !!(st.vpc_results.stratified || st.vpc_results.exposure_pc
+                || st.vpc_results.blq_vpc);
               return (
                 <div key={m.id} className="msg agent">
                   <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>VP</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                  <div className="msg-bubble" style={{ maxWidth: wide ? 920 : 640 }}>
                     <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · VPC / GOF</div>
-                    <VpcCard r={st.vpc_results} />
+                    <VpcCard r={st.vpc_results} onRerun={runVpc} busy={loading}
+                      covariates={vpcStrataOptions(st.dataset_metadata as
+                        { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null)} />
                   </div>
                 </div>
               );
@@ -2998,7 +3260,7 @@ export default function App() {
         {state?.pk_model_results?.status === 'ok' && (
           <div className="quick-actions">
             <span className="quick-actions-label">Diagnostics:</span>
-            <button className="chip" disabled={loading} onClick={runVpc}>VPC / goodness-of-fit</button>
+            <button className="chip" disabled={loading} onClick={() => runVpc()}>VPC / goodness-of-fit</button>
             <button className="chip" disabled={loading} onClick={runDiagnostics}>Residual diagnostics</button>
             <button className="chip" disabled={loading} onClick={runCovariateForest}
               title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">

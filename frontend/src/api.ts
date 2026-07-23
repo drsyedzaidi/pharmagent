@@ -129,8 +129,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  vpc: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
-    req(`/sessions/${sid}/vpc`, { method: 'POST' }),
+  vpc: (sid: string, body?: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }):
+    Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/vpc`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
 
   diagnostics: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
     req(`/sessions/${sid}/diagnostics`, { method: 'POST' }),

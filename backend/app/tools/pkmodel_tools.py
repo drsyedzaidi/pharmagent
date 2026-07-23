@@ -18,7 +18,14 @@ from app.compute.dosing import dose_events
 from app.compute.pk_fit import compare_models, fit_pk_dataset
 from app.compute.pk_models import PK_KEYS, REGISTRY, get_model, list_models
 from app.compute.pk_simulate import simulate_timecourse
-from app.compute.vpc import obs_vs_pred, pcvpc, vpc_band
+from app.compute.vpc import (
+    blq_predictive_check,
+    exposure_predictive_check,
+    obs_vs_pred,
+    pcvpc,
+    stratified_vpc,
+    vpc_band,
+)
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult
@@ -277,6 +284,16 @@ def _last_fit(state: PharmState) -> tuple[str | None, list[dict], dict, dict]:
     return key, fits, pop, typical
 
 
+def _dataset_lloq(df: pd.DataFrame, roles: dict[str, str]) -> float | None:
+    """LLOQ from an explicit LLOQ-role column (median positive value), else None."""
+    lloq_col = next((c for c, r in roles.items() if r == "LLOQ"), None)
+    if not lloq_col or lloq_col not in df.columns:
+        return None
+    vals = pd.to_numeric(df[lloq_col], errors="coerce").dropna()
+    vals = vals[vals > 0]
+    return float(vals.median()) if len(vals) else None
+
+
 def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     model_key, fits, pop, typical = _last_fit(state)
     if not model_key:
@@ -326,14 +343,95 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                "gof": ovp["gof"], "obs_vs_pred": {k: ovp[k] for k in ("observed", "ipred", "pred")},
                "vpc": band, "vpc_dose": vpc_dose, "obs_t": obs_t, "obs_c": obs_c,
                "pcvpc": pc}
+
+    # Stratified / dose-normalized VPC (Week-11 evaluation). Additive: computed
+    # ONLY when the caller asks, so the default payload is unchanged. A pooled
+    # dose-normalized VPC is stratify_by=None + correction="dose".
+    stratify_by = args.get("stratify_by")
+    dose_normalize = bool(args.get("dose_normalize"))
+    x_by = args.get("x_by", "time")
+    if x_by not in ("time", "tad"):
+        x_by = "time"
+    if stratify_by or dose_normalize or x_by == "tad":
+        available = sorted({c for s in subjects for c in (s.get("cov") or {})} | {"DOSE"})
+        if stratify_by and stratify_by != "DOSE" and stratify_by not in available:
+            payload["stratified"] = {"status": "bad_stratum", "stratify_by": stratify_by,
+                                     "available": available,
+                                     "message": (f"unknown stratum {stratify_by!r}; "
+                                                 f"available: {', '.join(available)}")}
+        else:
+            payload["stratified"] = stratified_vpc(
+                model_key, subjects, typical, iiv,
+                stratify_by=stratify_by,
+                correction="dose" if dose_normalize else "pred", x_by=x_by,
+                sigma_prop=sigma_prop, sigma_add=sigma_add)
+
+    # Exposure predictive check (Week-11): observed group-mean AUC/Cmax vs the
+    # simulated-replicate mean distribution. Additive; grouped by the requested
+    # stratum else by dose. Default payload unchanged when not requested.
+    if bool(args.get("exposure_check")):
+        exp_group = stratify_by or "DOSE"
+        payload["exposure_pc"] = exposure_predictive_check(
+            model_key, subjects, typical, iiv, group_by=exp_group,
+            sigma_prop=sigma_prop, sigma_add=sigma_add)
+
+    # BLQ-incidence VPC (Week-11): needs censoring flags, so subjects are rebuilt
+    # with with_blq=True (BLQ rows carry the LLOQ in DV and are otherwise dropped)
+    # and the dataset LLOQ is recovered from them.
+    if bool(args.get("blq_check")):
+        roles_b = _roles(df, state)
+        blq_subjects, _bm, _bp = _build_subjects(df, roles_b, with_blq=True)
+        # Prefer an explicit LLOQ column (some datasets carry BLQ rows as DV=0, so
+        # the median-BLQ-DV fallback would be 0); else use the per-subject LLOQ
+        # recovered from BLQ rows that carry the LLOQ in DV.
+        lloq = _dataset_lloq(df, roles_b)
+        if lloq is None:
+            lloqs = [float(s["lloq"]) for s in blq_subjects
+                     if s.get("lloq") is not None and math.isfinite(float(s["lloq"]))
+                     and float(s["lloq"]) > 0]
+            lloq = float(np.median(lloqs)) if lloqs else None
+        payload["blq_vpc"] = blq_predictive_check(
+            model_key, blq_subjects, typical, iiv, lloq=lloq,
+            sigma_prop=sigma_prop, sigma_add=sigma_add, x_by=x_by)
+
     g = ovp["gof"]
+    strat = payload.get("stratified")
+    strat_note = ""
+    if strat and strat.get("status") == "ok":
+        strat_note = (f" Stratified by {strat['stratify_by'] or 'dose (normalized)'}: "
+                      f"{len(strat['strata'])} strata"
+                      + (", dose-normalized" if strat["correction"] == "dose" else "")
+                      + (f", by {strat['x_by'].upper()}" if strat["x_by"] == "tad" else "") + ".")
+    elif strat and strat.get("status") not in (None, "ok"):
+        strat_note = f" Stratification: {strat.get('message', strat['status'])}."
+
+    exp = payload.get("exposure_pc")
+    exp_note = ""
+    if exp and exp.get("status") == "ok":
+        n_within = sum(1 for grp in exp["groups"]
+                       for met in ("auc", "cmax") if grp[met]["within"])
+        n_tot = 2 * len(exp["groups"])
+        exp_note = (f" Exposure PC by {exp['group_by']}: {len(exp['groups'])} groups, "
+                    f"{n_within}/{n_tot} observed means within the simulated CI.")
+    elif exp and exp.get("status") not in (None, "ok"):
+        exp_note = f" Exposure PC: {exp.get('message', exp['status'])}."
+
+    blq = payload.get("blq_vpc")
+    blq_note = ""
+    if blq and blq.get("status") == "ok":
+        blq_note = (f" BLQ-incidence VPC: {blq['n_blq']} censored obs over "
+                    f"{blq['n_bins']} bins (LLOQ {blq['lloq']}).")
+    elif blq and blq.get("status") not in (None, "ok"):
+        blq_note = f" BLQ-incidence VPC: {blq.get('message', blq['status'])}."
+
     return ToolResult(
         summary=(f"VPC / GOF for {model.label}: n={g['n']} obs, "
                  f"log-scale R²(IPRED)={g['r2_log_ipred']}; "
-                 f"pcVPC over {pc.get('n_bins', 0)} time bins."),
+                 f"pcVPC over {pc.get('n_bins', 0)} time bins." + strat_note + exp_note + blq_note),
         action=f"run_vpc({model_key})",
         writes={"vpc_results": payload},
-        result={"status": "ok", "model_key": model_key, "gof": g, "vpc_dose": vpc_dose})
+        result={"status": "ok", "model_key": model_key, "gof": g, "vpc_dose": vpc_dose,
+                "stratified": strat, "exposure_pc": exp, "blq_vpc": blq})
 
 
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
