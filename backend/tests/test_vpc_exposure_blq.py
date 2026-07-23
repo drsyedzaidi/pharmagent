@@ -281,3 +281,61 @@ def test_blq_check_recovers_lloq_from_column(loaded):
 
 def test_tool_is_registered():
     assert default_registry().get("run_vpc").agent == "modeler"
+
+
+# --- non-finite robustness (adversarial-review findings) -------------------
+
+def test_epc_summ_survives_non_finite_replicate(monkeypatch):
+    """A degenerate simulate() draw (inf/nan) in one replicate must not crash
+    np.histogram or poison the percentile — it is dropped, matching the module's
+    documented non-finite contract (obs_vs_pred / pcvpc)."""
+    import app.compute.vpc as vpcmod
+    real = vpcmod.simulate
+    state = {"n": 0}
+
+    def flaky(model, params, doses, times, **kw):
+        out = real(model, params, doses, times, **kw)
+        state["n"] += 1
+        if state["n"] == 3:          # one degenerate replicate mid-run
+            cp = np.asarray(out["cp"], dtype=float).copy()
+            cp[0] = np.inf
+            return {**out, "cp": cp}
+        return out
+
+    monkeypatch.setattr(vpcmod, "simulate", flaky)
+    res = exposure_predictive_check(MODEL_KEY, _population(doses=(25.0,), n=6),
+                                    TYPICAL, IIV, group_by="DOSE", n_sim=30)
+    assert res["status"] == "ok"                         # no crash
+    for g in res["groups"]:
+        for met in ("auc", "cmax"):
+            m = g[met]
+            # summaries stay finite (the inf replicate was dropped)
+            for k in ("sim_median", "sim_lo", "sim_hi"):
+                assert m[k] is None or np.isfinite(m[k])
+
+
+def test_blq_excludes_non_finite_simulated_draws(monkeypatch):
+    """A non-finite simulated concentration must be EXCLUDED, not scored not-BLQ
+    (nan < lloq is False), which would bias the simulated fraction downward."""
+    import app.compute.vpc as vpcmod
+    real = vpcmod.simulate
+    state = {"n": 0}
+
+    def flaky(model, params, doses, times, **kw):
+        out = real(model, params, doses, times, **kw)
+        state["n"] += 1
+        if state["n"] % 7 == 0:
+            cp = np.asarray(out["cp"], dtype=float).copy()
+            cp[-1] = np.nan
+            return {**out, "cp": cp}
+        return out
+
+    monkeypatch.setattr(vpcmod, "simulate", flaky)
+    subs = _population(doses=(25.0,), n=30, lloq=0.15)
+    res = blq_predictive_check(MODEL_KEY, subs, TYPICAL, IIV, lloq=0.15,
+                               sigma_prop=0.1, n_sim=60)
+    assert res["status"] == "ok"
+    for b in res["bins"]:                                # fractions stay valid
+        for key in ("sim_med", "sim_lo", "sim_hi"):
+            if b[key] is not None:
+                assert 0.0 <= b[key] <= 1.0

@@ -536,9 +536,9 @@ export interface VpcResults {
 
 export interface ExposureMetric {
   observed: number;
-  sim_median: number;
-  sim_lo: number;
-  sim_hi: number;
+  sim_median: number | null;
+  sim_lo: number | null;
+  sim_hi: number | null;
   within: boolean;
   hist: { edges: number[]; counts: number[] };
 }

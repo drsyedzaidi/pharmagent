@@ -614,10 +614,19 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
             sim_cmax[lb][r] = float(np.mean(cm))
 
     def _summ(arr: np.ndarray, obs_val: float) -> dict:
-        lo, hi = (float(v) for v in np.percentile(arr, _EXP_CI))
-        counts, edges = np.histogram(arr, bins=int(n_hist_bins))
+        # Drop non-finite replicate means before summarizing — matches the module
+        # docstring's pairwise-drop promise and the guards in obs_vs_pred/pcvpc, and
+        # stops one degenerate simulate() draw (inf/nan) from poisoning np.percentile
+        # or raising in np.histogram.
+        fa = arr[np.isfinite(arr)]
+        if fa.size == 0:
+            return {"observed": round(obs_val, _ROUND_DP), "sim_median": None,
+                    "sim_lo": None, "sim_hi": None, "within": False,
+                    "hist": {"edges": [], "counts": []}}
+        lo, hi = (float(v) for v in np.percentile(fa, _EXP_CI))
+        counts, edges = np.histogram(fa, bins=int(n_hist_bins))
         return {"observed": round(obs_val, _ROUND_DP),
-                "sim_median": round(float(np.median(arr)), _ROUND_DP),
+                "sim_median": round(float(np.median(fa)), _ROUND_DP),
                 "sim_lo": round(lo, _ROUND_DP), "sim_hi": round(hi, _ROUND_DP),
                 "within": bool(lo <= obs_val <= hi),
                 "hist": {"edges": [round(float(e), _ROUND_DP) for e in edges],
@@ -732,6 +741,7 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
     rep_frac = np.full((int(n_sim), nb), np.nan)
     for r in range(int(n_sim)):
         sim_below = np.zeros(len(rows), dtype=bool)
+        sim_ok = np.zeros(len(rows), dtype=bool)     # finite simulated draws only
         for s in subj_rec:
             params_i = {p: float(typical_params[p]) *
                         float(np.exp(rng.normal(0.0, sds[p]) if sds[p] > 0 else 0.0))
@@ -742,8 +752,12 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
             ysim = cp + np.sqrt(np.maximum(var, 0.0)) * rng.normal(0.0, 1.0, cp.size)
             for k, gidx in enumerate(s["idx"]):
                 sim_below[gidx] = ysim[k] < lloq
+                sim_ok[gidx] = bool(np.isfinite(ysim[k]))
+        # Exclude non-finite simulated draws (a degenerate simulate() value would
+        # otherwise be scored not-BLQ, since `nan < lloq` is False, biasing the
+        # simulated fraction down) — mirrors pcvpc's `& np.isfinite` guard.
         for b in range(nb):
-            m = valid & (bin_idx == b)
+            m = valid & (bin_idx == b) & sim_ok
             if np.any(m):
                 rep_frac[r, b] = float(np.mean(sim_below[m]))
 

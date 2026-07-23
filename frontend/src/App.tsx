@@ -1620,9 +1620,10 @@ function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', 
   const sx = (v: number) => ml + ((v - lo) / (hi - lo || 1)) * (W - ml - mr);
   const cmax = Math.max(1, ...counts);
   const sy = (c: number) => H - mb - (c / cmax) * (H - mt - mb);
-  const vline = (v: number, color: string, dash: boolean) =>
-    <line x1={sx(v)} y1={mt} x2={sx(v)} y2={H - mb} stroke={color}
-      strokeWidth={dash ? 1 : 1.7} strokeDasharray={dash ? '4 3' : undefined} />;
+  const vline = (v: number | null, color: string, dash: boolean) =>
+    v == null ? null :
+      <line x1={sx(v)} y1={mt} x2={sx(v)} y2={H - mb} stroke={color}
+        strokeWidth={dash ? 1 : 1.7} strokeDasharray={dash ? '4 3' : undefined} />;
   return (
     <div key={g.label} style={{ width: W, maxWidth: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
