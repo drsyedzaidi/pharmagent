@@ -1941,7 +1941,8 @@ const CLINSIM_METRICS: { key: string; label: string }[] = [
 function ClinsimCard({ r, onRerun, busy }: {
   r: PharmState['clinsim_results'];
   onRerun?: (o: { doses?: number[]; metric?: string; threshold?: number | null;
-    direction?: string; target_fraction?: number; n_subjects?: number }) => void;
+    direction?: string; target_fraction?: number; n_subjects?: number;
+    param_uncertainty?: boolean }) => void;
   busy?: boolean;
 }) {
   const [metric, setMetric] = useState(() => r?.metric ?? 'ctrough');
@@ -1951,6 +1952,7 @@ function ClinsimCard({ r, onRerun, busy }: {
     String(Math.round((r?.target_fraction ?? 0.9) * 100)));
   const [dosesStr, setDosesStr] = useState(() => (r?.doses ?? []).map(d => d.dose).join(', '));
   const [nSubj, setNSubj] = useState(() => String(r?.n_subjects ?? 500));
+  const [paramUnc, setParamUnc] = useState(() => (r?.n_param_draws ?? 0) > 0);
   if (!r || r.status !== 'ok') {
     return <div className="qc-card conditional"><div className="qc-title">Clinical trial simulation — not run</div>
       <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
@@ -1966,6 +1968,10 @@ function ClinsimCard({ r, onRerun, busy }: {
   const syP = (v: number) => H - mb - Math.max(0, Math.min(1, v)) * (H - mt - mb);
   const ptaPath = rows.filter(d => d.pta != null)
     .map((d, i) => `${i ? 'L' : 'M'}${xAt(rows.indexOf(d)).toFixed(1)} ${syP(d.pta as number).toFixed(1)}`).join(' ');
+  // Parameter-uncertainty PTA band (present only when param draws were run).
+  const ptaBandRows = rows.filter(d => d.pta_lo != null && d.pta_hi != null);
+  const ptaUp = ptaBandRows.map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syP(d.pta_hi as number).toFixed(1)}`).join(' ');
+  const ptaDn = ptaBandRows.map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syP(d.pta_lo as number).toFixed(1)}`).reverse().join(' ');
   // Exposure panel domain
   const evals = rows.flatMap(d => [d.metric_p05, d.metric_p95]).filter(v => v != null) as number[];
   const emax = (Math.max(...evals, r.threshold ?? 0) || 1) * 1.05;
@@ -1993,6 +1999,7 @@ function ClinsimCard({ r, onRerun, busy }: {
         <>
           <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' }}>
             Probability of target attainment ({r.metric} {r.direction} {r.threshold})
+            {(r.n_param_draws ?? 0) > 0 && <span> · ▦ {r.n_param_draws}-draw parameter-uncertainty band</span>}
           </div>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
             aria-label="Probability of target attainment vs dose">
@@ -2002,6 +2009,7 @@ function ClinsimCard({ r, onRerun, busy }: {
                 <text x={ml - 6} y={syP(f) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">{(f * 100).toFixed(0)}%</text>
               </g>
             ))}
+            {ptaBandRows.length > 1 && <polygon points={`${ptaUp} ${ptaDn}`} fill="var(--accent)" fillOpacity="0.16" />}
             <line x1={ml} y1={syP(tgt)} x2={W - mr} y2={syP(tgt)} stroke="var(--yellow)" strokeDasharray="4 3" strokeWidth="1.2" />
             <path d={ptaPath} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
             {rows.map((d, i) => d.pta == null ? null : (
@@ -2058,9 +2066,14 @@ function ClinsimCard({ r, onRerun, busy }: {
           <label style={{ color: 'var(--text-dim)' }}>N{' '}
             <input type="number" value={nSubj} disabled={busy}
               onChange={e => setNSubj(e.target.value)} style={{ width: 64 }} /></label>
-          <label style={{ color: 'var(--text-dim)', flex: '1 1 160px' }}>doses{' '}
+          <label style={{ color: 'var(--text-dim)', flex: '1 1 140px' }}>doses{' '}
             <input type="text" value={dosesStr} disabled={busy} placeholder="comma-separated"
-              onChange={e => setDosesStr(e.target.value)} style={{ width: '70%' }} /></label>
+              onChange={e => setDosesStr(e.target.value)} style={{ width: '65%' }} /></label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Draw the structural parameters from their RSE (needs an NLME fit) → a PTA confidence band + parameter sensitivity">
+            <input type="checkbox" checked={paramUnc} disabled={busy}
+              onChange={e => setParamUnc(e.target.checked)} /> param uncertainty
+          </label>
           <button className="chip" disabled={busy}
             onClick={() => {
               // An empty / non-positive target% must fall back to the backend
@@ -2072,7 +2085,7 @@ function ClinsimCard({ r, onRerun, busy }: {
                 metric, threshold: threshold === '' ? null : Number(threshold), direction,
                 target_fraction: targetPct.trim() === '' || !(tf > 0)
                   ? undefined : Math.min(1, tf),
-                n_subjects: Number(nSubj),
+                n_subjects: Number(nSubj), param_uncertainty: paramUnc,
               });
             }}>{busy ? 'Simulating…' : 'Recompute'}</button>
         </div>
@@ -2091,6 +2104,55 @@ function ClinsimCard({ r, onRerun, busy }: {
           ))}
         </tbody>
       </table>
+      {r.sensitivity && r.sensitivity.records.length > 0 && (() => {
+        const refDose = rec ?? rows[rows.length - 1]?.dose;
+        const refIdx = rows.findIndex(d => d.dose === refDose);
+        return <ClinsimSensitivityPanel s={r.sensitivity} refDose={refDose} refIdx={refIdx} />;
+      })()}
+    </div>
+  );
+}
+
+/** Parameter sensitivity (Week-12 Ex 4): for each structural parameter, a
+ * scatter of its uncertainty draw vs the resulting PTA at the reference dose —
+ * shows which parameters drive the attainment uncertainty. */
+function ClinsimSensitivityPanel({ s, refDose, refIdx }: {
+  s: NonNullable<PharmState['clinsim_results']>['sensitivity'];
+  refDose?: number; refIdx: number;
+}) {
+  if (!s || refDose == null || refIdx < 0) return null;
+  const W = 210, H = 150, ml = 30, mr = 8, mt = 8, mb = 26;
+  const panel = (p: string) => {
+    const pts = s.records
+      .map(rec => ({ x: rec.theta[p], y: rec.pta[refIdx] }))
+      .filter(pt => pt.x != null && pt.y != null) as { x: number; y: number }[];
+    if (pts.length < 2) return null;
+    const xs = pts.map(pt => pt.x), xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const sx = (v: number) => ml + ((v - xmin) / (xmax - xmin || 1)) * (W - ml - mr);
+    const sy = (v: number) => H - mb - Math.max(0, Math.min(1, v)) * (H - mt - mb);
+    return (
+      <div key={p} style={{ width: W, maxWidth: '100%' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>{p}</div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+          aria-label={`PTA sensitivity to ${p}`}>
+          {[0, 0.5, 1].map((f, i) => (
+            <line key={i} x1={ml} y1={sy(f)} x2={W - mr} y2={sy(f)} stroke="var(--border)" strokeOpacity="0.4" />
+          ))}
+          <text x={ml - 4} y={sy(1) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">100%</text>
+          <text x={ml - 4} y={sy(0) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">0</text>
+          {pts.map((pt, i) => <circle key={i} cx={sx(pt.x)} cy={sy(pt.y)} r="1.8" fill="var(--accent)" fillOpacity="0.55" />)}
+          <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+          <text x={(ml + W) / 2} y={H - 3} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{p} draw</text>
+        </svg>
+      </div>
+    );
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Parameter sensitivity — PTA at dose {refDose} vs each parameter draw ({s.n_draws} draws)
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>{s.params.map(panel)}</div>
     </div>
   );
 }
@@ -2890,7 +2952,7 @@ export default function App() {
   }
 
   async function runClinsim(opts?: { doses?: number[]; metric?: string; threshold?: number | null;
-    direction?: string; target_fraction?: number; n_subjects?: number }) {
+    direction?: string; target_fraction?: number; n_subjects?: number; param_uncertainty?: boolean }) {
     if (!session) return;
     setLoading(true);
     pushMsg({ role: 'user', content: 'Clinical trial simulation (target attainment)', id: '' });
@@ -2903,6 +2965,7 @@ export default function App() {
         ...(opts?.direction ? { direction: opts.direction } : {}),
         ...(opts?.target_fraction != null ? { target_fraction: opts.target_fraction } : {}),
         ...(opts?.n_subjects ? { n_subjects: opts.n_subjects } : {}),
+        ...(opts?.param_uncertainty ? { param_uncertainty: true } : {}),
       });
       setState(res.state);
       pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });

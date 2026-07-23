@@ -258,7 +258,7 @@ export const api = {
   clinsim: (sid: string, body: {
     doses?: number[]; tau?: number; n_doses?: number; metric?: string;
     threshold?: number | null; direction?: string; target_fraction?: number;
-    n_subjects?: number;
+    n_subjects?: number; param_uncertainty?: boolean; n_param_draws?: number;
   }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
     req(`/sessions/${sid}/clinsim`, {
       method: 'POST',

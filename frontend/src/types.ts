@@ -619,11 +619,20 @@ export interface ClinsimDose {
   dose: number;
   n: number;
   pta: number | null;
+  pta_lo?: number | null;
+  pta_hi?: number | null;
   metric_p05: number | null;
   metric_p25: number | null;
   metric_median: number | null;
   metric_p75: number | null;
   metric_p95: number | null;
+}
+
+export interface ClinsimSensitivity {
+  n_draws: number;
+  params: string[];
+  // pta is aligned to the ClinsimResults.doses order.
+  records: { theta: Record<string, number>; pta: (number | null)[] }[];
 }
 
 export interface ClinsimResults {
@@ -640,6 +649,8 @@ export interface ClinsimResults {
   n_subjects?: number;
   with_covariates?: boolean;
   with_iiv?: boolean;
+  n_param_draws?: number;
+  sensitivity?: ClinsimSensitivity | null;
   doses?: ClinsimDose[];
   recommended_dose?: number | null;
   recommendation_note?: string;

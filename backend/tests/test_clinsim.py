@@ -19,6 +19,7 @@ import pytest
 from app.compute.clinsim import (
     clinical_trial_simulation,
     exposure_covariate_forest,
+    sample_theta_draws,
 )
 from app.compute.pk_models import get_model
 from app.compute.pk_simulate import simulate
@@ -105,6 +106,47 @@ def test_cts_degenerate_paths():
         clinical_trial_simulation(MODEL_KEY, theta=THETA, omega_cv_pct=OMEGA,
                                   iiv_params=IIV, doses=[100], tau=24, n_doses=1,
                                   direction="sideways")
+
+
+# --- parameter-uncertainty PTA band + sensitivity (Ex 3/4) -----------------
+
+def test_param_draws_default_path_unchanged():
+    kw = dict(theta=THETA, omega_cv_pct=OMEGA, iiv_params=IIV, doses=[100, 200],
+              tau=24, n_doses=7, metric="ctrough", threshold=2.0, n_subjects=120)
+    a = clinical_trial_simulation(MODEL_KEY, **kw)
+    assert a["n_param_draws"] == 0 and a["sensitivity"] is None
+    assert all("pta_lo" not in d for d in a["doses"])          # no band without draws
+    b = clinical_trial_simulation(MODEL_KEY, **kw)             # still deterministic
+    assert [d["pta"] for d in a["doses"]] == [d["pta"] for d in b["doses"]]
+
+
+def test_sample_theta_draws():
+    draws = sample_theta_draws(THETA, {"CL": 20.0, "V": 10.0}, 50, seed=1)
+    assert len(draws) == 50 and set(draws[0]) == {"CL", "V"}   # KA has no RSE
+    assert all(d["CL"] > 0 and d["V"] > 0 for d in draws)
+    # ~20% CV on CL -> spread; and deterministic for a fixed seed.
+    cls = [d["CL"] for d in draws]
+    assert max(cls) > min(cls)
+    assert sample_theta_draws(THETA, {"CL": 20.0}, 3, seed=7) == \
+        sample_theta_draws(THETA, {"CL": 20.0}, 3, seed=7)
+    assert sample_theta_draws(THETA, {}, 5) == []              # no RSE -> empty
+
+
+def test_pta_band_brackets_point_and_has_sensitivity():
+    draws = sample_theta_draws(THETA, {"CL": 15.0, "V": 10.0, "KA": 8.0}, 40)
+    res = clinical_trial_simulation(
+        MODEL_KEY, theta=THETA, omega_cv_pct=OMEGA, iiv_params=IIV,
+        doses=[100, 200, 400], tau=24, n_doses=7, metric="ctrough",
+        threshold=2.0, n_subjects=120, param_draws=draws)
+    assert res["n_param_draws"] == 40
+    for d in res["doses"]:
+        if d.get("pta_lo") is not None:
+            assert d["pta_lo"] <= d["pta"] <= d["pta_hi"]      # point within band
+            assert 0.0 <= d["pta_lo"] <= d["pta_hi"] <= 1.0
+    s = res["sensitivity"]
+    assert s["n_draws"] == 40 and set(s["params"]) == {"CL", "V", "KA"}
+    assert len(s["records"]) == 40
+    assert set(s["records"][0]["theta"]) == {"CL", "V", "KA"}
 
 
 # --- exposure covariate forest --------------------------------------------
@@ -204,7 +246,8 @@ def _pk_model_results() -> dict:
 def _nlme_with_cov() -> dict:
     return {"status": "ok", "model_key": MODEL_KEY, "theta": {"CL": 5.0, "V": 50.0, "KA": 1.0},
             "omega_cv_pct": {"CL": 30.0, "V": 20.0}, "iiv_params": ["CL", "V"],
-            "sigma": {"prop": 0.1, "add": 0.0}, "covariate_effects": _EGFR_EFF}
+            "sigma": {"prop": 0.1, "add": 0.0}, "covariate_effects": _EGFR_EFF,
+            "theta_rse_pct": {"CL": 12.0, "V": 8.0, "KA": 15.0}}
 
 
 @pytest.fixture
@@ -234,6 +277,29 @@ def test_run_clinsim_uses_covariates_and_is_json_safe(loaded):
     cs = res.writes["clinsim_results"]
     assert cs["status"] == "ok" and cs["with_covariates"] and cs["with_iiv"]
     json.dumps(cs)
+
+
+def test_run_clinsim_param_uncertainty_band(loaded):
+    state, ctx = loaded
+    res = run_clinsim(state, ctx, {"doses": [50, 100, 200], "tau": 24, "n_doses": 7,
+                                   "metric": "ctrough", "threshold": 1.0, "n_subjects": 120,
+                                   "param_uncertainty": True, "n_param_draws": 30})
+    cs = res.writes["clinsim_results"]
+    assert cs["status"] == "ok" and cs["n_param_draws"] > 0
+    assert cs["sensitivity"] is not None and cs["sensitivity"]["records"]
+    assert any("pta_lo" in d for d in cs["doses"])
+    json.dumps(cs)
+
+
+def test_run_clinsim_param_uncertainty_needs_nlme_rse(loaded):
+    # Two-stage fit only (no NLME theta_rse_pct) -> no band, still ok.
+    state, ctx = loaded
+    state.nlme_results = None
+    res = run_clinsim(state, ctx, {"doses": [50, 100], "tau": 24, "n_doses": 7,
+                                   "threshold": 1.0, "n_subjects": 80,
+                                   "param_uncertainty": True})
+    cs = res.writes["clinsim_results"]
+    assert cs["status"] == "ok" and cs["n_param_draws"] == 0 and cs["sensitivity"] is None
 
 
 def test_run_exposure_forest_builds_scenarios(loaded):

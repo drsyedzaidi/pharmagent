@@ -477,6 +477,33 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     doses = [float(d) for d in (args.get("doses")
              or [base * f for f in (0.25, 0.5, 1.0, 2.0, 4.0)])]
     threshold = args.get("threshold")
+    n_subjects = int(args.get("n_subjects", 500))
+
+    # Parameter-uncertainty PTA band + sensitivity (Ex 3/4), opt-in. Requires a
+    # matching NLME fit carrying theta + theta_rse_pct; use it as the SINGLE
+    # provenance for the whole run so the point PTA and the band agree. Budget-
+    # capped: subjects x draws x doses is bounded so an opt-in band stays ~1 min.
+    param_draws = None
+    param_note = ""
+    if bool(args.get("param_uncertainty")):
+        rse = (nl or {}).get("theta_rse_pct") if nl else None
+        nl_theta = (nl or {}).get("theta") if nl else None
+        if nl and rse and nl_theta:
+            from app.compute.clinsim import sample_theta_draws
+            typical = {**model.defaults, **nl_theta}
+            iiv = nl.get("omega_cv_pct") or iiv
+            iiv_params = list(nl.get("iiv_params") or iiv_params)
+            # Budget the band so a synchronous opt-in call stays ~20-30s:
+            # subjects x draws x doses is bounded to ~60k simulations.
+            n_subjects = min(n_subjects, 200)
+            n_draws = min(int(args.get("n_param_draws", 60)),
+                          max(2, 60_000 // max(1, n_subjects * len(doses))))
+            param_draws = sample_theta_draws(nl_theta, rse, n_draws) or None
+            if param_draws is None:
+                param_note = " (no structural RSE% available for the band)"
+        else:
+            param_note = " (parameter-uncertainty band needs a converged NLME fit with RSE%)"
+
     payload = clinical_trial_simulation(
         model_key, theta=typical, omega_cv_pct=iiv, iiv_params=iiv_params,
         doses=doses, tau=float(args.get("tau", 24.0)),
@@ -486,8 +513,8 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
         direction=args.get("direction", "above"),
         target_fraction=float(args.get("target_fraction", 0.9)),
         cov_rows=cov_rows if cov_effects else None, wt_rows=wt_rows,
-        covariate_effects=cov_effects,
-        n_subjects=int(args.get("n_subjects", 500)))
+        covariate_effects=cov_effects, n_subjects=n_subjects,
+        param_draws=param_draws)
 
     if payload.get("status") != "ok":
         return ToolResult(summary=f"Clinical trial simulation: {payload.get('message', payload['status'])}.",
@@ -501,10 +528,12 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     iiv_txt = " with IIV" if payload["with_iiv"] else ""
     pta_txt = ("" if payload["threshold"] is None
                else f" {payload['direction']} {format(payload['threshold'], 'g')}")
+    band_txt = (f" +{payload['n_param_draws']} parameter draws (PTA band + sensitivity)"
+                if payload.get("n_param_draws") else param_note)
     return ToolResult(
         summary=(f"Clinical trial simulation ({model.label}): {payload['n_subjects']} virtual "
                  f"subjects{iiv_txt} over {len(payload['doses'])} doses; "
-                 f"PTA on {payload['metric']}{pta_txt}." + note),
+                 f"PTA on {payload['metric']}{pta_txt}.{band_txt}" + note),
         action=f"run_clinsim({model_key})",
         writes={"clinsim_results": payload},
         result={"status": "ok", "model_key": model_key, "metric": payload["metric"],
@@ -1281,7 +1310,9 @@ TOOLS = [
                          "threshold": {"type": "number"},
                          "direction": {"type": "string", "enum": ["above", "below"]},
                          "target_fraction": {"type": "number"},
-                         "n_subjects": {"type": "integer"}},
+                         "n_subjects": {"type": "integer"},
+                         "param_uncertainty": {"type": "boolean"},
+                         "n_param_draws": {"type": "integer"}},
           "required": []},
          run_clinsim),
     Tool("run_exposure_forest",

@@ -188,6 +188,8 @@ class ClinsimRequest(BaseModel):
     direction: str = "above"
     target_fraction: float = Field(0.9, gt=0.0, le=1.0)
     n_subjects: int = 500
+    param_uncertainty: bool = False
+    n_param_draws: int = 100
 
 
 class ExposureForestRequest(BaseModel):

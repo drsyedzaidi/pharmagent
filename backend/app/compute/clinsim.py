@@ -28,8 +28,6 @@ Design notes matching the course lab (Exercise 2, ``zero_re(sigma)``):
 """
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
 from app.compute.dose_sweep import _interval_metrics
@@ -94,6 +92,21 @@ def _sample_population(cov_rows: list[dict] | None, wt_rows: list[float] | None,
     return pop
 
 
+def sample_theta_draws(theta: dict, theta_rse_pct: dict | None, n_draws: int,
+                       seed: int = 20250614) -> list[dict]:
+    """``n_draws`` lognormal parameter sets ``theta[p] * exp(N(0, rse_p/100))``
+    for structural params carrying a positive RSE% (others held fixed). Feeds the
+    parameter-uncertainty PTA band / sensitivity analysis. Empty when no RSE is
+    available (the caller then reports a point estimate only)."""
+    rse = {p: float(v) for p, v in (theta_rse_pct or {}).items()
+           if v is not None and float(v) > 0 and p in theta}
+    if not rse:
+        return []
+    rng = np.random.default_rng(seed)
+    return [{p: float(theta[p]) * float(np.exp(rng.normal(0.0, rse[p] / 100.0)))
+             for p in rse} for _ in range(int(max(1, n_draws)))]
+
+
 def clinical_trial_simulation(
     model_key: str, *, theta: dict, omega_cv_pct: dict, iiv_params: list[str],
     doses: list[float], tau: float, n_doses: int,
@@ -103,6 +116,7 @@ def clinical_trial_simulation(
     covariate_effects: list[dict] | None = None, n_subjects: int = 500,
     seed: int = 20250614, wt_default: float = 70.0, n_points: int = 160,
     max_subjects: int = 2000, max_doses: int = 24,
+    param_draws: list[dict] | None = None,
 ) -> dict:
     """Probability of target attainment (PTA) across a dose grid.
 
@@ -151,37 +165,76 @@ def clinical_trial_simulation(
             else np.zeros(n_subjects) for p in iiv_params}
     with_covariates = bool(covariate_effects) and bool(cov_rows)
 
+    def _run_pop(theta_set: dict) -> dict:
+        """Per-dose metric array for the FIXED (population, etas) — only theta
+        changes. Common random numbers isolate the parameter-set's effect."""
+        out: dict[float, np.ndarray] = {}
+        for d in dose_grid:
+            vals = np.empty(n_subjects)
+            for si, subj in enumerate(pop):
+                theta_i = apply_cov(theta_set, subj["cov"])
+                params_i = {k: float(theta_i[k]) for k in theta_i}
+                for p in iiv_params:
+                    if p in params_i:
+                        params_i[p] = params_i[p] * float(np.exp(etas[p][si]))
+                sim = simulate_timecourse(model, params_i, dose=d, tau=tau,
+                                          n_doses=n_doses, tmax=tmax, n_points=n_points,
+                                          wt=subj["wt"])
+                m = _interval_metrics(sim["times"], sim["cp"],
+                                      t_last=(n_doses - 1) * tau, tau=tau, tmax=tmax)
+                vals[si] = m[metric]
+            out[d] = vals
+        return out
+
+    def _pta(vals: np.ndarray) -> float | None:
+        finite = vals[np.isfinite(vals)]
+        if threshold is None or not finite.size:
+            return None
+        hit = finite > float(threshold) if direction == "above" else finite < float(threshold)
+        return float(np.mean(hit))
+
+    point = _run_pop(typical)
     dose_rows: list[dict] = []
     for d in dose_grid:
-        vals = np.empty(n_subjects)
-        for si, subj in enumerate(pop):
-            theta_i = apply_cov(typical, subj["cov"])
-            params_i = {k: float(theta_i[k]) for k in theta_i}
-            for p in iiv_params:
-                if p in params_i:
-                    params_i[p] = params_i[p] * float(np.exp(etas[p][si]))
-            sim = simulate_timecourse(model, params_i, dose=d, tau=tau,
-                                      n_doses=n_doses, tmax=tmax, n_points=n_points,
-                                      wt=subj["wt"])
-            m = _interval_metrics(sim["times"], sim["cp"],
-                                  t_last=(n_doses - 1) * tau, tau=tau, tmax=tmax)
-            vals[si] = m[metric]
-
+        vals = point[d]
         finite = vals[np.isfinite(vals)]
         pcts = (np.percentile(finite, _REPORT_PCTL) if finite.size
                 else [float("nan")] * len(_REPORT_PCTL))
-        row: dict[str, Any] = {
+        p = _pta(vals)
+        dose_rows.append({
             "dose": round(d, 6), "n": int(finite.size),
             "metric_p05": _r(pcts[0]), "metric_p25": _r(pcts[1]),
             "metric_median": _r(pcts[2]), "metric_p75": _r(pcts[3]),
             "metric_p95": _r(pcts[4]),
-        }
-        if threshold is not None and finite.size:
-            hit = finite > float(threshold) if direction == "above" else finite < float(threshold)
-            row["pta"] = round(float(np.mean(hit)), 6)
-        else:
-            row["pta"] = None
-        dose_rows.append(row)
+            "pta": (None if p is None else round(p, 6)),
+        })
+
+    # Parameter-uncertainty PTA band + sensitivity (Week-12 Ex 3/4). Each draw is
+    # a parameter set (theta ± its RSE, from the tool); the population is reused
+    # (common random numbers) so the band reflects PARAMETER uncertainty.
+    sensitivity = None
+    if param_draws and threshold is not None:
+        draw_ptas: dict[float, list[float]] = {d: [] for d in dose_grid}
+        records: list[dict] = []
+        for pdraw in param_draws:
+            theta_d = {**typical, **{k: float(v) for k, v in pdraw.items()}}
+            arrays_d = _run_pop(theta_d)
+            pta_list: list[float | None] = []       # aligned to dose_grid order
+            for d in dose_grid:
+                pd = _pta(arrays_d[d])
+                pta_list.append(None if pd is None else round(pd, 6))
+                if pd is not None:
+                    draw_ptas[d].append(pd)
+            records.append({"theta": {k: round(float(v), 6) for k, v in pdraw.items()},
+                            "pta": pta_list})
+        for row in dose_rows:
+            arr = draw_ptas.get(row["dose"]) or []
+            if arr:
+                lo, hi = np.percentile(arr, [2.5, 97.5])
+                row["pta_lo"] = round(float(lo), 6)
+                row["pta_hi"] = round(float(hi), 6)
+        sensitivity = {"n_draws": len(param_draws),
+                       "params": list(param_draws[0].keys()), "records": records}
 
     rec_dose, rec_note = _recommend(dose_rows, threshold, direction, target_fraction)
     return {
@@ -190,6 +243,7 @@ def clinical_trial_simulation(
         "direction": direction, "target_fraction": round(float(target_fraction), 6),
         "tau": tau, "n_doses": n_doses, "n_subjects": n_subjects,
         "with_covariates": with_covariates, "with_iiv": with_iiv,
+        "n_param_draws": len(param_draws or []), "sensitivity": sensitivity,
         "doses": dose_rows, "recommended_dose": rec_dose, "recommendation_note": rec_note,
     }
 
