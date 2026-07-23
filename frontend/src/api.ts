@@ -255,6 +255,25 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  clinsim: (sid: string, body: {
+    doses?: number[]; tau?: number; n_doses?: number; metric?: string;
+    threshold?: number | null; direction?: string; target_fraction?: number;
+    n_subjects?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/clinsim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  exposureForest: (sid: string, body?: {
+    dose?: number; tau?: number; n_doses?: number; n_draws?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/exposure_forest`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
   review: (sid: string, body?: { goal?: string; max_iter?: number }):
     Promise<ReviewLoopResult> =>
     req(`/sessions/${sid}/review`, {

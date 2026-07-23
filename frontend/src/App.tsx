@@ -1929,6 +1929,247 @@ function DoseSweepCard({ r }: { r: PharmState['dose_sweep_results'] }) {
   );
 }
 
+const CLINSIM_METRICS: { key: string; label: string }[] = [
+  { key: 'ctrough', label: 'Ctrough (efficacy)' },
+  { key: 'cmax', label: 'Cmax (safety)' },
+  { key: 'auc_tau', label: 'AUCτ' },
+  { key: 'cavg', label: 'Cavg' },
+];
+
+/** Clinical trial simulation → probability of target attainment vs dose, with a
+ * dose recommendation. Virtual population sampled from the dataset + fitted IIV. */
+function ClinsimCard({ r, onRerun, busy }: {
+  r: PharmState['clinsim_results'];
+  onRerun?: (o: { doses?: number[]; metric?: string; threshold?: number | null;
+    direction?: string; target_fraction?: number; n_subjects?: number }) => void;
+  busy?: boolean;
+}) {
+  const [metric, setMetric] = useState(() => r?.metric ?? 'ctrough');
+  const [threshold, setThreshold] = useState(() => (r?.threshold != null ? String(r.threshold) : ''));
+  const [direction, setDirection] = useState<string>(() => r?.direction ?? 'above');
+  const [targetPct, setTargetPct] = useState(() =>
+    String(Math.round((r?.target_fraction ?? 0.9) * 100)));
+  const [dosesStr, setDosesStr] = useState(() => (r?.doses ?? []).map(d => d.dose).join(', '));
+  const [nSubj, setNSubj] = useState(() => String(r?.n_subjects ?? 500));
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Clinical trial simulation — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.doses ?? [];
+  const tgt = r.target_fraction ?? 0.9;
+  const rec = r.recommended_dose;
+  const hasPta = rows.some(d => d.pta != null);
+  const W = 560, H = 210, ml = 44, mr = 14, mt = 12, mb = 34;
+  const n = rows.length;
+  const xAt = (i: number) => ml + (n <= 1 ? 0.5 : i / (n - 1)) * (W - ml - mr);
+  // PTA panel (0..1)
+  const syP = (v: number) => H - mb - Math.max(0, Math.min(1, v)) * (H - mt - mb);
+  const ptaPath = rows.filter(d => d.pta != null)
+    .map((d, i) => `${i ? 'L' : 'M'}${xAt(rows.indexOf(d)).toFixed(1)} ${syP(d.pta as number).toFixed(1)}`).join(' ');
+  // Exposure panel domain
+  const evals = rows.flatMap(d => [d.metric_p05, d.metric_p95]).filter(v => v != null) as number[];
+  const emax = (Math.max(...evals, r.threshold ?? 0) || 1) * 1.05;
+  const syE = (v: number) => H - mb - (v / emax) * (H - mt - mb);
+  const band = (key: 'metric_p05' | 'metric_p95') => rows.filter(d => d[key] != null);
+  const up = band('metric_p95').map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syE(d.metric_p95 as number).toFixed(1)}`).join(' ');
+  const dn = band('metric_p05').map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syE(d.metric_p05 as number).toFixed(1)}`).reverse().join(' ');
+  const medPath = rows.filter(d => d.metric_median != null)
+    .map((d, i) => `${i ? 'L' : 'M'}${xAt(rows.indexOf(d)).toFixed(1)} ${syE(d.metric_median as number).toFixed(1)}`).join(' ');
+  const fmtDose = (d: number) => d >= 1000 ? `${(d / 1000).toFixed(d % 1000 ? 1 : 0)}k` : `${d}`;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · {r.n_subjects} virtual subjects{r.with_iiv ? ' with IIV' : ' (no IIV)'}
+        {r.with_covariates && ' + covariates'} · {r.n_doses}× q{r.tau}h
+      </div>
+      <div style={{ padding: '8px 12px', marginBottom: 8, borderRadius: 6,
+        background: rec != null ? 'rgba(29,122,90,0.12)' : 'rgba(154,91,18,0.12)',
+        border: `1px solid ${rec != null ? 'var(--green)' : 'var(--yellow)'}`, fontSize: 13 }}>
+        {rec != null
+          ? <><b style={{ color: 'var(--green)' }}>Recommended dose: {fmtDose(rec)}</b> — {r.recommendation_note}</>
+          : <span style={{ color: 'var(--yellow)' }}>{r.recommendation_note}</span>}
+      </div>
+      {hasPta && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' }}>
+            Probability of target attainment ({r.metric} {r.direction} {r.threshold})
+          </div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+            aria-label="Probability of target attainment vs dose">
+            {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+              <g key={i}>
+                <line x1={ml} y1={syP(f)} x2={W - mr} y2={syP(f)} stroke="var(--border)" strokeOpacity="0.4" />
+                <text x={ml - 6} y={syP(f) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">{(f * 100).toFixed(0)}%</text>
+              </g>
+            ))}
+            <line x1={ml} y1={syP(tgt)} x2={W - mr} y2={syP(tgt)} stroke="var(--yellow)" strokeDasharray="4 3" strokeWidth="1.2" />
+            <path d={ptaPath} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
+            {rows.map((d, i) => d.pta == null ? null : (
+              <circle key={i} cx={xAt(i)} cy={syP(d.pta)} r={d.dose === rec ? 4 : 2.6}
+                fill={d.dose === rec ? 'var(--green)' : 'var(--accent)'} />
+            ))}
+            {rows.map((d, i) => (
+              <text key={i} x={xAt(i)} y={H - mb + 14} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{fmtDose(d.dose)}</text>
+            ))}
+            <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="var(--text-dim)">dose</text>
+          </svg>
+        </>
+      )}
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 2px' }}>
+        {r.metric} distribution (median + 5–95%)
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label="Exposure metric vs dose">
+        {up && dn && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.16" />}
+        {r.threshold != null && (
+          <line x1={ml} y1={syE(r.threshold)} x2={W - mr} y2={syE(r.threshold)}
+            stroke="var(--yellow)" strokeDasharray="4 3" strokeWidth="1.2" />
+        )}
+        <path d={medPath} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
+        {rows.map((d, i) => d.metric_median == null ? null :
+          <circle key={i} cx={xAt(i)} cy={syE(d.metric_median)} r="2.6" fill="var(--accent)" />)}
+        <line x1={ml} y1={mt} x2={ml} y2={H - mb} stroke="var(--border)" />
+        {rows.map((d, i) => (
+          <text key={i} x={xAt(i)} y={H - mb + 14} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{fmtDose(d.dose)}</text>
+        ))}
+        <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="var(--text-dim)">dose</text>
+      </svg>
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          margin: '10px 0 0', paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <label style={{ color: 'var(--text-dim)' }}>metric{' '}
+            <select className="model-select" style={{ maxWidth: 160 }} value={metric} disabled={busy}
+              onChange={e => setMetric(e.target.value)}>
+              {CLINSIM_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </label>
+          <label style={{ color: 'var(--text-dim)' }}>
+            <select className="model-select" style={{ maxWidth: 90 }} value={direction} disabled={busy}
+              onChange={e => setDirection(e.target.value)}>
+              <option value="above">above</option>
+              <option value="below">below</option>
+            </select>{' '}
+            <input type="number" value={threshold} disabled={busy} placeholder="threshold"
+              onChange={e => setThreshold(e.target.value)} style={{ width: 84 }} />
+          </label>
+          <label style={{ color: 'var(--text-dim)' }}>target{' '}
+            <input type="number" value={targetPct} disabled={busy}
+              onChange={e => setTargetPct(e.target.value)} style={{ width: 52 }} />%</label>
+          <label style={{ color: 'var(--text-dim)' }}>N{' '}
+            <input type="number" value={nSubj} disabled={busy}
+              onChange={e => setNSubj(e.target.value)} style={{ width: 64 }} /></label>
+          <label style={{ color: 'var(--text-dim)', flex: '1 1 160px' }}>doses{' '}
+            <input type="text" value={dosesStr} disabled={busy} placeholder="comma-separated"
+              onChange={e => setDosesStr(e.target.value)} style={{ width: '70%' }} /></label>
+          <button className="chip" disabled={busy}
+            onClick={() => {
+              // An empty / non-positive target% must fall back to the backend
+              // default, not send target_fraction:0 (which would trivially
+              // green-light every dose since PTA >= 0).
+              const tf = Number(targetPct) / 100;
+              onRerun({
+                doses: dosesStr.split(',').map(s => Number(s.trim())).filter(x => x > 0),
+                metric, threshold: threshold === '' ? null : Number(threshold), direction,
+                target_fraction: targetPct.trim() === '' || !(tf > 0)
+                  ? undefined : Math.min(1, tf),
+                n_subjects: Number(nSubj),
+              });
+            }}>{busy ? 'Simulating…' : 'Recompute'}</button>
+        </div>
+      )}
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Dose</th><th>PTA</th><th>{r.metric} median</th><th>5–95%</th><th>n</th></tr></thead>
+        <tbody>
+          {rows.map((d, i) => (
+            <tr key={i} style={d.dose === rec ? { background: 'rgba(29,122,90,0.12)' } : undefined}>
+              <td>{fmtDose(d.dose)}</td>
+              <td>{d.pta == null ? '–' : `${(d.pta * 100).toFixed(1)}%`}</td>
+              <td>{fmt(d.metric_median ?? undefined, 3)}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{fmt(d.metric_p05 ?? undefined, 3)}–{fmt(d.metric_p95 ?? undefined, 3)}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{d.n}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Simulated exposure covariate forest: horizontal relative-exposure (AUC or
+ * Cmax) rows with a 95% interval, the 0.8–1.25 clinical-relevance band, and the
+ * reference at 1.0. */
+function ExposureForestCard({ r }: { r: PharmState['exposure_forest_results'] }) {
+  const [showMetric, setShowMetric] = useState<'rel_auc' | 'rel_cmax'>('rel_auc');
+  if (!r || r.status !== 'ok' || !r.rows?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Exposure forest — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.rows;
+  const band = r.band ?? [0.8, 1.25];
+  const vals = rows.flatMap(x => [x[showMetric].lo, x[showMetric].hi]).filter(v => v != null) as number[];
+  const lo = Math.min(...vals, band[0], 1) * 0.95;
+  const hi = Math.max(...vals, band[1], 1) * 1.05;
+  const W = 600, rowH = 26, padT = 8, padB = 30, ml = 150, mr = 70;
+  const H = padT + rows.length * rowH + padB;
+  // log-scale x so ratios are symmetric around 1.
+  const lnLo = Math.log(Math.max(lo, 1e-3)), lnHi = Math.log(hi);
+  const sx = (v: number) => ml + ((Math.log(Math.max(v, 1e-3)) - lnLo) / (lnHi - lnLo || 1)) * (W - ml - mr);
+  const yAt = (i: number) => padT + i * rowH + rowH / 2;
+  const ticks = [0.5, 0.8, 1, 1.25, 2, 4].filter(t => t >= lo && t <= hi);
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · relative exposure vs reference at dose {r.dose} q{r.tau}h ·
+        {' '}{r.n_draws} uncertainty draws
+        <span style={{ marginLeft: 10 }}>
+          {(['rel_auc', 'rel_cmax'] as const).map(m => (
+            <button key={m} className="chip" style={{
+              padding: '1px 8px', marginLeft: 4,
+              background: showMetric === m ? 'var(--accent)' : undefined,
+              color: showMetric === m ? '#fff' : undefined,
+            }} onClick={() => setShowMetric(m)}>{m === 'rel_auc' ? 'AUC' : 'Cmax'}</button>
+          ))}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label="Exposure covariate forest">
+        <rect x={sx(band[0])} y={padT} width={Math.max(0, sx(band[1]) - sx(band[0]))}
+          height={rows.length * rowH} fill="var(--green)" fillOpacity="0.08" />
+        <line x1={sx(1)} y1={padT} x2={sx(1)} y2={padT + rows.length * rowH} stroke="var(--text-dim)" strokeDasharray="3 3" />
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={sx(t)} y1={padT + rows.length * rowH} x2={sx(t)} y2={padT + rows.length * rowH + 4} stroke="var(--border)" />
+            <text x={sx(t)} y={H - 16} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{t}</text>
+          </g>
+        ))}
+        {rows.map((row, i) => {
+          const m = row[showMetric];
+          if (m.median == null) return null;
+          const within = m.lo != null && m.hi != null && m.lo >= band[0] && m.hi <= band[1];
+          const col = within ? 'var(--green)' : 'var(--accent)';
+          return (
+            <g key={i}>
+              <text x={ml - 8} y={yAt(i) + 3} textAnchor="end" fontSize="10" fill="var(--text)">
+                {row.covariate} = {row.label}</text>
+              {m.lo != null && m.hi != null &&
+                <line x1={sx(m.lo)} y1={yAt(i)} x2={sx(m.hi)} y2={yAt(i)} stroke={col} strokeWidth="1.4" />}
+              <circle cx={sx(m.median)} cy={yAt(i)} r="3.4" fill={col} />
+              <text x={W - mr + 6} y={yAt(i) + 3} fontSize="9" fill="var(--text-dim)">
+                {m.median?.toFixed(2)} [{m.lo?.toFixed(2)}–{m.hi?.toFixed(2)}]</text>
+            </g>
+          );
+        })}
+        <text x={(ml + W - mr) / 2} y={H - 3} textAnchor="middle" fontSize="10" fill="var(--text-dim)">
+          {showMetric === 'rel_auc' ? 'relative AUC' : 'relative Cmax'} (fraction of reference)</text>
+      </svg>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shaded 0.8–1.25 = commonly judged not clinically meaningful; reference (—) = 1.0.
+        Reference AUC {r.reference?.auc}, Cmax {r.reference?.cmax} at WT {r.reference?.wt} kg.
+      </div>
+    </div>
+  );
+}
+
 const ROLE_OPTIONS = ['', 'ID', 'TIME', 'TAD', 'DV', 'AMT', 'EVID', 'MDV', 'CMT',
   'II', 'ADDL', 'DVID', 'CENS', 'ROUTE', 'PD'];
 
@@ -2648,6 +2889,43 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
+  async function runClinsim(opts?: { doses?: number[]; metric?: string; threshold?: number | null;
+    direction?: string; target_fraction?: number; n_subjects?: number }) {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Clinical trial simulation (target attainment)', id: '' });
+    try {
+      const res = await api.clinsim(session.id, {
+        ...(opts?.doses?.length ? { doses: opts.doses } : { dose: simDose }),
+        tau: simTau, n_doses: simNDoses,
+        ...(opts?.metric ? { metric: opts.metric } : {}),
+        ...(opts && 'threshold' in opts ? { threshold: opts.threshold } : {}),
+        ...(opts?.direction ? { direction: opts.direction } : {}),
+        ...(opts?.target_fraction != null ? { target_fraction: opts.target_fraction } : {}),
+        ...(opts?.n_subjects ? { n_subjects: opts.n_subjects } : {}),
+      });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__CLINSIM__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runExposureForest() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Exposure covariate forest', id: '' });
+    try {
+      const res = await api.exposureForest(session.id, { dose: simDose, tau: simTau, n_doses: simNDoses });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__EXPFOREST__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
   const QUICK_ACTIONS = [
     { label: 'Dose proportionality', msg: 'run dose proportionality power model' },
     { label: 'Compartmental fit', msg: 'fit a one- and two-compartment model' },
@@ -3045,6 +3323,28 @@ export default function App() {
                 </div>
               );
             }
+            if (m.content === '__CLINSIM__' && st?.clinsim_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>CT</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Clinical trial simulation</div>
+                    <ClinsimCard r={st.clinsim_results} onRerun={runClinsim} busy={loading} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__EXPFOREST__' && st?.exposure_forest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>EF</div>
+                  <div className="msg-bubble" style={{ maxWidth: 680 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Exposure covariate forest</div>
+                    <ExposureForestCard r={st.exposure_forest_results} />
+                  </div>
+                </div>
+              );
+            }
             if (m.content === '__SIM__' && st?.simulation_results) {
               return (
                 <div key={m.id} className="msg agent">
@@ -3267,12 +3567,19 @@ export default function App() {
               title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">
               Covariate forest
             </button>
+            <button className="chip" disabled={loading} onClick={runExposureForest}
+              title="Simulated exposure forest: relative AUC/Cmax across covariate extremes with the 0.8–1.25 band">
+              Exposure forest
+            </button>
             <label className="sim-field">doses
               <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"
                 value={sweepDoses} disabled={loading}
                 onChange={e => setSweepDoses(e.target.value)} />
             </label>
             <button className="chip" disabled={loading} onClick={runDoseSweep}>Dose sweep</button>
+            <button className="chip" disabled={loading} onClick={() => runClinsim()}
+              title="Clinical trial simulation: virtual population across a dose grid → probability of target attainment + dose recommendation">
+              Trial simulation (PTA)</button>
           </div>
         )}
 

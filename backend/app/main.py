@@ -177,6 +177,28 @@ class DoseSweepRequest(BaseModel):
     tmax: float | None = None
 
 
+class ClinsimRequest(BaseModel):
+    """Clinical trial simulation / probability of target attainment."""
+    doses: list[float] | None = None
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 1
+    metric: str = "ctrough"
+    threshold: float | None = None
+    direction: str = "above"
+    target_fraction: float = Field(0.9, gt=0.0, le=1.0)
+    n_subjects: int = 500
+
+
+class ExposureForestRequest(BaseModel):
+    """Simulated exposure covariate forest options."""
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    percentiles: list[float] | None = None
+    n_draws: int = 500
+
+
 class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
@@ -494,6 +516,25 @@ def run_dose_sweep(sid: str, req: DoseSweepRequest, sess=Depends(owned_session),
                    actor: str = Depends(actor_id)) -> dict:
     try:
         return orch.run_tool(sid, "run_dose_sweep", "simulator", req.model_dump(), actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/clinsim")
+def run_clinsim(sid: str, req: ClinsimRequest, sess=Depends(owned_session),
+                actor: str = Depends(actor_id)) -> dict:
+    try:
+        return orch.run_tool(sid, "run_clinsim", "simulator", req.model_dump(), actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/exposure_forest")
+def run_exposure_forest(sid: str, req: ExposureForestRequest | None = None,
+                        sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_exposure_forest", "simulator", args, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

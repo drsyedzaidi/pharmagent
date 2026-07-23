@@ -434,6 +434,179 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                 "stratified": strat, "exposure_pc": exp, "blq_vpc": blq})
 
 
+def _covariate_rows(state: PharmState, ctx: ToolContext) -> tuple[list[dict], list[float]]:
+    """Per-subject covariate dicts + weights from the loaded dataset, for
+    resampling a virtual population. Empty when no dataset is bound."""
+    if not state.dataset_id or state.dataset_id not in ctx.dataset_store:
+        return [], []
+    try:
+        df = ctx.dataset_store[state.dataset_id]
+        subjects, _m, _p = _build_subjects(df, _roles(df, state))
+    except (ValueError, KeyError):
+        return [], []
+    cov_rows = [dict(s.get("cov") or {}) for s in subjects]
+    wt_rows = [float(s.get("wt", 70.0)) for s in subjects]
+    return cov_rows, wt_rows
+
+
+def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Clinical trial simulation → probability of target attainment across doses."""
+    from app.compute.clinsim import clinical_trial_simulation  # lazy: may import nlme
+
+    model_key, _fits, pop, typical = _last_fit(state)
+    if not model_key:
+        status = {"status": "no_fit",
+                  "message": "Fit a PK model first to simulate a virtual trial."}
+        return ToolResult(summary="Clinical trial simulation skipped: no fitted model.",
+                          action="run_clinsim(no_fit)",
+                          writes={"clinsim_results": status}, result=status)
+    model = get_model(model_key)
+    typical = {**model.defaults, **typical}
+    params = (pop.get("parameters") or {})
+    iiv = {k: v.get("iiv_cv_pct") for k, v in params.items()}
+    iiv_params = [k for k, v in iiv.items() if v]
+
+    # Covariate effects only from a converged NLME fit of the SAME model.
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    if nl is not None and nl.get("model_key") != model_key:
+        nl = None
+    cov_effects = (nl or {}).get("covariate_effects") if nl else None
+    cov_rows, wt_rows = _covariate_rows(state, ctx)
+
+    base = float(args.get("dose", 100.0))
+    doses = [float(d) for d in (args.get("doses")
+             or [base * f for f in (0.25, 0.5, 1.0, 2.0, 4.0)])]
+    threshold = args.get("threshold")
+    payload = clinical_trial_simulation(
+        model_key, theta=typical, omega_cv_pct=iiv, iiv_params=iiv_params,
+        doses=doses, tau=float(args.get("tau", 24.0)),
+        n_doses=int(args.get("n_doses", 1)),
+        metric=args.get("metric", "ctrough"),
+        threshold=(None if threshold is None else float(threshold)),
+        direction=args.get("direction", "above"),
+        target_fraction=float(args.get("target_fraction", 0.9)),
+        cov_rows=cov_rows if cov_effects else None, wt_rows=wt_rows,
+        covariate_effects=cov_effects,
+        n_subjects=int(args.get("n_subjects", 500)))
+
+    if payload.get("status") != "ok":
+        return ToolResult(summary=f"Clinical trial simulation: {payload.get('message', payload['status'])}.",
+                          action=f"run_clinsim({payload['status']})",
+                          writes={"clinsim_results": payload}, result=payload)
+
+    rec = payload.get("recommended_dose")
+    tgt = payload.get("target_fraction")
+    note = (f" Recommended dose {rec:g} ({tgt:.0%} attainment)." if rec is not None
+            else f" No dose reached the {tgt:.0%} target.")
+    iiv_txt = " with IIV" if payload["with_iiv"] else ""
+    pta_txt = ("" if payload["threshold"] is None
+               else f" {payload['direction']} {format(payload['threshold'], 'g')}")
+    return ToolResult(
+        summary=(f"Clinical trial simulation ({model.label}): {payload['n_subjects']} virtual "
+                 f"subjects{iiv_txt} over {len(payload['doses'])} doses; "
+                 f"PTA on {payload['metric']}{pta_txt}." + note),
+        action=f"run_clinsim({model_key})",
+        writes={"clinsim_results": payload},
+        result={"status": "ok", "model_key": model_key, "metric": payload["metric"],
+                "recommended_dose": rec, "n_subjects": payload["n_subjects"]})
+
+
+def run_exposure_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Simulated exposure covariate forest — relative AUC/Cmax across covariate
+    scenarios with parameter uncertainty (Week-12 forest-plots.R)."""
+    from app.compute.clinsim import exposure_covariate_forest  # lazy: imports nlme
+
+    # Single-provenance sourcing mirrors run_covariate_forest: prefer a converged
+    # SCM final model that selected covariates, else a plain NLME covariate model.
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
+    scm_final = None
+    if scm_outer is not None:
+        final = scm_outer.get("final") or {}
+        if final.get("covariate_effects"):
+            scm_final = {"status": "ok", **final}
+    chosen = scm_final if (scm_final is not None) else nl
+    cov_effects = (chosen or {}).get("covariate_effects")
+    if not chosen or not cov_effects:
+        status = {"status": "no_covariate_model",
+                  "message": ("Fit a population model with covariate effects "
+                              "(run_nlme with a covariate_model, or run_scm) first.")}
+        return ToolResult(summary="Exposure forest skipped: no covariate model.",
+                          action="run_exposure_forest(no_covariate_model)",
+                          writes={"exposure_forest_results": status}, result=status)
+
+    model_key = chosen.get("model_key")
+    model = get_model(model_key)
+    theta = {**model.defaults, **(chosen.get("theta") or {})}
+    df = ctx.dataset_store.get(state.dataset_id) if state.dataset_id else None
+    subjects = []
+    if df is not None:
+        try:
+            subjects, _m, _p = _build_subjects(df, _roles(df, state))
+        except (ValueError, KeyError):
+            subjects = []
+
+    pct = args.get("percentiles")
+    percentiles = ([float(pct[0]), float(pct[1])]
+                   if isinstance(pct, (list, tuple)) and len(pct) == 2 else [5.0, 95.0])
+    cov_values, ref_levels, _stats = _cov_eval_points(subjects, cov_effects, percentiles)
+
+    # Reference covariates: fitted center (continuous) / reference level (categorical).
+    reference_cov: dict[str, Any] = {}
+    scenarios: list[dict] = []
+    for eff in cov_effects:
+        cov = eff["covariate"]
+        if eff.get("kind") == "categorical":
+            ref = ref_levels.get(cov)
+            reference_cov[cov] = ref
+            levels = [{"label": str(lv), "value": lv}
+                      for lv in cov_values.get(cov, []) if str(lv) != str(ref)]
+        else:
+            reference_cov[cov] = float(eff.get("center") or 0.0)
+            vals = cov_values.get(cov)
+            if not vals:
+                continue
+            levels = [{"label": f"{percentiles[0]:g}th", "value": vals[0]},
+                      {"label": f"{percentiles[1]:g}th", "value": vals[1]}]
+        if levels:
+            scenarios.append({"covariate": cov, "is_weight": False, "levels": levels})
+
+    # WT scenario via allometric scaling (not part of the estimated covariate model).
+    wt_rows = [float(s.get("wt", 70.0)) for s in subjects]
+    ref_wt = float(np.median(wt_rows)) if wt_rows else 70.0
+    if model.allometric and len(wt_rows) >= _MIN_N_FOR_COV_PERCENTILE:
+        lo, hi = np.percentile(wt_rows, percentiles)
+        scenarios.append({"covariate": "WT", "is_weight": True,
+                          "levels": [{"label": f"{lo:.0f} kg", "value": float(lo)},
+                                     {"label": f"{hi:.0f} kg", "value": float(hi)}]})
+
+    if not scenarios:
+        status = {"status": "no_scenarios",
+                  "message": "no covariate levels available to simulate (need the source dataset)."}
+        return ToolResult(summary="Exposure forest skipped: no scenarios.",
+                          action="run_exposure_forest(no_scenarios)",
+                          writes={"exposure_forest_results": status}, result=status)
+
+    dose = float(args.get("dose", 100.0))
+    payload = exposure_covariate_forest(
+        model_key, theta=theta, covariate_effects=cov_effects, scenarios=scenarios,
+        reference_cov=reference_cov, dose=dose, tau=float(args.get("tau", 24.0)),
+        n_doses=int(args.get("n_doses", 7)), ref_wt=ref_wt,
+        n_draws=int(args.get("n_draws", 500)))
+    if payload.get("status") != "ok":
+        return ToolResult(summary=f"Exposure forest: {payload.get('message', payload['status'])}.",
+                          action=f"run_exposure_forest({payload['status']})",
+                          writes={"exposure_forest_results": payload}, result=payload)
+    n_out = len(payload["rows"])
+    return ToolResult(
+        summary=(f"Exposure covariate forest ({model.label}): relative AUC/Cmax over "
+                 f"{n_out} covariate scenarios at {dose:g}, {payload['n_draws']} uncertainty "
+                 f"draws; reference AUC {payload['reference']['auc']}."),
+        action=f"run_exposure_forest({model_key})",
+        writes={"exposure_forest_results": payload},
+        result={"status": "ok", "model_key": model_key, "n_rows": n_out})
+
+
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model."""
     from app.compute.nlme import population_fit  # lazy: heavy + optional dependency
@@ -1091,4 +1264,39 @@ TOOLS = [
                          "wt": {"type": "number"}, "params": {"type": "object"}},
           "required": []},
          run_dose_sweep),
+    Tool("run_clinsim",
+         "Clinical trial simulation for dose selection: simulate a virtual population "
+         "(covariates resampled from the dataset, between-subject variability from the "
+         "fitted IIV) across a grid of doses and report the probability of target "
+         "attainment — the fraction of subjects whose Cmax/AUC_tau/Cavg/Ctrough is "
+         "above (efficacy) or below (safety) a clinical threshold — recommending the "
+         "lowest efficacious / highest safe dose.",
+         "simulator",
+         {"type": "object",
+          "properties": {"doses": {"type": "array", "items": {"type": "number"}},
+                         "dose": {"type": "number"}, "tau": {"type": "number"},
+                         "n_doses": {"type": "integer"},
+                         "metric": {"type": "string",
+                                    "enum": ["cmax", "auc_tau", "cavg", "ctrough"]},
+                         "threshold": {"type": "number"},
+                         "direction": {"type": "string", "enum": ["above", "below"]},
+                         "target_fraction": {"type": "number"},
+                         "n_subjects": {"type": "integer"}},
+          "required": []},
+         run_clinsim),
+    Tool("run_exposure_forest",
+         "Simulated exposure covariate forest: for a fitted covariate model, "
+         "simulate a steady-state regimen for a reference patient and for each "
+         "covariate at its dataset extremes, and report the relative AUC/Cmax vs "
+         "the reference with a 95% interval from coefficient uncertainty — the "
+         "labeling-style forest (shaded 0.8-1.25) that a parameter-ratio forest "
+         "cannot give.",
+         "simulator",
+         {"type": "object",
+          "properties": {"dose": {"type": "number"}, "tau": {"type": "number"},
+                         "n_doses": {"type": "integer"},
+                         "percentiles": {"type": "array", "items": {"type": "number"}},
+                         "n_draws": {"type": "integer"}},
+          "required": []},
+         run_exposure_forest),
 ]

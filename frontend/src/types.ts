@@ -106,6 +106,8 @@ export interface PharmState {
   forest_results: ForestResults | null;
   engine_comparison_results: EngineComparisonResults | null;
   dose_sweep_results: DoseSweepResults | null;
+  clinsim_results: ClinsimResults | null;
+  exposure_forest_results: ExposureForestResults | null;
   simest_results: SimestResults | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
@@ -611,6 +613,65 @@ export interface DoseSweepResults {
   n_doses?: number;
   tmax?: number;
   profiles?: DoseProfile[];
+}
+
+export interface ClinsimDose {
+  dose: number;
+  n: number;
+  pta: number | null;
+  metric_p05: number | null;
+  metric_p25: number | null;
+  metric_median: number | null;
+  metric_p75: number | null;
+  metric_p95: number | null;
+}
+
+export interface ClinsimResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  metric?: string;
+  threshold?: number | null;
+  direction?: 'above' | 'below';
+  target_fraction?: number;
+  tau?: number;
+  n_doses?: number;
+  n_subjects?: number;
+  with_covariates?: boolean;
+  with_iiv?: boolean;
+  doses?: ClinsimDose[];
+  recommended_dose?: number | null;
+  recommendation_note?: string;
+}
+
+export interface RelExposure {
+  median: number | null;
+  lo: number | null;
+  hi: number | null;
+}
+
+export interface ExposureForestRow {
+  covariate: string;
+  label: string;
+  value: number | string;
+  is_weight: boolean;
+  rel_auc: RelExposure;
+  rel_cmax: RelExposure;
+}
+
+export interface ExposureForestResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  dose?: number;
+  tau?: number;
+  n_doses?: number;
+  n_draws?: number;
+  band?: number[];
+  reference?: { auc: number | null; cmax: number | null; wt: number };
+  rows?: ExposureForestRow[];
 }
 
 export interface SimulationResults {
