@@ -110,6 +110,7 @@ export interface PharmState {
   exposure_forest_results: ExposureForestResults | null;
   special_pop_results: SpecialPopResults | null;
   individual_exposures: IndividualExposures | null;
+  pediatric_results: PediatricResults | null;
   simest_results: SimestResults | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
@@ -702,6 +703,51 @@ export interface SpecialPopResults {
   reference_band?: Record<string, { lo: number | null; hi: number | null; median: number | null }>;
   strata?: SpecialPopStratum[];
   skipped?: { label: string; n: number }[];
+}
+
+export interface PediatricMetric {
+  p05: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+  within_ref: boolean;
+  pct_within_ref: number | null;
+}
+
+export interface PediatricDoseRow {
+  dose: number;
+  auc_tau?: PediatricMetric;
+  cmax?: PediatricMetric;
+}
+
+export interface PediatricStratum {
+  label: string;
+  age_label: string;
+  wt_label: string;
+  n: number;
+  doses: PediatricDoseRow[];
+  recommended_dose: number | null;
+  note: string;
+}
+
+export interface PediatricResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  kind?: string;
+  metrics?: string[];
+  reference_metric?: string;
+  reference_dose?: number;
+  reference_source?: string;
+  population_source?: string;
+  allometry?: string;
+  tau?: number;
+  n_doses?: number;
+  n_per_stratum?: number;
+  reference_band?: Record<string, { lo: number | null; hi: number | null; median: number | null; n?: number }>;
+  strata?: PediatricStratum[];
 }
 
 export interface IndividualExposures {

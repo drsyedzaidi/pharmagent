@@ -116,6 +116,44 @@ _RENAL_LABELS = ("Severe", "Moderate", "Mild", "Normal")
 _RENAL_KEYS = {"RF", "EGFR", "RENAL", "CRCL", "CLCR", "GFR", "EGFR_CKD"}
 _MIN_CONTINUOUS_LEVELS = 5
 
+# Pediatric age categories (years), matching the course lab's
+# findInterval(AGE, c(2,6,12,18)) -> 2-<6 / 6-<12 / 12-<18. Restricted to >=2 y,
+# where clearance maturation is essentially complete so weight allometry alone
+# extrapolates (the model carries no maturation function).
+_PED_AGE_EDGES = (6.0, 12.0)
+_PED_AGE_LABELS = ("2 to <6 y", "6 to <12 y", "12 to <18 y")
+_PED_AGE_RANGE = (2.0, 18.0)
+# Age-group-specific weight bins (kg) from the lab's NHANES weight distributions.
+_PED_WT_RANGE = {"2 to <6 y": (12.0, 25.0), "6 to <12 y": (20.0, 60.0),
+                 "12 to <18 y": (40.0, 100.0)}
+_PED_WT_EDGES = {"2 to <6 y": (18.0,), "6 to <12 y": (40.0,), "12 to <18 y": (70.0,)}
+_PED_WT_LABELS = {"2 to <6 y": ("12 to <18 kg", "18 to <25 kg"),
+                  "6 to <12 y": ("20 to <40 kg", "40 to <60 kg"),
+                  "12 to <18 y": ("40 to <70 kg", "70 to <100 kg")}
+
+
+def _scale_wt(params: dict, wt: float, wt_exponents: dict | None) -> tuple[dict, float]:
+    """Apply a MODEL-ESTIMATED allometric exponent instead of the simulator's
+    built-in fixed 0.75/1.0.
+
+    When ``wt_exponents`` (e.g. ``{"CL": 0.663, "VC": 1.087}``) is given, scale
+    each param by ``(wt/70)^exp`` here and return ``sim_wt = 70`` so the
+    simulator's built-in fixed allometry becomes a no-op (factor 1) — the effect
+    is applied exactly once. Otherwise return the params unchanged and
+    ``sim_wt = wt`` (built-in fixed allometry, the default byte-for-byte path).
+    Weight allometry and IIV are both multiplicative exponentials, so applying
+    this before or after the eta multiply gives the same result. The caller must
+    NOT also carry a WT covariate in ``covariate_effects`` (that would double).
+    """
+    if not wt_exponents:
+        return params, wt
+    f = float(wt) / 70.0
+    scaled = dict(params)
+    for p, expo in wt_exponents.items():
+        if p in scaled and expo:
+            scaled[p] = scaled[p] * (f ** float(expo))
+    return scaled, 70.0
+
 
 def _num(v) -> float | None:
     try:
@@ -360,6 +398,7 @@ def individual_exposures(
     dose: float, tau: float, n_doses: int, covariate_effects: list[dict] | None = None,
     iiv_params: list[str] | None = None, metrics: tuple[str, ...] = ("auc_tau", "cmax"),
     wt_default: float = 70.0, n_points: int = 160, group_key: str | None = None,
+    wt_exponents: dict | None = None,
 ) -> dict:
     """Per-subject steady-state exposure from EBEs (Week-13 ``individual-exposures.R``).
 
@@ -397,9 +436,10 @@ def individual_exposures(
         for p in iiv_params:
             if p in params_i:
                 params_i[p] = params_i[p] * float(np.exp(float(eta.get(p, 0.0))))
+        params_i, sim_wt = _scale_wt(params_i, wt, wt_exponents)
         sim = simulate_timecourse(model, params_i, dose=float(dose), tau=float(tau),
                                   n_doses=int(max(1, n_doses)), tmax=tmax,
-                                  n_points=n_points, wt=wt)
+                                  n_points=n_points, wt=sim_wt)
         m = _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=float(tau), tmax=tmax)
         rec = {"subject": str(sid), "auc_ss": _r(m["auc_tau"]), "cmax_ss": _r(m["cmax"])}
         if group_key is not None:
@@ -459,6 +499,222 @@ def _recommend_special(dose_rows: list[dict], reference_band: dict, metric: str,
     if meds and all(m < band["lo"] for m in meds):
         return None, f"exposure below the {ref_label} range at all doses — consider a higher dose."
     return None, f"no simulated dose matches the {ref_label} reference range."
+
+
+def _pediatric_strata(cov_rows: list[dict], age_key: str, wt_key: str
+                      ) -> tuple[dict[str, list[int]], dict[str, tuple[str, str]], list[str]]:
+    """Cross the pediatric age bins (2-<6 / 6-<12 / 12-<18 y) with each age
+    group's weight bins into ordered composite strata (``age · weight``). Subjects
+    outside 2-<18 y or outside their age group's weight range are dropped.
+    Returns ``(partition, meta, ordered_labels)`` where meta[label]=(age, weight)."""
+    parts: dict[str, list[int]] = {}
+    meta: dict[str, tuple[str, str]] = {}
+    for i, row in enumerate(cov_rows):
+        r = row or {}
+        a = _num(r.get(age_key))
+        w = _num(r.get(wt_key))
+        if a is None or w is None:
+            continue
+        if not (_PED_AGE_RANGE[0] <= a < _PED_AGE_RANGE[1]):
+            continue
+        age_label = _PED_AGE_LABELS[int(np.digitize(a, _PED_AGE_EDGES))]
+        lo, hi = _PED_WT_RANGE[age_label]
+        if not (lo <= w < hi):
+            continue
+        wt_label = _PED_WT_LABELS[age_label][int(np.digitize(w, _PED_WT_EDGES[age_label]))]
+        label = f"{age_label} · {wt_label}"
+        parts.setdefault(label, []).append(i)
+        meta[label] = (age_label, wt_label)
+    order = [f"{al} · {wl}" for al in _PED_AGE_LABELS for wl in _PED_WT_LABELS[al]]
+    return parts, meta, [lb for lb in order if parts.get(lb)]
+
+
+def _recommend_pediatric(dose_rows: list[dict], metric: str, band: dict) -> tuple[float | None, str]:
+    """The dose that maximizes the % of subjects within the adult reference range
+    (ties -> lowest dose) — the pediatric exposure-matching dose. Returns None when
+    no dose puts ANY subject inside the band (exposure off the adult range across
+    the whole grid), matching the PTA / renal recommenders."""
+    cand = [(r["dose"], r[metric].get("pct_within_ref")) for r in dose_rows]
+    cand = [(d, p) for d, p in cand if p is not None]
+    if not cand:
+        return None, "no adult reference band — cannot match exposure."
+    best_p = max(p for _d, p in cand)
+    if best_p <= 0.0:
+        meds = [r[metric]["p50"] for r in dose_rows if r[metric].get("p50") is not None]
+        hi, lo = (band or {}).get("hi"), (band or {}).get("lo")
+        if meds and hi is not None and all(m > hi for m in meds):
+            return None, "exposure above the adult range at every dose — no matching dose in the grid."
+        if meds and lo is not None and all(m < lo for m in meds):
+            return None, "exposure below the adult range at every dose — no matching dose in the grid."
+        return None, "no dose puts any subject inside the adult range."
+    best_d = min(d for d, p in cand if p == best_p)
+    return best_d, (f"dose {best_d:g} maximizes overlap with the adult range "
+                    f"({best_p:.0f}% of subjects within).")
+
+
+def pediatric_reference_population(n: int = 6000, seed: int = 20250614
+                                   ) -> tuple[list[dict], list[float]]:
+    """A representative pediatric covariate distribution (ages 2-<18 y) with a
+    realistic weight-for-age relationship — a stand-in when the analysis dataset
+    has no pediatric subjects (Week-14 draws these from NHANES). AGE ~ U(2,18);
+    median weight follows a smooth growth curve
+    ``exp(2.247 + 0.1431*AGE - 0.001913*AGE^2)`` kg fit to CDC 50th-percentile
+    weight-for-age (~12.5 kg at 2 y, ~20.8 at 6, ~40 at 12, ~62 at 17 — the
+    adolescent acceleration a log-linear fit misses) with lognormal between-subject
+    spread (~19% CV), clipped to 8-120 kg. EGFR fixed at 90 mL/min/1.73m^2 (normal
+    renal function — the conservative pediatric assumption, matching the lab).
+
+    NOTE: SYNTHETIC / representative, not literal NHANES (no runtime fetch). The
+    lab's per-age-group weight bins still drop out-of-range subjects, so the
+    lightest young tail of each band is under-represented by construction (matching
+    the lab). Returns ``(cov_rows, wt_rows)`` for :func:`pediatric_simulation`.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(max(1, n))
+    # Clip the rounded age to [2, 17.9] so rounding never yields exactly 18.0
+    # (which would fall outside the pediatric range and be dropped downstream).
+    age = np.clip(np.round(rng.uniform(_PED_AGE_RANGE[0], _PED_AGE_RANGE[1], n), 1),
+                  _PED_AGE_RANGE[0], 17.9)
+    median_wt = np.exp(2.247 + 0.1431 * age - 0.001913 * age ** 2)
+    wt = np.clip(median_wt * np.exp(rng.normal(0.0, 0.185, n)), 8.0, 120.0)
+    cov_rows = [{"AGE": round(float(age[i]), 1), "WT": round(float(wt[i]), 1),
+                 "EGFR": 90.0} for i in range(n)]
+    return cov_rows, [round(float(w), 1) for w in wt]
+
+
+def pediatric_simulation(
+    model_key: str, *, theta: dict, omega_cv_pct: dict, iiv_params: list[str],
+    cov_rows: list[dict], wt_rows: list[float], reference_exposures: dict,
+    doses: list[float], tau: float, n_doses: int,
+    covariate_effects: list[dict] | None = None,
+    metrics: tuple[str, ...] = ("auc_tau", "cmax"), age_key: str = "AGE",
+    wt_key: str = "WT", n_per_stratum: int = 1000, seed: int = 20250614,
+    wt_default: float = 70.0, n_points: int = 160, wt_exponents: dict | None = None,
+    max_per_stratum: int = 2000, max_doses: int = 12,
+) -> dict:
+    """Pediatric dose-finding by exposure matching (Week-13/14 ``pediatric-simulations.R``).
+
+    Stratify a pediatric virtual population by age x weight, simulate steady-state
+    exposure at each dose, and compare each stratum's distribution to an EXTERNAL
+    adult reference band (``reference_exposures`` = adult AUCss/Cmax,ss at the
+    label dose, e.g. from :func:`individual_exposures` on the normal-renal adults).
+    Unlike the renal special-population sim, the reference is a different
+    population (adults), not an in-population stratum. Reports the % of each
+    stratum's subjects whose exposure lands inside the adult 5-95% range per dose,
+    and recommends the dose that maximizes that overlap.
+
+    ``wt_exponents`` (e.g. ``{"CL": 0.663, "VC": 1.087}``) uses model-estimated
+    allometric exponents instead of the built-in fixed 0.75/1.0 — the pediatric
+    extrapolation hinges on the estimated weight-clearance relationship.
+
+    Returns ``{status, model_key, label, kind:"pediatric", metrics,
+    reference_metric, reference_band:{metric:{lo,hi,median,n}}, allometry, tau,
+    n_doses, n_per_stratum, strata:[{label, age_label, wt_label, n, doses:[{dose,
+    metric:{p05..p95, within_ref, pct_within_ref}}], recommended_dose, note}],
+    skipped}``.
+    """
+    bad = [m for m in metrics if m not in _METRICS]
+    if bad:
+        raise ValueError(f"metrics must be in {_METRICS}; got {bad}")
+    dose_grid = sorted({float(d) for d in doses if float(d) > 0})
+    if not dose_grid:
+        return {"status": "no_doses", "message": "no positive dose levels supplied."}
+    if len(dose_grid) > max_doses:
+        return {"status": "too_many_doses",
+                "message": f"dose grid capped at {max_doses}; got {len(dose_grid)}."}
+    if not cov_rows:
+        return {"status": "no_covariates", "message": "pediatric simulation needs covariates."}
+
+    # Reference band = adult exposure percentiles (external, not simulated here).
+    reference_band = {}
+    for m in metrics:
+        a = np.asarray([v for v in (reference_exposures or {}).get(m, []) if v is not None],
+                       dtype=float)
+        a = a[np.isfinite(a)]
+        if a.size:
+            lo, med, hi = np.percentile(a, [5.0, 50.0, 95.0])
+            reference_band[m] = {"lo": _r(lo), "hi": _r(hi), "median": _r(med), "n": int(a.size)}
+        else:
+            reference_band[m] = {"lo": None, "hi": None, "median": None, "n": 0}
+    if all(b["lo"] is None for b in reference_band.values()):
+        return {"status": "no_reference",
+                "message": "no adult reference exposures supplied for the comparison band."}
+
+    parts, meta, labels = _pediatric_strata(cov_rows, age_key, wt_key)
+    if not labels:
+        return {"status": "no_strata",
+                "message": "no subjects in the pediatric age/weight ranges (2-<18 y).",
+                "strata": [], "skipped": []}
+
+    n_per = int(max(1, min(n_per_stratum, max_per_stratum)))
+    tau = float(tau)
+    n_doses = int(max(1, n_doses))
+    tmax = tau * n_doses
+    t_last = (n_doses - 1) * tau
+    model = get_model(model_key)
+    typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
+    apply_cov = _covariate_applier(covariate_effects)
+    sds = {p: float(np.sqrt(_cv_pct_to_omega2(omega_cv_pct.get(p)))) for p in iiv_params}
+    rng = np.random.default_rng(seed)
+
+    def _exposure(dose: float, si: int, eta: dict) -> dict:
+        cov = cov_rows[si] or {}
+        wt = float(wt_rows[si]) if si < len(wt_rows) else float(cov.get(wt_key, wt_default))
+        theta_i = apply_cov(typical, cov)
+        params_i = {k: float(theta_i[k]) for k in theta_i}
+        for p in iiv_params:
+            if p in params_i:
+                params_i[p] = params_i[p] * float(np.exp(eta[p]))
+        params_i, sim_wt = _scale_wt(params_i, wt, wt_exponents)
+        sim = simulate_timecourse(model, params_i, dose=dose, tau=tau, n_doses=n_doses,
+                                  tmax=tmax, n_points=n_points, wt=sim_wt)
+        return _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=tau, tmax=tmax)
+
+    def _dist(pool: list[int], dose: float) -> dict:
+        picks = _sample_indices(pool, n_per, rng)
+        vals = {m: np.empty(len(picks)) for m in metrics}
+        for k, si in enumerate(picks):
+            eta = {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
+            mm = _exposure(dose, si, eta)
+            for m in metrics:
+                vals[m][k] = mm[m]
+        return {m: vals[m][np.isfinite(vals[m])] for m in metrics}
+
+    out_strata = []
+    for lb in labels:
+        pool = parts[lb]
+        age_label, wt_label = meta[lb]
+        dose_rows = []
+        for d in dose_grid:
+            dist = _dist(pool, d)
+            row = {"dose": round(d, 6)}
+            for m in metrics:
+                a = dist[m]
+                band = reference_band[m]
+                if a.size:
+                    p05, p25, p50, p75, p95 = np.percentile(a, _REPORT_PCTL)
+                    if band["lo"] is not None:
+                        pct = 100.0 * float(np.mean((a >= band["lo"]) & (a <= band["hi"])))
+                        within = bool(band["lo"] <= float(p50) <= band["hi"])
+                    else:
+                        pct, within = None, False
+                    row[m] = {"p05": _r(p05), "p25": _r(p25), "p50": _r(p50), "p75": _r(p75),
+                              "p95": _r(p95), "within_ref": within,
+                              "pct_within_ref": _r(pct) if pct is not None else None}
+                else:
+                    row[m] = {"p05": None, "p25": None, "p50": None, "p75": None, "p95": None,
+                              "within_ref": False, "pct_within_ref": None}
+            dose_rows.append(row)
+        rec, note = _recommend_pediatric(dose_rows, metrics[0], reference_band.get(metrics[0], {}))
+        out_strata.append({"label": lb, "age_label": age_label, "wt_label": wt_label,
+                           "n": len(pool), "doses": dose_rows, "recommended_dose": rec, "note": note})
+
+    return {
+        "status": "ok", "model_key": model_key, "label": model.label, "kind": "pediatric",
+        "metrics": list(metrics), "reference_metric": metrics[0], "reference_band": reference_band,
+        "allometry": "estimated" if wt_exponents else "fixed", "tau": tau, "n_doses": n_doses,
+        "n_per_stratum": n_per, "strata": out_strata, "skipped": [],
+    }
 
 
 def clinical_trial_simulation(

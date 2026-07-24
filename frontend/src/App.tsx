@@ -11,7 +11,7 @@ import type {
   Session, PharmState, AgentMessage, AuditEntry,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
-  PcVpcBin, SpecialPopMetric, SpecialPopStratum,
+  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -2385,6 +2385,182 @@ function IndividualExposuresCard({ r }: { r: PharmState['individual_exposures'] 
   );
 }
 
+/** Pediatric dose-finding: exposure by age×weight stratum vs an adult reference
+ * band, with the %-within-adult-range dose-selection curve (Week-14). */
+const PED_PALETTE = ['#6ea8fe', '#63e6be', '#ffd43b', '#ff922b', '#e599f7', '#ff8787'];
+
+function PediatricCard({ r, onRerun, busy }: {
+  r: PharmState['pediatric_results'];
+  onRerun?: (o: { source?: string; wt_exponent_cl?: number | null; wt_exponent_v?: number | null }) => void;
+  busy?: boolean;
+}) {
+  const [metric, setMetric] = useState(() => (r?.metrics && r.metrics[0]) || 'auc_tau');
+  const [clExp, setClExp] = useState('');
+  const [vExp, setVExp] = useState('');
+  if (!r || r.status !== 'ok' || !r.strata?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Pediatric simulation — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const strata = r.strata;
+  const band = r.reference_band?.[metric];
+  const doses = strata[0].doses.map(d => d.dose);
+  const n = doses.length;
+
+  // --- % within adult range: the dose-selection curve (headline) ---
+  const CW = 380, CH = 210, cl = 44, cr = 12, ct = 10, cb = 34;
+  const cx = (i: number) => cl + (n <= 1 ? 0.5 : i / (n - 1)) * (CW - cl - cr);
+  const cy = (p: number) => CH - cb - (p / 100) * (CH - ct - cb);
+
+  // --- boxplots vs the adult band (shared log-y) ---
+  const all = strata.flatMap(s => s.doses.flatMap(d => {
+    const m = d[metric as keyof typeof d] as { p05?: number | null; p95?: number | null } | undefined;
+    return [m?.p05, m?.p95];
+  })).filter(v => v != null) as number[];
+  const lo = Math.max(1e-6, Math.min(...all, band?.lo ?? Infinity) * 0.9);
+  const hi = Math.max(...all, band?.hi ?? 0) * 1.1;
+  const lnLo = Math.log(lo), lnHi = Math.log(hi);
+  const W = 250, H = 156, ml = 40, mr = 8, mt = 8, mb = 26;
+  const sy = (v: number) => H - mb - ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo || 1)) * (H - mt - mb);
+  const xAt = (i: number) => ml + (n <= 1 ? 0.5 : (i + 0.5) / n) * (W - ml - mr);
+  const bw = Math.min(20, (W - ml - mr) / (n * 1.7));
+
+  const boxPanel = (s: PediatricStratum) => (
+    <div key={s.label} style={{ width: W, maxWidth: '100%' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', fontWeight: 600 }}>
+        {s.label} <span style={{ opacity: 0.7 }}>(n = {s.n})</span>
+        {s.recommended_dose != null && <span style={{ color: 'var(--green)' }}> · dose {s.recommended_dose}</span>}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label={`Pediatric exposure for ${s.label}`}>
+        {band?.lo != null && band.hi != null &&
+          <rect x={ml} y={sy(band.hi)} width={W - ml - mr} height={Math.max(0, sy(band.lo) - sy(band.hi))}
+            fill="var(--text-dim)" fillOpacity="0.12" />}
+        {band?.median != null &&
+          <line x1={ml} y1={sy(band.median)} x2={W - mr} y2={sy(band.median)} stroke="var(--text-dim)" strokeDasharray="3 3" />}
+        {s.doses.map((d, i) => {
+          const m = d[metric as keyof typeof d] as PediatricMetric | undefined;
+          if (!m || m.p50 == null) return null;
+          const x = xAt(i), col = m.within_ref ? 'var(--green)' : 'var(--accent)';
+          return (
+            <g key={i}>
+              {m.p05 != null && m.p95 != null &&
+                <line x1={x} y1={sy(m.p95)} x2={x} y2={sy(m.p05)} stroke={col} strokeWidth="1" />}
+              {m.p25 != null && m.p75 != null &&
+                <rect x={x - bw / 2} y={sy(m.p75)} width={bw} height={Math.max(1, sy(m.p25) - sy(m.p75))}
+                  fill={col} fillOpacity="0.25" stroke={col} strokeWidth="0.8" />}
+              <line x1={x - bw / 2} y1={sy(m.p50)} x2={x + bw / 2} y2={sy(m.p50)} stroke={col} strokeWidth="1.6" />
+            </g>
+          );
+        })}
+        <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+        {s.doses.map((d, i) => (
+          <text key={i} x={xAt(i)} y={H - mb + 11} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{d.dose}</text>
+        ))}
+      </svg>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · pediatric exposure by <b>age × weight</b> vs the adult range
+        ({r.reference_source} at {r.reference_dose}) · {r.allometry} allometry · {r.n_per_stratum}/stratum
+        <span style={{ marginLeft: 10 }}>
+          {(r.metrics ?? ['auc_tau']).map(mk => (
+            <button key={mk} className="chip" style={{ padding: '1px 8px', marginLeft: 4,
+              background: metric === mk ? 'var(--accent)' : undefined, color: metric === mk ? '#fff' : undefined }}
+              onClick={() => setMetric(mk)}>{SP_METRIC_LABEL[mk] ?? mk}</button>
+          ))}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600, marginBottom: 2 }}>
+        {SP_METRIC_LABEL[metric] ?? metric} — % of pediatric subjects within the adult range
+      </div>
+      <svg viewBox={`0 0 ${CW} ${CH}`} style={{ width: '100%', maxWidth: CW }} role="img"
+        aria-label="Percent of pediatric subjects within the adult exposure range by dose">
+        {[0, 25, 50, 75, 100].map(p => (
+          <g key={p}>
+            <line x1={cl} y1={cy(p)} x2={CW - cr} y2={cy(p)} stroke="var(--border)" strokeOpacity="0.5" />
+            <text x={cl - 5} y={cy(p) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">{p}</text>
+          </g>
+        ))}
+        {strata.map((s, si) => {
+          const col = PED_PALETTE[si % PED_PALETTE.length];
+          const pts = s.doses.map((d, i) => {
+            const m = d[metric as keyof typeof d] as PediatricMetric | undefined;
+            return m?.pct_within_ref == null ? null : { x: cx(i), y: cy(m.pct_within_ref), rec: d.dose === s.recommended_dose };
+          }).filter(Boolean) as { x: number; y: number; rec: boolean }[];
+          return (
+            <g key={s.label}>
+              <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={col} strokeWidth="1.6" />
+              {pts.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={p.rec ? 3.4 : 2} fill={col}
+                stroke={p.rec ? '#fff' : 'none'} strokeWidth={p.rec ? 1 : 0} />)}
+            </g>
+          );
+        })}
+        <line x1={cl} y1={CH - cb} x2={CW - cr} y2={CH - cb} stroke="var(--border)" />
+        {doses.map((d, i) => (
+          <text key={i} x={cx(i)} y={CH - cb + 12} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{d}</text>
+        ))}
+        <text x={(cl + CW) / 2} y={CH - 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Dose (mg)</text>
+      </svg>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: 10, marginTop: 2 }}>
+        {strata.map((s, si) => (
+          <span key={s.label} style={{ color: 'var(--text-dim)' }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+              background: PED_PALETTE[si % PED_PALETTE.length], marginRight: 3 }} />{s.label}
+          </span>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>{strata.map(boxPanel)}</div>
+
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8,
+          paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <span style={{ color: 'var(--text-dim)' }}>pediatric covariates:</span>
+          {(['reference', 'dataset'] as const).map(src => (
+            <button key={src} className="chip" disabled={busy}
+              style={{ background: r.population_source === src ? 'var(--accent)' : undefined,
+                color: r.population_source === src ? '#fff' : undefined }}
+              onClick={() => onRerun({ source: src })}>{src === 'reference' ? 'representative peds' : 'analysis dataset'}</button>
+          ))}
+          <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>WT exponent CL</span>
+          <input type="number" step="0.01" value={clExp} onChange={e => setClExp(e.target.value)}
+            placeholder="0.75" disabled={busy} style={{ width: 56 }} />
+          <span style={{ color: 'var(--text-dim)' }}>V</span>
+          <input type="number" step="0.01" value={vExp} onChange={e => setVExp(e.target.value)}
+            placeholder="1.0" disabled={busy} style={{ width: 56 }} />
+          <button className="chip" disabled={busy}
+            onClick={() => onRerun({ wt_exponent_cl: clExp === '' ? null : Number(clExp),
+              wt_exponent_v: vExp === '' ? null : Number(vExp) })}>Re-simulate</button>
+          {busy && <span style={{ color: 'var(--text-dim)' }}>simulating…</span>}
+        </div>
+      )}
+
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Age</th><th>Weight</th><th>n</th><th>Matched dose</th><th>Basis</th></tr></thead>
+        <tbody>
+          {strata.map((s, i) => (
+            <tr key={i}>
+              <td>{s.age_label}</td><td>{s.wt_label}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{s.n}</td>
+              <td style={{ color: s.recommended_dose != null ? 'var(--green)' : 'var(--text-dim)' }}>
+                {s.recommended_dose ?? '—'}</td>
+              <td style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shaded band = adult 5–95% at dose {r.reference_dose}; box = IQR, whiskers = 5–95%, line = median.
+        Green = median within the adult range. Matched dose maximizes the % of subjects within it.
+      </div>
+    </div>
+  );
+}
+
 const ROLE_OPTIONS = ['', 'ID', 'TIME', 'TAD', 'DV', 'AMT', 'EVID', 'MDV', 'CMT',
   'II', 'ADDL', 'DVID', 'CENS', 'ROUTE', 'PD'];
 
@@ -3174,6 +3350,25 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
+  async function runPediatric(opts?: { source?: string; wt_exponent_cl?: number | null; wt_exponent_v?: number | null }) {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Pediatric dose-finding simulation', id: '' });
+    try {
+      const res = await api.pediatricSimulation(session.id, {
+        tau: simTau, n_doses: simNDoses,
+        ...(opts?.source ? { source: opts.source } : {}),
+        ...(opts?.wt_exponent_cl != null ? { wt_exponent_cl: opts.wt_exponent_cl } : {}),
+        ...(opts?.wt_exponent_v != null ? { wt_exponent_v: opts.wt_exponent_v } : {}),
+      });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__PEDIATRIC__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
   const QUICK_ACTIONS = [
     { label: 'Dose proportionality', msg: 'run dose proportionality power model' },
     { label: 'Compartmental fit', msg: 'fit a one- and two-compartment model' },
@@ -3615,6 +3810,17 @@ export default function App() {
                 </div>
               );
             }
+            if (m.content === '__PEDIATRIC__' && st?.pediatric_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>PD</div>
+                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Pediatric dose-finding</div>
+                    <PediatricCard r={st.pediatric_results} onRerun={runPediatric} busy={loading} />
+                  </div>
+                </div>
+              );
+            }
             if (m.content === '__SIM__' && st?.simulation_results) {
               return (
                 <div key={m.id} className="msg agent">
@@ -3848,6 +4054,10 @@ export default function App() {
             <button className="chip" disabled={loading} onClick={runIndividualExposures}
               title="Per-subject steady-state AUCss/Cmax,ss from the fitted EBEs (needs an NLME fit)">
               Individual exposures
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runPediatric()}
+              title="Pediatric dose-finding: age×weight exposure vs the adult range → the dose matching adult exposure (supports estimated allometry)">
+              Pediatric doses
             </button>
             <label className="sim-field">doses
               <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"

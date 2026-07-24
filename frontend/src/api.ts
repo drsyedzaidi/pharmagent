@@ -292,6 +292,16 @@ export const api = {
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
     }),
 
+  pediatricSimulation: (sid: string, body?: {
+    doses?: number[]; tau?: number; n_doses?: number; reference_dose?: number;
+    n_per_stratum?: number; source?: string; n_pediatric?: number; n_reference?: number;
+    wt_exponent_cl?: number | null; wt_exponent_v?: number | null;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/pediatric_simulation`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
   review: (sid: string, body?: { goal?: string; max_iter?: number }):
     Promise<ReviewLoopResult> =>
     req(`/sessions/${sid}/review`, {

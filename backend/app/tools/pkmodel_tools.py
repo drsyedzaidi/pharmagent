@@ -780,6 +780,127 @@ def run_individual_exposures(state: PharmState, ctx: ToolContext, args: dict[str
         result={"status": "ok", "model_key": model_key, "n_subjects": len(payload["subjects"])})
 
 
+_WT_COV_NAMES = ("WT", "WEIGHT", "BW", "BWT", "BODYWEIGHT")
+
+
+def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Pediatric dose-finding by exposure matching — steady-state exposure by age x
+    weight stratum vs an adult reference band (Week-14 pediatric-simulations.R)."""
+    import numpy as np
+
+    from app.compute.clinsim import (  # lazy: imports nlme
+        _cv_pct_to_omega2,
+        individual_exposures,
+        pediatric_reference_population,
+        pediatric_simulation,
+        reference_population,
+    )
+
+    model_key, _fits, pop, typical = _last_fit(state)
+    if not model_key:
+        status = {"status": "no_fit", "message": "Fit a PK model first to simulate pediatric doses."}
+        return ToolResult(summary="Pediatric simulation skipped: no fitted model.",
+                          action="run_pediatric_simulation(no_fit)",
+                          writes={"pediatric_results": status}, result=status)
+    model = get_model(model_key)
+    typical = {**model.defaults, **typical}
+    params = (pop.get("parameters") or {})
+    iiv = {k: v.get("iiv_cv_pct") for k, v in params.items()}
+    iiv_params = [k for k, v in iiv.items() if v]
+
+    # Covariate model: SCM final else NLME (single provenance, like special-pop).
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
+    cov_effects = None
+    if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
+        final = scm_outer["final"]
+        if final.get("model_key") == model_key:
+            cov_effects = final.get("covariate_effects")
+            typical = {**model.defaults, **(final.get("theta") or typical)}
+    if cov_effects is None and nl and nl.get("model_key") == model_key:
+        cov_effects = nl.get("covariate_effects")
+        if cov_effects and nl.get("theta"):
+            typical = {**model.defaults, **nl["theta"]}
+
+    # Model-estimated allometric exponents (opt-in): a WT-CL and WT-V exponent
+    # (e.g. 0.663 / 1.087) replacing the built-in fixed 0.75 / 1.0. Applied to the
+    # flow (exp<1) and volume (exp>=1) params via the model's allometric map.
+    cl_e = _num_or_none(args.get("wt_exponent_cl"))
+    v_e = _num_or_none(args.get("wt_exponent_v"))
+    wt_exponents = None
+    if cl_e is not None or v_e is not None:
+        cl_e = 0.75 if cl_e is None else cl_e
+        v_e = 1.0 if v_e is None else v_e
+        wt_exponents = {p: (cl_e if expo < 1.0 else v_e) for p, expo in model.allometric.items()}
+    # Weight always enters via allometry — the built-in fixed 0.75/1.0 on the default
+    # path, or wt_exponents when supplied. A WT covariate in the fitted model would
+    # double-count against BOTH, so strip it unconditionally before simulating.
+    cov_effects = [e for e in (cov_effects or [])
+                   if (e.get("covariate") or "").upper() not in _WT_COV_NAMES] or None
+
+    tau = float(args.get("tau", 12.0))
+    n_doses = int(args.get("n_doses", 14))
+    ref_dose = float(args.get("reference_dose", 25.0))
+    doses = [float(d) for d in (args.get("doses") or [5.0, 10.0, 15.0, 20.0, 25.0])]
+    n_per = int(args.get("n_per_stratum", 1000))
+
+    # Adult reference band: normal-renal adults at the label dose, one IIV draw
+    # each (stochastic adult exposure distribution). Dataset adults if available,
+    # else representative adults — mirrors the lab's normal-adult-exposures.
+    adult_rows, adult_wt = _covariate_rows(state, ctx)
+    adult_source = "dataset adults"
+    if not adult_rows:
+        adult_rows, adult_wt = reference_population(n=int(args.get("n_reference", 4000)))
+        adult_source = "representative adults"
+    renal_key = next((c for c in _RENAL_COV_NAMES for r in adult_rows if c in (r or {})), None)
+    if renal_key:
+        keep = [i for i, r in enumerate(adult_rows) if _num_or_none((r or {}).get(renal_key)) is None
+                or _num_or_none((r or {}).get(renal_key)) >= 90.0]
+        if keep:
+            adult_rows = [adult_rows[i] for i in keep]
+            adult_wt = [adult_wt[i] for i in keep]
+    rng = np.random.default_rng(20250614)
+    sds = {p: (_cv_pct_to_omega2(iiv.get(p)) ** 0.5) for p in iiv_params}
+    adults = [{"subject": str(i), "cov": adult_rows[i], "wt": float(adult_wt[i])}
+              for i in range(len(adult_rows))]
+    etas = {str(i): {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
+            for i in range(len(adult_rows))}
+    adult_ie = individual_exposures(
+        model_key, theta=typical, subjects=adults, etas=etas, covariate_effects=cov_effects,
+        iiv_params=iiv_params, dose=ref_dose, tau=tau, n_doses=n_doses, wt_exponents=wt_exponents)
+    ref_exp = {"auc_tau": [s["auc_ss"] for s in adult_ie.get("subjects", [])],
+               "cmax": [s["cmax_ss"] for s in adult_ie.get("subjects", [])]}
+
+    # Pediatric covariate source: representative pediatric population (default) or
+    # the dataset (rare — analysis datasets are usually adults).
+    source = args.get("source", "reference")
+    if source == "dataset":
+        ped_rows, ped_wt = _covariate_rows(state, ctx)
+    else:
+        ped_rows, ped_wt = pediatric_reference_population(n=int(args.get("n_pediatric", 6000)))
+
+    payload = pediatric_simulation(
+        model_key, theta=typical, omega_cv_pct=iiv, iiv_params=iiv_params, cov_rows=ped_rows,
+        wt_rows=ped_wt, reference_exposures=ref_exp, doses=doses, tau=tau, n_doses=n_doses,
+        covariate_effects=cov_effects, wt_exponents=wt_exponents, n_per_stratum=n_per)
+    if payload.get("status") == "ok":
+        payload["reference_dose"] = ref_dose
+        payload["reference_source"] = adult_source
+        payload["population_source"] = source
+    if payload.get("status") != "ok":
+        return ToolResult(summary=f"Pediatric simulation: {payload.get('message', payload['status'])}.",
+                          action=f"run_pediatric_simulation({payload['status']})",
+                          writes={"pediatric_results": payload}, result=payload)
+    allo = "estimated" if wt_exponents else "fixed 0.75/1.0"
+    return ToolResult(
+        summary=(f"Pediatric simulation ({model.label}): {len(payload['strata'])} age x weight strata "
+                 f"x {len(doses)} doses vs the adult range ({adult_source} at {ref_dose:g}); "
+                 f"{allo} allometry."),
+        action=f"run_pediatric_simulation({model_key})",
+        writes={"pediatric_results": payload},
+        result={"status": "ok", "model_key": model_key, "n_strata": len(payload["strata"])})
+
+
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model."""
     from app.compute.nlme import population_fit  # lazy: heavy + optional dependency
@@ -1504,4 +1625,22 @@ TOOLS = [
                          "n_doses": {"type": "integer"}, "group_by": {"type": "string"}},
           "required": []},
          run_individual_exposures),
+    Tool("run_pediatric_simulation",
+         "Pediatric dose-finding by exposure matching: stratify a pediatric virtual "
+         "population (ages 2-<18 y) by age x weight, simulate steady-state exposure "
+         "across a dose grid, and report the % of each stratum whose AUCss/Cmax,ss "
+         "lands inside the adult reference range — recommending the dose that best "
+         "matches adult exposure. Supports model-estimated allometric exponents.",
+         "simulator",
+         {"type": "object",
+          "properties": {"doses": {"type": "array", "items": {"type": "number"}},
+                         "tau": {"type": "number"}, "n_doses": {"type": "integer"},
+                         "reference_dose": {"type": "number"},
+                         "n_per_stratum": {"type": "integer"},
+                         "source": {"type": "string", "enum": ["dataset", "reference"]},
+                         "n_pediatric": {"type": "integer"}, "n_reference": {"type": "integer"},
+                         "wt_exponent_cl": {"type": "number"},
+                         "wt_exponent_v": {"type": "number"}},
+          "required": []},
+         run_pediatric_simulation),
 ]

@@ -224,6 +224,20 @@ class IndividualExposuresRequest(BaseModel):
     group_by: str | None = None
 
 
+class PediatricRequest(BaseModel):
+    """Pediatric age×weight dose-matching simulation options."""
+    doses: list[float] | None = None
+    tau: float = 12.0
+    n_doses: int = 14
+    reference_dose: float = 25.0
+    n_per_stratum: int = 1000
+    source: str = "reference"
+    n_pediatric: int = 6000
+    n_reference: int = 4000
+    wt_exponent_cl: float | None = None
+    wt_exponent_v: float | None = None
+
+
 class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
@@ -580,6 +594,16 @@ def run_individual_exposures(sid: str, req: IndividualExposuresRequest | None = 
     args = req.model_dump() if req is not None else {}
     try:
         return orch.run_tool(sid, "run_individual_exposures", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/pediatric_simulation")
+def run_pediatric_simulation(sid: str, req: PediatricRequest | None = None,
+                             sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump(exclude_none=True) if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_pediatric_simulation", "simulator", args, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
