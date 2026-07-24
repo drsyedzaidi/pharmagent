@@ -274,6 +274,24 @@ export const api = {
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
     }),
 
+  specialPopulation: (sid: string, body?: {
+    stratify_by?: string | null; doses?: number[]; dose?: number; tau?: number; n_doses?: number;
+    metrics?: string[]; reference_stratum?: string; reference_dose?: number | null;
+    n_per_stratum?: number; source?: string; n_reference?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/special_population`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
+  individualExposures: (sid: string, body?: {
+    dose?: number; tau?: number; n_doses?: number; group_by?: string | null;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/individual_exposures`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
   review: (sid: string, body?: { goal?: string; max_iter?: number }):
     Promise<ReviewLoopResult> =>
     req(`/sessions/${sid}/review`, {

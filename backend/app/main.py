@@ -201,6 +201,29 @@ class ExposureForestRequest(BaseModel):
     n_draws: int = 500
 
 
+class SpecialPopRequest(BaseModel):
+    """Special-population (renal) exposure simulation options."""
+    stratify_by: str | None = None
+    doses: list[float] | None = None
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    metrics: list[str] | None = None
+    reference_stratum: str = "Normal"
+    reference_dose: float | None = None
+    n_per_stratum: int = 600
+    source: str = "dataset"
+    n_reference: int = 4000
+
+
+class IndividualExposuresRequest(BaseModel):
+    """Per-subject steady-state exposure options."""
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    group_by: str | None = None
+
+
 class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
@@ -537,6 +560,26 @@ def run_exposure_forest(sid: str, req: ExposureForestRequest | None = None,
     args = req.model_dump() if req is not None else {}
     try:
         return orch.run_tool(sid, "run_exposure_forest", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/special_population")
+def run_special_population(sid: str, req: SpecialPopRequest | None = None,
+                           sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_special_population", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/individual_exposures")
+def run_individual_exposures(sid: str, req: IndividualExposuresRequest | None = None,
+                             sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_individual_exposures", "simulator", args, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

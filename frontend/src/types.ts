@@ -108,6 +108,8 @@ export interface PharmState {
   dose_sweep_results: DoseSweepResults | null;
   clinsim_results: ClinsimResults | null;
   exposure_forest_results: ExposureForestResults | null;
+  special_pop_results: SpecialPopResults | null;
+  individual_exposures: IndividualExposures | null;
   simest_results: SimestResults | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
@@ -654,6 +656,66 @@ export interface ClinsimResults {
   doses?: ClinsimDose[];
   recommended_dose?: number | null;
   recommendation_note?: string;
+}
+
+export interface SpecialPopMetric {
+  p05: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+  within_ref: boolean;
+}
+
+export interface SpecialPopDoseRow {
+  dose: number;
+  auc_tau?: SpecialPopMetric;
+  cmax?: SpecialPopMetric;
+  cavg?: SpecialPopMetric;
+  ctrough?: SpecialPopMetric;
+}
+
+export interface SpecialPopStratum {
+  label: string;
+  n: number;
+  doses: SpecialPopDoseRow[];
+  recommended_dose: number | null;
+  note: string;
+}
+
+export interface SpecialPopResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  stratify_by?: string;
+  kind?: string;
+  metrics?: string[];
+  reference_stratum?: string;
+  reference_dose?: number;
+  tau?: number;
+  n_doses?: number;
+  n_per_stratum?: number;
+  covariate_in_model?: boolean;
+  population_source?: string;
+  available?: string[];
+  reference_band?: Record<string, { lo: number | null; hi: number | null; median: number | null }>;
+  strata?: SpecialPopStratum[];
+  skipped?: { label: string; n: number }[];
+}
+
+export interface IndividualExposures {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  dose?: number;
+  tau?: number;
+  n_doses?: number;
+  metrics?: string[];
+  subjects?: { subject: string; auc_ss: number | null; cmax_ss: number | null; group?: string | number | null }[];
+  groups?: { group: string; n: number; auc_ss?: { p05: number | null; median: number | null; p95: number | null };
+    cmax_ss?: { p05: number | null; median: number | null; p95: number | null } }[];
 }
 
 export interface RelExposure {

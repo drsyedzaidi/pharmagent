@@ -107,6 +107,360 @@ def sample_theta_draws(theta: dict, theta_rse_pct: dict | None, n_draws: int,
              for p in rse} for _ in range(int(max(1, n_draws)))]
 
 
+# KDIGO-style renal-function categories by eGFR (mL/min/1.73m^2). The course lab
+# uses findInterval(EGFR, c(15,30,60,90,Inf)); here G4 (<30) and G5 (<15) are
+# folded into a single "Severe" bucket, giving 4 categories: <30 Severe,
+# [30,60) Moderate, [60,90) Mild, >=90 Normal (right-open, via np.digitize).
+_RENAL_EDGES = (30.0, 60.0, 90.0)
+_RENAL_LABELS = ("Severe", "Moderate", "Mild", "Normal")
+_RENAL_KEYS = {"RF", "EGFR", "RENAL", "CRCL", "CLCR", "GFR", "EGFR_CKD"}
+_MIN_CONTINUOUS_LEVELS = 5
+
+
+def _num(v) -> float | None:
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _renal_label(egfr: float) -> str:
+    """eGFR -> Severe/Moderate/Mild/Normal (KDIGO-ish, per the course lab)."""
+    return _RENAL_LABELS[int(np.digitize(egfr, _RENAL_EDGES))]
+
+
+def _sorted_labels(labels) -> list:
+    """Numeric-aware label order (25 before 100, Q1 before Q10)."""
+    def _isnum(s) -> bool:
+        try:
+            float(s)
+            return True
+        except (TypeError, ValueError):
+            return False
+    return sorted(labels, key=lambda x: (0, float(x)) if _isnum(x) else (1, str(x)))
+
+
+def _stratify_source(cov_rows: list[dict], wt_rows: list[float], stratify_by: str
+                     ) -> tuple[dict[str, list[int]], str]:
+    """Group source-row indices into strata by ``stratify_by``.
+
+    Returns ``(partition, kind)`` with ``kind`` in ``renal | categorical |
+    quartile | missing``. A renal covariate (eGFR/CrCl/RF) is binned into the
+    KDIGO categories; a categorical covariate splits per level; a continuous
+    covariate splits into quartiles Q1..Q4.
+    """
+    key = stratify_by.strip()
+    upper = key.upper()
+    present = [(i, (cov_rows[i] or {}).get(key)) for i in range(len(cov_rows))]
+    present = [(i, v) for i, v in present if v is not None]
+    if not present:
+        return {}, "missing"
+
+    if upper in _RENAL_KEYS:
+        nums = [(i, _num(v)) for i, v in present]
+        nums = [(i, v) for i, v in nums if v is not None]
+        if not nums:
+            return {}, "missing"
+        parts: dict[str, list[int]] = {}
+        for i, v in nums:
+            parts.setdefault(_renal_label(v), []).append(i)
+        return parts, "renal"
+
+    vals = [v for _i, v in present]
+    numeric = [_num(v) for v in vals]
+    is_continuous = (all(n is not None for n in numeric)
+                     and len({round(float(n), 6) for n in numeric}) >= _MIN_CONTINUOUS_LEVELS)
+    parts = {}
+    if is_continuous:
+        arr = np.array([float(n) for n in numeric], dtype=float)
+        q = np.quantile(arr, [0.25, 0.5, 0.75])
+        for (i, _v), n in zip(present, numeric):
+            parts.setdefault(f"Q{int(np.digitize(float(n), q)) + 1}", []).append(i)
+        return parts, "quartile"
+    for i, v in present:
+        parts.setdefault(str(v), []).append(i)
+    return parts, "categorical"
+
+
+def _sample_indices(idx_pool: list[int], n: int, rng: np.random.Generator) -> list[int]:
+    """Resample n indices from the pool with replacement (empty pool -> empty)."""
+    if not idx_pool:
+        return []
+    return [idx_pool[j] for j in rng.integers(0, len(idx_pool), size=int(n))]
+
+
+def special_population_simulation(
+    model_key: str, *, theta: dict, omega_cv_pct: dict, iiv_params: list[str],
+    cov_rows: list[dict], wt_rows: list[float], stratify_by: str, doses: list[float],
+    tau: float, n_doses: int, covariate_effects: list[dict] | None = None,
+    metrics: tuple[str, ...] = ("auc_tau", "cmax"), reference_stratum: str = "Normal",
+    reference_dose: float | None = None, n_per_stratum: int = 600,
+    seed: int = 20250614, wt_default: float = 70.0, n_points: int = 160,
+    max_per_stratum: int = 2000, max_doses: int = 12,
+) -> dict:
+    """Special-population exposure simulation (Week-13 ``renal-simulations.R``).
+
+    Stratify the virtual-population source by a categorized covariate (renal
+    function from eGFR, or quartiles of a continuous covariate), sample
+    ``n_per_stratum`` subjects per stratum, simulate a steady-state regimen at
+    every dose, and report the exposure distribution (``metrics`` over the last
+    interval — AUC_tau ≈ AUCss, cmax ≈ Cmax,ss). The ``reference_stratum`` at
+    ``reference_dose`` gives the 5-95% comparison band; each stratum-dose median
+    is flagged within/above/below it, and each stratum gets the dose whose median
+    exposure lands back inside the reference band — the special-population dose
+    adjustment.
+
+    Returns ``{status, model_key, label, stratify_by, kind, metrics,
+    reference_stratum, reference_dose, tau, n_doses, n_per_stratum,
+    reference_band: {metric: {lo, hi, median}}, strata: [{label, n, doses:
+    [{dose, metric: {p05,p25,p50,p75,p95, within_ref}}], recommended_dose,
+    note}], skipped}``.
+    """
+    bad = [m for m in metrics if m not in _METRICS]
+    if bad:
+        raise ValueError(f"metrics must be in {_METRICS}; got {bad}")
+    dose_grid = sorted({float(d) for d in doses if float(d) > 0})
+    if not dose_grid:
+        return {"status": "no_doses", "message": "no positive dose levels supplied."}
+    if len(dose_grid) > max_doses:
+        return {"status": "too_many_doses",
+                "message": f"dose grid capped at {max_doses}; got {len(dose_grid)}."}
+    if not cov_rows:
+        return {"status": "no_covariates",
+                "message": "special-population simulation needs the dataset covariates."}
+
+    partition, kind = _stratify_source(cov_rows, wt_rows, stratify_by)
+    if kind == "missing":
+        return {"status": "missing_covariate", "stratify_by": stratify_by,
+                "message": f"no subject carries covariate {stratify_by!r}."}
+
+    n_per = int(max(1, min(n_per_stratum, max_per_stratum)))
+    tau = float(tau)
+    n_doses = int(max(1, n_doses))
+    tmax = tau * n_doses
+    t_last = (n_doses - 1) * tau
+    ref_dose = float(reference_dose) if reference_dose is not None else dose_grid[len(dose_grid) // 2]
+
+    model = get_model(model_key)
+    typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
+    apply_cov = _covariate_applier(covariate_effects)
+    sds = {p: float(np.sqrt(_cv_pct_to_omega2(omega_cv_pct.get(p)))) for p in iiv_params}
+    rng = np.random.default_rng(seed)
+
+    def _exposure(dose: float, si: int, eta: dict) -> dict:
+        cov = cov_rows[si] or {}
+        wt = float(wt_rows[si]) if si < len(wt_rows) else float(cov.get("WT", wt_default))
+        theta_i = apply_cov(typical, cov)
+        params_i = {k: float(theta_i[k]) for k in theta_i}
+        for p in iiv_params:
+            if p in params_i:
+                params_i[p] = params_i[p] * float(np.exp(eta[p]))
+        sim = simulate_timecourse(model, params_i, dose=dose, tau=tau, n_doses=n_doses,
+                                  tmax=tmax, n_points=n_points, wt=wt)
+        return _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=tau, tmax=tmax)
+
+    def _dist(pool: list[int], dose: float) -> dict:
+        """Sampled exposure metrics for one (stratum, dose)."""
+        picks = _sample_indices(pool, n_per, rng)
+        vals = {m: np.empty(len(picks)) for m in metrics}
+        for k, si in enumerate(picks):
+            eta = {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
+            m = _exposure(dose, si, eta)
+            for met in metrics:
+                vals[met][k] = m[met]
+        return {met: vals[met][np.isfinite(vals[met])] for met in metrics}
+
+    labels = _sorted_renal(partition) if kind == "renal" else _sorted_labels(partition)
+    skipped = [{"label": lb, "n": len(partition[lb])} for lb in labels if not partition[lb]]
+    labels = [lb for lb in labels if partition[lb]]
+    if not labels:
+        return {"status": "no_strata", "stratify_by": stratify_by, "kind": kind,
+                "strata": [], "skipped": skipped}
+
+    # Reference band: the reference stratum at the reference dose (fall back to the
+    # first stratum if the named reference is absent, e.g. no "Normal" subjects).
+    ref_label = reference_stratum if reference_stratum in partition and partition[reference_stratum] else labels[0]
+    ref_dist = _dist(partition[ref_label], ref_dose)
+    reference_band = {}
+    for met in metrics:
+        a = ref_dist[met]
+        if a.size:
+            lo, med, hi = np.percentile(a, [5.0, 50.0, 95.0])
+            reference_band[met] = {"lo": _r(lo), "hi": _r(hi), "median": _r(med)}
+        else:
+            reference_band[met] = {"lo": None, "hi": None, "median": None}
+
+    out_strata = []
+    for lb in labels:
+        pool = partition[lb]
+        dose_rows = []
+        for d in dose_grid:
+            dist = _dist(pool, d)
+            row = {"dose": round(d, 6)}
+            for met in metrics:
+                a = dist[met]
+                if a.size:
+                    p05, p25, p50, p75, p95 = np.percentile(a, _REPORT_PCTL)
+                    band = reference_band[met]
+                    within = (band["lo"] is not None
+                              and band["lo"] <= float(p50) <= band["hi"])
+                    row[met] = {"p05": _r(p05), "p25": _r(p25), "p50": _r(p50),
+                                "p75": _r(p75), "p95": _r(p95), "within_ref": bool(within)}
+                else:
+                    row[met] = {"p05": None, "p25": None, "p50": None, "p75": None,
+                                "p95": None, "within_ref": False}
+            dose_rows.append(row)
+        rec_dose, note = _recommend_special(dose_rows, reference_band, metrics[0], lb, ref_label)
+        out_strata.append({"label": lb, "n": len(pool), "doses": dose_rows,
+                           "recommended_dose": rec_dose, "note": note})
+
+    return {
+        "status": "ok", "model_key": model_key, "label": model.label,
+        "stratify_by": stratify_by, "kind": kind, "metrics": list(metrics),
+        "reference_stratum": ref_label, "reference_dose": round(ref_dose, 6),
+        "tau": tau, "n_doses": n_doses, "n_per_stratum": n_per,
+        "reference_band": reference_band, "strata": out_strata, "skipped": skipped,
+    }
+
+
+def reference_population(n: int = 4000, seed: int = 20250614
+                         ) -> tuple[list[dict], list[float]]:
+    """A representative adult covariate distribution spanning renal-function
+    categories — a stand-in reference population when the analysis dataset lacks
+    renal-impaired subjects (Week-13 supplements sparse severe-RI numbers from an
+    external source). AGE ~ U(18,85), SEX 50/50, WT ~ N(80,18) kg, serum
+    creatinine lognormal, and eGFR from the MDRD equation (mL/min/1.73m^2):
+    ``175 * SCr^-1.154 * AGE^-0.203 * 0.742^(female)``.
+
+    NOTE: SYNTHETIC / representative, not literal NHANES (the course lab pulls
+    NHANES over the network via ``nhanesA``; PharmAgent bundles no external data
+    and does no runtime fetch). Returns ``(cov_rows, wt_rows)`` matching the
+    :func:`special_population_simulation` input contract.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(max(1, n))
+    age = rng.uniform(18.0, 85.0, n)
+    sex = rng.integers(0, 2, n)                       # 0 male, 1 female
+    wt = np.clip(rng.normal(80.0, 18.0, n), 40.0, 160.0)
+    scr = np.clip(rng.lognormal(np.log(0.9), 0.5, n), 0.4, 8.0)   # mg/dL
+    egfr = 175.0 * scr ** -1.154 * age ** -0.203 * np.where(sex == 1, 0.742, 1.0)
+    egfr = np.clip(egfr, 5.0, 150.0)
+    # SEX as float (not int): the dataset covariate pipeline casts numerics to
+    # float, so a fitted categorical covariate stores its levels as str(1.0)="1.0".
+    # Emitting int here would str()-match as "1" and silently drop the effect
+    # (categorical matching in nlme._CovEffect.factor is by string equality).
+    cov_rows = [{"AGE": round(float(age[i]), 1), "SEX": float(sex[i]),
+                 "WT": round(float(wt[i]), 1), "SCR": round(float(scr[i]), 2),
+                 "EGFR": round(float(egfr[i]), 1)} for i in range(n)]
+    return cov_rows, [round(float(w), 1) for w in wt]
+
+
+def individual_exposures(
+    model_key: str, *, theta: dict, subjects: list[dict], etas: dict,
+    dose: float, tau: float, n_doses: int, covariate_effects: list[dict] | None = None,
+    iiv_params: list[str] | None = None, metrics: tuple[str, ...] = ("auc_tau", "cmax"),
+    wt_default: float = 70.0, n_points: int = 160, group_key: str | None = None,
+) -> dict:
+    """Per-subject steady-state exposure from EBEs (Week-13 ``individual-exposures.R``).
+
+    For each fitted subject, individual parameters are the covariate-adjusted
+    typical values times ``exp(eta_i)`` (the subject's stored empirical-Bayes
+    estimate); a steady-state regimen is simulated and AUCss (``auc_tau``) and
+    Cmax,ss (``cmax``) over the last interval are reported. This is the reference
+    exposure table the special-population simulation compares against.
+
+    ``etas``: ``{subject_id: {param: eta}}``; a subject without a stored eta uses
+    eta = 0. ``group_key`` (e.g. a renal-function column) adds a per-group summary.
+    Returns ``{status, model_key, label, dose, tau, n_doses, metrics,
+    subjects: [{subject, group?, auc_ss, cmax_ss, ...}], groups?}``.
+    """
+    bad = [m for m in metrics if m not in _METRICS]
+    if bad:
+        raise ValueError(f"metrics must be in {_METRICS}; got {bad}")
+    if not subjects:
+        return {"status": "empty", "message": "no fitted subjects."}
+    model = get_model(model_key)
+    typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
+    apply_cov = _covariate_applier(covariate_effects)
+    iiv_params = iiv_params or []
+    tmax = float(tau) * int(max(1, n_doses))
+    t_last = (int(max(1, n_doses)) - 1) * float(tau)
+
+    recs = []
+    for s in subjects:
+        sid = s.get("subject")
+        cov = s.get("cov") or {}
+        wt = float(s.get("wt", wt_default))
+        eta = etas.get(sid) or etas.get(str(sid)) or {}
+        theta_i = apply_cov(typical, cov)
+        params_i = {k: float(theta_i[k]) for k in theta_i}
+        for p in iiv_params:
+            if p in params_i:
+                params_i[p] = params_i[p] * float(np.exp(float(eta.get(p, 0.0))))
+        sim = simulate_timecourse(model, params_i, dose=float(dose), tau=float(tau),
+                                  n_doses=int(max(1, n_doses)), tmax=tmax,
+                                  n_points=n_points, wt=wt)
+        m = _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=float(tau), tmax=tmax)
+        rec = {"subject": str(sid), "auc_ss": _r(m["auc_tau"]), "cmax_ss": _r(m["cmax"])}
+        if group_key is not None:
+            gv = cov.get(group_key)
+            # Bin a renal covariate into KDIGO categories so the group summary is
+            # meaningful (raw eGFR would otherwise make one group per subject).
+            if group_key.upper() in _RENAL_KEYS and _num(gv) is not None:
+                rec["group"] = _renal_label(float(gv))
+            else:
+                rec["group"] = gv
+        recs.append(rec)
+
+    out = {"status": "ok", "model_key": model_key, "label": model.label,
+           "dose": round(float(dose), 6), "tau": float(tau), "n_doses": int(max(1, n_doses)),
+           "metrics": list(metrics), "subjects": recs}
+    if group_key is not None:
+        groups: dict[str, list[dict]] = {}
+        for r in recs:
+            groups.setdefault(str(r.get("group")), []).append(r)
+        summary = []
+        for g, rs in groups.items():
+            gsum = {"group": g, "n": len(rs)}
+            for met, fld in (("auc_ss", "auc_ss"), ("cmax_ss", "cmax_ss")):
+                arr = np.array([r[fld] for r in rs if r[fld] is not None], dtype=float)
+                if arr.size:
+                    p05, p50, p95 = np.percentile(arr, [5.0, 50.0, 95.0])
+                    gsum[met] = {"p05": _r(p05), "median": _r(p50), "p95": _r(p95)}
+            summary.append(gsum)
+        out["groups"] = summary
+    return out
+
+
+def _sorted_renal(partition) -> list:
+    """Severe → Normal order for renal strata (others appended)."""
+    order = {lab: i for i, lab in enumerate(_RENAL_LABELS)}
+    return sorted(partition, key=lambda x: (order.get(x, 99), x))
+
+
+def _recommend_special(dose_rows: list[dict], reference_band: dict, metric: str,
+                       label: str, ref_label: str) -> tuple[float | None, str]:
+    """The dose whose median ``metric`` lands inside the reference band — the
+    special-population dose that normalizes exposure to the reference group."""
+    band = reference_band.get(metric) or {}
+    if band.get("lo") is None:
+        return None, "no reference band available."
+    if label == ref_label:
+        return None, "reference stratum."
+    within = [r for r in dose_rows if r[metric].get("within_ref")]
+    if within:
+        best = min(within, key=lambda r: abs((r[metric]["p50"] or 0) - (band["median"] or 0)))
+        return best["dose"], (f"dose {best['dose']:g} brings median {metric} into the "
+                              f"{ref_label} reference range.")
+    # None land inside — say which side the exposure sits on at every dose.
+    meds = [r[metric]["p50"] for r in dose_rows if r[metric]["p50"] is not None]
+    if meds and all(m > band["hi"] for m in meds):
+        return None, f"exposure above the {ref_label} range at all doses — consider a lower dose."
+    if meds and all(m < band["lo"] for m in meds):
+        return None, f"exposure below the {ref_label} range at all doses — consider a higher dose."
+    return None, f"no simulated dose matches the {ref_label} reference range."
+
+
 def clinical_trial_simulation(
     model_key: str, *, theta: dict, omega_cv_pct: dict, iiv_params: list[str],
     doses: list[float], tau: float, n_doses: int,

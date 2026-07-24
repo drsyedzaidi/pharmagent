@@ -636,6 +636,150 @@ def run_exposure_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any
         result={"status": "ok", "model_key": model_key, "n_rows": n_out})
 
 
+# Covariate names commonly denoting renal function (auto-detected default stratum).
+_RENAL_COV_NAMES = ("RF", "EGFR", "CRCL", "CLCR", "GFR")
+
+
+def run_special_population(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Special-population exposure simulation — steady-state exposure by renal (or
+    other) covariate stratum vs a reference band (Week-13 renal-simulations.R)."""
+    from app.compute.clinsim import (  # lazy: imports nlme
+        reference_population,
+        special_population_simulation,
+    )
+
+    model_key, _fits, pop, typical = _last_fit(state)
+    if not model_key:
+        status = {"status": "no_fit", "message": "Fit a PK model first to simulate special populations."}
+        return ToolResult(summary="Special-population simulation skipped: no fitted model.",
+                          action="run_special_population(no_fit)",
+                          writes={"special_pop_results": status}, result=status)
+    model = get_model(model_key)
+    typical = {**model.defaults, **typical}
+    params = (pop.get("parameters") or {})
+    iiv = {k: v.get("iiv_cv_pct") for k, v in params.items()}
+    iiv_params = [k for k, v in iiv.items() if v]
+
+    # Covariate model: prefer SCM final, else NLME (single provenance, like the forest).
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
+    cov_effects = None
+    if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
+        final = scm_outer["final"]
+        if final.get("model_key") == model_key:
+            cov_effects = final.get("covariate_effects")
+            typical = {**model.defaults, **(final.get("theta") or typical)}
+    if cov_effects is None and nl and nl.get("model_key") == model_key:
+        cov_effects = nl.get("covariate_effects")
+        if cov_effects and nl.get("theta"):
+            typical = {**model.defaults, **nl["theta"]}
+
+    # Population source: the analysis dataset (default) or a synthetic representative
+    # adult population spanning renal categories (when the dataset lacks renal spread).
+    source = args.get("source", "dataset")
+    if source == "reference":
+        cov_rows, wt_rows = reference_population(n=int(args.get("n_reference", 4000)))
+    else:
+        cov_rows, wt_rows = _covariate_rows(state, ctx)
+    # Default stratum: a renal covariate present in the data, else the first covariate.
+    cov_keys = {c for r in cov_rows for c in (r or {})}
+    stratify_by = args.get("stratify_by")
+    if not stratify_by:
+        stratify_by = next((c for c in _RENAL_COV_NAMES if c in cov_keys), None)
+    if not stratify_by:
+        status = {"status": "no_covariate", "available": sorted(cov_keys),
+                  "message": ("no renal covariate (EGFR/RF/CrCl) found; pass stratify_by "
+                              f"as one of: {', '.join(sorted(cov_keys)) or '(none)'}")}
+        return ToolResult(summary="Special-population simulation skipped: no stratifying covariate.",
+                          action="run_special_population(no_covariate)",
+                          writes={"special_pop_results": status}, result=status)
+
+    base = float(args.get("dose", 100.0))
+    doses = [float(d) for d in (args.get("doses")
+             or [base * f for f in (0.5, 1.0, 2.0, 4.0)])]
+    metrics = tuple(args.get("metrics") or ("auc_tau", "cmax"))
+    payload = special_population_simulation(
+        model_key, theta=typical, omega_cv_pct=iiv, iiv_params=iiv_params,
+        cov_rows=cov_rows, wt_rows=wt_rows, stratify_by=stratify_by, doses=doses,
+        tau=float(args.get("tau", 24.0)), n_doses=int(args.get("n_doses", 7)),
+        covariate_effects=cov_effects, metrics=metrics,
+        reference_stratum=args.get("reference_stratum", "Normal"),
+        reference_dose=args.get("reference_dose"),
+        n_per_stratum=int(args.get("n_per_stratum", 600)))
+    # A covariate model that includes the stratifying covariate is what makes the
+    # strata differ; flag when it is missing so a flat result is not misread.
+    cov_in_model = bool(cov_effects) and any(
+        (e.get("covariate") or "").upper() == stratify_by.upper() for e in (cov_effects or []))
+    if payload.get("status") == "ok":
+        payload["covariate_in_model"] = cov_in_model
+        payload["population_source"] = source
+
+    if payload.get("status") != "ok":
+        return ToolResult(summary=f"Special-population simulation: {payload.get('message', payload['status'])}.",
+                          action=f"run_special_population({payload['status']})",
+                          writes={"special_pop_results": payload}, result=payload)
+    note = "" if cov_in_model else (f" (no fitted {stratify_by} effect — strata differ only by "
+                                    "allometric weight; run SCM/NLME with this covariate)")
+    n_strata = len(payload["strata"])
+    return ToolResult(
+        summary=(f"Special-population simulation ({model.label}) by {stratify_by}: {n_strata} strata × "
+                 f"{len(doses)} doses vs the {payload['reference_stratum']} reference band.{note}"),
+        action=f"run_special_population({model_key})",
+        writes={"special_pop_results": payload},
+        result={"status": "ok", "model_key": model_key, "stratify_by": stratify_by,
+                "n_strata": n_strata})
+
+
+def run_individual_exposures(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Per-subject steady-state exposure (AUCss/Cmax,ss) from the fitted EBEs."""
+    from app.compute.clinsim import individual_exposures  # lazy: imports nlme
+
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    if not nl or not nl.get("individual"):
+        status = {"status": "needs_nlme",
+                  "message": ("Individual exposures need a converged run_nlme fit with per-subject "
+                              "EBEs (eta values).")}
+        return ToolResult(summary="Individual exposures skipped: no NLME EBEs.",
+                          action="run_individual_exposures(needs_nlme)",
+                          writes={"individual_exposures": status}, result=status)
+    model_key = nl.get("model_key")
+    model = get_model(model_key)
+    theta = {**model.defaults, **(nl.get("theta") or {})}
+    etas = {str(r["subject"]): (r.get("eta") or {}) for r in nl["individual"] if "subject" in r}
+
+    df = ctx.dataset_store.get(state.dataset_id) if state.dataset_id else None
+    if df is None:
+        status = {"status": "no_dataset", "message": "the source dataset is not loaded."}
+        return ToolResult(summary="Individual exposures skipped: no dataset.",
+                          action="run_individual_exposures(no_dataset)",
+                          writes={"individual_exposures": status}, result=status)
+    subjects, _m, _p = _build_subjects(df, _roles(df, state))
+    subj_in = [{"subject": str(s["subject"]), "cov": s.get("cov") or {},
+                "wt": float(s.get("wt", 70.0))} for s in subjects]
+
+    group_key = args.get("group_by")
+    if not group_key:
+        cov_keys = {c for s in subj_in for c in s["cov"]}
+        group_key = next((c for c in _RENAL_COV_NAMES if c in cov_keys), None)
+    payload = individual_exposures(
+        model_key, theta=theta, subjects=subj_in, etas=etas,
+        dose=float(args.get("dose", 100.0)), tau=float(args.get("tau", 24.0)),
+        n_doses=int(args.get("n_doses", 7)),
+        covariate_effects=nl.get("covariate_effects"),
+        iiv_params=list(nl.get("iiv_params") or []), group_key=group_key)
+    if payload.get("status") != "ok":
+        return ToolResult(summary=f"Individual exposures: {payload.get('message', payload['status'])}.",
+                          action=f"run_individual_exposures({payload['status']})",
+                          writes={"individual_exposures": payload}, result=payload)
+    return ToolResult(
+        summary=(f"Individual exposures ({model.label}): steady-state AUCss/Cmax,ss for "
+                 f"{len(payload['subjects'])} subjects at {payload['dose']:g} q{payload['tau']}h"
+                 + (f", grouped by {group_key}" if group_key else "") + "."),
+        action=f"run_individual_exposures({model_key})",
+        writes={"individual_exposures": payload},
+        result={"status": "ok", "model_key": model_key, "n_subjects": len(payload["subjects"])})
+
+
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model."""
     from app.compute.nlme import population_fit  # lazy: heavy + optional dependency
@@ -1330,4 +1474,34 @@ TOOLS = [
                          "n_draws": {"type": "integer"}},
           "required": []},
          run_exposure_forest),
+    Tool("run_special_population",
+         "Special-population exposure simulation: stratify a virtual population by "
+         "renal function (eGFR/RF bins Severe/Moderate/Mild/Normal) or another "
+         "covariate, simulate steady-state exposure across a dose grid per stratum, "
+         "and compare each stratum to the reference (normal) 90% band — the "
+         "renal/hepatic/weight dose-adjustment question for a biologic.",
+         "simulator",
+         {"type": "object",
+          "properties": {"stratify_by": {"type": "string"},
+                         "doses": {"type": "array", "items": {"type": "number"}},
+                         "dose": {"type": "number"}, "tau": {"type": "number"},
+                         "n_doses": {"type": "integer"},
+                         "metrics": {"type": "array", "items": {"type": "string"}},
+                         "reference_stratum": {"type": "string"},
+                         "reference_dose": {"type": "number"},
+                         "n_per_stratum": {"type": "integer"},
+                         "source": {"type": "string", "enum": ["dataset", "reference"]},
+                         "n_reference": {"type": "integer"}},
+          "required": []},
+         run_special_population),
+    Tool("run_individual_exposures",
+         "Per-subject steady-state exposure (AUCss / Cmax,ss) computed from the "
+         "fitted individual EBEs — the reference exposure table for a special-"
+         "population comparison. Needs a converged run_nlme fit.",
+         "simulator",
+         {"type": "object",
+          "properties": {"dose": {"type": "number"}, "tau": {"type": "number"},
+                         "n_doses": {"type": "integer"}, "group_by": {"type": "string"}},
+          "required": []},
+         run_individual_exposures),
 ]

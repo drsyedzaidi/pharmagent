@@ -80,6 +80,8 @@ class PharmState(BaseModel):
     dose_sweep_results: dict[str, Any] | None = None   # dose-comparison simulation
     clinsim_results: dict[str, Any] | None = None      # clinical trial simulation / PTA
     exposure_forest_results: dict[str, Any] | None = None  # simulated exposure covariate forest
+    special_pop_results: dict[str, Any] | None = None  # special-population (renal) exposure sim
+    individual_exposures: dict[str, Any] | None = None  # per-subject AUCss/Cmax,ss from EBEs
     simest_results: dict[str, Any] | None = None
     bootstrap_results: dict[str, Any] | None = None       # non-parametric bootstrap CIs
     sir_results: dict[str, Any] | None = None             # sampling importance resampling CIs
@@ -129,7 +131,8 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
-                  "clinsim_results", "exposure_forest_results",
+                  "clinsim_results", "exposure_forest_results", "special_pop_results",
+                  "individual_exposures",
                   "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
 }
