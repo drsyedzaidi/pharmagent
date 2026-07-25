@@ -901,8 +901,33 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
         result={"status": "ok", "model_key": model_key, "n_strata": len(payload["strata"])})
 
 
+def _theta_prior_from_fit(fit: dict, prior_var: float | None = None) -> dict | None:
+    """Build a theta_prior {names, mean_log, cov_log} from a stored NLME fit — the
+    Bayesian-borrowing prior for a subsequent (e.g. pediatric) fit. ``mean_log`` =
+    log(theta); the covariance is diagonal, from the prior study's per-parameter
+    RSE% (informative) or a fixed ``prior_var`` on the log scale (weakly/slightly
+    informative, matching the lab's THETAPV=1 / 0.1 variants)."""
+    theta = fit.get("theta") or {}
+    rse = fit.get("theta_rse_pct") or {}
+    names = [k for k in theta]
+    if not names:
+        return None
+    mean_log = [math.log(max(float(theta[k]), 1e-9)) for k in names]
+    if prior_var is not None:
+        var = [float(prior_var)] * len(names)
+    else:
+        var = [(float(rse[k]) / 100.0) ** 2 if rse.get(k) is not None else 1.0 for k in names]
+    return {"names": names, "mean_log": mean_log, "cov_log": np.diag(var).tolist()}
+
+
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model."""
+    """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model.
+
+    An informative theta prior (Bayesian borrowing) turns the FOCE-I fit into a
+    MAP estimate: pass ``theta_prior`` explicitly, or ``prior_from="nlme"`` to
+    build it from the currently-stored fit (e.g. fit adults, then fit pediatrics
+    with the adult fit as the prior). ``prior_var`` sets the prior informativeness.
+    """
     from app.compute.nlme import population_fit  # lazy: heavy + optional dependency
 
     fitted_key, _f, _p, _t = _last_fit(state)
@@ -927,19 +952,79 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
                           writes={"nlme_results": status}, result=status)
 
     method = args.get("method", "focei")
+    # Informative prior (MAP / Bayesian borrowing): explicit, or built from the
+    # currently-stored fit. Priors are a FOCE-I feature, so force that method.
+    theta_prior = args.get("theta_prior")
+    if theta_prior is None and args.get("prior_from") == "nlme":
+        prior_fit = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+        if prior_fit and prior_fit.get("theta"):
+            theta_prior = _theta_prior_from_fit(prior_fit, prior_var=args.get("prior_var"))
+    if theta_prior:
+        method = "focei"
     res = population_fit(model_key, subjects, method=method,
                          iiv_params=args.get("iiv_params"),
                          error_model=args.get("error_model", "proportional"),
-                         covariate_model=args.get("covariate_model"))
+                         covariate_model=args.get("covariate_model"),
+                         theta_prior=theta_prior)
     payload = {"status": "ok", **res}
+    map_note = " (MAP with informative prior)" if res.get("map") else ""
     return ToolResult(
         summary=(f"{res['method']} fit of {res['label']}: OFV {res['ofv']}, "
                  f"{res['n_subjects']} subjects, IIV on {res['iiv_params']} "
-                 f"({'converged' if res.get('converged') else 'did not converge'})."),
+                 f"({'converged' if res.get('converged') else 'did not converge'}){map_note}."),
         action=f"run_nlme({method}, {model_key})",
         writes={"nlme_results": payload},
         result={"status": "ok", "method": res["method"], "theta": res["theta"],
                 "omega_cv_pct": res["omega_cv_pct"], "sigma": res["sigma"], "ofv": res["ofv"]})
+
+
+def run_prior_check(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Bayesian-borrowing diagnostics for the current MAP fit: a prior-predictive
+    band vs the observed data + a prior-vs-posterior shrinkage summary."""
+    from app.compute.bayes import prior_posterior_diagnostic, prior_predictive_check
+
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    if not nl or not nl.get("theta_prior"):
+        status = {"status": "needs_map",
+                  "message": "Run an NLME fit with an informative prior (prior_from='nlme') first."}
+        return ToolResult(summary="Prior check skipped: no MAP fit with a prior.",
+                          action="run_prior_check(needs_map)",
+                          writes={"prior_check_results": status}, result=status)
+    diag = prior_posterior_diagnostic(nl)
+    model_key = nl.get("model_key")
+    ppc: dict[str, Any] = {"status": "no_data"}
+    df = ctx.dataset_store.get(state.dataset_id) if state.dataset_id else None
+    if df is not None:
+        try:
+            subjects, _m, _p = _build_subjects(df, _roles(df, state))
+        except (ValueError, KeyError):
+            subjects = []
+        def _seq(v: Any) -> list:
+            return list(v) if v is not None else []
+        obs_t = [float(t) for s in subjects for t in _seq(s.get("obs_t"))]
+        obs_c = [float(c) for s in subjects for c in _seq(s.get("obs_c"))]
+        doses = [float(d["amt"]) for s in subjects for d in _seq(s.get("doses")) if d.get("amt")]
+        wts = [float(s.get("wt", 70.0)) for s in subjects if s.get("wt")]
+        if obs_t and doses:
+            tmax = max(max(obs_t), 1.0)
+            # A representative subject weight (not the 70 kg default) so the band is
+            # not mis-scaled for a low-weight pediatric cohort — the exact borrowing use.
+            ppc = prior_predictive_check(
+                model_key, theta_prior=nl["theta_prior"], base_theta=nl.get("theta") or {},
+                dose=float(np.median(doses)), tau=tmax, n_doses=1,
+                obs_times=obs_t, obs_conc=obs_c, n_draws=int(args.get("n_draws", 500)),
+                wt=float(np.median(wts)) if wts else 70.0)
+    payload = {"status": "ok", "model_key": model_key, "label": nl.get("label"),
+               "prior_predictive": ppc, "diagnostic": diag}
+    cov = ppc.get("coverage_pct") if isinstance(ppc, dict) else None
+    return ToolResult(
+        summary=(f"Prior check ({nl.get('label', model_key)}): mean shrinkage "
+                 f"{diag.get('mean_shrinkage')}"
+                 + (f", prior-predictive coverage {cov}%" if cov is not None else "") + "."),
+        action=f"run_prior_check({model_key})",
+        writes={"prior_check_results": payload},
+        result={"status": "ok", "model_key": model_key,
+                "mean_shrinkage": diag.get("mean_shrinkage")})
 
 
 _MAX_AUTO_CANDIDATES = 6
@@ -1511,9 +1596,21 @@ TOOLS = [
                          "model_key": {"type": "string"},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
-                         "covariate_model": {"type": "array", "items": {"type": "object"}}},
+                         "covariate_model": {"type": "array", "items": {"type": "object"}},
+                         "prior_from": {"type": "string", "enum": ["nlme"]},
+                         "prior_var": {"type": "number"}},
           "required": []},
          run_nlme),
+    Tool("run_prior_check",
+         "Bayesian-borrowing diagnostics for a MAP (informative-prior) fit: a "
+         "prior-predictive concentration band vs the observed data (with coverage%) "
+         "and a prior-vs-posterior shrinkage summary showing how much the data "
+         "updated each prior. Needs a run_nlme fit made with prior_from='nlme'.",
+         "modeler",
+         {"type": "object",
+          "properties": {"n_draws": {"type": "integer"}},
+          "required": []},
+         run_prior_check),
     Tool("run_scm",
          "Stepwise covariate modeling (forward selection at p<0.05 then backward "
          "elimination at p<0.01) on a structural PK model using FOCE-I OFVs. "

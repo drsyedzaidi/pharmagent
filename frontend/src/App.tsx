@@ -600,6 +600,76 @@ function PkModelCard({ r }: { r: PharmState['pk_model_results'] }) {
   );
 }
 
+/** Bayesian-borrowing diagnostics for a MAP fit: a prior-predictive band vs the
+ * observed data + a prior-vs-posterior shrinkage table (Week-15). */
+function PriorCheckCard({ r }: { r: PharmState['prior_check_results'] }) {
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Prior check — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const ppc = r.prior_predictive;
+  const rows = r.diagnostic?.params ?? [];
+  const band = (ppc?.band ?? []).filter(b => b.time != null && b.lo != null && b.hi != null);
+  const obs = ppc?.observed ?? [];
+  // prior-predictive band SVG (log-y)
+  const W = 460, H = 220, ml = 46, mr = 10, mt = 10, mb = 30;
+  const ys = band.flatMap(b => [b.lo, b.hi]).concat(obs.map(o => o.dv)).filter(v => v != null && (v as number) > 0) as number[];
+  const xs = band.map(b => b.time as number).concat(obs.map(o => o.time as number)).filter(v => v != null);
+  const hasBand = band.length > 1 && ys.length > 0;
+  const lo = hasBand ? Math.max(1e-6, Math.min(...ys) * 0.8) : 0.1;
+  const hi = hasBand ? Math.max(...ys) * 1.2 : 1;
+  const xmax = xs.length ? Math.max(...xs) : 1;
+  const lnLo = Math.log(lo), lnHi = Math.log(hi);
+  const sx = (t: number) => ml + (xmax > 0 ? t / xmax : 0) * (W - ml - mr);
+  const sy = (v: number) => H - mb - ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo || 1)) * (H - mt - mb);
+  const areaPts = hasBand
+    ? band.map(b => `${sx(b.time as number)},${sy(b.hi as number)}`).join(' ') + ' ' +
+      band.slice().reverse().map(b => `${sx(b.time as number)},${sy(b.lo as number)}`).join(' ')
+    : '';
+  const medPts = hasBand ? band.filter(b => b.med != null).map(b => `${sx(b.time as number)},${sy(b.med as number)}`).join(' ') : '';
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · Bayesian borrowing · mean shrinkage <b>{fmt(r.diagnostic?.mean_shrinkage ?? undefined, 2)}</b>
+        {ppc?.coverage_pct != null && <> · prior-predictive coverage <b>{fmt(ppc.coverage_pct, 0)}%</b> ({ppc.n_draws} draws)</>}
+      </div>
+      {hasBand && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>Prior-predictive band vs observed data</div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+            aria-label="Prior-predictive concentration band vs observed data">
+            <polygon points={areaPts} fill="var(--accent)" fillOpacity="0.15" />
+            {medPts && <polyline points={medPts} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />}
+            {obs.map((o, i) => (o.time != null && o.dv != null && (o.dv as number) > 0
+              ? <circle key={i} cx={sx(o.time)} cy={sy(o.dv)} r="2" fill="var(--text)" fillOpacity="0.7" /> : null))}
+            <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+            <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Time</text>
+          </svg>
+        </>
+      )}
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Param</th><th>Prior mean</th><th>Posterior</th><th>95% CrI</th><th>Shrinkage</th></tr></thead>
+        <tbody>
+          {rows.map((p, i) => (
+            <tr key={i}>
+              <td>{p.param}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{fmt(p.prior_mean ?? undefined, 3)}</td>
+              <td>{fmt(p.post_mean ?? undefined, 3)}</td>
+              <td style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                {p.ci95?.[0] != null ? `${fmt(p.ci95[0], 3)}–${fmt(p.ci95[1] ?? undefined, 3)}` : '—'}</td>
+              <td style={{ color: p.shrinkage != null ? 'var(--green)' : 'var(--text-dim)' }}>
+                {p.shrinkage != null ? fmt(p.shrinkage, 2) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shrinkage = 1 − posterior_sd/prior_sd (0 = data adds nothing beyond the prior; →1 = data dominates).
+      </div>
+    </div>
+  );
+}
+
 function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
   if (!r) return null;
   if (r.status !== 'ok') {
@@ -624,6 +694,8 @@ function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
         {r.method} · {r.label} · OFV {fmt(r.ofv ?? undefined, 1)} · {r.n_subjects} subjects ·
         {' '}IIV on {(r.iiv_params ?? []).join(', ')} · {r.error_model} error
         {r.n_blq ? ` · ${r.n_blq} BLQ (M3)` : ''}
+        {r.map && <span style={{ color: 'var(--accent)' }}> · MAP (informative prior{r.ofv_likelihood != null
+          ? `, −2LL ${fmt(r.ofv_likelihood, 1)}` : ''})</span>}
         {' '}· {r.converged ? 'converged' : 'did not converge'}
         {cond != null && (
           <> · <span style={{ color: condFlag ? 'var(--red)' : 'inherit' }}>
@@ -3093,16 +3165,22 @@ export default function App() {
     }
   }
 
-  async function runNlme(method: string) {
+  async function runNlme(method: string, opts?: { prior_from?: string; prior_var?: number }) {
     if (!session) return;
     const label: Record<string, string> = {
       focei: 'FOCE-I only', saem: 'SAEM',
       focei_saem: 'FOCE-I (SAEM-seeded)', auto: 'Auto (escalating)',
     };
+    const priorNote = opts?.prior_from
+      ? ` + informative prior (MAP${opts.prior_var != null ? `, var ${opts.prior_var}` : ''})` : '';
     setLoading(true);
-    pushMsg({ role: 'user', content: `NLME fit — ${label[method] ?? method} (${errorModel} error)`, id: '' });
+    pushMsg({ role: 'user', content: `NLME fit — ${label[method] ?? method} (${errorModel} error)${priorNote}`, id: '' });
     try {
-      const { job_id } = await api.nlme(session.id, { method, error_model: errorModel });
+      const { job_id } = await api.nlme(session.id, {
+        method, error_model: errorModel,
+        ...(opts?.prior_from ? { prior_from: opts.prior_from } : {}),
+        ...(opts?.prior_var != null ? { prior_var: opts.prior_var } : {}),
+      });
       const res = await api.pollJob(session.id, job_id,
         s => setJobNote(`Population fit running… ${s}s`));
       setJobNote('');
@@ -3112,6 +3190,20 @@ export default function App() {
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
     } finally { setJobNote(''); setLoading(false); }
+  }
+
+  async function runPriorCheck() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Prior check (predictive band + shrinkage)', id: '' });
+    try {
+      const res = await api.priorCheck(session.id, { n_draws: 500 });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
+      pushMsg({ role: 'assistant', content: '__PRIORCHECK__', agent: 'modeler', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
+    } finally { setLoading(false); }
   }
 
   async function runScm() {
@@ -3689,6 +3781,17 @@ export default function App() {
                 </div>
               );
             }
+            if (m.content === '__PRIORCHECK__' && st?.prior_check_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>PC</div>
+                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Prior check (Bayesian borrowing)</div>
+                    <PriorCheckCard r={st.prior_check_results} />
+                  </div>
+                </div>
+              );
+            }
             if (m.content === '__SCM__' && st?.scm_results) {
               return (
                 <div key={m.id} className="msg agent">
@@ -3945,6 +4048,21 @@ export default function App() {
                 <option value="combined">combined</option>
               </select>
             </label>
+            <button className="chip" disabled={loading || !state?.nlme_results}
+              onClick={() => runNlme('focei', { prior_from: 'nlme' })}
+              title="MAP fit with the current fit as an informative prior (Bayesian borrowing): informative prior from the stored fit's covariance. Fit adults first, then load the sparse (e.g. pediatric) data and click this.">
+              MAP (informative prior)
+            </button>
+            <button className="chip" disabled={loading || !state?.nlme_results}
+              onClick={() => runNlme('focei', { prior_from: 'nlme', prior_var: 1.0 })}
+              title="MAP fit with a WEAKLY informative prior (variance 1.0 on all params) — the estimate follows the data more than the prior.">
+              MAP (weak prior)
+            </button>
+            <button className="chip" disabled={loading || !(state?.nlme_results && state.nlme_results.map)}
+              onClick={runPriorCheck}
+              title="Prior-predictive band vs the data + prior-vs-posterior shrinkage. Needs a MAP fit.">
+              Prior check
+            </button>
             <button className="chip" disabled={loading} onClick={runScm}
               title="Stepwise covariate modeling: forward selection (p<0.05) + backward elimination (p<0.01) over dataset covariates">
               Covariate SCM

@@ -98,6 +98,7 @@ export interface PharmState {
   poppk_results: PopPkResults | null;
   pk_model_results: PkModelResults | null;
   nlme_results: NlmeResults | null;
+  prior_check_results: PriorCheckResults | null;
   scm_results: ScmResults | null;
   forecast_results: ForecastResults | null;
   simulation_results: SimulationResults | null;
@@ -291,6 +292,38 @@ export interface PkRankRow {
   mean_aic: number | null;
 }
 
+export interface PriorPredictiveBin {
+  time: number | null;
+  lo: number | null;
+  med: number | null;
+  hi: number | null;
+}
+
+export interface PriorParamRow {
+  param: string;
+  prior_mean: number | null;
+  prior_sd_log: number | null;
+  post_mean: number | null;
+  post_sd_log: number | null;
+  shrinkage: number | null;
+  ci95: (number | null)[];
+}
+
+export interface PriorCheckResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  prior_predictive?: {
+    status: string;
+    n_draws?: number;
+    band?: PriorPredictiveBin[];
+    coverage_pct?: number | null;
+    observed?: { time: number | null; dv: number | null }[];
+  };
+  diagnostic?: { status: string; params?: PriorParamRow[]; mean_shrinkage?: number | null };
+}
+
 export interface NlmeResults {
   status: string;
   method?: string;
@@ -318,6 +351,10 @@ export interface NlmeResults {
   /** Present only for method="focei_saem": the SAEM burn-in that seeded the fit. */
   seeded_by?: { method: string; iterations: number; ofv: number; converged: boolean } | null;
   ofv?: number;
+  /** Present only for a MAP fit (informative theta prior / Bayesian borrowing). */
+  map?: boolean;
+  ofv_likelihood?: number;
+  theta_prior?: { names: string[]; mean_log: number[]; sd_log?: number[]; penalty?: number };
   condition_number?: number | null;
   cov_note?: string;
   shrinkage_pct?: Record<string, number>;

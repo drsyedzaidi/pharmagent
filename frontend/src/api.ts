@@ -143,12 +143,20 @@ export const api = {
   forest: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
     req(`/sessions/${sid}/forest`, { method: 'POST' }),
 
-  nlme: (sid: string, body: { method: string; model_key?: string; error_model?: string }):
+  nlme: (sid: string, body: { method: string; model_key?: string; error_model?: string;
+    prior_from?: string; prior_var?: number }):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/nlme`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+
+  priorCheck: (sid: string, body?: { n_draws?: number }):
+    Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/prior_check`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
     }),
 
   scm: (sid: string, body: { model_key?: string; error_model?: string; iiv_params?: string[] }):

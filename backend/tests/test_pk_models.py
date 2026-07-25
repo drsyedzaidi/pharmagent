@@ -12,10 +12,12 @@ T = np.array([0.25, 0.5, 1, 2, 4, 6, 8, 12, 18, 24], dtype=float)
 DOSE = 100.0
 
 
-def test_registry_has_18_models():
-    assert len(REGISTRY) == 18
-    assert len(PK_KEYS) == 10 and len(PKPD_KEYS) == 8
-    assert len(list_models()) == 18
+def test_registry_has_19_models():
+    # 10 PK + 9 PK/PD (the 9th is pkpd_transit_lifespan, the Week-15 transduction
+    # / cell-lifespan model). Update deliberately whenever a model is added.
+    assert len(REGISTRY) == 19
+    assert len(PK_KEYS) == 10 and len(PKPD_KEYS) == 9
+    assert len(list_models()) == 19
 
 
 def test_iv_1cmt_matches_analytic_monoexp():

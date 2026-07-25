@@ -71,6 +71,7 @@ class PharmState(BaseModel):
     # --- structural PK model library (Modeler Agent) ----------------------
     pk_model_results: dict[str, Any] | None = None
     nlme_results: dict[str, Any] | None = None         # FOCE-I / SAEM mixed-effects fit
+    prior_check_results: dict[str, Any] | None = None  # prior-predictive + prior-vs-posterior (MAP)
     scm_results: dict[str, Any] | None = None          # stepwise covariate modeling
     forecast_results: dict[str, Any] | None = None     # MAP/TDM Bayesian forecast
     vpc_results: dict[str, Any] | None = None          # GOF / VPC diagnostics
@@ -127,7 +128,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "poppk": {"poppk_results", "covariate_results", "widgets"},
     "modeler": {"pk_model_results", "nlme_results", "scm_results", "forecast_results",
                 "vpc_results", "diagnostics_results", "engine_comparison_results",
-                "forest_results", "widgets"},
+                "forest_results", "prior_check_results", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections"},

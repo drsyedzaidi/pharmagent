@@ -27,7 +27,7 @@ def client():
 
 def test_health_and_models_public(client):
     assert client.get("/api/health").json()["status"] == "ok"
-    assert len(client.get("/api/pk_models").json()["models"]) == 18
+    assert len(client.get("/api/pk_models").json()["models"]) == 19
 
 
 def test_session_and_nca_workflow(client):

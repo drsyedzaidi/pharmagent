@@ -202,6 +202,37 @@ def _eff_resp(y, p):    return y[2]
 def _cp_pkpd(y, p):     return y[1] / p["V"]
 
 
+# ── Transit / cell-lifespan PD (transduction chain) ──
+# A 1-cmt oral PK base drives an Emax stimulation of production into an N-transit
+# maturation chain (a transduction / cell-lifespan model). Mean transit time
+# MTT = N / KTR; each transit compartment sits at a relative amount 1 at steady
+# state (KIN = KTR). The observed cell count is BASE x the MEAN transit amount
+# across the chain (the course lab's COUNT = sum(transit)/N * BASE readout — note
+# this is the chain mean, not the terminal-compartment readout of a canonical
+# lifespan model, so MTT here is the mean maturation time of the whole chain).
+_N_TRANSIT = 5
+
+def _lifespan_init(p):
+    """DEPOT=0, CENT=0, then N transit compartments at the steady-state amount 1."""
+    return [0.0, 0.0] + [1.0] * _N_TRANSIT
+
+def _lifespan_rhs(t, y, p):
+    DEPOT, CENT = y[0], y[1]
+    dd, dc = _pkpd_pk(t, DEPOT, CENT, p)
+    cp = CENT / p["V"]
+    eff = p["EMAX"] * cp / (p["EC50"] + cp)           # Emax stimulation of production
+    ktr = _N_TRANSIT / p["MTT"]
+    tr = y[2:]
+    dtr = [ktr * (1.0 + eff) - ktr * tr[0]]           # drug affects production into cmt 1
+    for k in range(1, _N_TRANSIT):
+        dtr.append(ktr * (tr[k - 1] - tr[k]))         # cells mature through the chain
+    return [dd, dc, *dtr]
+
+def _eff_count(y, p):
+    """Observed count = mean transit amount x baseline count."""
+    return p["BASE"] * float(np.mean(y[2:]))
+
+
 REGISTRY: dict[str, PKModel] = {
     "iv_1cmt": PKModel("iv_1cmt", "1-cmt IV (linear)", "IV linear", True, False,
         ("CL", "V"), {"CL": 5, "V": 50}, 1, 0, _allo("CL", "V"), _iv1, _cp_v, amat=_A_iv1),
@@ -267,6 +298,12 @@ REGISTRY: dict[str, PKModel] = {
         "PK/PD", False, True, ("CL", "V", "KA", "KIN", "KOUT", "EMAX", "EC50"),
         {"CL": 5, "V": 50, "KA": 1, "KIN": 10, "KOUT": 1, "EMAX": 4, "EC50": 2}, 3, 0,
         _allo("CL", "V"), _idr4_rhs, _cp_pkpd, init_state=_idr_init, eff=_eff_resp),
+    "pkpd_transit_lifespan": PKModel("pkpd_transit_lifespan",
+        f"Transit/lifespan PD ({_N_TRANSIT}-cmt)", "PK/PD", False, True,
+        ("CL", "V", "KA", "BASE", "EMAX", "EC50", "MTT"),
+        {"CL": 5, "V": 50, "KA": 1, "BASE": 100, "EMAX": 1.0, "EC50": 5, "MTT": 24},
+        2 + _N_TRANSIT, 0, _allo("CL", "V"), _lifespan_rhs, _cp_pkpd,
+        init_state=_lifespan_init, eff=_eff_count),
 }
 
 PK_KEYS = [k for k, m in REGISTRY.items() if not m.has_pd]

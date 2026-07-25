@@ -562,6 +562,59 @@ def _omega_prior(om: np.ndarray) -> _OmegaPrior:
     return _OmegaPrior(prec=Li.T @ Li, logdet=logdet)
 
 
+class _ThetaPrior(NamedTuple):
+    """A Gaussian prior on structural theta, on the LOG (estimation) scale — the
+    NONMEM ``$THETAP`` (mean) / ``$THETAPV`` (covariance) construct. ``penalty``
+    is the ``-2*log p(theta)`` term (up to a constant) added to the FOCE-I OFV so
+    the fit becomes a maximum-a-posteriori (MAP) estimate: informative priors from
+    a prior study (e.g. adults) pull the fit toward the prior, exactly the
+    frequentist-prior borrowing used for sparse pediatric data.
+    """
+    names: tuple[str, ...]
+    mu: np.ndarray            # log-scale prior means, aligned to names
+    prec: np.ndarray          # log-scale precision (Sigma^-1), (k, k)
+
+    def penalty(self, theta: dict[str, float]) -> float:
+        d = np.array([math.log(max(theta[n], _EPS)) for n in self.names]) - self.mu
+        return float(d @ self.prec @ d)
+
+
+def _build_theta_prior(spec: _PopSpec, prior: dict | None) -> _ThetaPrior | None:
+    """Build a :class:`_ThetaPrior` from a serializable spec
+    ``{"names", "mean_log", "cov_log"?, "sd_log"?}``, keeping only parameters the
+    model actually has. ``mean_log`` are log-scale prior means (e.g.
+    ``log(theta_adult)``); the covariance is on the same log scale (from the prior
+    study's ``theta_rse_pct`` -> diagonal, or a full covariance). Returns None when
+    no usable prior parameter remains."""
+    if not prior:
+        return None
+    names = list(prior.get("names") or [])
+    mean_log = list(prior.get("mean_log") or [])
+    if len(mean_log) != len(names):
+        return None
+    keep = [i for i, n in enumerate(names) if n in spec.param_names]
+    if not keep:
+        return None
+    mu = np.array([float(mean_log[i]) for i in keep], dtype=float)
+    cov_in = prior.get("cov_log")
+    if cov_in is not None:
+        c = np.asarray(cov_in, dtype=float)
+        if c.shape != (len(names), len(names)):   # malformed -> fail soft, not crash
+            return None
+        cov = c[np.ix_(keep, keep)]
+    else:
+        sd_in = prior.get("sd_log")
+        if sd_in is not None and len(sd_in) != len(names):
+            return None
+        sd = np.asarray(sd_in or [1.0] * len(names), dtype=float)[keep]
+        cov = np.diag(np.clip(sd, _EPS, None) ** 2)
+    try:
+        prec = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        prec = np.diag(1.0 / np.clip(np.diag(cov), 1e-8, None))
+    return _ThetaPrior(tuple(names[i] for i in keep), mu, 0.5 * (prec + prec.T))
+
+
 def _block_corr(om: np.ndarray) -> np.ndarray:
     """Correlation matrix of a covariance matrix (0 where a variance is 0)."""
     d = np.sqrt(np.maximum(np.diag(om), 0.0))
@@ -1316,14 +1369,18 @@ def _post_fit_uncertainty(spec: _PopSpec, subjects: list[_Subject],
                           omega2: dict[str, float], sigma_prop: float,
                           sigma_add: float, eta_hats: list[np.ndarray], *,
                           enabled: bool, converged: bool,
-                          omega_matrix: np.ndarray | None = None
+                          omega_matrix: np.ndarray | None = None,
+                          theta_prior: _ThetaPrior | None = None
                           ) -> dict[str, Any] | None:
     """Compute asymptotic uncertainty at the final estimates (FOCE-I & SAEM).
 
     Builds a clean OFV closure warm-started from the converged EBEs (so each
     perturbed Laplace pass starts at its mode and stays consistent), then defers
     to :func:`_parameter_uncertainty`. Returns ``None`` when disabled or when the
-    fit did not converge (uncertainty at a non-optimum is meaningless).
+    fit did not converge (uncertainty at a non-optimum is meaningless). With a
+    ``theta_prior`` the closure is the PENALIZED objective, so the Hessian is the
+    posterior precision (Fisher information + prior precision) and the reported SEs
+    are the MAP posterior SEs — tighter than the likelihood-only SEs.
     """
     if not (enabled and converged and subjects):
         return None
@@ -1336,6 +1393,8 @@ def _post_fit_uncertainty(spec: _PopSpec, subjects: list[_Subject],
         # block standard error would be wrong.
         val, _ = _population_ofv(spec, subjects, th, cc, om, sp, sa, final_etas,
                                  _omega_matrix(spec, xv))
+        if theta_prior is not None:
+            val += theta_prior.penalty(th)
         return val
 
     x_hat = _pack(spec, theta, cov_coefs, omega2, sigma_prop, sigma_add,
@@ -1452,7 +1511,8 @@ def focei_fit(model_key: str, subjects: list[dict], *,
               max_iter: int = 200, compute_uncertainty: bool = True,
               covariate_model: list[dict] | None = None,
               init: dict[str, Any] | None = None,
-              omega_block: list[str] | None = None) -> dict[str, Any]:
+              omega_block: list[str] | None = None,
+              theta_prior: dict | None = None) -> dict[str, Any]:
     """Fit a population PK model by FOCE-I (Laplace conditional estimation).
 
     Inner problem: per-subject conditional modes (EBEs). Outer problem: minimize
@@ -1486,6 +1546,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     spec = _PopSpec(model, iiv, error_model, cov_effects, omega_block=omega_block)
     n_obs = int(sum(s.t.size for s in prepared))
     cov0 = np.zeros(spec.n_cov, dtype=float)
+    tprior = _build_theta_prior(spec, theta_prior)   # None unless a usable prior
 
     # Degenerate guard: nothing usable -> return defaults, not converged.
     if not prepared:
@@ -1537,6 +1598,8 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         ofv, eta_hats = _population_ofv(
             spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"],
             _omega_matrix(spec, x))
+        if tprior is not None:                       # MAP: add -2*log-prior
+            ofv += tprior.penalty(theta)
         warm["eta"] = eta_hats
         if start_ofv["v"] is None:
             start_ofv["v"] = ofv
@@ -1556,8 +1619,13 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     x_final = np.asarray(res.x, dtype=float)
     theta, cc, omega2, s_prop, s_add = _unpack(spec, x_final)
     omega_m = _omega_matrix(spec, x_final)
-    final_ofv, eta_hats = _population_ofv(
+    final_ll, eta_hats = _population_ofv(
         spec, prepared, theta, cc, omega2, s_prop, s_add, warm["eta"], omega_m)
+    # MAP objective = likelihood OFV + prior penalty (0 without a prior); this is
+    # what Powell minimized and what start_ofv holds, so the converged check and
+    # the reported OFV both use it. ofv_likelihood keeps the penalty-free -2LL.
+    pen = tprior.penalty(theta) if tprior is not None else 0.0
+    final_ofv = final_ll + pen
     # Converged if the optimizer reports success, OR it exhausted its evaluation
     # budget at a finite OFV that improved on the starting value (a stabilized
     # optimum that simply did not trip Powell's strict tolerance test).
@@ -1569,13 +1637,23 @@ def focei_fit(model_key: str, subjects: list[dict], *,
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cc, omega2, s_prop, s_add, eta_hats,
-        enabled=compute_uncertainty, converged=converged, omega_matrix=omega_m)
+        enabled=compute_uncertainty, converged=converged, omega_matrix=omega_m,
+        theta_prior=tprior)
 
-    return _assemble(spec, "FOCE-I", model_key, theta, cc, omega2, s_prop, s_add,
-                     final_ofv, eta_hats, prepared, n_obs, converged,
-                     int(res.nit) if hasattr(res, "nit") else eval_count["n"],
-                     omega_matrix=omega_m,
-                     uncertainty=uncertainty)
+    result = _assemble(spec, "FOCE-I MAP" if tprior is not None else "FOCE-I",
+                       model_key, theta, cc, omega2, s_prop, s_add,
+                       final_ofv, eta_hats, prepared, n_obs, converged,
+                       int(res.nit) if hasattr(res, "nit") else eval_count["n"],
+                       omega_matrix=omega_m, uncertainty=uncertainty)
+    if tprior is not None:
+        prior_sd = np.sqrt(np.clip(np.diag(np.linalg.inv(tprior.prec)), 0.0, None))
+        result["map"] = True
+        result["ofv_likelihood"] = round(float(final_ll), 4)
+        result["theta_prior"] = {"names": list(tprior.names),
+                                 "mean_log": [round(float(v), 6) for v in tprior.mu],
+                                 "sd_log": [round(float(s), 6) for s in prior_sd],
+                                 "penalty": round(float(pen), 4)}
+    return result
 
 
 # ──────────────────────────────── SAEM ───────────────────────────────────────
@@ -1981,7 +2059,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
                    error_model: str = "proportional", max_iter: int = 200,
                    seed: int = 20250614, compute_uncertainty: bool = True,
                    covariate_model: list[dict] | None = None,
-                   omega_block: list[str] | None = None) -> dict[str, Any]:
+                   omega_block: list[str] | None = None,
+                   theta_prior: dict | None = None) -> dict[str, Any]:
     """Estimate a population PK model by the requested NLME method.
 
     Args:
@@ -2015,12 +2094,16 @@ def population_fit(model_key: str, subjects: list[dict], *,
     model = get_model(model_key)
     iiv = _resolve_iiv(model, iiv_params)
     m = method.lower().replace("-", "_")
+    # Informative theta priors (MAP) are implemented in the FOCE-I outer objective
+    # only; SAEM's M-step is a separate closed-form path that does not carry them.
+    if theta_prior and m != "focei":
+        raise ValueError("theta_prior (MAP estimation) requires method='focei'")
     if m == "focei":
         return focei_fit(model_key, subjects, iiv_params=iiv,
                          error_model=error_model, max_iter=max_iter,
                          compute_uncertainty=compute_uncertainty,
                          covariate_model=covariate_model,
-                         omega_block=omega_block)
+                         omega_block=omega_block, theta_prior=theta_prior)
     if m == "saem":
         return saem_fit(model_key, subjects, iiv_params=iiv,
                         error_model=error_model, max_iter=max(max_iter, 1),

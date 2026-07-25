@@ -438,16 +438,32 @@ class NlmeRequest(BaseModel):
     model_key: str | None = None
     iiv_params: list[str] | None = None
     error_model: str = "proportional"
+    prior_from: str | None = None        # "nlme" -> MAP with the stored fit as prior
+    prior_var: float | None = None       # prior variance (log scale); None -> from RSE%
 
 
 @app.post("/api/sessions/{sid}/nlme")
 def run_nlme(sid: str, req: NlmeRequest, sess=Depends(owned_session),
              actor: str = Depends(actor_id)) -> dict:
     """Submit the (slow) population fit as a background job; poll /jobs/{id}."""
-    body = req.model_dump()
+    body = req.model_dump(exclude_none=True)
     job_id = jobs.submit(session_id=sid, kind="nlme",
                          fn=lambda: orch.run_tool(sid, "run_nlme", "modeler", body, actor=actor))
     return {"job_id": job_id, "status": "running", "kind": "nlme"}
+
+
+class PriorCheckRequest(BaseModel):
+    n_draws: int = 500
+
+
+@app.post("/api/sessions/{sid}/prior_check")
+def run_prior_check(sid: str, req: PriorCheckRequest | None = None,
+                    sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_prior_check", "modeler", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 class SimestRequest(BaseModel):
