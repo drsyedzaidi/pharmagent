@@ -89,19 +89,75 @@ class Orchestrator:
 
     # -- persistence -------------------------------------------------------
     def _load_persisted(self) -> None:
+        from app.core.provenance import file_sha256  # local: keep import graph light
         for row in self.store.load_all():
             ctx = ToolContext(data_dir=str(settings.data_dir))
-            if row.get("dataset_path") and row.get("dataset_id"):
+            state = PharmState.model_validate(row["state"])
+            path, dsid = row.get("dataset_path"), row.get("dataset_id")
+            audit = AuditChain.from_list(row["audit"])
+            integrity_changed = False
+            if path and dsid:
+                recorded = (state.dataset_metadata or {}).get("dataset_sha256")
                 try:  # re-hydrate the dataset from disk (path is confined)
-                    ctx.dataset_store[row["dataset_id"]] = _read_dataset(row["dataset_path"])
+                    # file_sha256 returns "n/a" for a missing/unreadable file, which
+                    # must NOT be reported as tampering — distinguish the two.
+                    actual = file_sha256(path) if recorded else None
+                    if recorded and actual == "n/a":
+                        verdict = "file_missing"
+                    elif recorded and actual != recorded:
+                        verdict = "sha256_mismatch"
+                    else:
+                        verdict = None
+                    if verdict:
+                        # Fail closed: the file no longer matches the recorded
+                        # provenance hash (or is gone). Do NOT load it — analyses must
+                        # not run on unverifiable data — and flag it for an audited
+                        # re-import instead of silently trusting it.
+                        state = state.model_copy(update={"dataset_metadata":
+                            {**(state.dataset_metadata or {}), "dataset_integrity": verdict}})
+                        # Part 11: a detection that leaves no trace is not a control.
+                        # Record it once — only on the transition into the failed
+                        # state — so a restart loop cannot pad the chain. The
+                        # transition is durable (persisted below); otherwise every
+                        # restart would re-detect and the finding would never survive.
+                        if (row["state"].get("dataset_metadata") or {}).get(
+                                "dataset_integrity") != verdict:
+                            audit.append(
+                                agent="system", tool="dataset_integrity",
+                                action=f"integrity_check_failed({verdict})",
+                                inputs={"dataset_id": dsid, "recorded_sha256": recorded},
+                                outputs={"observed_sha256": actual, "loaded": False},
+                                timestamp=self.clock(), actor="system",
+                                reason="dataset failed its recorded sha256 on rehydration")
+                            log.warning("dataset integrity %s for session %s (%s)",
+                                        verdict, row["id"], dsid)
+                            integrity_changed = True
+                    else:
+                        ctx.dataset_store[dsid] = _read_dataset(path)
+                        if (state.dataset_metadata or {}).get("dataset_integrity"):
+                            # The digest matches again (file restored, or re-imported),
+                            # so clear the flag — a sticky failure would otherwise mark
+                            # the session tampered forever, and _persist would write
+                            # that stale verdict back into stored provenance.
+                            md = dict(state.dataset_metadata or {})
+                            md.pop("dataset_integrity", None)
+                            state = state.model_copy(update={"dataset_metadata": md})
+                            integrity_changed = True
                 except Exception:
-                    pass  # dataset file gone — session still usable for review/audit
-            self.sessions[row["id"]] = Session(
-                id=row["id"], state=PharmState.model_validate(row["state"]),
-                ctx=ctx, audit=AuditChain.from_list(row["audit"]),
+                    pass  # unreadable/corrupt file — session still usable for review/audit
+            sess = Session(
+                id=row["id"], state=state,
+                ctx=ctx, audit=audit,
                 history=row["history"], pending_review=row["pending"],
                 params=row["params"], owner=row["owner"], created_at=row["created_at"],
                 commands=row.get("commands") or [])
+            self.sessions[row["id"]] = sess
+            if integrity_changed:
+                # Write the verdict AND its audit entry back, or the detection lives
+                # only in this process: the next restart would re-read the original
+                # row, re-detect, and the finding would never become part of the
+                # record. Persisting also makes the transition test above correct.
+                self._persist(sess)
 
     def _persist(self, sess: Session) -> None:
         self.store.save(
@@ -170,38 +226,43 @@ class Orchestrator:
     def run_pk_model(self, sid: str, *, model_key: str | None = None,
                      compare: bool = False, models: list[str] | None = None,
                      actor: str | None = None) -> dict[str, Any]:
-        sess = self.get_session(sid)
-        sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "modeler"})
-        args: dict[str, Any] = {}
-        if model_key:
-            args["model_key"] = model_key
-        if compare:
-            args["compare"] = True
-        if models:
-            args["models"] = models
-        sess.state, res = self.registry.execute(
-            "fit_pk_model", state=sess.state, ctx=sess.ctx,
-            args=args, audit=sess.audit, timestamp=self.clock(), actor=actor or "",
-        )
-        self._log_command(sess, "modeler", "fit_pk_model", args)
-        self._persist(sess)
-        return {"agent": "modeler", "tool": "fit_pk_model", "summary": res.summary,
-                "state": sess.state.model_dump(), "result": res.result,
-                "audit_ok": sess.audit.verify()}
+        # Serialize with every other mutation of this session (like run_tool):
+        # this path mutates state, audit, commands and persists, so concurrent
+        # requests without the lock can lose updates or persist a torn snapshot.
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "modeler"})
+            args: dict[str, Any] = {}
+            if model_key:
+                args["model_key"] = model_key
+            if compare:
+                args["compare"] = True
+            if models:
+                args["models"] = models
+            sess.state, res = self.registry.execute(
+                "fit_pk_model", state=sess.state, ctx=sess.ctx,
+                args=args, audit=sess.audit, timestamp=self.clock(), actor=actor or "",
+            )
+            self._log_command(sess, "modeler", "fit_pk_model", args)
+            self._persist(sess)
+            return {"agent": "modeler", "tool": "fit_pk_model", "summary": res.summary,
+                    "state": sess.state.model_dump(), "result": res.result,
+                    "audit_ok": sess.audit.verify()}
 
     def simulate_pk(self, sid: str, params: dict[str, Any],
                     actor: str | None = None) -> dict[str, Any]:
-        sess = self.get_session(sid)
-        sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "simulator"})
-        sess.state, res = self.registry.execute(
-            "simulate_pk_profile", state=sess.state, ctx=sess.ctx,
-            args=params or {}, audit=sess.audit, timestamp=self.clock(), actor=actor or "",
-        )
-        self._log_command(sess, "simulator", "simulate_pk_profile", params or {})
-        self._persist(sess)
-        return {"agent": "simulator", "tool": "simulate_pk_profile", "summary": res.summary,
-                "state": sess.state.model_dump(), "result": res.result,
-                "audit_ok": sess.audit.verify()}
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "simulator"})
+            sess.state, res = self.registry.execute(
+                "simulate_pk_profile", state=sess.state, ctx=sess.ctx,
+                args=params or {}, audit=sess.audit, timestamp=self.clock(), actor=actor or "",
+            )
+            self._log_command(sess, "simulator", "simulate_pk_profile", params or {})
+            self._persist(sess)
+            return {"agent": "simulator", "tool": "simulate_pk_profile", "summary": res.summary,
+                    "state": sess.state.model_dump(), "result": res.result,
+                    "audit_ok": sess.audit.verify()}
 
     def run_tool(self, sid: str, tool: str, agent: str, args: dict[str, Any],
                  actor: str | None = None) -> dict[str, Any]:
@@ -255,6 +316,13 @@ class Orchestrator:
         return {
             "goal": result.get("goal", goal or ""),
             "goal_met": result.get("goal_met", False),
+            # Carry the verdict and its caveats through: "not goal_met" alone cannot
+            # distinguish real blocking findings from a review that had no raw data
+            # to verify against (UNVERIFIABLE) or nothing to inspect (INCOMPLETE).
+            "status": result.get("status", ""),
+            "unverifiable": result.get("unverifiable", False),
+            "unverifiable_reason": result.get("unverifiable_reason", ""),
+            "checked": result.get("checked", {}),
             "iterations": len(passes),
             "passes": passes,
             "findings": result.get("findings", []),

@@ -727,6 +727,25 @@ def export_cdisc(sid: str, sess=Depends(owned_session)) -> Response:
         raise HTTPException(404, "run NCA first — no parameters to export as ADaM")
     roles = (sess.state.dataset_metadata or {}).get("detected_roles", {})
     df = sess.ctx.dataset_store.get(sess.state.dataset_id)
+    # Refuse rather than ship a package whose ADPP is fully populated while ADPC is
+    # silently empty — that reads as a complete submission dataset. Check the built
+    # ADPC itself, not just `df is None`: build_adpc also yields zero rows when the
+    # ID/TIME/DV roles are unmapped, or when every DV is non-numeric.
+    if df is None:
+        integrity = (sess.state.dataset_metadata or {}).get("dataset_integrity")
+        raise HTTPException(409, (
+            f"source dataset unavailable ({integrity}) — ADPC would be empty; "
+            "re-import the dataset before exporting"
+            if integrity else
+            "source dataset not loaded — ADPC would be empty; load the dataset first"))
+    missing = [r for r in ("ID", "TIME", "DV") if r not in set(roles.values())]
+    if missing:
+        raise HTTPException(409, f"ADPC would be empty: unmapped role(s) {missing} — "
+                                 "set the dataset roles before exporting")
+    adpc_rows, _ = cdisc.build_adpc(df, roles, sess.state)
+    if not adpc_rows:
+        raise HTTPException(409, "ADPC would be empty: no usable concentration "
+                                 "records in the source dataset")
     body = cdisc.build_package(sess.state, df, roles)
     return Response(content=body, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"'})

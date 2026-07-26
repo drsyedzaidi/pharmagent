@@ -39,10 +39,11 @@ _ADPP_PARAMS: dict[str, tuple[str, str]] = {
 
 
 def _csv_bytes(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
+    from app.core.exporters import sanitize_cell  # shared formula-injection guard
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
     w.writeheader()
-    w.writerows(rows)
+    w.writerows({k: sanitize_cell(v) for k, v in r.items()} for r in rows)
     return buf.getvalue().encode("utf-8")
 
 

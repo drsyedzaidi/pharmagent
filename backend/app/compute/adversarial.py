@@ -347,13 +347,28 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
     # Fail closed: a review that had nothing to inspect must not report GOAL MET —
     # otherwise an empty/mismatched state silently rubber-stamps as passing.
     nothing_checked = not any(checked.values())
-    goal_met = (len(unresolved_blocking) == 0) and not nothing_checked
+    # Fail closed again, one level up: this reviewer's whole point is to recompute
+    # the reported numbers from the RAW data. With NCA results present but no
+    # dataset to recompute from (file never loaded, or withheld because it failed
+    # its recorded sha256), the strongest checks silently do not run — so the
+    # honest verdict is UNVERIFIABLE, not "goal met". Reporting approval here would
+    # turn a data-integrity failure into a clean bill of health.
+    unverifiable = bool(params) and not checked["nca_recompute"]
+    goal_met = (len(unresolved_blocking) == 0) and not nothing_checked and not unverifiable
+    status = ("INCOMPLETE" if nothing_checked else
+              "UNVERIFIABLE" if unverifiable else
+              "GOAL MET" if goal_met else "FINDINGS BLOCK GOAL")
     return {
         "goal": goal,
         "goal_met": goal_met,
+        "status": status,
         "findings": findings,
         "counts": counts,
         "n_findings": len(findings),
         "nothing_checked": nothing_checked,
+        "unverifiable": unverifiable,
+        "unverifiable_reason": ("NCA parameters are reported but the raw dataset is "
+                                "unavailable, so they could not be independently "
+                                "recomputed") if unverifiable else "",
         "checked": checked,
     }
