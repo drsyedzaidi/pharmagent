@@ -324,7 +324,10 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
                 continue  # degenerate simulated column
             less = float(np.count_nonzero(finite < obs_val))
             equal = float(np.count_nonzero(finite == obs_val))
-            f = (less + 0.5 * equal) / n_sim
+            # Denominator is the number of FINITE draws, not n_sim: counting the
+            # rank over finite draws while dividing by n_sim would deflate the
+            # mid-rank probability whenever some simulated draws are non-finite.
+            f = (less + 0.5 * equal) / finite.size
             f = min(max(f, clip_lo), clip_hi)
             times.append(float(obs_t[j]))
             pred.append(float(col_median[j]))

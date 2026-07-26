@@ -49,9 +49,16 @@ def _draw_theta_prior(theta_prior: dict, n: int, rng: np.random.Generator
 def prior_predictive_check(
     model_key: str, *, theta_prior: dict, base_theta: dict, dose: float, tau: float,
     n_doses: int, obs_times: list[float] | None = None, obs_conc: list[float] | None = None,
-    n_draws: int = 500, seed: int = 20250614, n_points: int = 80, wt: float = 70.0,
+    sigma: dict | None = None, n_draws: int = 500, seed: int = 20250614,
+    n_points: int = 80, wt: float = 70.0,
 ) -> dict:
-    """Prior-predictive concentration band + observed-data coverage.
+    """Prior-predictive band for NEW OBSERVATIONS + observed-data coverage.
+
+    Draws structural parameters from the prior, simulates, and — when ``sigma``
+    (``{"prop", "add"}``) is supplied — adds one residual-error realization per
+    draw, so the band is the prior-predictive of a measured concentration (which
+    carries residual scatter), not of the residual-free structural prediction.
+    Comparing observed DV to a residual-free band would bias coverage low.
 
     Parameters not carried by the prior are held at ``base_theta`` (the fitted or
     default structural values). Returns ``{status, model_key, n_draws, band:
@@ -61,11 +68,14 @@ def prior_predictive_check(
         return {"status": "no_prior", "message": "no prior supplied for the predictive check."}
     n_draws = int(max(1, n_draws))
     model = get_model(model_key)
-    names, draws = _draw_theta_prior(theta_prior, n_draws, np.random.default_rng(seed))
+    rng = np.random.default_rng(seed)
+    names, draws = _draw_theta_prior(theta_prior, n_draws, rng)
     tau = float(tau)
     n_doses = int(max(1, n_doses))
     tmax = tau * n_doses
     base = {**model.defaults, **{k: float(v) for k, v in base_theta.items()}}
+    s_prop = float((sigma or {}).get("prop") or 0.0)
+    s_add = float((sigma or {}).get("add") or 0.0)
 
     curves = []
     times = None
@@ -75,6 +85,9 @@ def prior_predictive_check(
                                   tmax=tmax, n_points=n_points, wt=float(wt))
         cp = np.asarray(sim["cp"], dtype=float)
         if np.all(np.isfinite(cp)):
+            if s_prop or s_add:                    # add the observation model
+                sd = np.sqrt(s_add ** 2 + (s_prop * cp) ** 2)
+                cp = cp + sd * rng.standard_normal(cp.shape)
             curves.append(cp)
             times = np.asarray(sim["times"], dtype=float)
     if not curves or times is None:

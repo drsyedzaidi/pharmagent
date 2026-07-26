@@ -40,6 +40,15 @@ def test_nonmem_iv_2cmt_advan3_trans4():
     assert "V1" in ctl and "V2" in ctl and "S1 = V1" in ctl
 
 
+def test_mrgsolve_flags_categorical_covariate():
+    # A fitted categorical effect can't be auto-coded cleanly, so the mrgsolve
+    # export must flag it for manual coding (mirroring build_nonmem) rather than
+    # silently drop it and diverge from the fitted model.
+    cpp = build_mrgsolve(_fit(cov=[{"param": "CL", "covariate": "SEX", "kind": "categorical",
+                                    "levels": ["1.0"], "coefficient": {"1.0": -0.2}}]))
+    assert "NOTE" in cpp and "SEX" in cpp and "categorical" in cpp
+
+
 def test_mrgsolve_oral_1cmt_has_ode_and_blocks():
     cpp = build_mrgsolve(_fit())
     assert "$ODE" in cpp and "dxdt_DEPOT = -KA*DEPOT" in cpp

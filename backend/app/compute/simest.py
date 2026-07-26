@@ -317,9 +317,11 @@ def run_simest(model_key: str, design: dict[str, Any], nlme_result: dict[str, An
         truth_p = float(theta[p])
         point_vals = np.array([e["theta"][p] for e in evaluated], dtype=float)
         gm = float(np.exp(np.mean(np.log(point_vals)))) if point_vals.size else None
-        rel_bias_pct = 100.0 * (gm / truth_p - 1.0) if gm is not None else None
+        # Guard truth_p == 0 (would ZeroDivisionError on the pure-float divide and
+        # violate the never-raise contract) — relative metrics are undefined there.
+        rel_bias_pct = 100.0 * (gm / truth_p - 1.0) if (gm is not None and truth_p) else None
         rmse_pct = (100.0 * math.sqrt(float(np.mean((point_vals / truth_p - 1.0) ** 2)))
-                   if point_vals.size else None)
+                   if (point_vals.size and truth_p) else None)
         cv_across_pct = (100.0 * float(np.std(point_vals, ddof=1)) / float(np.mean(point_vals))
                          if point_vals.size >= 2 else None)
 

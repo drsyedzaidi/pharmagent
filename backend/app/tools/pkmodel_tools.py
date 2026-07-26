@@ -471,6 +471,14 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     if nl is not None and nl.get("model_key") != model_key:
         nl = None
     cov_effects = (nl or {}).get("covariate_effects") if nl else None
+    # Single provenance: if we adopt the NLME covariate model, take that fit's
+    # theta AND between-subject variability too — never layer an NLME covariate
+    # model onto two-stage typical values (a hybrid that is neither validated fit).
+    if cov_effects and nl.get("theta"):
+        typical = {**model.defaults, **nl["theta"]}
+        if nl.get("omega_cv_pct"):
+            iiv = nl["omega_cv_pct"]
+            iiv_params = list(nl.get("iiv_params") or iiv_params)
     cov_rows, wt_rows = _covariate_rows(state, ctx)
 
     base = float(args.get("dose", 100.0))
@@ -664,15 +672,23 @@ def run_special_population(state: PharmState, ctx: ToolContext, args: dict[str, 
     nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
     scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
     cov_effects = None
+    # Single provenance: when we adopt a fit's covariate model, take that fit's
+    # theta AND between-subject variability (omega), never mix with the two-stage IIV.
     if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
         final = scm_outer["final"]
         if final.get("model_key") == model_key:
             cov_effects = final.get("covariate_effects")
             typical = {**model.defaults, **(final.get("theta") or typical)}
+            if final.get("omega_cv_pct"):
+                iiv = final["omega_cv_pct"]
+                iiv_params = list(final.get("iiv_params") or iiv_params)
     if cov_effects is None and nl and nl.get("model_key") == model_key:
         cov_effects = nl.get("covariate_effects")
         if cov_effects and nl.get("theta"):
             typical = {**model.defaults, **nl["theta"]}
+            if nl.get("omega_cv_pct"):
+                iiv = nl["omega_cv_pct"]
+                iiv_params = list(nl.get("iiv_params") or iiv_params)
 
     # Population source: the analysis dataset (default) or a synthetic representative
     # adult population spanning renal categories (when the dataset lacks renal spread).
@@ -812,15 +828,22 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
     nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
     scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
     cov_effects = None
+    # Single provenance: adopt the covariate model's fit theta AND omega together.
     if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
         final = scm_outer["final"]
         if final.get("model_key") == model_key:
             cov_effects = final.get("covariate_effects")
             typical = {**model.defaults, **(final.get("theta") or typical)}
+            if final.get("omega_cv_pct"):
+                iiv = final["omega_cv_pct"]
+                iiv_params = list(final.get("iiv_params") or iiv_params)
     if cov_effects is None and nl and nl.get("model_key") == model_key:
         cov_effects = nl.get("covariate_effects")
         if cov_effects and nl.get("theta"):
             typical = {**model.defaults, **nl["theta"]}
+            if nl.get("omega_cv_pct"):
+                iiv = nl["omega_cv_pct"]
+                iiv_params = list(nl.get("iiv_params") or iiv_params)
 
     # Model-estimated allometric exponents (opt-in): a WT-CL and WT-V exponent
     # (e.g. 0.663 / 1.087) replacing the built-in fixed 0.75 / 1.0. Applied to the
@@ -1012,7 +1035,8 @@ def run_prior_check(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
             ppc = prior_predictive_check(
                 model_key, theta_prior=nl["theta_prior"], base_theta=nl.get("theta") or {},
                 dose=float(np.median(doses)), tau=tmax, n_doses=1,
-                obs_times=obs_t, obs_conc=obs_c, n_draws=int(args.get("n_draws", 500)),
+                obs_times=obs_t, obs_conc=obs_c, sigma=nl.get("sigma"),
+                n_draws=int(args.get("n_draws", 500)),
                 wt=float(np.median(wts)) if wts else 70.0)
     payload = {"status": "ok", "model_key": model_key, "label": nl.get("label"),
                "prior_predictive": ppc, "diagnostic": diag}

@@ -246,7 +246,10 @@ def run_profile(*, profile_ofv_fn: Callable[[str, float], float],
         # A dOFV below zero means the constrained fit BEAT the reported optimum:
         # the original fit was not converged. That is a finding about the fit,
         # not about the interval, and it invalidates the profile built on it.
-        neg = lower["negative_dofv_at"] or upper["negative_dofv_at"]
+        # `is not None`, not truthiness: negative_dofv_at is a parameter COORDINATE,
+        # so a valid detection at exactly 0.0 must not be discarded as falsy.
+        neg = (lower["negative_dofv_at"] if lower["negative_dofv_at"] is not None
+               else upper["negative_dofv_at"])
         if neg is not None:
             better_than_optimum.append({"parameter": name, "at_value": _round(neg)})
 

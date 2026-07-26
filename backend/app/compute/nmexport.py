@@ -262,8 +262,14 @@ def build_mrgsolve(nl: dict) -> str | None:
     # $MAIN: realize individual parameters (+ covariate effects + IIV).
     main: list[str] = []
     cov_by_param: dict[str, list[str]] = {}
+    cov_notes: list[str] = []
     for ce in cov_effects:
         if ce.get("kind") == "categorical":
+            # Categorical effects are not auto-coded (no clean $PARAM column) —
+            # flag them for manual $MAIN if-block coding, mirroring build_nonmem,
+            # so the export is honestly incomplete rather than silently wrong.
+            cov_notes.append(f"// NOTE: covariate {ce['covariate']} on {ce['param']} is "
+                             f"categorical — add an if/else multiplier in $MAIN manually.")
             continue
         cov_by_param.setdefault(ce["param"], []).append(_mrg_cov_multiplier(ce))
     for our, _ in spec["map"]:
@@ -335,6 +341,7 @@ def build_mrgsolve(nl: dict) -> str | None:
     label = nl.get("label", nl.get("model_key", "model"))
     out = [
         f"// PharmAgent export — {label}",
+        *cov_notes,
         "$PARAM " + ", ".join(param_kv),
         "$CMT " + " ".join(cmts),
         omega_block_str,

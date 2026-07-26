@@ -214,7 +214,8 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
     * ``"pred"`` (default): prediction correction,
       ``pcY = y * median_bin(PRED) / PRED`` (Bergstrand et al. 2011).
     * ``"dose"``: dose normalization, ``pcY = y * dose_ref / dose_i`` with
-      ``dose_ref`` the modal first-dose amount. This is the dose-normalized VPC
+      ``dose_ref`` the median dose (a robust common reference; only sets the
+      shared scale, so any consistent choice is valid). This is the dose-normalized VPC
       the FDA-cited course recommends for pooling across dose groups; pooling
       raw concentrations instead lets the lowest dose set the lower band and the
       highest set the upper, which is misleading.
@@ -307,8 +308,8 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
     if correction == "pred":
         corr = bin_pred[bin_idx] / np.where(pred_all > 0, pred_all, np.nan)
     elif correction == "dose":
-        # Normalize every observation to a common reference dose (the modal
-        # first-dose amount), so all dose groups share one comparable scale.
+        # Normalize every observation to a common reference dose (the median
+        # dose, a robust common reference), so all dose groups share one scale.
         finite_dose = dose_all[valid & np.isfinite(dose_all) & (dose_all > 0)]
         dose_ref = float(np.median(finite_dose)) if finite_dose.size else 1.0
         corr = dose_ref / np.where(dose_all > 0, dose_all, np.nan)

@@ -2531,7 +2531,8 @@ def map_estimate(model_key: str, *, theta: dict[str, float],
                  iiv_params: list[str], obs_t, obs_c, doses: list[dict],
                  wt: float = 70.0, cov: dict | None = None,
                  covariate_effects: list[dict] | None = None,
-                 error_model: str = "proportional") -> dict[str, Any]:
+                 error_model: str = "proportional",
+                 omega_matrix: list | np.ndarray | None = None) -> dict[str, Any]:
     """Maximum-a-posteriori (empirical-Bayes) estimate of a NEW patient's random
     effects from sparse observations, given fitted population parameters.
 
@@ -2554,12 +2555,23 @@ def map_estimate(model_key: str, *, theta: dict[str, float],
     # used elsewhere and avoids a KeyError when a caller passes a partial omega.
     omega2_vec = np.array([max(omega2.get(p, _OMEGA_FLOOR), _OMEGA_FLOOR)
                            for p in spec.iiv_params], dtype=float)
+    # A correlated (block) population Omega must enter the eta prior as the full
+    # precision, or an observed CL deviation could not inform V. Diagonal fits
+    # (omega_matrix=None) keep the marginal-variance penalty, unchanged.
+    prior = None
+    if omega_matrix is not None:
+        om = np.asarray(omega_matrix, dtype=float)
+        if om.shape == (spec.n_omega, spec.n_omega) and np.any(om - np.diag(np.diag(om))):
+            try:
+                prior = _omega_prior(0.5 * (om + om.T))
+            except (np.linalg.LinAlgError, ValueError):
+                prior = None
     if subj.t.size == 0:                          # no levels -> fall back to typical
         eta_hat = np.zeros(spec.n_omega, dtype=float)
         obj = float("nan")
     else:
         eta_hat, obj, _ = _conditional_mode(
-            spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add)
+            spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add, prior=prior)
     p_ind = _individual_params(spec, theta_i, eta_hat)
     return {
         "eta": {p: round(float(eta_hat[k]), 6) for k, p in enumerate(spec.iiv_params)},
@@ -2984,14 +2996,21 @@ def profile_ofv_factory(model_key: str, subjects: list[dict],
 
         if not free:
             return obj(np.array([]))
-        start = warm.get(param)
+        # Warm-start per (param, SIDE): the lower and upper profile sides are
+        # walked separately, so sharing one cache would seed the upper side's
+        # first point from the distant lower-crossing solution and — under the
+        # tight inner feval cap — fail to re-optimize back, biasing the CI inward.
+        # Keying by side makes each side's first point start ~1 SE from the
+        # estimate (x_hat) and each later point warm-start from its same-side neighbor.
+        key = (param, fixed_log >= float(x_hat[j]))
+        start = warm.get(key)
         if start is None or start.size != len(free):
             start = x_hat[free]
         res = minimize(obj, start, method="Powell",
                        options={"maxiter": _PROFILE_INNER_ITER,
                                 "maxfev": _PROFILE_INNER_FEV,
                                 "xtol": 1e-2, "ftol": 1e-2})
-        warm[param] = np.asarray(res.x, dtype=float)
+        warm[key] = np.asarray(res.x, dtype=float)
         return float(res.fun)
 
     theta = {p: float(v) for p, v in (nlme_result.get("theta") or {}).items()

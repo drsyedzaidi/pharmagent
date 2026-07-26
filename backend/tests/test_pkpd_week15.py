@@ -186,6 +186,49 @@ def test_prior_predictive_band_and_coverage():
                                   dose=100, tau=24, n_doses=1)["status"] == "no_prior"
 
 
+def test_prior_predictive_includes_residual_error():
+    # The band must reflect the observation model (residual), not just the
+    # structural prediction — otherwise coverage of scattered DV is biased low.
+    m = get_model(MK)
+    sim = simulate_timecourse(m, {"CL": 7.0, "V": 50.0, "KA": 1.0}, dose=100, tau=8,
+                              n_doses=1, tmax=8, n_points=200)
+    ts = np.array(sim["times"])
+    ot = [0.5, 1, 2, 4, 8]
+    oc = [float(np.interp(x, ts, sim["cp"])) for x in ot]
+    prior = {"names": ["CL", "V"], "mean_log": [math.log(5.0), math.log(50.0)],
+             "cov_log": [[0.005, 0], [0, 0.01]]}
+    no_sig = prior_predictive_check(MK, theta_prior=prior, base_theta={"CL": 5, "V": 50, "KA": 1},
+                                    dose=100, tau=8, n_doses=1, obs_times=ot, obs_conc=oc, n_draws=300)
+    with_sig = prior_predictive_check(MK, theta_prior=prior, base_theta={"CL": 5, "V": 50, "KA": 1},
+                                      dose=100, tau=8, n_doses=1, obs_times=ot, obs_conc=oc,
+                                      sigma={"prop": 0.2, "add": 0.0}, n_draws=300)
+    assert with_sig["coverage_pct"] >= no_sig["coverage_pct"]     # residual widens the band
+
+
+def test_map_estimate_block_omega_uses_correlated_prior():
+    # A correlated (block) Omega must enter the individual MAP as the full
+    # precision — an observed CL deviation should then inform V. Diagonal path
+    # (omega_matrix=None) is unchanged.
+    from app.compute.nlme import map_estimate
+    m = get_model(MK)
+    th = {"CL": 5.0, "V": 50.0, "KA": 1.0}
+    om2 = {"CL": 0.09, "V": 0.09}
+    sd = np.sqrt([0.09, 0.09])
+    om = np.outer(sd, sd) * np.array([[1.0, 0.9], [0.9, 1.0]])
+    sim = simulate_timecourse(m, {"CL": 7.0, "V": 50.0, "KA": 1.0}, dose=100, tau=24,
+                              n_doses=1, tmax=24, n_points=200)
+    ts = np.array(sim["times"])
+    ot, oc = [1.0, 4.0], [float(np.interp(x, ts, sim["cp"])) for x in [1.0, 4.0]]
+    kw = dict(theta=th, omega2=om2, sigma_prop=0.1, sigma_add=0.0, iiv_params=["CL", "V"],
+              obs_t=ot, obs_c=oc, doses=[{"time": 0, "amt": 100}])
+    diag = map_estimate(MK, **kw)
+    block = map_estimate(MK, omega_matrix=om.tolist(), **kw)
+    assert abs(diag["eta"]["V"] - block["eta"]["V"]) > 1e-3
+    # a diagonal matrix passed as omega_matrix must reproduce the diagonal MAP
+    dm = map_estimate(MK, omega_matrix=np.diag([0.09, 0.09]).tolist(), **kw)
+    assert dm["eta"]["V"] == pytest.approx(diag["eta"]["V"], abs=1e-6)
+
+
 def test_prior_posterior_shrinkage_in_range():
     subs = _sparse_peds()
     fit = population_fit(MK, subs, method="focei", iiv_params=["CL", "V"], theta_prior=_ADULT_PRIOR)
