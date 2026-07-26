@@ -31,15 +31,23 @@ export function FlexplotPanel({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState('');
   const reqId = useRef(0);
 
-  // Load the variable list and seed the initial selection.
+  // Load the variable list and seed the initial selection. Every setState below
+  // sits inside an async callback: setting state synchronously in an effect body
+  // triggers a cascading render (react-hooks/set-state-in-effect), so the
+  // loading/error resets live in the promise handlers and in patchSpec instead.
   useEffect(() => {
     let cancelled = false;
-    setError('');
     api.variables(sessionId)
       .then(res => {
         if (cancelled) return;
+        setError('');
         setVariables(res.variables);
-        setSpec(seedSpec(res.variables, res.detected_roles));
+        const seeded = seedSpec(res.variables, res.detected_roles);
+        // Seeding a usable spec starts the plot fetch below, so enter the loading
+        // state with it — but only when that fetch will actually run, or the
+        // spinner would never clear.
+        if (seeded?.y) setLoading(true);
+        setSpec(seeded);
       })
       .catch(e => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
@@ -50,18 +58,23 @@ export function FlexplotPanel({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!spec?.y) return;
     const id = ++reqId.current;
-    setLoading(true);
-    setError('');
     api.flexplot(sessionId, spec)
       .then(res => {
         if (id !== reqId.current) return;
+        setError('');
         setData(res.state.flexplot_data);
       })
       .catch(e => { if (id === reqId.current) setError((e as Error).message); })
       .finally(() => { if (id === reqId.current) setLoading(false); });
   }, [sessionId, spec]);
 
-  const patchSpec = (patch: Partial<FlexplotSpec>) =>
+  const patchSpec = (patch: Partial<FlexplotSpec>) => {
+    // Changing the spec is what triggers the refetch, so the loading state is
+    // owned by this event handler rather than by the effect that reacts to it.
+    if (spec) {
+      setLoading(true);
+      setError('');
+    }
     setSpec(s => {
       if (!s) return s;
       const next = { ...s, ...patch };
@@ -73,6 +86,7 @@ export function FlexplotPanel({ sessionId }: { sessionId: string }) {
       if (next.panel_by && (next.panel_by === next.y || next.panel_by === next.x)) next.panel_by = null;
       return next;
     });
+  };
   const patchOpts = (patch: Partial<ChartOpts>) =>
     setOpts(o => ({ ...o, ...patch }));
 

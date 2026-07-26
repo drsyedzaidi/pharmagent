@@ -2676,11 +2676,14 @@ function RolesEditor({ state, onApply, loading }:
 }
 
 function SimChart({ sim }: { sim: PharmState['simulation_results'] }) {
+  // Hooks must run unconditionally and in the same order every render — keep this
+  // above the early return, or a not-run -> ok transition changes hook order and
+  // React throws "Rendered more hooks than during the previous render."
+  const [logY, setLogY] = useState(false);
   if (!sim || sim.status !== 'ok' || !sim.times || !sim.cp) {
     return <div className="qc-card conditional"><div className="qc-title">Simulation — not run</div>
       <div style={{ fontSize: 12 }}>{sim?.message}</div></div>;
   }
-  const [logY, setLogY] = useState(false);
   const W = 580, H = 240, ml = 48, mr = sim.eff ? 48 : 16, mt = 12, mb = 32;
   const t = sim.times, cp = sim.cp, eff = sim.eff;
   const tmax = Math.max(...t) || 1;
