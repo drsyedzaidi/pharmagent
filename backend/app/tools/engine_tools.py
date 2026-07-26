@@ -174,5 +174,6 @@ TOOLS = [
             },
         },
         run=run_engine_comparison,
+        expensive=True,   # multi-engine fit — job-backed endpoint only, never in a chat turn
     ),
 ]

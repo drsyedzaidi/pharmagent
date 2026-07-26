@@ -1624,7 +1624,7 @@ TOOLS = [
                          "prior_from": {"type": "string", "enum": ["nlme"]},
                          "prior_var": {"type": "number"}},
           "required": []},
-         run_nlme),
+         run_nlme, expensive=True),
     Tool("run_prior_check",
          "Bayesian-borrowing diagnostics for a MAP (informative-prior) fit: a "
          "prior-predictive concentration band vs the observed data (with coverage%) "
@@ -1651,7 +1651,7 @@ TOOLS = [
                          "backward_p": {"type": "number"},
                          "max_iter": {"type": "integer"}},
           "required": []},
-         run_scm),
+         run_scm, expensive=True),
     Tool("forecast_map",
          "MAP / empirical-Bayes forecast: from the fitted population (NLME) model "
          "and a new patient's sparse measured levels, estimate their individual PK, "

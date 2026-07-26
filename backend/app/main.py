@@ -16,7 +16,7 @@ from app.core import cdisc, exporters
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
-from app.workflows import WORKFLOWS
+from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
 log = logging.getLogger("pharmagent")
@@ -329,22 +329,36 @@ def set_roles(sid: str, req: RolesRequest, sess=Depends(owned_session),
     return orch.set_roles(sid, req.overrides, actor=actor, reason=req.reason)
 
 
+def _start_workflow(sid: str, name: str, params: dict | None, actor: str) -> dict:
+    """Start a workflow, handing the leg to the job queue if it reaches a long fit.
+
+    Admission control, not convenience: a leg containing run_nlme/run_scm/
+    run_engine_comparison must not occupy a request thread or bypass the
+    JobManager's concurrency caps, so it is submitted and polled instead.
+    """
+    try:
+        wf = get_workflow(name)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    if orch.workflow_needs_job(wf, 0):
+        job_id = jobs.submit(
+            session_id=sid, kind="workflow_start",
+            fn=lambda: orch.start_workflow(sid, name, params, actor=actor,
+                                           allow_expensive=True))
+        return {"job_id": job_id, "status": "running", "kind": "workflow_start"}
+    return orch.start_workflow(sid, name, params, actor=actor)
+
+
 @app.post("/api/sessions/{sid}/workflow/start")
 def start_workflow_v2(sid: str, req: WorkflowStartRequest, sess=Depends(owned_session),
                       actor: str = Depends(actor_id)) -> dict:
-    try:
-        return orch.start_workflow(sid, req.workflow, req.params, actor=actor)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+    return _start_workflow(sid, req.workflow, req.params, actor)
 
 
 @app.post("/api/sessions/{sid}/workflow")
 def start_workflow(sid: str, req: WorkflowRequest, sess=Depends(owned_session),
                    actor: str = Depends(actor_id)) -> dict:
-    try:
-        return orch.start_workflow(sid, req.name, req.params, actor=actor)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+    return _start_workflow(sid, req.name, req.params, actor)
 
 
 @app.post("/api/sessions/{sid}/workflow/resume")
@@ -352,13 +366,28 @@ def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
                     actor: str = Depends(actor_id)) -> dict:
     # A rejection does no compute — it records the signed decision and returns,
     # so it always runs inline. Only an approval can start a long leg.
-    if req.background and req.approve:
-        if not orch.get_session(sid).pending_review:
-            raise HTTPException(400, "no pending review to resume")
-        job_id = jobs.submit(
-            session_id=sid, kind="workflow_resume",
-            fn=lambda: orch.resume_workflow(sid, True, actor=actor, reason=req.reason))
-        return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
+    if req.approve:
+        sess_now = orch.get_session(sid)
+        # Approving a gate is a scientific decision, not queue admission: if the
+        # remaining leg reaches a long fit it goes to the job queue regardless of
+        # what the client asked for.
+        needs_job = False
+        if sess_now.state.workflow_name:
+            try:
+                needs_job = orch.workflow_needs_job(
+                    get_workflow(sess_now.state.workflow_name),
+                    sess_now.state.current_step)
+            except KeyError:
+                needs_job = False
+        if req.background or needs_job:
+            if not sess_now.pending_review:
+                raise HTTPException(400, "no pending review to resume")
+            job_id = jobs.submit(
+                session_id=sid, kind="workflow_resume",
+                fn=lambda: orch.resume_workflow(sid, True, actor=actor,
+                                                reason=req.reason,
+                                                allow_expensive=True))
+            return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
     try:
         return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason)
     except (KeyError, ValueError) as e:

@@ -7,6 +7,7 @@ pausing at review gates).
 """
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from collections.abc import Callable
@@ -23,10 +24,12 @@ from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import collect_provenance
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.core.store import SessionStore
-from app.tools.base import ToolContext, ToolRegistry
+from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 from app.tools.builtins import default_registry
 from app.tools.data_tools import _read as _read_dataset
 from app.workflows import get_workflow
+
+log = logging.getLogger("pharmagent")
 
 
 def _iso_clock() -> str:
@@ -213,6 +216,9 @@ class Orchestrator:
             sess.state, res = self.registry.execute(
                 tool, state=sess.state, ctx=sess.ctx, args=args or {},
                 audit=sess.audit, timestamp=self.clock(), actor=actor or "",
+                # This is the admission-controlled entry: the NLME/SCM/engine
+                # endpoints reach it via JobManager.submit, which bounds them.
+                allow_expensive=True,
             )
             self._log_command(sess, agent, tool, args or {})
             self._persist(sess)
@@ -287,30 +293,36 @@ class Orchestrator:
             raise KeyError(f"unknown skill: {name}")
         sess = self.create_session(owner=owner)
         executed: list[dict[str, Any]] = []
-        # 1. load the new dataset (replay always supplies its own data)
-        sess.state, res = self.registry.execute(
-            "load_dataset", state=sess.state, ctx=sess.ctx,
-            args={"path": dataset_path}, audit=sess.audit,
-            timestamp=self.clock(), actor=actor or "")
-        self._log_command(sess, "data_manager", "load_dataset", {"path": dataset_path})
-        executed.append({"tool": "load_dataset", "status": "ok", "summary": res.summary})
-        # 2. replay the captured analysis steps in order
-        for step in skill.steps:
-            try:
-                sess.state, res = self.registry.execute(
-                    step["tool"], state=sess.state, ctx=sess.ctx,
-                    args=dict(step.get("args") or {}), audit=sess.audit,
-                    timestamp=self.clock(), actor=actor or "")
-                self._log_command(sess, step.get("agent", ""), step["tool"],
-                                  step.get("args") or {})
-                executed.append({"tool": step["tool"], "status": "ok",
-                                 "summary": res.summary})
-            except Exception as exc:  # a step failed — record and continue the trail
-                executed.append({"tool": step["tool"], "status": "error",
-                                 "error": str(exc)})
-        self._persist(sess)
-        return {"skill": name, "session_id": sess.id, "executed": executed,
-                "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
+        # create_session already registered this id, so a concurrent reader can reach
+        # it mid-replay: hold the same per-session lock every other mutator uses.
+        with self.session_lock(sess.id):
+            # 1. load the new dataset (replay always supplies its own data)
+            sess.state, res = self.registry.execute(
+                "load_dataset", state=sess.state, ctx=sess.ctx,
+                args={"path": dataset_path}, audit=sess.audit,
+                timestamp=self.clock(), actor=actor or "")
+            self._log_command(sess, "data_manager", "load_dataset", {"path": dataset_path})
+            executed.append({"tool": "load_dataset", "status": "ok", "summary": res.summary})
+            # 2. replay the captured analysis steps in order. allow_expensive is NOT
+            #    passed: a replay runs synchronously here, so a captured NLME/SCM step
+            #    is refused (recorded as an error below) rather than re-running a
+            #    multi-minute fit outside the job queue.
+            for step in skill.steps:
+                try:
+                    sess.state, res = self.registry.execute(
+                        step["tool"], state=sess.state, ctx=sess.ctx,
+                        args=dict(step.get("args") or {}), audit=sess.audit,
+                        timestamp=self.clock(), actor=actor or "")
+                    self._log_command(sess, step.get("agent", ""), step["tool"],
+                                      step.get("args") or {})
+                    executed.append({"tool": step["tool"], "status": "ok",
+                                     "summary": res.summary})
+                except Exception as exc:  # a step failed — record and continue the trail
+                    executed.append({"tool": step["tool"], "status": "error",
+                                     "error": str(exc)})
+            self._persist(sess)
+            return {"skill": name, "session_id": sess.id, "executed": executed,
+                    "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
 
     def set_roles(self, sid: str, overrides: dict[str, str],
                   actor: str | None = None, reason: str = "") -> dict[str, Any]:
@@ -336,7 +348,8 @@ class Orchestrator:
 
     # -- workflows ---------------------------------------------------------
     def start_workflow(self, sid: str, name: str, params: dict[str, Any] | None = None,
-                       actor: str | None = None) -> dict[str, Any]:
+                       actor: str | None = None,
+                       allow_expensive: bool = False) -> dict[str, Any]:
         # Held under the per-session lock (re-entrant): the whole advance — audit
         # appends + state RMW, including the long engine step — is serialized
         # against concurrent run_tool / background jobs on the same session.
@@ -346,10 +359,12 @@ class Orchestrator:
             sess.state = apply_writes(sess.state, "supervisor",
                                       {"workflow_name": name, "current_step": 0})
             sess.params = params or {}
-            return self._advance(sess, wf, params or {}, actor=actor or "")
+            return self._advance(sess, wf, params or {}, actor=actor or "",
+                                 allow_expensive=allow_expensive)
 
     def resume_workflow(self, sid: str, approve: bool = True,
-                        actor: str | None = None, reason: str = "") -> dict[str, Any]:
+                        actor: str | None = None, reason: str = "",
+                        allow_expensive: bool = False) -> dict[str, Any]:
         with self.session_lock(sid):
             sess = self.get_session(sid)
             if not sess.pending_review:
@@ -372,10 +387,29 @@ class Orchestrator:
                 return {"status": "rejected", "at_step": sess.state.current_step,
                         "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
             sess.pending_review = None
-            return self._advance(sess, wf, params, actor=actor or "")
+            return self._advance(sess, wf, params, actor=actor or "",
+                                 allow_expensive=allow_expensive)
+
+    def workflow_needs_job(self, wf: dict[str, Any], from_step: int = 0) -> bool:
+        """True if advancing from ``from_step`` would reach a long-running fit.
+
+        Only the steps that would actually run in this leg are considered — a
+        template whose expensive steps sit after a gate does not need a job to
+        reach that gate. Callers use this to hand the leg to the JobManager
+        instead of running it on the request thread.
+        """
+        for step in wf["steps"][from_step:]:
+            try:
+                if self.registry.get(step["tool"]).expensive:
+                    return True
+            except KeyError:
+                pass
+            if step.get("gate"):
+                break        # this leg stops here; later steps are the next leg's
+        return False
 
     def _advance(self, sess: Session, wf: dict[str, Any], params: dict[str, Any],
-                 actor: str = "") -> dict[str, Any]:
+                 actor: str = "", allow_expensive: bool = False) -> dict[str, Any]:
         steps = wf["steps"]
         executed: list[dict[str, Any]] = []
         i = sess.state.current_step
@@ -384,10 +418,26 @@ class Orchestrator:
             args = dict(step.get("args", {}))
             if step["tool"] == "load_dataset" and "path" not in args and params.get("path"):
                 args["path"] = params["path"]
-            sess.state, res = self.registry.execute(
-                step["tool"], state=sess.state, ctx=sess.ctx,
-                args=args, audit=sess.audit, timestamp=self.clock(), actor=actor,
-            )
+            try:
+                sess.state, res = self.registry.execute(
+                    step["tool"], state=sess.state, ctx=sess.ctx,
+                    args=args, audit=sess.audit, timestamp=self.clock(), actor=actor,
+                    # Being human-initiated (or human-approved at a gate) is NOT queue
+                    # admission control: a gate says "this analysis is scientifically
+                    # right to run", not "there is capacity to run it now". Only the
+                    # JobManager path sets this, so a long fit cannot occupy a request
+                    # thread or slip past the concurrency caps.
+                    allow_expensive=allow_expensive,
+                )
+            except ExpensiveToolError as exc:
+                # Stop cleanly at the expensive step WITHOUT advancing current_step,
+                # so the same leg resumes unchanged once it is submitted as a job.
+                self._persist(sess)
+                return {"status": "awaiting_job", "executed": executed,
+                        "next_step": i, "next_tool": step["tool"],
+                        "message": f"{exc} Re-issue this workflow leg as a background job.",
+                        "state": sess.state.model_dump(),
+                        "audit_ok": sess.audit.verify()}
             self._log_command(sess, step.get("agent", ""), step["tool"], args)
             executed.append({"step": i, "label": step.get("label", step["tool"]),
                              "tool": step["tool"], "summary": res.summary})
