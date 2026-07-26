@@ -649,7 +649,11 @@ def get_audit(sid: str, sess=Depends(owned_session)) -> dict:
     # Take the session lock so a concurrent background job can't be mid-append.
     with orch.session_lock(sid):
         entries = sess.audit.to_list()
-        return {"entries": entries, "verified": sess.audit.verify(), "count": len(entries)}
+        status = sess.audit.verify_status()
+        # `verified` alone overstates a chain containing legacy v1 entries (whose
+        # action is not bound by the hash), so ship the caveats alongside it.
+        return {"entries": entries, "verified": status["ok"], "count": len(entries),
+                "integrity": status}
 
 
 @app.get("/api/sessions/{sid}/state")
