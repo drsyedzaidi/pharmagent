@@ -1,6 +1,7 @@
 import type {
   Session, ChatResponse, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
+  AuditIntegrityStatus,
 } from './types';
 
 const BASE = '/api';
@@ -342,7 +343,12 @@ export const api = {
   skillMarkdown: (name: string): Promise<void> =>
     download(`/skills/${encodeURIComponent(name)}/markdown`, `${name}.SKILL.md`),
 
-  getAudit: (sid: string): Promise<{ entries: AuditEntry[]; verified: boolean; count: number }> =>
+  getAudit: (sid: string): Promise<{
+    entries: AuditEntry[];
+    verified: boolean;
+    count: number;
+    integrity: AuditIntegrityStatus;
+  }> =>
     req(`/sessions/${sid}/audit`),
 
   downloadReport: (sid: string, reportPath: string): string => {

@@ -937,6 +937,18 @@ export interface AuditEntry {
   reason?: string;
 }
 
+export interface AuditIntegrityStatus {
+  chain_ok: boolean;
+  mode: 'enforced' | 'hash_only';
+  mac_ok: boolean;
+  anchor_ok: boolean;
+  verified: boolean;
+  baseline: 'fresh' | 'operator_attested_legacy' | 'unsealed' | null;
+  generation: number | null;
+  key_id: string | null;
+  trusted_since_index: number | null;
+}
+
 export interface ChatResponse {
   agent: string;
   messages: AgentMessage[];

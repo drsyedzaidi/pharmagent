@@ -171,7 +171,8 @@ def test_background_resume_returns_a_job_that_completes_the_workflow(client):
     assert job["result"]["audit_ok"]
     # The signed approval still landed in the chain, just from the job thread.
     audit = client.get(f"/api/sessions/{sid}/audit").json()
-    assert audit["verified"] is True
+    assert audit["integrity"]["chain_ok"] is True
+    assert audit["verified"] is False  # fixture is explicit hash-only dev mode
 
 
 def test_background_resume_without_a_pending_review_is_rejected(client):

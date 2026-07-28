@@ -19,17 +19,24 @@ from app.agents.definitions import AGENTS
 from app.agents.supervisor import Supervisor
 from app.config import settings
 from app.core.audit import AuditChain
+from app.core.audit_seal import (
+    NO_SEAL,
+    AuditIntegrityError,
+    AuditSecurity,
+    audit_security_from_settings,
+)
 from app.core.llm import LLM, get_llm
 from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import collect_provenance
 from app.core.skills import Skill, SkillStore, distill_steps
-from app.core.store import SessionStore
+from app.core.store import SecureWriteConflict, SessionStore
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 from app.tools.builtins import default_registry
 from app.tools.data_tools import _read as _read_dataset
 from app.workflows import get_workflow
 
 log = logging.getLogger("pharmagent")
+_AUDIT_SECURITY_FROM_SETTINGS = object()
 
 
 def _iso_clock() -> str:
@@ -60,7 +67,9 @@ class Orchestrator:
     def __init__(self, llm: LLM | None = None, registry: ToolRegistry | None = None,
                  clock: Callable[[], str] | None = None,
                  store: SessionStore | None = None,
-                 skills: SkillStore | None = None) -> None:
+                 skills: SkillStore | None = None,
+                 audit_security: AuditSecurity | None | object =
+                 _AUDIT_SECURITY_FROM_SETTINGS) -> None:
         self.llm = llm or get_llm()
         self.registry = registry or default_registry()
         self.supervisor = Supervisor(self.llm)
@@ -70,6 +79,14 @@ class Orchestrator:
         # in-memory skill store too so tests never touch the real DB file.
         self.skills = skills if skills is not None else SkillStore(
             ":memory:" if store is not None else str(settings.db_path))
+        if audit_security is _AUDIT_SECURITY_FROM_SETTINGS:
+            # An injected store denotes a hermetic test/dev orchestrator and keeps
+            # the historical hash-only behaviour unless security is also injected.
+            self.audit_security = (
+                None if store is not None else audit_security_from_settings(settings)
+            )
+        else:
+            self.audit_security = audit_security
         self.sessions: dict[str, Session] = {}
         # Per-session re-entrant locks serialize mutations (and let readers take a
         # consistent snapshot) when background jobs run a tool off the request
@@ -90,7 +107,20 @@ class Orchestrator:
     # -- persistence -------------------------------------------------------
     def _load_persisted(self) -> None:
         from app.core.provenance import file_sha256  # local: keep import graph light
-        for row in self.store.load_all():
+        rows = self.store.load_all()
+        persisted_ids = {row["id"] for row in rows}
+        if self.audit_security is not None:
+            orphaned = set(self.audit_security.anchor_heads()) - persisted_ids
+            if orphaned:
+                raise AuditIntegrityError(
+                    "external audit anchor exists for a missing database session"
+                )
+        for row in rows:
+            if self.audit_security is not None:
+                self.audit_security.assert_current(
+                    row["id"], row["audit"], row["audit_seal"],
+                    owner=row["owner"], created_at=row["created_at"], recover=True
+                )
             ctx = ToolContext(data_dir=str(settings.data_dir))
             state = PharmState.model_validate(row["state"])
             path, dsid = row.get("dataset_path"), row.get("dataset_id")
@@ -160,13 +190,119 @@ class Orchestrator:
                 self._persist(sess)
 
     def _persist(self, sess: Session) -> None:
-        self.store.save(
-            id=sess.id, owner=sess.owner, created_at=sess.created_at,
-            updated_at=self.clock(), state=sess.state.model_dump(),
-            audit=sess.audit.to_list(), history=sess.history,
-            pending=sess.pending_review, params=sess.params,
-            dataset_id=sess.state.dataset_id, dataset_path=sess.state.dataset_path,
-            commands=sess.commands)
+        values = {
+            "id": sess.id,
+            "owner": sess.owner,
+            "created_at": sess.created_at,
+            "updated_at": self.clock(),
+            "state": sess.state.model_dump(),
+            "audit": sess.audit.to_list(),
+            "history": sess.history,
+            "pending": sess.pending_review,
+            "params": sess.params,
+            "dataset_id": sess.state.dataset_id,
+            "dataset_path": sess.state.dataset_path,
+            "commands": sess.commands,
+        }
+        if self.audit_security is None:
+            self.store.save(**values)
+            return
+
+        row = self.store.get(sess.id)
+        previous = None
+        expected_audit_json = None
+        expected_seal_json = None
+        if row is not None:
+            previous = self.audit_security.assert_current(
+                sess.id, row["audit"], row["audit_seal"],
+                owner=row["owner"], created_at=row["created_at"], recover=True
+            )
+            expected_audit_json = row["_audit_json_raw"]
+            expected_seal_json = row["_audit_seal_json_raw"]
+            current = row["audit"]
+            proposed = values["audit"]
+            if len(proposed) < len(current) or proposed[:len(current)] != current:
+                raise AuditIntegrityError(
+                    "in-memory audit does not extend the sealed persisted audit"
+                )
+        elif self.audit_security.anchor_head(sess.id) is not None:
+            raise AuditIntegrityError(
+                "cannot recreate a session whose external anchor already exists"
+            )
+
+        proposed_entries = values["audit"]
+        if (
+            previous is not None
+            and proposed_entries == row["audit"]
+            and previous.key_id == self.audit_security.keyring.active_key_id
+        ):
+            seal = previous
+        else:
+            seal = self.audit_security.create_seal(
+                session_id=sess.id,
+                owner=sess.owner,
+                created_at=sess.created_at,
+                entries=proposed_entries,
+                previous=previous,
+                baseline="fresh",
+            )
+        try:
+            self.store.save_secured(
+                **values,
+                audit_seal=seal.to_dict(),
+                expected_audit_json=expected_audit_json,
+                expected_audit_seal_json=expected_seal_json,
+            )
+        except SecureWriteConflict as exc:
+            raise AuditIntegrityError(
+                "persisted audit changed during secured save"
+            ) from exc
+        if previous is None or seal.seal_mac != previous.seal_mac:
+            expected_mac = previous.seal_mac if previous is not None else NO_SEAL
+            # DB-first is intentional. If this raises, the request must not report
+            # success; startup can recover only the exact signed one-generation
+            # successor linked to the current external anchor.
+            self.audit_security.advance(expected_mac, seal)
+
+    def audit_status(self, sid: str) -> dict:
+        """Return an honest structural/MAC/anchor status for the persisted row."""
+        sess = self.get_session(sid)
+        if self.audit_security is None:
+            chain = sess.audit.verify_status()
+            return {
+                **chain,
+                "chain_ok": chain["ok"],
+                "mode": "hash_only",
+                "mac_ok": False,
+                "anchor_ok": False,
+                "verified": False,
+                "baseline": "unsealed",
+                "generation": None,
+                "key_id": None,
+                "trusted_since_index": None,
+            }
+        row = self.store.get(sid)
+        if row is None:
+            return {
+                "ok": False,
+                "chain_ok": False,
+                "mode": "enforced",
+                "mac_ok": False,
+                "anchor_ok": False,
+                "verified": False,
+                "baseline": None,
+                "generation": None,
+                "key_id": None,
+                "trusted_since_index": None,
+                "legacy_entries": 0,
+                "unverifiable_entries": 1,
+                "n_entries": 0,
+                "degraded": False,
+            }
+        return self.audit_security.inspect(
+            sid, row["audit"], row["audit_seal"],
+            owner=row["owner"], created_at=row["created_at"]
+        )
 
     @staticmethod
     def _log_command(sess: Session, agent: str, tool: str, args: dict[str, Any]) -> None:

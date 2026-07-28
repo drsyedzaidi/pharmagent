@@ -8,7 +8,7 @@ import {
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
 import type {
-  Session, PharmState, AgentMessage, AuditEntry,
+  Session, PharmState, AgentMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
   PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum,
@@ -2749,8 +2749,15 @@ function SimChart({ sim }: { sim: PharmState['simulation_results'] }) {
   );
 }
 
-function AuditPanel({ entries, verified }: { entries: AuditEntry[]; verified: boolean }) {
+function AuditPanel({
+  entries,
+  integrity,
+}: {
+  entries: AuditEntry[];
+  integrity: AuditIntegrityStatus | null;
+}) {
   const [open, setOpen] = useState(false);
+  const verified = integrity?.verified === true;
   return (
     <div>
       <span className="audit-toggle" onClick={() => setOpen(o => !o)}>
@@ -2759,6 +2766,12 @@ function AuditPanel({ entries, verified }: { entries: AuditEntry[]; verified: bo
       {verified && (
         <span className="audit-ok" style={{ marginLeft: 8 }}>
           <ShieldCheck size={10} style={{ display: 'inline', marginRight: 3 }} />verified
+        </span>
+      )}
+      {integrity && !verified && (
+        <span style={{ marginLeft: 8, color: 'var(--warning)', fontSize: 10 }}>
+          <AlertTriangle size={10} style={{ display: 'inline', marginRight: 3 }} />
+          {integrity.mode === 'hash_only' ? 'hash-only · unanchored' : 'verification failed'}
         </span>
       )}
       {open && (
@@ -2793,7 +2806,7 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
-  const [auditVerified, setAuditVerified] = useState(false);
+  const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrityStatus | null>(null);
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [currentStep, setCurrentStep] = useState(-1);
   const [pkModels, setPkModels] = useState<PkModelDef[]>([]);
@@ -2868,7 +2881,7 @@ export default function App() {
     try {
       const a = await api.getAudit(session.id);
       setAudit(a.entries);
-      setAuditVerified(a.verified);
+      setAuditIntegrity(a.integrity);
     } catch { /* best-effort */ }
   }
 
@@ -3537,8 +3550,12 @@ export default function App() {
           </div>
           <div className="sidebar-stat">
             <span className="sidebar-stat-key">Audit</span>
-            <span className="sidebar-stat-val" style={{ color: auditVerified ? 'var(--green)' : 'var(--text-dim)' }}>
-              {audit.length > 0 ? `${audit.length} entries${auditVerified ? ' ✓' : ''}` : '–'}
+            <span className="sidebar-stat-val" style={{
+              color: auditIntegrity?.verified ? 'var(--green)' : 'var(--text-dim)',
+            }}>
+              {audit.length > 0
+                ? `${audit.length} entries${auditIntegrity?.verified ? ' ✓' : ''}`
+                : '–'}
             </span>
           </div>
         </div>
@@ -3696,7 +3713,7 @@ export default function App() {
                     <QcCard state={st} />
                     {audit.length > 0 && (
                       <div style={{ marginTop: 10 }}>
-                        <AuditPanel entries={audit} verified={auditVerified} />
+                        <AuditPanel entries={audit} integrity={auditIntegrity} />
                       </div>
                     )}
                   </div>

@@ -25,14 +25,12 @@ TWO LIMITS, both deliberate and worth stating plainly:
 
 1. Traceability is not correctness. The chain proves *what was run and that the
    log was not altered*, not that the analysis was scientifically right.
-2. The digest is unkeyed (plain SHA-256, no HMAC) and the head is not anchored
-   anywhere outside the row that stores the chain. It is therefore tamper-
-   EVIDENT against edits made through the application, and against a partial or
-   careless edit of the stored JSON — but an actor who can write the audit
-   column directly can recompute every hash forward with this same public
-   algorithm, or truncate the tail, and the result still verifies. Resisting
-   that requires a keyed MAC plus an append-only or externally anchored head,
-   which is a deployment/key-management decision, not a code-local one.
+2. This entry-level digest is deliberately public SHA-256, so by itself it only
+   detects partial/careless edits. Enforced deployments use
+   :mod:`app.core.audit_seal` to HMAC the complete semantic snapshot and anchor
+   each seal outside the primary database. API ``verified`` is true only when
+   the public chain, keyed seal, and external anchor all agree; keyless
+   development is reported as ``hash_only`` rather than authenticated.
 """
 from __future__ import annotations
 

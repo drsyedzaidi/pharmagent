@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.core import cdisc, exporters
+from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
@@ -74,6 +75,25 @@ async def job_rejected_handler(request: Request, exc: JobRejected) -> JSONRespon
     return JSONResponse(status_code=429,
                         headers={"X-Request-ID": rid, "Retry-After": "5"},
                         content=_error_body("job_rejected", str(exc), rid))
+
+
+@app.exception_handler(AuditSecurityError)
+async def audit_security_handler(
+    request: Request, exc: AuditSecurityError
+) -> JSONResponse:
+    """Fail closed without disclosing seal/key/anchor internals to API callers."""
+    rid = getattr(request.state, "request_id", "")
+    log.error("audit_security_failure", extra={"request_id": rid,
+              "error_type": type(exc).__name__})
+    return JSONResponse(
+        status_code=423,
+        headers={"X-Request-ID": rid},
+        content=_error_body(
+            "audit_integrity_failure",
+            "session is locked because its audit evidence could not be verified",
+            rid,
+        ),
+    )
 
 
 orch = Orchestrator()
@@ -264,7 +284,8 @@ class FlexplotRequest(BaseModel):
 def health() -> dict:
     return {"status": "ok", "app": settings.app_name, "org": settings.org_name,
             "llm": "mock" if settings.llm_is_mock else settings.model,
-            "auth": "required" if settings.api_token else "open"}
+            "auth": "required" if settings.api_token else "open",
+            "audit": "enforced" if orch.audit_security is not None else "hash_only"}
 
 
 @app.get("/api/workflows")
@@ -678,11 +699,12 @@ def get_audit(sid: str, sess=Depends(owned_session)) -> dict:
     # Take the session lock so a concurrent background job can't be mid-append.
     with orch.session_lock(sid):
         entries = sess.audit.to_list()
-        status = sess.audit.verify_status()
-        # `verified` alone overstates a chain containing legacy v1 entries (whose
-        # action is not bound by the hash), so ship the caveats alongside it.
-        return {"entries": entries, "verified": status["ok"], "count": len(entries),
-                "integrity": status}
+        status = orch.audit_status(sid)
+        # ``verified`` now means structural chain + keyed semantic snapshot +
+        # current external anchor. Hash-only development mode is never presented
+        # as authenticated, even when its public chain is internally consistent.
+        return {"entries": entries, "verified": status["verified"],
+                "count": len(entries), "integrity": status}
 
 
 @app.get("/api/sessions/{sid}/state")
