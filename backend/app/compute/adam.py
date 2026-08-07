@@ -57,8 +57,22 @@ def _dt(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce", format="mixed")
 
 
-def _cmt_for_route(route: Any) -> int:
-    return 1 if str(route).strip().upper() in _EXTRAVASCULAR else 2
+def _is_extravascular(route: Any) -> bool:
+    return str(route).strip().upper() in _EXTRAVASCULAR
+
+
+def _cmt_for_route(route: Any, *, central: int) -> int:
+    """NONMEM (1-based) dosing compartment for a route.
+
+    ``central`` is where the central compartment sits in THIS dataset's
+    numbering, which depends on whether a depot exists: a dataset containing
+    any extravascular dose needs an absorption model, so depot=1 and
+    central=2; an IV-only dataset is fitted with a model that has no depot, so
+    central=1. Hardcoding central=2 would dose the PERIPHERAL compartment of
+    ``iv_2cmt`` — in range, so nothing would raise, and every parameter would
+    be quietly wrong.
+    """
+    return 1 if _is_extravascular(route) else central
 
 
 def build_analysis_dataset(
@@ -137,6 +151,11 @@ def build_analysis_dataset(
         return (when - who.map(t0)).dt.total_seconds() / 3600.0 / div
 
     # -- dose records --------------------------------------------------------
+    # Dataset CMT numbering is model-specific (as in NONMEM). A depot exists
+    # only if some dose is extravascular; that shifts where central sits.
+    any_ev = bool(dosed["EXROUTE"].map(_is_extravascular).any()) if "EXROUTE" in dosed else True
+    central_cmt = 2 if any_ev else 1
+
     dur_h = (dosed["_end"] - dosed["_start"]).dt.total_seconds() / 3600.0
     dur_h = dur_h.where(dur_h > 0)                    # 0/NaN duration => bolus
     amt = pd.to_numeric(dosed["EXDOSE"], errors="coerce")
@@ -148,7 +167,8 @@ def build_analysis_dataset(
         # RATE is per TIME unit, so it must follow the same scaling as TIME.
         "RATE": (amt / (dur_h / div)).fillna(0.0),
         "DV": 0.0, "EVID": 1, "MDV": 1, "BLQ": 0,
-        "CMT": dosed["EXROUTE"].map(_cmt_for_route) if "EXROUTE" in dosed else 1,
+        "CMT": (dosed["EXROUTE"].map(lambda r: _cmt_for_route(r, central=central_cmt))
+                if "EXROUTE" in dosed else 1),
     })
     n_inf = int(dur_h.notna().sum())
     if n_inf:
@@ -228,5 +248,9 @@ def build_analysis_dataset(
                              if c not in ("ID", "TIME", "AMT", "RATE", "DV",
                                           "EVID", "MDV", "BLQ", "CMT")),
         "routes": sorted(dosed["EXROUTE"].dropna().unique()) if "EXROUTE" in dosed else [],
+        # CMT numbering is model-specific: fit this dataset with a model whose
+        # compartment order matches, or the dose enters the wrong compartment.
+        "dose_cmt_convention": ("1=depot, 2=central (extravascular doses present)"
+                                if any_ev else "1=central (IV only, no depot)"),
     }
     return AdamResult(df=df, id_map=id_map, meta=meta, issues=issues)

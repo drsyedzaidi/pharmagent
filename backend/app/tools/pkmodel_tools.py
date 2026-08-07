@@ -56,11 +56,17 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
     # single-endpoint path — keeps every other caller's behaviour unchanged.
     cens_col = next((c for c, r in roles.items() if r == "CENS"), None)
     do_blq = bool(with_blq and cens_col and not dvid_col)
+    # Infusion rate and dosing compartment, when the dataset carries them: a
+    # 2 h infusion fitted as a bolus, or an SC dose silently redirected to the
+    # central compartment, biases every parameter downstream.
+    rate_col = next((c for c, r in roles.items() if r == "RATE"), None)
+    cmt_col = next((c for c, r in roles.items() if r == "CMT"), None)
     if not (id_col and time_col and dv_col and amt_col):
         raise ValueError("dataset needs ID/TIME/DV/AMT roles for PK model fitting")
 
     used = {c for c, r in roles.items()
-            if r in {"ID", "TIME", "DV", "AMT", "EVID", "MDV", "CMT", "II", "ADDL", "DVID", "PD", "CENS"}}
+            if r in {"ID", "TIME", "DV", "AMT", "EVID", "MDV", "CMT", "II", "ADDL",
+                     "DVID", "PD", "CENS", "RATE"}}
     wt_col = next((c for c in df.columns if c not in used and c.strip().lower() in _WT_NAMES), None)
     # Candidate covariate columns: anything not a PK structural role (includes WT,
     # AGE, SEX, CRCL, ...). Baseline (first non-null) value per subject is taken.
@@ -80,7 +86,8 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
     for sid, g in dft.groupby(id_col):
         rows = g.to_dict("records")
         doses = dose_events(rows, time_col=time_col, amt_col=amt_col,
-                            ii_col=ii_col, addl_col=addl_col)
+                            ii_col=ii_col, addl_col=addl_col,
+                            rate_col=rate_col, cmt_col=cmt_col)
         if len(doses) > 1:
             multi = True
         # PK observations: positive concentrations at t>0. Oral first-order

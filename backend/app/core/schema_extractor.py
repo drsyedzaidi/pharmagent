@@ -23,6 +23,7 @@ ROLE_EXACT: dict[str, str] = {
     "pd": "PD", "effect": "PD", "resp": "PD", "response": "PD", "biomarker": "PD",
     "dv": "DV", "conc": "DV", "concentration": "DV", "cobs": "DV", "y": "DV",
     "amt": "AMT", "amount": "AMT", "dose": "AMT",
+    "rate": "RATE",          # zero-order infusion rate (amount per TIME unit)
     "addl": "ADDL", "ii": "II", "tau": "II",
     "tad": "TAD", "tafd": "TAD",
     "time": "TIME", "atime": "TIME", "ntime": "TIME",

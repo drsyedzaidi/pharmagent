@@ -69,6 +69,22 @@ def test_shapes_routes_and_placebo_exclusion():
     assert set(doses[doses.RATE == 0].CMT) == {1}
 
 
+def test_cmt_numbering_depends_on_whether_a_depot_exists():
+    """A dataset with any extravascular dose needs an absorption model, so
+    depot=1/central=2. An IV-only dataset is fitted with a model that has no
+    depot, where central is compartment 1 — emitting 2 there would dose the
+    PERIPHERAL compartment of iv_2cmt: in range, silent, and wrong."""
+    mixed = _build()                                   # IV + SC
+    assert "1=depot, 2=central" in mixed.meta["dose_cmt_convention"]
+    assert set(mixed.df[(mixed.df.EVID == 1) & (mixed.df.RATE > 0)].CMT) == {2}
+
+    ex = _adex()
+    ex["EXROUTE"] = "IV"                               # IV-only dataset
+    iv_only = build_analysis_dataset(_adsl(), ex, _adpc())
+    assert "1=central" in iv_only.meta["dose_cmt_convention"]
+    assert set(iv_only.df[iv_only.df.EVID == 1].CMT) == {1}
+
+
 def test_infusion_becomes_a_rate_not_a_bolus():
     r = _build()                                      # hours
     iv = r.df[(r.df.EVID == 1) & (r.df.CMT == 2)].iloc[0]
