@@ -78,11 +78,20 @@ def run_bootstrap(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> 
     def fit_fn(rep_subjects: list[dict], seed: int) -> dict:
         # compute_uncertainty=False: the bootstrap IS the uncertainty estimate,
         # so a per-replicate Hessian would be pure cost for an unused number.
+        # escalate_on_collapse=False: a replicate whose search collapses is
+        # DISCARDED by compute_run_bootstrap (it filters on `converged`), which
+        # is the standard treatment and is now correct — before collapse was
+        # detected, such a replicate reported converged=True and contributed a
+        # clearance of zero to the percentile interval. Re-fitting each failure
+        # with a seeded search would multiply the cost of an already long,
+        # job-backed run for replicates that are then reported as a success-rate
+        # shortfall anyway.
         res = population_fit(model_key, rep_subjects, method=method,
                              iiv_params=list(nl.get("iiv_params") or []),
                              error_model=nl.get("error_model", "proportional"),
                              covariate_model=_cov_spec(nl),
-                             compute_uncertainty=False, seed=seed)
+                             compute_uncertainty=False, seed=seed,
+                             escalate_on_collapse=False)
         return {"status": "ok", **res}
 
     try:

@@ -77,6 +77,18 @@ from app.compute.pk_simulate import simulate
 _EPS = 1e-12                 # floor for predictions / variances (avoid log 0)
 _VAR_FLOOR = 1e-10           # hard floor on residual variance
 _OMEGA_FLOOR = 1e-6          # hard floor on a diagonal Omega element (variance)
+# Structural thetas are optimised as log(theta), so nothing stops the search
+# running to -inf: exp() then underflows and the parameter is reported as an
+# exact 0.0 — a clearance of zero, with plausible RSE% on its neighbours. These
+# bracket the range any real PK parameter can occupy in the app's units, and a
+# value outside them means the fit collapsed, not that the parameter is small.
+# Judged RELATIVE to the model's own default for that parameter, because an
+# absolute floor is unit-dependent: a monoclonal antibody's CL is ~0.01 L/h and
+# ~0.25 L/day, both legitimate. Seven orders of magnitude either side of the
+# default is far wider than any real estimate strays (the observed collapse ran
+# 1.3e8-fold below it), so this flags ruin without touching a hard fit.
+_THETA_REL_MIN = 1e-7
+_THETA_REL_MAX = 1e7
 _SIGMA_FLOOR = 1e-4          # hard floor on a residual-error sigma
 _BIG = 1e10                  # objective value returned on any failure
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
@@ -1429,6 +1441,29 @@ def _covariate_records(spec: _PopSpec, cov_coefs: np.ndarray,
     return out
 
 
+def _degenerate_thetas(spec: _PopSpec, theta: dict[str, float]) -> list[str]:
+    """Structural parameters whose estimate is not a number a PK model can use.
+
+    theta is exp(x) of an unbounded search variable, so a flat or improving
+    direction toward -inf ends in underflow: exp(-745) is exactly 0.0, and a
+    reported clearance of 0 means the profile has no elimination at all. The
+    optimiser reports success either way, and uncertainty for the collapsed
+    parameter comes back as None while its neighbours keep plausible RSE%, so
+    nothing downstream distinguishes this from a real fit.
+    """
+    defaults = dict(getattr(spec.model, "defaults", {}) or {})
+    bad = []
+    for name in spec.param_names:
+        v = float(theta.get(name, float("nan")))
+        if not math.isfinite(v) or v <= 0.0:
+            bad.append(name)                      # underflowed or non-numeric
+            continue
+        ref = float(defaults.get(name, 0.0) or 0.0)
+        if ref > 0 and not (_THETA_REL_MIN <= v / ref <= _THETA_REL_MAX):
+            bad.append(name)
+    return bad
+
+
 def _assemble(spec: _PopSpec, method_label: str, model_key: str,
               theta: dict[str, float], cov_coefs: np.ndarray,
               omega2: dict[str, float],
@@ -1438,6 +1473,12 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
               uncertainty: dict[str, Any] | None = None,
               omega_matrix: np.ndarray | None = None) -> dict[str, Any]:
     """Build the public result dict shared by FOCE-I and SAEM."""
+    # A structural parameter that ran off the end of the log scale is a
+    # collapsed fit, not an estimate. Report it as NOT converged so no caller
+    # (and no automatic method arbitration) can mistake it for a usable result.
+    degenerate = _degenerate_thetas(spec, theta)
+    if degenerate:
+        converged = False
     omega2_vec = np.array([omega2[p] for p in spec.iiv_params], dtype=float)
     sigma = {
         "prop": round(float(sigma_prop), 6) if spec.has_prop else None,
@@ -1468,6 +1509,9 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
         "n_obs": int(n_obs),
         "n_blq": int(sum(int(s.blq.sum()) for s in subjects)),
         "converged": bool(converged),
+        # Present (and non-empty) only when the search collapsed; keeps the key
+        # set of a healthy fit exactly as it was.
+        **({"degenerate_params": degenerate} if degenerate else {}),
         "individual": _individual_records(spec, subjects, theta, cov_coefs, eta_hats),
         "iterations": int(iterations),
         # Block-Omega keys. Emitted only when a block was actually fitted, so
@@ -2060,7 +2104,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
                    seed: int = 20250614, compute_uncertainty: bool = True,
                    covariate_model: list[dict] | None = None,
                    omega_block: list[str] | None = None,
-                   theta_prior: dict | None = None) -> dict[str, Any]:
+                   theta_prior: dict | None = None,
+                   escalate_on_collapse: bool = True) -> dict[str, Any]:
     """Estimate a population PK model by the requested NLME method.
 
     Args:
@@ -2099,11 +2144,31 @@ def population_fit(model_key: str, subjects: list[dict], *,
     if theta_prior and m != "focei":
         raise ValueError("theta_prior (MAP estimation) requires method='focei'")
     if m == "focei":
-        return focei_fit(model_key, subjects, iiv_params=iiv,
-                         error_model=error_model, max_iter=max_iter,
-                         compute_uncertainty=compute_uncertainty,
-                         covariate_model=covariate_model,
-                         omega_block=omega_block, theta_prior=theta_prior)
+        res = focei_fit(model_key, subjects, iiv_params=iiv,
+                        error_model=error_model, max_iter=max_iter,
+                        compute_uncertainty=compute_uncertainty,
+                        covariate_model=covariate_model,
+                        omega_block=omega_block, theta_prior=theta_prior)
+        # Cold-start Powell can run a structural parameter off the log scale
+        # (see _degenerate_thetas). Rather than hand back a clearance of zero —
+        # or make every well-behaved fit pay for a seeded search it does not
+        # need — escalate ONCE, only when the collapse actually happened.
+        # A MAP fit is excluded: its prior lives in the FOCE-I objective and is
+        # not carried by the SAEM seed stage.
+        if res.get("degenerate_params") and not theta_prior and escalate_on_collapse:
+            seeded = _focei_saem_fit(
+                model_key, subjects, iiv_params=iiv, error_model=error_model,
+                max_iter=max_iter, seed=seed,
+                compute_uncertainty=compute_uncertainty,
+                covariate_model=covariate_model, omega_block=omega_block)
+            # Keep the escalation only if it actually produced a usable fit;
+            # otherwise report the original collapse rather than hide it.
+            if not seeded.get("degenerate_params"):
+                seeded["method"] = f"{seeded.get('method', 'FOCE-I')} (auto-escalated: cold start collapsed)"
+                seeded["escalated_from"] = {"method": "FOCE-I",
+                                            "degenerate_params": res["degenerate_params"]}
+                return seeded
+        return res
     if m == "saem":
         return saem_fit(model_key, subjects, iiv_params=iiv,
                         error_model=error_model, max_iter=max(max_iter, 1),
