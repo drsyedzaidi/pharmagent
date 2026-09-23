@@ -21,3 +21,4 @@ Append one JSON line per run. Prune entries older than 30 days.
 {"run_id":"2026-07-13T23:32:00Z","pattern":"security-triage","duration_s":0,"items_found":8,"actions_taken":0,"escalations":0,"tokens_estimate":0,"outcome":"report-only","note":"seeded from scan b8fc4338 (3 high, 5 medium)"}
 
 {"run_id":"2026-07-14T00:24:00Z","pattern":"security-triage","duration_s":0,"items_found":8,"actions_taken":8,"escalations":0,"tokens_estimate":0,"outcome":"security-fixes-pushed","note":"scan b8fc4338 findings resolved in c9d2658"}
+{"run_id":"2026-07-14T14:50:23Z","pattern":"ci-sweeper","duration_s":871,"items_found":0,"actions_taken":0,"escalations":0,"tokens_estimate":0,"outcome":"report-only","note":"L1 day-1: ruff clean; pytest 337 passed/2 skipped/0 failed; git clean vs origin (0 unpushed); security queue empty; 0 FIXME/HACK in app/"}
