@@ -182,3 +182,66 @@ def test_bootstrap_opts_out_of_escalation():
     from app.tools import bootstrap_tools
     src = inspect.getsource(bootstrap_tools)
     assert "escalate_on_collapse=False" in src
+
+
+# ── prevention: the search cannot run theta off the log scale ────────────────
+
+def test_log_clamp_stops_the_underflow_that_caused_the_collapse():
+    """exp(-745) is exactly 0.0. Powell reached that point; the decode clamp is
+    what stops a clearance of zero being decodable at all."""
+    import math
+
+    import numpy as np
+    spec = nlme._PopSpec(REGISTRY["oral_2cmt"], ["CL", "VC"], "proportional", [])
+    x = nlme._pack(spec, {"CL": 0.25, "VC": 3.5, "Q": 0.4, "VP": 2.8, "KA": 0.3},
+                   np.zeros(0), {"CL": 0.1, "VC": 0.1}, 0.3, 0.0)
+    x[0] = -745.0                                   # what the optimiser actually did
+    cl = nlme._unpack(spec, x)[0]["CL"]
+    assert cl > 0.0 and math.isfinite(cl)
+    assert cl == pytest.approx(5.0 * 1e-7 / 10)     # default 5 x REL_MIN / margin
+
+
+def test_clamped_theta_is_still_reported_as_degenerate():
+    """The clamp sits one decade OUTSIDE the detection window on purpose: hitting
+    the wall must not look like a healthy small estimate."""
+    import numpy as np
+    spec = nlme._PopSpec(REGISTRY["oral_2cmt"], ["CL", "VC"], "proportional", [])
+    x = nlme._pack(spec, {"CL": 0.25, "VC": 3.5, "Q": 0.4, "VP": 2.8, "KA": 0.3},
+                   np.zeros(0), {"CL": 0.1, "VC": 0.1}, 0.3, 0.0)
+    x[0] = -745.0
+    theta = nlme._unpack(spec, x)[0]
+    assert nlme._degenerate_thetas(spec, theta) == ["CL"]
+
+
+def test_values_inside_the_box_decode_bit_identically():
+    """Inertness guarantee: min/max is a no-op inside the box, so an already
+    validated fit decodes to the exact same float it did before the clamp."""
+    import math
+
+    import numpy as np
+    spec = nlme._PopSpec(REGISTRY["oral_2cmt"], ["CL", "VC"], "proportional", [])
+    base = nlme._pack(spec, {"CL": 0.25, "VC": 3.5, "Q": 0.4, "VP": 2.8, "KA": 0.3},
+                      np.zeros(0), {"CL": 0.1, "VC": 0.1}, 0.3, 0.0)
+    for cl in (0.25, 0.0104, 1.7e-4, 5.0, 120.0, 1e4):
+        x = base.copy()
+        x[0] = math.log(cl)
+        assert nlme._unpack(spec, x)[0]["CL"] == math.exp(math.log(cl))
+
+
+def test_box_is_strictly_wider_than_the_detection_window():
+    import math
+    spec = nlme._PopSpec(REGISTRY["oral_2cmt"], ["CL", "VC"], "proportional", [])
+    lo, hi = nlme._theta_log_bounds(spec, "CL")
+    ref = float(REGISTRY["oral_2cmt"].defaults["CL"])
+    assert math.exp(lo) < ref * nlme._THETA_REL_MIN
+    assert math.exp(hi) > ref * nlme._THETA_REL_MAX
+
+
+def test_model_without_a_default_is_left_unbounded():
+    """No default means no reference magnitude; bounding on a guess would be
+    worse than not bounding, so that parameter behaves exactly as before."""
+    import math
+    spec = nlme._PopSpec(REGISTRY["oral_2cmt"], ["CL"], "proportional", [])
+    spec.model.defaults.pop("__probe__", None)
+    lo, hi = nlme._theta_log_bounds(spec, "__probe__")   # unknown name -> no default
+    assert lo == -math.inf and hi == math.inf

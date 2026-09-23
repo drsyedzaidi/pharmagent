@@ -89,6 +89,17 @@ _OMEGA_FLOOR = 1e-6          # hard floor on a diagonal Omega element (variance)
 # 1.3e8-fold below it), so this flags ruin without touching a hard fit.
 _THETA_REL_MIN = 1e-7
 _THETA_REL_MAX = 1e7
+#: The search itself is confined one decade OUTSIDE that window. Clamping in
+#: the decode (not via Powell's `bounds=`) is deliberate: passing bounds to
+#: Powell switches it to a bounded line search and perturbs the result even
+#: when the optimum sits far inside them (measured: ~2.5e-4 shift and a
+#: different evaluation count on a smooth 2-D objective), which would move
+#: every already-validated fit. A decode clamp returns bit-identical values
+#: everywhere inside the window, so a healthy fit is untouched, while beyond
+#: it the objective is flat and the search has nothing to chase. The extra
+#: decade of margin means anything that reaches the wall is still outside the
+#: detection window and is reported by _degenerate_thetas.
+_THETA_CLAMP_MARGIN = 10.0
 _SIGMA_FLOOR = 1e-4          # hard floor on a residual-error sigma
 _BIG = 1e10                  # objective value returned on any failure
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
@@ -722,7 +733,14 @@ def _unpack(spec: _PopSpec, x: np.ndarray
     """Decode the outer vector into (theta, cov_coefs, omega2, sigma_prop,
     sigma_add)."""
     i = 0
-    theta = {p: math.exp(x[i + k]) for k, p in enumerate(spec.param_names)}
+    # Clamp in log space before exponentiating: exp() of an unbounded search
+    # variable underflows to exactly 0.0 near -745, which is how a clearance of
+    # zero used to be reported as a converged estimate. min/max is a no-op for
+    # any value inside the box, so healthy fits decode bit-identically.
+    theta = {}
+    for k, p in enumerate(spec.param_names):
+        lo, hi = _theta_log_bounds(spec, p)
+        theta[p] = math.exp(min(max(float(x[i + k]), lo), hi))
     i += spec.n_theta
     cov_coefs = np.asarray(x[i:i + spec.n_cov], dtype=float)
     i += spec.n_cov
@@ -1439,6 +1457,20 @@ def _covariate_records(spec: _PopSpec, cov_coefs: np.ndarray,
         })
         ci += eff.n_coef
     return out
+
+
+def _theta_log_bounds(spec: _PopSpec, name: str) -> tuple[float, float]:
+    """Log-space box for one structural parameter, relative to the model default.
+
+    Returns (-inf, +inf) when the model declares no usable default, so a model
+    without one behaves exactly as before.
+    """
+    defaults = getattr(spec.model, "defaults", {}) or {}
+    ref = float(defaults.get(name, 0.0) or 0.0)
+    if ref <= 0.0:
+        return (-math.inf, math.inf)
+    return (math.log(ref * _THETA_REL_MIN / _THETA_CLAMP_MARGIN),
+            math.log(ref * _THETA_REL_MAX * _THETA_CLAMP_MARGIN))
 
 
 def _degenerate_thetas(spec: _PopSpec, theta: dict[str, float]) -> list[str]:
