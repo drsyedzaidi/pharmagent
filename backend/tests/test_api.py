@@ -27,7 +27,7 @@ def client():
 
 def test_health_and_models_public(client):
     assert client.get("/api/health").json()["status"] == "ok"
-    assert len(client.get("/api/pk_models").json()["models"]) == 18
+    assert len(client.get("/api/pk_models").json()["models"]) == 19
 
 
 def test_session_and_nca_workflow(client):
@@ -37,7 +37,12 @@ def test_session_and_nca_workflow(client):
     assert r["status"] == "awaiting_review"
     assert r["state"]["nca_parameters"] and len(r["state"]["nca_parameters"]) == 12
     audit = client.get(f"/api/sessions/{sid}/audit").json()
-    assert audit["verified"] is True and audit["count"] >= 1
+    assert audit["count"] >= 1
+    assert audit["integrity"]["chain_ok"] is True
+    # The API test fixture is intentionally keyless; hash-only mode must never
+    # overclaim the keyed+externally-anchored meaning of ``verified``.
+    assert audit["verified"] is False
+    assert audit["integrity"]["mode"] == "hash_only"
 
 
 def test_role_override(client):

@@ -71,12 +71,23 @@ class PharmState(BaseModel):
     # --- structural PK model library (Modeler Agent) ----------------------
     pk_model_results: dict[str, Any] | None = None
     nlme_results: dict[str, Any] | None = None         # FOCE-I / SAEM mixed-effects fit
+    prior_check_results: dict[str, Any] | None = None  # prior-predictive + prior-vs-posterior (MAP)
     scm_results: dict[str, Any] | None = None          # stepwise covariate modeling
     forecast_results: dict[str, Any] | None = None     # MAP/TDM Bayesian forecast
     vpc_results: dict[str, Any] | None = None          # GOF / VPC diagnostics
-    diagnostics_results: dict[str, Any] | None = None  # IWRES / NPDE residual diagnostics
+    diagnostics_results: dict[str, Any] | None = None  # IWRES / CWRES / npd residual diagnostics
+    forest_results: dict[str, Any] | None = None       # covariate GMR forest plot
     engine_comparison_results: dict[str, Any] | None = None  # cross-engine model comparison
     dose_sweep_results: dict[str, Any] | None = None   # dose-comparison simulation
+    clinsim_results: dict[str, Any] | None = None      # clinical trial simulation / PTA
+    exposure_forest_results: dict[str, Any] | None = None  # simulated exposure covariate forest
+    special_pop_results: dict[str, Any] | None = None  # special-population (renal) exposure sim
+    individual_exposures: dict[str, Any] | None = None  # per-subject AUCss/Cmax,ss from EBEs
+    pediatric_results: dict[str, Any] | None = None  # pediatric age×weight dose-matching sim
+    simest_results: dict[str, Any] | None = None
+    bootstrap_results: dict[str, Any] | None = None       # non-parametric bootstrap CIs
+    sir_results: dict[str, Any] | None = None             # sampling importance resampling CIs
+    profile_results: dict[str, Any] | None = None         # log-likelihood profile CIs
 
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
@@ -116,11 +127,15 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "compartmental": {"compartmental_results", "widgets"},
     "poppk": {"poppk_results", "covariate_results", "widgets"},
     "modeler": {"pk_model_results", "nlme_results", "scm_results", "forecast_results",
-                "vpc_results", "diagnostics_results", "engine_comparison_results", "widgets"},
+                "vpc_results", "diagnostics_results", "engine_comparison_results",
+                "forest_results", "prior_check_results", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections"},
-    "simulator": {"simulation_results", "dose_sweep_results", "widgets"},
+    "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
+                  "clinsim_results", "exposure_forest_results", "special_pop_results",
+                  "individual_exposures", "pediatric_results",
+                  "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
 }
 

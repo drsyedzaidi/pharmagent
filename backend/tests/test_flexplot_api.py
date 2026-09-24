@@ -50,9 +50,11 @@ def test_flexplot_endpoint_writes_state_and_audits(client):
     assert fp["kind"] == "scatter"
     assert fp["summary"]["n"] > 0
     assert fp["cells"][0]["fit"] is not None
-    # audit chain still verifies after the tool write
+    # Public chain remains structurally sound; this fixture has no keyed external
+    # anchor, so the API correctly withholds the stronger ``verified`` claim.
     audit = client.get(f"/api/sessions/{sid}/audit").json()
-    assert audit["verified"] is True
+    assert audit["integrity"]["chain_ok"] is True
+    assert audit["verified"] is False
 
 
 def test_flexplot_dotplot_and_color(client):

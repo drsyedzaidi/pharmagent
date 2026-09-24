@@ -188,13 +188,26 @@ def _seed_session_with_nca(client, params, summary=None):
     return sid
 
 
-def test_http_review_clean_meets_goal(client):
+def test_http_review_clean_but_unverifiable_does_not_meet_goal(client):
+    """UPDATED DELIBERATELY (was: asserted goal_met is True).
+
+    This helper seeds NCA parameters straight into state with NO dataset loaded,
+    so the reviewer cannot independently recompute a single reported number. It
+    previously reported GOAL MET on that basis, which turns "the source data is
+    missing" into a clean bill of health — the exact false approval the review of
+    this branch flagged as blocking. Clean findings are still asserted; only the
+    verdict changed, to UNVERIFIABLE. The genuinely-verified pass (dataset loaded,
+    recompute performed) is covered by
+    tests/test_security_findings.py::test_review_is_unverifiable_without_raw_data.
+    """
     sid = _seed_session_with_nca(client, _clean_nca())
     resp = client.post(f"/api/sessions/{sid}/review", json={})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["goal_met"] is True
     assert body["counts"]["CRITICAL"] == 0 and body["counts"]["HIGH"] == 0
+    assert body["goal_met"] is False
+    assert body["status"] == "UNVERIFIABLE"
+    assert body["checked"]["nca_recompute"] is False
     assert body["iterations"] >= 1
 
 

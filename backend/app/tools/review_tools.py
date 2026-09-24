@@ -30,12 +30,17 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
     result = adversarial.review(state.model_dump(), df, _roles(state), goal=goal)
 
     c = result["counts"]
-    verdict = "GOAL MET" if result["goal_met"] else "FINDINGS BLOCK GOAL"
+    # Use the engine's own verdict: it distinguishes UNVERIFIABLE (results present
+    # but no raw data to recompute them from) from an actual pass.
+    verdict = result.get("status") or ("GOAL MET" if result["goal_met"]
+                                       else "FINDINGS BLOCK GOAL")
     summary = (
         f"Adversarial review: {verdict} — {result['n_findings']} finding(s) "
         f"[{c['CRITICAL']} critical, {c['HIGH']} high, {c['MEDIUM']} medium, "
         f"{c['LOW']} low]. Goal: {goal}."
     )
+    if result.get("unverifiable"):
+        summary += f" NOT independently verified: {result['unverifiable_reason']}."
     return ToolResult(
         summary=summary,
         action=f"adversarial_review(goal={goal!r}) -> goal_met={result['goal_met']}",

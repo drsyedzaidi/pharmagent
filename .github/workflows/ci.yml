@@ -41,6 +41,11 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Lint
+        # react-hooks/rules-of-hooks is the rule that catches a conditional hook
+        # (a render-time crash). Typecheck and build both pass on that bug, so
+        # eslint has to run here or nothing guards it.
+        run: npx eslint src
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Build

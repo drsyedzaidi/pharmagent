@@ -1,6 +1,7 @@
 import type {
   Session, ChatResponse, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
+  AuditIntegrityStatus,
 } from './types';
 
 const BASE = '/api';
@@ -77,6 +78,17 @@ export const api = {
       body: JSON.stringify({ approve }),
     }),
 
+  // Approving a gate runs every remaining step in one call. When that remainder
+  // is a population fit (poppk_full), ask for a job id and poll it rather than
+  // holding the request open for minutes.
+  resumeWorkflowAsync: (sid: string, reason = ''):
+    Promise<{ job_id: string; status: string; kind: string }> =>
+    req(`/sessions/${sid}/workflow/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve: true, reason, background: true }),
+    }),
+
   getState: (sid: string): Promise<PharmState> =>
     req(`/sessions/${sid}/state`),
 
@@ -118,13 +130,22 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  vpc: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
-    req(`/sessions/${sid}/vpc`, { method: 'POST' }),
+  vpc: (sid: string, body?: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }):
+    Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/vpc`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
 
   diagnostics: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
     req(`/sessions/${sid}/diagnostics`, { method: 'POST' }),
 
-  nlme: (sid: string, body: { method: string; model_key?: string; error_model?: string }):
+  forest: (sid: string): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/forest`, { method: 'POST' }),
+
+  nlme: (sid: string, body: { method: string; model_key?: string; error_model?: string;
+    prior_from?: string; prior_var?: number }):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/nlme`, {
       method: 'POST',
@@ -132,9 +153,30 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  priorCheck: (sid: string, body?: { n_draws?: number }):
+    Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/prior_check`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
   scm: (sid: string, body: { model_key?: string; error_model?: string; iiv_params?: string[] }):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/scm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  simest: (sid: string, body: {
+    confirm: boolean;
+    design: {
+      n_subjects: number; obs_t: number[]; dose?: number; dose_per_kg?: number;
+      n_doses?: number; tau?: number; wt_mean?: number; wt_cv_pct?: number; lloq?: number;
+    };
+    n_rep?: number; params?: string[]; ci_target_pct?: number; method?: string;
+  }): Promise<{ job_id: string; status: string; kind: string }> =>
+    req(`/sessions/${sid}/simest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -182,12 +224,12 @@ export const api = {
     req(`/sessions/${sid}/jobs/${jobId}`),
 
   // Poll a background job to completion. onTick fires each poll with elapsed seconds.
-  pollJob: async (sid: string, jobId: string,
-                  onTick?: (elapsedSec: number) => void): Promise<JobResult> => {
+  pollJob: async <T = JobResult>(sid: string, jobId: string,
+                  onTick?: (elapsedSec: number) => void): Promise<T> => {
     const start = Date.now();
     for (;;) {
       const j = await api.getJob(sid, jobId);
-      if (j.status === 'done' && j.result) return j.result;
+      if (j.status === 'done' && j.result) return j.result as unknown as T;
       if (j.status === 'error') throw new Error(j.error || 'job failed');
       onTick?.(Math.round((Date.now() - start) / 1000));
       await new Promise(r => setTimeout(r, 1500));
@@ -222,6 +264,53 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  clinsim: (sid: string, body: {
+    doses?: number[]; tau?: number; n_doses?: number; metric?: string;
+    threshold?: number | null; direction?: string; target_fraction?: number;
+    n_subjects?: number; param_uncertainty?: boolean; n_param_draws?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/clinsim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  exposureForest: (sid: string, body?: {
+    dose?: number; tau?: number; n_doses?: number; n_draws?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/exposure_forest`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
+  specialPopulation: (sid: string, body?: {
+    stratify_by?: string | null; doses?: number[]; dose?: number; tau?: number; n_doses?: number;
+    metrics?: string[]; reference_stratum?: string; reference_dose?: number | null;
+    n_per_stratum?: number; source?: string; n_reference?: number;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/special_population`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
+  individualExposures: (sid: string, body?: {
+    dose?: number; tau?: number; n_doses?: number; group_by?: string | null;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/individual_exposures`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
+  pediatricSimulation: (sid: string, body?: {
+    doses?: number[]; tau?: number; n_doses?: number; reference_dose?: number;
+    n_per_stratum?: number; source?: string; n_pediatric?: number; n_reference?: number;
+    wt_exponent_cl?: number | null; wt_exponent_v?: number | null;
+  }): Promise<{ agent: string; summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/pediatric_simulation`, {
+      method: 'POST',
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    }),
+
   review: (sid: string, body?: { goal?: string; max_iter?: number }):
     Promise<ReviewLoopResult> =>
     req(`/sessions/${sid}/review`, {
@@ -254,7 +343,12 @@ export const api = {
   skillMarkdown: (name: string): Promise<void> =>
     download(`/skills/${encodeURIComponent(name)}/markdown`, `${name}.SKILL.md`),
 
-  getAudit: (sid: string): Promise<{ entries: AuditEntry[]; verified: boolean; count: number }> =>
+  getAudit: (sid: string): Promise<{
+    entries: AuditEntry[];
+    verified: boolean;
+    count: number;
+    integrity: AuditIntegrityStatus;
+  }> =>
     req(`/sessions/${sid}/audit`),
 
   downloadReport: (sid: string, reportPath: string): string => {

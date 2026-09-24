@@ -98,7 +98,10 @@ def forecast(nlme: dict[str, Any], *, dose: float, tau: float,
         model_key, theta=theta, omega2=omega2, sigma_prop=sigma_prop,
         sigma_add=sigma_add, iiv_params=iiv, obs_t=obs_t, obs_c=obs_c,
         doses=hist_doses, wt=wt, cov=cov,
-        covariate_effects=nlme.get("covariate_effects"), error_model=error_model)
+        covariate_effects=nlme.get("covariate_effects"), error_model=error_model,
+        # A block-Omega fit stores the full covariance; pass it so the individual
+        # MAP uses the correlated prior (not just the marginals).
+        omega_matrix=nlme.get("omega_matrix"))
     ind_params, typ_params = m["individual_params"], m["typical_params"]
 
     show_tmax = float(tmax or tau * 3)

@@ -41,21 +41,130 @@ def test_tampering_with_actor_breaks_the_chain():
     assert chain.verify() is False           # hash no longer matches
 
 
+def test_tampering_with_action_breaks_the_chain():
+    # The human-review e-signature lives in `action`; flipping approved<->rejected
+    # must be tamper-evident (v2 binds `action` into the hash).
+    chain = AuditChain()
+    chain.append(agent="qc", tool="human_review", action="approved", inputs={},
+                 outputs={}, timestamp="t0", actor="alice")
+    chain.entries[-1].action = "rejected"
+    assert chain.verify() is False
+
+
+def test_tampering_with_index_breaks_the_chain():
+    chain = AuditChain()
+    chain.append(agent="nca", tool="a", action="x", inputs={}, outputs={}, timestamp="t0")
+    chain.append(agent="nca", tool="b", action="y", inputs={}, outputs={}, timestamp="t1")
+    chain.entries[-1].index = 0              # renumber / reorder
+    assert chain.verify() is False
+
+
+def test_field_boundaries_cannot_be_shifted():
+    """v2 delimits every field, so re-splitting two adjacent variable-length fields
+    must NOT reproduce the same digest. Without delimiters an unsigned entry
+    (actor='', reason='alice approved') could be rewritten to look signed
+    (actor='alice', reason=' approved') with a byte-identical hash."""
+    chain = AuditChain()
+    chain.append(agent="qc", tool="human_review", action="approved", inputs={},
+                 outputs={}, timestamp="t0", actor="", reason="alice approved")
+    forged = chain.entries[0]
+    before = forged.entry_hash
+    forged.actor, forged.reason = "alice", " approved"
+    assert forged.compute_hash() != before
+    assert chain.verify() is False
+    # same for the agent/tool boundary
+    c2 = AuditChain()
+    c2.append(agent="qc", tool="human_review", action="x", inputs={}, outputs={},
+              timestamp="t0")
+    c2.entries[0].agent, c2.entries[0].tool = "q", "chuman_review"
+    assert c2.verify() is False
+
+
+def test_field_boundaries_survive_injected_separators():
+    """A delimiter join is only injective if the delimiter cannot appear in the
+    fields — and `actor`/`reason` are user-supplied through the API. Shifting
+    content across the boundary must not collide."""
+    def mk(actor, reason):
+        return AuditEntry(index=0, timestamp="t", agent="g", tool="T", action="A",
+                          inputs_hash="i", outputs_hash="o", prev_hash=GENESIS,
+                          actor=actor, reason=reason, hash_version=2)
+    for sep in ("\x1f", "\x00", "|", "\n"):
+        assert mk("a", f"b{sep}c").compute_hash() != mk(f"a{sep}b", "c").compute_hash(), sep
+
+
+def test_unknown_hash_version_is_not_a_pass():
+    """Relabelling the version must not preserve the digest, and a version this
+    build cannot recompute must fail closed rather than be assumed valid."""
+    chain = AuditChain()
+    chain.append(agent="qc", tool="human_review", action="approved", inputs={},
+                 outputs={}, timestamp="t0", actor="alice")
+    chain.entries[0].hash_version = 999
+    assert chain.verify() is False
+    assert chain.verify_status()["unverifiable_entries"] == 1
+
+
+def test_legacy_chain_reports_degraded_not_clean():
+    """v1 cannot bind `action`, so a legacy approval can still be flipped. That
+    weakness must be visible instead of reported as a clean verification."""
+    legacy = AuditEntry(index=0, timestamp="t", agent="qc", tool="human_review",
+                        action="approved", inputs_hash="i", outputs_hash="o",
+                        prev_hash=GENESIS, hash_version=1)
+    legacy.entry_hash = legacy.compute_hash()
+    chain = AuditChain(); chain.entries = [legacy]
+    status = chain.verify_status()
+    assert status["ok"] is True and status["degraded"] is True
+    assert status["legacy_entries"] == 1
+    # a v2 chain is NOT degraded
+    fresh = AuditChain()
+    fresh.append(agent="qc", tool="human_review", action="approved", inputs={},
+                 outputs={}, timestamp="t0")
+    assert fresh.verify_status()["degraded"] is False
+
+
+def test_from_list_survives_malformed_persisted_rows():
+    """Persisted audit JSON is untrusted and is read for every session at startup:
+    a bad row must not raise out of the constructor, and must not vanish."""
+    good = AuditChain()
+    good.append(agent="a", tool="b", action="c", inputs={}, outputs={}, timestamp="t0")
+    d = good.entries[0].to_dict()
+    # unknown key (e.g. written by a newer version) is dropped, entry still verifies
+    assert AuditChain.from_list([{**d, "surprise": 1}]).verify() is True
+    # a non-int hash_version is coerced rather than exploding inside compute_hash
+    chain = AuditChain.from_list([{**d, "hash_version": "2"}])
+    assert isinstance(chain.entries[0].hash_version, int)
+    assert chain.verify() in (True, False)           # must not raise
+    # an unrebuildable row is KEPT (dropping it would forge a shorter valid chain)
+    for bad in ([{"index": 0}], ["bad"], [None], [42]):
+        broken = AuditChain.from_list(bad)
+        assert len(broken.entries) == 1, bad
+        assert broken.entries[0].action == "unreadable_entry", bad
+        assert broken.verify() is False, bad
+    # a null semantic field must be coerced, not blow up inside compute_hash
+    nulled = AuditChain.from_list([{**d, "action": None, "actor": None,
+                                    "hash_version": 2}])
+    assert nulled.verify() is False        # and must not raise
+
+
 def test_backward_compatible_with_pre_identity_entries():
-    """An entry persisted before actor/reason existed (no such keys) must still
-    rebuild and verify — empty-string defaults hash identically to the old form."""
-    legacy = AuditChain()
-    legacy.append(agent="nca", tool="compute_nca", action="x",
-                  inputs={"a": 1}, outputs={"b": 2}, timestamp="t0")
-    d = legacy.entries[0].to_dict()
-    d.pop("actor"); d.pop("reason")          # simulate an old persisted dict
+    """New entries are v2 (bind index + action); a genuinely legacy v1 entry —
+    hashed under the old format, no actor/reason/hash_version keys — must still
+    rebuild and verify unchanged."""
+    chain = AuditChain()
+    chain.append(agent="nca", tool="compute_nca", action="x",
+                 inputs={"a": 1}, outputs={"b": 2}, timestamp="t0")
+    assert chain.entries[0].hash_version == 2 and chain.verify() is True
+    # a genuinely old persisted entry: v1 format, hashed without action/index/identity
+    legacy = AuditEntry(index=0, timestamp="t0", agent="nca", tool="compute_nca",
+                        action="x", inputs_hash="ih", outputs_hash="oh",
+                        prev_hash=GENESIS, hash_version=1)
+    legacy.entry_hash = legacy.compute_hash()
+    d = legacy.to_dict()
+    d.pop("actor"); d.pop("reason"); d.pop("hash_version")   # old persisted dict shape
     rebuilt = AuditChain.from_list([d])
-    assert rebuilt.verify() is True
-    # and a legacy-style hash equals one computed without the identity fields.
-    e = AuditEntry(index=0, timestamp="t0", agent="nca", tool="compute_nca",
-                   action="x", inputs_hash=legacy.entries[0].inputs_hash,
-                   outputs_hash=legacy.entries[0].outputs_hash, prev_hash=GENESIS)
-    assert e.compute_hash() == legacy.entries[0].entry_hash
+    assert rebuilt.entries[0].hash_version == 1 and rebuilt.verify() is True
+    # v1 and v2 of identical fields hash DIFFERENTLY — that is the fix.
+    v2 = AuditEntry(**{**legacy.to_dict(), "hash_version": 2})
+    assert v2.compute_hash() != legacy.entry_hash
 
 
 # ── provenance ────────────────────────────────────────────────────────────────

@@ -8,9 +8,10 @@ import {
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
 import type {
-  Session, PharmState, AgentMessage, AuditEntry,
+  Session, PharmState, AgentMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
-  SpaghettiData, NcaPlotData, LzSubject,
+  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
+  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -41,7 +42,41 @@ const MODELING_STEPS = [
   { key: 'adversarial_review',    label: 'Adversarial review', gate: true },
 ] as const;
 
-type WorkflowName = 'nca_full' | 'poppk_modeling';
+const POPPK_FULL_STEPS = [
+  { key: 'load_dataset',         label: 'Load dataset' },
+  { key: 'profile_pk_dataset',   label: 'Profile PK data' },
+  { key: 'validate_cdisc',       label: 'Validate format' },
+  { key: 'spaghetti_plot',       label: 'Spaghetti plot' },
+  { key: 'fit_pk_model',         label: 'Compare structural models', gate: true },
+  { key: 'run_nlme',             label: 'Population (NLME) fit' },
+  { key: 'run_scm',              label: 'Covariate model (SCM)' },
+  { key: 'run_diagnostics',      label: 'Residual diagnostics' },
+  { key: 'run_covariate_forest', label: 'Covariate forest' },
+  { key: 'run_vpc',              label: 'VPC / goodness-of-fit' },
+  { key: 'adversarial_review',   label: 'Adversarial review', gate: true },
+  { key: 'generate_report',      label: 'Generate report' },
+] as const;
+
+type WorkflowName = 'nca_full' | 'poppk_modeling' | 'poppk_full';
+
+/** Sidebar presentation per workflow — keeps the step tracker in one place. */
+const WORKFLOW_UI: Record<WorkflowName, { title: string; steps: readonly { key: string; label: string; gate?: boolean }[] }> = {
+  nca_full:       { title: 'NCA Workflow',        steps: STEPS },
+  poppk_modeling: { title: 'Modeling Workflow',   steps: MODELING_STEPS },
+  poppk_full:     { title: 'Population PK Workflow', steps: POPPK_FULL_STEPS },
+};
+
+/** Steps that submit a real population fit — minutes of compute, so resuming
+ *  into one is polled as a background job rather than awaited inline. */
+const HEAVY_STEPS = new Set<string>([
+  'run_nlme', 'run_scm', 'run_engine_comparison', 'run_simest',
+]);
+
+const WF_LABEL: Record<WorkflowName, string> = {
+  nca_full: 'NCA',
+  poppk_modeling: 'population modeling',
+  poppk_full: 'full population PK',
+};
 
 function fmt(v: number | undefined, d = 2) {
   if (v == null || isNaN(v)) return '–';
@@ -565,6 +600,76 @@ function PkModelCard({ r }: { r: PharmState['pk_model_results'] }) {
   );
 }
 
+/** Bayesian-borrowing diagnostics for a MAP fit: a prior-predictive band vs the
+ * observed data + a prior-vs-posterior shrinkage table (Week-15). */
+function PriorCheckCard({ r }: { r: PharmState['prior_check_results'] }) {
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Prior check — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const ppc = r.prior_predictive;
+  const rows = r.diagnostic?.params ?? [];
+  const band = (ppc?.band ?? []).filter(b => b.time != null && b.lo != null && b.hi != null);
+  const obs = ppc?.observed ?? [];
+  // prior-predictive band SVG (log-y)
+  const W = 460, H = 220, ml = 46, mr = 10, mt = 10, mb = 30;
+  const ys = band.flatMap(b => [b.lo, b.hi]).concat(obs.map(o => o.dv)).filter(v => v != null && (v as number) > 0) as number[];
+  const xs = band.map(b => b.time as number).concat(obs.map(o => o.time as number)).filter(v => v != null);
+  const hasBand = band.length > 1 && ys.length > 0;
+  const lo = hasBand ? Math.max(1e-6, Math.min(...ys) * 0.8) : 0.1;
+  const hi = hasBand ? Math.max(...ys) * 1.2 : 1;
+  const xmax = xs.length ? Math.max(...xs) : 1;
+  const lnLo = Math.log(lo), lnHi = Math.log(hi);
+  const sx = (t: number) => ml + (xmax > 0 ? t / xmax : 0) * (W - ml - mr);
+  const sy = (v: number) => H - mb - ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo || 1)) * (H - mt - mb);
+  const areaPts = hasBand
+    ? band.map(b => `${sx(b.time as number)},${sy(b.hi as number)}`).join(' ') + ' ' +
+      band.slice().reverse().map(b => `${sx(b.time as number)},${sy(b.lo as number)}`).join(' ')
+    : '';
+  const medPts = hasBand ? band.filter(b => b.med != null).map(b => `${sx(b.time as number)},${sy(b.med as number)}`).join(' ') : '';
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · Bayesian borrowing · mean shrinkage <b>{fmt(r.diagnostic?.mean_shrinkage ?? undefined, 2)}</b>
+        {ppc?.coverage_pct != null && <> · prior-predictive coverage <b>{fmt(ppc.coverage_pct, 0)}%</b> ({ppc.n_draws} draws)</>}
+      </div>
+      {hasBand && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>Prior-predictive band vs observed data</div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+            aria-label="Prior-predictive concentration band vs observed data">
+            <polygon points={areaPts} fill="var(--accent)" fillOpacity="0.15" />
+            {medPts && <polyline points={medPts} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />}
+            {obs.map((o, i) => (o.time != null && o.dv != null && (o.dv as number) > 0
+              ? <circle key={i} cx={sx(o.time)} cy={sy(o.dv)} r="2" fill="var(--text)" fillOpacity="0.7" /> : null))}
+            <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+            <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Time</text>
+          </svg>
+        </>
+      )}
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Param</th><th>Prior mean</th><th>Posterior</th><th>95% CrI</th><th>Shrinkage</th></tr></thead>
+        <tbody>
+          {rows.map((p, i) => (
+            <tr key={i}>
+              <td>{p.param}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{fmt(p.prior_mean ?? undefined, 3)}</td>
+              <td>{fmt(p.post_mean ?? undefined, 3)}</td>
+              <td style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                {p.ci95?.[0] != null ? `${fmt(p.ci95[0], 3)}–${fmt(p.ci95[1] ?? undefined, 3)}` : '—'}</td>
+              <td style={{ color: p.shrinkage != null ? 'var(--green)' : 'var(--text-dim)' }}>
+                {p.shrinkage != null ? fmt(p.shrinkage, 2) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shrinkage = 1 − posterior_sd/prior_sd (0 = data adds nothing beyond the prior; →1 = data dominates).
+      </div>
+    </div>
+  );
+}
+
 function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
   if (!r) return null;
   if (r.status !== 'ok') {
@@ -589,6 +694,8 @@ function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
         {r.method} · {r.label} · OFV {fmt(r.ofv ?? undefined, 1)} · {r.n_subjects} subjects ·
         {' '}IIV on {(r.iiv_params ?? []).join(', ')} · {r.error_model} error
         {r.n_blq ? ` · ${r.n_blq} BLQ (M3)` : ''}
+        {r.map && <span style={{ color: 'var(--accent)' }}> · MAP (informative prior{r.ofv_likelihood != null
+          ? `, −2LL ${fmt(r.ofv_likelihood, 1)}` : ''})</span>}
         {' '}· {r.converged ? 'converged' : 'did not converge'}
         {cond != null && (
           <> · <span style={{ color: condFlag ? 'var(--red)' : 'inherit' }}>
@@ -596,6 +703,21 @@ function NlmeCard({ r }: { r: PharmState['nlme_results'] }) {
           </span></>
         )}
       </div>
+      {r.auto && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}
+          title="Every candidate is a converged FOCE-I fit of the same model on the same data, so their OFVs are directly comparable and the lowest wins.">
+          {r.auto.escalated
+            ? `Auto: escalated (${r.auto.reason}) — ${r.auto.n_candidates} starts compared, kept ${r.auto.winner}`
+            : `Auto: no escalation (${r.auto.reason}) — kept ${r.auto.winner}`}
+          {r.auto.escalated && (
+            <> · OFV {Object.entries(r.auto.candidate_ofv)
+              .filter(([, v]) => v != null)
+              .sort((a, b) => (a[1] as number) - (b[1] as number))
+              .map(([k, v]) => `${k} ${fmt(v as number, 1)}`)
+              .join(' | ')}</>
+          )}
+        </div>
+      )}
       <table className="nca-table">
         <thead><tr><th>Parameter</th><th>Typical (θ)</th><th>RSE%</th><th>IIV CV% (RSE%)</th><th>η-shrinkage%</th></tr></thead>
         <tbody>
@@ -826,87 +948,302 @@ function ForecastCard({ r }: { r: PharmState['forecast_results'] }) {
   );
 }
 
+// Small reusable residual-vs-x scatter panel, shared by the legacy two-stage
+// IWRES plot and the NLME-provenance grid (IWRES/CWRES/npd x PRED/TIME/TAD).
+// `tad` arrays carry `null` for observations before any dose — those pairs
+// are dropped rather than plotted at a fabricated x=0.
+function residualScatterSVG(
+  x: (number | null | undefined)[], y: (number | null | undefined)[],
+  xlabel: string, ylabel: string, refKey: string,
+) {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const xi = x[i], yi = y[i];
+    if (xi != null && yi != null && Number.isFinite(xi) && Number.isFinite(yi)) pairs.push([xi, yi]);
+  }
+  if (!pairs.length) return null;
+  const W = 168, H = 132, m = 26;
+  const xmax = Math.max(...pairs.map(p => p[0])) * 1.05 || 1;
+  const yabs = Math.max(2, ...pairs.map(p => Math.abs(p[1]))) * 1.1;
+  const sx = (v: number) => m + (v / xmax) * (W - m - 6);
+  const sy = (v: number) => (H - m) / 2 + 4 - (v / yabs) * ((H - m - 10) / 2);
+  return (
+    <svg key={refKey} viewBox={`0 0 ${W} ${H}`} width="150px" role="img" aria-label={`${ylabel} vs ${xlabel}`}>
+      <line x1={m} y1={sy(0)} x2={W - 6} y2={sy(0)} stroke="var(--text-dim)" strokeDasharray="2 2" />
+      <line x1={m} y1={9} x2={m} y2={H - m} stroke="var(--border)" />
+      {pairs.map(([xi, yi], i) => (
+        <circle key={i} cx={sx(xi)} cy={sy(yi)} r="1.7"
+          fill={Math.abs(yi) > 1.96 ? 'var(--yellow)' : 'var(--accent)'} fillOpacity="0.6" />
+      ))}
+      <text x={(m + W) / 2} y={H - 4} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)">{xlabel}</text>
+      <text x={8} y={(9 + H - m) / 2} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)"
+        transform={`rotate(-90 8 ${(9 + H - m) / 2})`}>{ylabel}</text>
+    </svg>
+  );
+}
+
+// Distribution histogram with an N(0,1) overlay, shared by every residual row.
+function residualHistSVG(y: (number | null | undefined)[], label: string, refKey: string) {
+  const vals = y.filter((v): v is number => v != null && Number.isFinite(v));
+  if (!vals.length) return null;
+  const W = 168, H = 132, m = 26;
+  const bins = 11, lo = -3.25, hi = 3.25, bw = (hi - lo) / bins;
+  const counts = new Array(bins).fill(0);
+  vals.forEach(v => { const b = Math.min(bins - 1, Math.max(0, Math.floor((v - lo) / bw))); counts[b]++; });
+  const cmax = Math.max(...counts, 1);
+  const bx = (i: number) => m + (i / bins) * (W - m - 6);
+  const bwid = (W - m - 6) / bins;
+  const by = (c: number) => H - m - (c / cmax) * (H - m - 10);
+  const norm = (z: number) => Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
+  const peak = norm(0) * vals.length * bw;
+  const curve = Array.from({ length: 31 }, (_, k) => {
+    const z = lo + (k / 30) * (hi - lo);
+    return `${k ? 'L' : 'M'}${bx((z - lo) / bw).toFixed(1)} ${by(norm(z) * vals.length * bw / peak * cmax).toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg key={refKey} viewBox={`0 0 ${W} ${H}`} width="150px" role="img" aria-label={`${label} distribution`}>
+      {counts.map((c, i) => <rect key={i} x={bx(i) + 1} y={by(c)} width={bwid - 2} height={H - m - by(c)}
+        fill="var(--accent)" fillOpacity="0.3" />)}
+      <path d={curve} fill="none" stroke="var(--green)" strokeWidth="1.3" />
+      <line x1={m} y1={H - m} x2={W - 6} y2={H - m} stroke="var(--border)" />
+      <text x={(m + W) / 2} y={H - 4} textAnchor="middle" fontSize="8.5" fill="var(--text-dim)">{label} (vs N(0,1))</text>
+    </svg>
+  );
+}
+
 function DiagnosticsCard({ r }: { r: PharmState['diagnostics_results'] }) {
   if (!r || r.status !== 'ok') {
     return <div className="qc-card conditional"><div className="qc-title">Diagnostics — not run</div>
       <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
   }
-  const W = 270, H = 210, m = 36;
-  const res = r.residuals, np = r.npde;
-  // IWRES vs IPRED
-  let iwresPlot = null;
-  if (res && res.ipred.length) {
-    const x = res.ipred, y = res.iwres;
-    const xmax = Math.max(...x) * 1.05 || 1;
-    const ymax = Math.max(2, ...y.map(Math.abs)) * 1.1;
-    const sx = (v: number) => m + (v / xmax) * (W - m - 8);
-    const sy = (v: number) => (H - m) / 2 + 6 - (v / ymax) * ((H - m - 12) / 2);
-    iwresPlot = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="IWRES vs predicted">
-        <line x1={m} y1={sy(0)} x2={W - 8} y2={sy(0)} stroke="var(--text-dim)" strokeDasharray="3 3" />
-        <line x1={m} y1={12} x2={m} y2={H - m} stroke="var(--border)" />
-        {x.map((xi, i) => <circle key={i} cx={sx(xi)} cy={sy(y[i])} r="2" fill="var(--accent)" fillOpacity="0.6" />)}
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">IPRED</text>
-        <text x={11} y={(12 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-          transform={`rotate(-90 11 ${(12 + H - m) / 2})`}>IWRES</text>
-      </svg>
-    );
-  }
-  // NPDE vs time
-  let npdeTime = null, npdeHist = null;
-  if (np && np.time.length) {
-    const x = np.time, y = np.npde;
-    const xmax = Math.max(...x) || 1;
-    const yabs = Math.max(3, ...y.map(Math.abs));
-    const sx = (v: number) => m + (v / xmax) * (W - m - 8);
-    const sy = (v: number) => (H - m) / 2 + 6 - (v / yabs) * ((H - m - 12) / 2);
-    npdeTime = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="NPDE vs time">
-        {[1.96, 0, -1.96].map((v, i) => (
-          <line key={i} x1={m} y1={sy(v)} x2={W - 8} y2={sy(v)} stroke="var(--text-dim)"
-            strokeDasharray={v === 0 ? '3 3' : '1 3'} />
-        ))}
-        <line x1={m} y1={12} x2={m} y2={H - m} stroke="var(--border)" />
-        {x.map((xi, i) => <circle key={i} cx={sx(xi)} cy={sy(y[i])} r="2"
-          fill={Math.abs(y[i]) > 1.96 ? 'var(--yellow)' : 'var(--green)'} fillOpacity="0.65" />)}
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">time (h)</text>
-        <text x={11} y={(12 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-          transform={`rotate(-90 11 ${(12 + H - m) / 2})`}>NPDE</text>
-      </svg>
-    );
-    // histogram of NPDE with N(0,1) overlay
-    const bins = 13, lo = -3.25, hi = 3.25, bw = (hi - lo) / bins;
-    const counts = new Array(bins).fill(0);
-    y.forEach(v => { const b = Math.min(bins - 1, Math.max(0, Math.floor((v - lo) / bw))); counts[b]++; });
-    const cmax = Math.max(...counts, 1);
-    const bx = (i: number) => m + (i / bins) * (W - m - 8);
-    const bwid = (W - m - 8) / bins;
-    const by = (c: number) => H - m - (c / cmax) * (H - m - 12);
-    const norm = (z: number) => Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
-    const peak = norm(0) * y.length * bw;
-    const curve = Array.from({ length: 41 }, (_, k) => {
-      const z = lo + (k / 40) * (hi - lo);
-      return `${k ? 'L' : 'M'}${bx((z - lo) / bw).toFixed(1)} ${by(norm(z) * y.length * bw / peak * cmax).toFixed(1)}`;
-    }).join(' ');
-    npdeHist = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="32%" style={{ maxWidth: W }} role="img" aria-label="NPDE distribution">
-        {counts.map((c, i) => <rect key={i} x={bx(i) + 1} y={by(c)} width={bwid - 2} height={H - m - by(c)}
-          fill="var(--accent)" fillOpacity="0.3" />)}
-        <path d={curve} fill="none" stroke="var(--green)" strokeWidth="1.4" />
-        <line x1={m} y1={H - m} x2={W - 8} y2={H - m} stroke="var(--border)" />
-        <text x={(m + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">NPDE (vs N(0,1))</text>
-      </svg>
-    );
-  }
-  const g = np?.summary;
+  const res = r.residuals;
+  const cw = r.cwres, np = r.npde;
+  // Single-provenance grid (IWRES/CWRES/npd, all from the SAME converged NLME
+  // fit) renders only when both blocks are available — otherwise a figure
+  // would mix panels from two different estimators. `status` present on
+  // either block (needs_nlme / blq_unsupported) means it isn't.
+  const gridAvailable = !!(cw && !cw.status && np && !np.status);
+
+  // Legacy two-stage IWRES panel (unweighted log residual): always shown when
+  // present, since it needs only a structural fit, not NLME.
+  const legacyIwres = res && res.ipred.length
+    ? residualScatterSVG(res.ipred, res.iwres, 'IPRED', 'log residual (two-stage)', 'legacy-iwres')
+    : null;
+
+  const npdLine = np?.status
+    ? `npd unavailable — ${np.message ?? np.status}`
+    : `npd mean ${fmt(np?.summary?.mean ?? undefined, 3)} sd ${fmt(np?.summary?.sd ?? undefined, 2)} · `
+      + `${fmt(np?.summary?.pct_outside_1_96 ?? undefined, 1)}% outside ±1.96 (ideal ~5%)`;
+  const cwresLine = cw?.status
+    ? `CWRES unavailable — ${cw.message ?? cw.status}`
+    : `CWRES mean ${fmt(cw?.summary?.cwres_mean ?? undefined, 3)} sd ${fmt(cw?.summary?.cwres_sd ?? undefined, 2)} `
+      + `(${cw?.summary?.cwres_variant ?? 'focei'})`;
+
   return (
     <div>
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
-        {r.label} · IWRES mean {fmt(res?.summary.iwres_mean ?? undefined, 3)} sd {fmt(res?.summary.iwres_sd ?? undefined, 2)} ·
-        {' '}NPDE mean {fmt(g?.mean ?? undefined, 3)} sd {fmt(g?.sd ?? undefined, 2)} ·
-        {' '}{fmt(g?.pct_outside_1_96 ?? undefined, 1)}% outside ±1.96 (ideal ~5%)
+        {r.label} · two-stage IWRES mean {fmt(res?.summary.iwres_mean ?? undefined, 3)} sd {fmt(res?.summary.iwres_sd ?? undefined, 2)} ·
+        {' '}{cwresLine} · {npdLine}
       </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{iwresPlot}{npdeTime}{npdeHist}</div>
+      {!gridAvailable && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
+            Run a population fit (run_nlme) on {r.label} to unlock the CWRES/npd grid below (vs PRED/TIME/TAD).
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{legacyIwres}</div>
+        </>
+      )}
+      {gridAvailable && cw && np && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, auto)', gap: 8, marginBottom: 8 }}>
+            {residualScatterSVG(cw.ipred ?? [], cw.iwres ?? [], 'IPRED', 'IWRES', 'iwres-pred')}
+            {residualScatterSVG(cw.time ?? [], cw.iwres ?? [], 'time (h)', 'IWRES', 'iwres-time')}
+            {residualScatterSVG(cw.tad ?? [], cw.iwres ?? [], 'TAD (h)', 'IWRES', 'iwres-tad')}
+
+            {residualScatterSVG(cw.cpred ?? [], cw.cwres ?? [], 'CPRED', 'CWRES', 'cwres-pred')}
+            {residualScatterSVG(cw.time ?? [], cw.cwres ?? [], 'time (h)', 'CWRES', 'cwres-time')}
+            {residualScatterSVG(cw.tad ?? [], cw.cwres ?? [], 'TAD (h)', 'CWRES', 'cwres-tad')}
+
+            {residualScatterSVG(np.pred ?? [], np.npde ?? [], 'sim. median', 'npd', 'npd-pred')}
+            {residualScatterSVG(np.time ?? [], np.npde ?? [], 'time (h)', 'npd', 'npd-time')}
+            {residualScatterSVG(np.tad ?? [], np.npde ?? [], 'TAD (h)', 'npd', 'npd-tad')}
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {residualHistSVG(cw.iwres ?? [], 'IWRES', 'iwres-hist')}
+            {residualHistSVG(cw.cwres ?? [], 'CWRES', 'cwres-hist')}
+            {residualHistSVG(np.npde ?? [], 'npd', 'npd-hist')}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ForestCard({ r }: { r: PharmState['forest_results'] }) {
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Covariate forest — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.rows ?? [];
+  if (!rows.length) {
+    return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+      {r.label} ({r.source}) — no covariate effects in the fitted model.
+    </div>;
+  }
+  const W = 560, rowH = 26, top = 26, left = 190, right = 90;
+  const H = top + rows.length * rowH + 24;
+  // Log-scale x-axis over GMR/CI (x_range already spans 0.9x-1.1x the data,
+  // widened further to include a bounds band if present and outside it).
+  let [xlo, xhi] = r.x_range ?? [0.5, 2.0];
+  if (r.bounds) { xlo = Math.min(xlo, r.bounds[0] * 0.9); xhi = Math.max(xhi, r.bounds[1] * 1.1); }
+  const lnLo = Math.log(Math.max(xlo, 1e-6)), lnHi = Math.log(Math.max(xhi, xlo * 1.01));
+  const sx = (v: number) => left + ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo)) * (W - left - right);
+  const ticks = [xlo, xlo * Math.sqrt(xhi / xlo), 1.0, xhi / Math.sqrt(xhi / xlo), xhi]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} ({r.source}) · {r.summary?.n_rows} row(s) across {r.summary?.n_effects} effect(s) ·
+        {' '}{Math.round((r.ci_level ?? 0.9) * 100)}% CI
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img" aria-label="Covariate forest plot">
+        {r.bounds && (
+          <rect x={sx(r.bounds[0])} y={top - 10} width={Math.max(0, sx(r.bounds[1]) - sx(r.bounds[0]))}
+            height={rows.length * rowH + 14} fill="var(--text-dim)" fillOpacity="0.08" />
+        )}
+        <line x1={sx(1.0)} y1={top - 10} x2={sx(1.0)} y2={top + rows.length * rowH + 4}
+          stroke="var(--text-dim)" strokeDasharray="3 3" />
+        {ticks.map((t, i) => (
+          <text key={i} x={sx(t)} y={top + rows.length * rowH + 18} textAnchor="middle"
+            fontSize="9" fill="var(--text-dim)">{t.toFixed(t < 1 ? 2 : 1)}</text>
+        ))}
+        {rows.map((row, i) => {
+          const y = top + i * rowH + rowH / 2;
+          const unavailable = row.gmr == null;
+          return (
+            <g key={i}>
+              <text x={4} y={y + 3} fontSize="10" fill="var(--text)">{row.eval_label}</text>
+              {unavailable ? (
+                <text x={left} y={y + 3} fontSize="9.5" fill="var(--yellow)">
+                  unavailable ({row.ci_source})
+                </text>
+              ) : (
+                <>
+                  {row.ci_lo != null && row.ci_hi != null && (
+                    <line x1={sx(row.ci_lo)} y1={y} x2={sx(row.ci_hi)} y2={y}
+                      stroke={row.outside_reference_band ? 'var(--yellow)' : 'var(--accent)'} strokeWidth="1.6" />
+                  )}
+                  <circle cx={sx(row.gmr as number)} cy={y} r="3.2"
+                    fill={row.outside_reference_band ? 'var(--yellow)' : 'var(--accent)'} />
+                  <text x={W - right + 6} y={y + 3} fontSize="9.5" fill="var(--text-dim)">
+                    {(row.gmr as number).toFixed(2)}
+                    {row.ci_lo != null && row.ci_hi != null ? ` [${row.ci_lo.toFixed(2)}, ${row.ci_hi.toFixed(2)}]` : ''}
+                  </text>
+                </>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {!!r.notes?.length && (
+        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '4px 0 0', paddingLeft: 16 }}>
+          {r.notes.map((n, i) => <li key={i}>{n}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SimestReplicatePlot({ replicates, param }: { replicates: SimestReplicate[]; param: string }) {
+  const pts = replicates
+    .map(r => ({ theta: r.theta[param], ci: r.ci?.[param] ?? null }))
+    .filter(p => p.theta != null);
+  if (!pts.length) return null;
+  const W = 260, rowH = 22, top = 8, left = 8, right = 8;
+  const H = top + pts.length * rowH + 18;
+  const allVals = pts.flatMap(p => (p.ci ? [p.ci[0], p.ci[1]] : [p.theta]));
+  const lo = Math.min(...allVals) * 0.95, hi = Math.max(...allVals) * 1.05;
+  const sx = (v: number) => left + ((v - lo) / Math.max(hi - lo, 1e-9)) * (W - left - right);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img"
+      aria-label={`${param} across replicates`}>
+      {pts.map((p, i) => {
+        const y = top + i * rowH + rowH / 2;
+        return (
+          <g key={i}>
+            {p.ci && <line x1={sx(p.ci[0])} y1={y} x2={sx(p.ci[1])} y2={y} stroke="var(--accent)" strokeWidth="1.6" />}
+            <circle cx={sx(p.theta)} cy={y} r="3" fill="var(--accent)" />
+          </g>
+        );
+      })}
+      <text x={left} y={H - 4} fontSize="9" fill="var(--text-dim)">{lo.toFixed(2)}</text>
+      <text x={W - right} y={H - 4} fontSize="9" fill="var(--text-dim)" textAnchor="end">{hi.toFixed(2)}</text>
+    </svg>
+  );
+}
+
+function SimestCard({ r }: { r: PharmState['simest_results'] }) {
+  if (!r || !['ok', 'partial', 'not_evaluable'].includes(r.status)) {
+    return <div className="qc-card conditional"><div className="qc-title">Trial-design check — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const params = r.params ?? [];
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.n_rep_completed}/{r.n_rep_planned} replicate(s) completed · {r.n_point_evaluable} point-evaluable ·
+        {' '}{r.n_ci_evaluable} CI-evaluable ({r.ci_validity}) ·
+        {' '}strict pass rate {r.criterion?.pct_within_60_140_strict}%
+        {r.criterion?.target_pct != null && (
+          <> vs target {r.criterion.target_pct}% — {r.criterion.criterion_met ? 'MET' : 'NOT MET'}</>
+        )}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%' }}>
+          <thead>
+            <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+              <th>param</th><th>truth</th><th>GM est.</th><th>bias%</th><th>RMSE%</th>
+              <th>CV%</th><th>pass (strict)</th><th>coverage 95% CI</th>
+            </tr>
+          </thead>
+          <tbody>
+            {params.map(p => {
+              const s = r.per_param?.[p];
+              if (!s) return null;
+              return (
+                <tr key={p} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td>{p}</td>
+                  <td>{fmt(s.truth ?? undefined, 3)}</td>
+                  <td>{fmt(s.gm_point_estimate ?? undefined, 3)}</td>
+                  <td>{fmt(s.rel_bias_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.rmse_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.cv_across_replicates_pct ?? undefined, 1)}</td>
+                  <td>{fmt(s.pct_within_60_140_strict ?? undefined, 0)}%</td>
+                  <td>[{fmt(s.coverage_wilson_ci_pct?.[0] ?? undefined, 0)}, {fmt(s.coverage_wilson_ci_pct?.[1] ?? undefined, 0)}]</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {!!r.replicates?.length && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+          {params.map(p => (
+            <div key={p}>
+              <div style={{ fontSize: 10.5, color: 'var(--text-dim)' }}>{p} per replicate</div>
+              <SimestReplicatePlot replicates={r.replicates!} param={p} />
+            </div>
+          ))}
+        </div>
+      )}
+      {!!r.design_limitations?.length && (
+        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
+          {r.design_limitations.map((n, i) => <li key={i}>{n}</li>)}
+          {r.citation && <li>{r.citation}</li>}
+        </ul>
+      )}
     </div>
   );
 }
@@ -1239,7 +1576,254 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
   );
 }
 
-function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
+/** Inline-SVG prediction-corrected VPC panel. Shared by the main VPC card and
+ * the per-stratum grid. Observed 5/50/95 (solid green) over the simulated
+ * 5/50/95 band (dashed) plus the simulated-median 90% CI ribbon. */
+function pcvpcSvg(bins: PcVpcBin[] | undefined, opts?: {
+  width?: number; height?: number; xLabel?: string; ariaLabel?: string;
+  yMax?: number;
+}) {
+  if (!bins) return null;
+  const pts = bins.filter(b => b.t != null);
+  if (!pts.length) return null;
+  const PW = opts?.width ?? 580, PH = opts?.height ?? 230, pm = 44, pr = 12, pt = 12, pb = 28;
+  const ts = pts.map(b => b.t as number);
+  const tmin = Math.min(...ts), tmax = Math.max(...ts);
+  const vals = pts.flatMap(b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[];
+  const cmax = opts?.yMax ?? ((Math.max(...vals) || 1) * 1.05);
+  const sx = (v: number) => pm + ((v - tmin) / (tmax - tmin || 1)) * (PW - pm - pr);
+  const sy = (v: number) => PH - pb - (v / cmax) * (PH - pt - pb);
+  const linePts = (key: 'obs_p05' | 'obs_p50' | 'obs_p95' | 'sim_p05' | 'sim_p50' | 'sim_p95') =>
+    pts.filter(b => b[key] != null)
+      .map((b, i) => `${i ? 'L' : 'M'}${sx(b.t as number).toFixed(1)} ${sy(b[key] as number).toFixed(1)}`).join(' ');
+  const ci = pts.filter(b => b.sim_med_lo != null && b.sim_med_hi != null);
+  const up = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_hi as number).toFixed(1)}`).join(' ');
+  const dn = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_lo as number).toFixed(1)}`).reverse().join(' ');
+  return (
+    <svg viewBox={`0 0 ${PW} ${PH}`} style={{ width: '100%', maxWidth: PW, marginTop: 8 }}
+      role="img" aria-label={opts?.ariaLabel ?? 'Prediction-corrected VPC'}>
+      {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
+      {(['sim_p05', 'sim_p95'] as const).map(k =>
+        <path key={k} d={linePts(k)} fill="none" stroke="var(--text-dim)" strokeWidth="1" strokeDasharray="4 3" />)}
+      <path d={linePts('sim_p50')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
+      {(['obs_p05', 'obs_p95'] as const).map(k =>
+        <path key={k} d={linePts(k)} fill="none" stroke="var(--green)" strokeWidth="1.1" />)}
+      <path d={linePts('obs_p50')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
+      {pts.filter(b => b.obs_p50 != null).map((b, i) =>
+        <circle key={i} cx={sx(b.t as number)} cy={sy(b.obs_p50 as number)} r="2.4" fill="var(--green)" />)}
+      <line x1={pm} y1={PH - pb} x2={PW - pr} y2={PH - pb} stroke="var(--border)" />
+      <line x1={pm} y1={pt} x2={pm} y2={PH - pb} stroke="var(--border)" />
+      <text x={(pm + PW) / 2} y={PH - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">
+        {opts?.xLabel ?? 'time (h)'}</text>
+      <text x={12} y={(pt + PH - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
+        transform={`rotate(-90 12 ${(pt + PH - pb) / 2})`}>prediction-corrected conc.</text>
+    </svg>
+  );
+}
+
+const _VPC_STRUCTURAL_ROLES = new Set(
+  ['ID', 'TIME', 'TAD', 'DV', 'AMT', 'EVID', 'MDV', 'CMT', 'II', 'ADDL', 'DVID', 'CENS', 'ROUTE', 'PD']);
+
+/** Covariate columns eligible for VPC stratification: dataset columns without a
+ * structural NONMEM role, plus DOSE (which the backend always accepts). The
+ * backend's `available` list is authoritative — this is a best-effort menu. */
+function vpcStrataOptions(
+  meta: { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null | undefined,
+): string[] {
+  const cols = meta?.columns ?? [];
+  const roles = meta?.detected_roles ?? {};
+  const covs = cols.map(c => c.name)
+    .filter(n => !_VPC_STRUCTURAL_ROLES.has((roles[n] ?? '').toUpperCase()));
+  return Array.from(new Set(['DOSE', ...covs]));
+}
+
+/** Small-multiples grid of per-stratum pcVPC panels, mirroring the flexplot
+ * facet layout. A shared y-axis makes the strata directly comparable. */
+function StratifiedVpcPanels({ s }: { s: NonNullable<PharmState['vpc_results']>['stratified'] }) {
+  if (!s) return null;
+  if (s.status !== 'ok' || !s.strata?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      Stratified VPC unavailable: {s.message ?? s.status}
+      {s.available && <> · available: {s.available.join(', ')}</>}
+    </div>;
+  }
+  const xLabel = s.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  const label = (s.stratify_by || 'dose (normalized)');
+  // Shared y-domain across panels so the strata are directly comparable.
+  const yMax = Math.max(1, ...s.strata.flatMap(st => st.bins.flatMap(
+    b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[])) * 1.05;
+  const tile = s.strata.length > 1 ? 380 : 560;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Prediction-corrected VPC stratified by <b>{label}</b>
+        {s.correction === 'dose' && ' · dose-normalized'} · {s.strata.length} strata · shared y-axis
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {s.strata.map(st => (
+          <div key={st.label} style={{ width: tile, maxWidth: '100%' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+              {label} = {st.label} <span style={{ opacity: 0.7 }}>(n = {st.n})</span>
+            </div>
+            {pcvpcSvg(st.bins, { width: tile, height: 200, xLabel, yMax,
+              ariaLabel: `pcVPC for ${label} = ${st.label}` })}
+          </div>
+        ))}
+      </div>
+      {!!s.skipped?.length && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+          Skipped: {s.skipped.map(k => `${k.label} (${k.reason})`).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ExpMetricT = NonNullable<NonNullable<PharmState['vpc_results']>['exposure_pc']>['groups'];
+
+/** One histogram of the simulated group-mean exposure, with the observed mean
+ * (solid) and the simulated 2.5-97.5% interval (dashed) overlaid. */
+function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', gb: string) {
+  const m = g[metric];
+  const edges = m.hist.edges, counts = m.hist.counts;
+  if (edges.length < 2) return null;
+  const W = 250, H = 150, ml = 8, mr = 8, mt = 6, mb = 24;
+  const lo = Math.min(edges[0], m.observed), hi = Math.max(edges[edges.length - 1], m.observed);
+  const sx = (v: number) => ml + ((v - lo) / (hi - lo || 1)) * (W - ml - mr);
+  const cmax = Math.max(1, ...counts);
+  const sy = (c: number) => H - mb - (c / cmax) * (H - mt - mb);
+  const vline = (v: number | null, color: string, dash: boolean) =>
+    v == null ? null :
+      <line x1={sx(v)} y1={mt} x2={sx(v)} y2={H - mb} stroke={color}
+        strokeWidth={dash ? 1 : 1.7} strokeDasharray={dash ? '4 3' : undefined} />;
+  return (
+    <div key={g.label} style={{ width: W, maxWidth: '100%' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+        {gb} = {g.label} <span style={{ opacity: 0.7 }}>(n = {g.n})</span>{' '}
+        <span style={{ color: m.within ? 'var(--green)' : 'var(--red, #c0392b)' }}>
+          {m.within ? '✓ within' : '✗ outside'}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label={`Exposure predictive check ${metric} for ${gb} ${g.label}`}>
+        {counts.map((c, i) => (
+          <rect key={i} x={sx(edges[i])} y={sy(c)} width={Math.max(0.5, sx(edges[i + 1]) - sx(edges[i]) - 0.5)}
+            height={H - mb - sy(c)} fill="var(--accent)" fillOpacity="0.5" />
+        ))}
+        {vline(m.sim_lo, 'var(--text-dim)', true)}
+        {vline(m.sim_hi, 'var(--text-dim)', true)}
+        {vline(m.observed, 'var(--green)', false)}
+        <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+        <text x={W / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">
+          {metric === 'auc' ? 'mean AUC (conc·h)' : 'mean Cmax (conc)'}</text>
+      </svg>
+    </div>
+  );
+}
+
+/** Exposure predictive check: for AUC and Cmax, one simulated-mean histogram per
+ * group with the observed mean and the simulated interval overlaid. */
+function ExposurePcPanel({ e }: { e: NonNullable<PharmState['vpc_results']>['exposure_pc'] }) {
+  if (!e) return null;
+  if (e.status !== 'ok' || !e.groups?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      Exposure predictive check unavailable: {e.message ?? e.status}</div>;
+  }
+  const gb = e.group_by || 'group';
+  const ci = e.ci && e.ci.length === 2 ? Math.round(e.ci[1] - e.ci[0]) : 95;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Exposure predictive check — observed group mean (—) vs simulated-mean distribution
+        ({ci}% interval dashed), by <b>{gb}</b>{e.multiple_dose && ' · last-interval exposure'}
+      </div>
+      {(['auc', 'cmax'] as const).map(metric => (
+        <div key={metric} style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+            {metric === 'auc' ? 'Mean AUC' : 'Mean Cmax'}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {e.groups!.map(g => expHistSvg(g, metric, gb))}
+          </div>
+        </div>
+      ))}
+      {!!e.skipped?.length && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+          Skipped: {e.skipped.map(k => `${k.label} (n = ${k.n}, ${k.reason})`).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** BLQ-incidence VPC: observed fraction below LLOQ per bin vs the simulated
+ * median and 5-95% band — the categorical companion to the concentration VPC. */
+function BlqVpcPanel({ b }: { b: NonNullable<PharmState['vpc_results']>['blq_vpc'] }) {
+  if (!b) return null;
+  if (b.status !== 'ok' || !b.bins?.length) {
+    return <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 8 }}>
+      BLQ-incidence VPC unavailable: {b.message ?? b.status}</div>;
+  }
+  const pts = b.bins.filter(p => p.x != null);
+  if (!pts.length) return null;
+  const W = 580, H = 220, pm = 44, pr = 12, pt = 12, pb = 28;
+  const xs = pts.map(p => p.x as number);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const sx = (v: number) => pm + ((v - xmin) / (xmax - xmin || 1)) * (W - pm - pr);
+  const sy = (v: number) => H - pb - Math.max(0, Math.min(1, v)) * (H - pt - pb);
+  const ci = pts.filter(p => p.sim_lo != null && p.sim_hi != null);
+  const up = ci.map(p => `${sx(p.x as number).toFixed(1)},${sy(p.sim_hi as number).toFixed(1)}`).join(' ');
+  const dn = ci.map(p => `${sx(p.x as number).toFixed(1)},${sy(p.sim_lo as number).toFixed(1)}`).reverse().join(' ');
+  const linePts = (key: 'sim_med' | 'obs_frac') =>
+    pts.filter(p => p[key] != null)
+      .map((p, i) => `${i ? 'L' : 'M'}${sx(p.x as number).toFixed(1)} ${sy(p[key] as number).toFixed(1)}`).join(' ');
+  const xLabel = b.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        BLQ-incidence VPC — fraction below LLOQ ({b.lloq}) over {xLabel}; {b.n_blq} censored obs
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }}
+        role="img" aria-label="BLQ-incidence VPC">
+        {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
+        <path d={linePts('sim_med')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
+        <path d={linePts('obs_frac')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
+        {pts.filter(p => p.obs_frac != null).map((p, i) =>
+          <circle key={i} cx={sx(p.x as number)} cy={sy(p.obs_frac as number)} r="2.4" fill="var(--green)" />)}
+        {[0, 0.5, 1].map((f, i) => (
+          <g key={i}>
+            <line x1={pm} y1={sy(f)} x2={W - pr} y2={sy(f)} stroke="var(--border)" strokeOpacity="0.5" />
+            <text x={pm - 6} y={sy(f) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">
+              {(f * 100).toFixed(0)}%</text>
+          </g>
+        ))}
+        <line x1={pm} y1={pt} x2={pm} y2={H - pb} stroke="var(--border)" />
+        <text x={(pm + W) / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">{xLabel}</text>
+        <text x={12} y={(pt + H - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
+          transform={`rotate(-90 12 ${(pt + H - pb) / 2})`}>fraction &lt; LLOQ</text>
+      </svg>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', display: 'flex', gap: 14 }}>
+        <span><span style={{ color: 'var(--green)' }}>—</span> observed fraction BLQ</span>
+        <span><span style={{ color: 'var(--accent)' }}>– –</span> simulated median</span>
+        <span style={{ color: 'var(--accent)' }}>▦ simulated 5–95%</span>
+      </div>
+    </div>
+  );
+}
+
+function VpcCard({ r, onRerun, busy, covariates }: {
+  r: PharmState['vpc_results'];
+  onRerun?: (o: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }) => void;
+  busy?: boolean;
+  covariates?: string[];
+}) {
+  // Controls state is seeded from the run that produced this card, so the knobs
+  // reflect what is actually plotted (each rerun mounts a fresh VpcCard).
+  const [stratifyBy, setStratifyBy] = useState(() => r?.stratified?.stratify_by ?? '');
+  const [doseNorm, setDoseNorm] = useState(() => r?.stratified?.correction === 'dose');
+  const [xTad, setXTad] = useState(() => r?.stratified?.x_by === 'tad');
+  const [expCheck, setExpCheck] = useState(() => !!r?.exposure_pc);
+  const [blqCheck, setBlqCheck] = useState(() => !!r?.blq_vpc);
   if (!r || r.status !== 'ok') {
     return <div className="qc-card conditional"><div className="qc-title">VPC / GOF — not run</div>
       <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
@@ -1291,46 +1875,11 @@ function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
       </svg>
     );
   }
-  // prediction-corrected VPC: binned observed vs simulated 5/50/95 + median CI band
+  // prediction-corrected VPC — rendered by the shared pcvpcSvg helper, which
+  // is reused for the per-stratum small-multiples below (single drawing idiom).
   const pc = r.pcvpc;
-  let pcChart = null;
-  if (pc && pc.status === 'ok' && pc.bins.length) {
-    const bins = pc.bins.filter(b => b.t != null);
-    if (bins.length) {
-      const PW = 580, PH = 230, pm = 44, pr = 12, pt = 12, pb = 28;
-      const ts = bins.map(b => b.t as number);
-      const tmin = Math.min(...ts), tmax = Math.max(...ts);
-      const vals = bins.flatMap(b => [b.obs_p95, b.sim_p95, b.sim_med_hi]).filter(v => v != null) as number[];
-      const cmax = (Math.max(...vals) || 1) * 1.05;
-      const sx = (v: number) => pm + ((v - tmin) / (tmax - tmin || 1)) * (PW - pm - pr);
-      const sy = (v: number) => PH - pb - (v / cmax) * (PH - pt - pb);
-      const linePts = (key: 'obs_p05' | 'obs_p50' | 'obs_p95' | 'sim_p05' | 'sim_p50' | 'sim_p95') =>
-        bins.filter(b => b[key] != null)
-          .map((b, i) => `${i ? 'L' : 'M'}${sx(b.t as number).toFixed(1)} ${sy(b[key] as number).toFixed(1)}`).join(' ');
-      const ci = bins.filter(b => b.sim_med_lo != null && b.sim_med_hi != null);
-      const up = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_hi as number).toFixed(1)}`).join(' ');
-      const dn = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_lo as number).toFixed(1)}`).reverse().join(' ');
-      pcChart = (
-        <svg viewBox={`0 0 ${PW} ${PH}`} style={{ width: '100%', maxWidth: PW, marginTop: 8 }}
-          role="img" aria-label="Prediction-corrected VPC">
-          {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
-          {(['sim_p05', 'sim_p95'] as const).map(k =>
-            <path key={k} d={linePts(k)} fill="none" stroke="var(--text-dim)" strokeWidth="1" strokeDasharray="4 3" />)}
-          <path d={linePts('sim_p50')} fill="none" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 3" />
-          {(['obs_p05', 'obs_p95'] as const).map(k =>
-            <path key={k} d={linePts(k)} fill="none" stroke="var(--green)" strokeWidth="1.1" />)}
-          <path d={linePts('obs_p50')} fill="none" stroke="var(--green)" strokeWidth="1.9" />
-          {bins.filter(b => b.obs_p50 != null).map((b, i) =>
-            <circle key={i} cx={sx(b.t as number)} cy={sy(b.obs_p50 as number)} r="2.4" fill="var(--green)" />)}
-          <line x1={pm} y1={PH - pb} x2={PW - pr} y2={PH - pb} stroke="var(--border)" />
-          <line x1={pm} y1={pt} x2={pm} y2={PH - pb} stroke="var(--border)" />
-          <text x={(pm + PW) / 2} y={PH - 6} textAnchor="middle" fontSize="10" fill="var(--text-dim)">time (h)</text>
-          <text x={12} y={(pt + PH - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
-            transform={`rotate(-90 12 ${(pt + PH - pb) / 2})`}>prediction-corrected conc.</text>
-        </svg>
-      );
-    }
-  }
+  const pcXLabel = pc?.x_by === 'tad' ? 'time after dose (h)' : 'time (h)';
+  const pcChart = pc && pc.status === 'ok' ? pcvpcSvg(pc.bins, { xLabel: pcXLabel }) : null;
 
   return (
     <div>
@@ -1357,6 +1906,47 @@ function VpcCard({ r }: { r: PharmState['vpc_results'] }) {
           </div>
         </>
       )}
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          margin: '12px 0 0', paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <span style={{ color: 'var(--text-dim)' }}>Pooling across dose groups misleads —
+            stratify or dose-normalize:</span>
+          <label style={{ color: 'var(--text-dim)' }}>
+            by{' '}
+            <select className="model-select" style={{ maxWidth: 150 }} value={stratifyBy} disabled={busy}
+              onChange={e => setStratifyBy(e.target.value)}>
+              <option value="">none (pooled)</option>
+              {(covariates ?? []).map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="checkbox" checked={doseNorm} disabled={busy}
+              onChange={e => setDoseNorm(e.target.checked)} /> dose-normalize
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="checkbox" checked={xTad} disabled={busy}
+              onChange={e => setXTad(e.target.checked)} /> time-after-dose
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Observed group-mean AUC/Cmax vs the simulated-mean distribution">
+            <input type="checkbox" checked={expCheck} disabled={busy}
+              onChange={e => setExpCheck(e.target.checked)} /> exposure PC
+          </label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Fraction of observations below the LLOQ over time vs the simulated band (needs censored data)">
+            <input type="checkbox" checked={blqCheck} disabled={busy}
+              onChange={e => setBlqCheck(e.target.checked)} /> BLQ VPC
+          </label>
+          <button className="chip" disabled={busy}
+            onClick={() => onRerun({ stratify_by: stratifyBy || null, dose_normalize: doseNorm,
+              x_by: xTad ? 'tad' : 'time', exposure_check: expCheck, blq_check: blqCheck })}>
+            {busy ? 'Running…' : 'Recompute VPC'}
+          </button>
+        </div>
+      )}
+      {r.stratified && <StratifiedVpcPanels s={r.stratified} />}
+      {r.exposure_pc && <ExposurePcPanel e={r.exposure_pc} />}
+      {r.blq_vpc && <BlqVpcPanel b={r.blq_vpc} />}
     </div>
   );
 }
@@ -1411,6 +2001,638 @@ function DoseSweepCard({ r }: { r: PharmState['dose_sweep_results'] }) {
   );
 }
 
+const CLINSIM_METRICS: { key: string; label: string }[] = [
+  { key: 'ctrough', label: 'Ctrough (efficacy)' },
+  { key: 'cmax', label: 'Cmax (safety)' },
+  { key: 'auc_tau', label: 'AUCτ' },
+  { key: 'cavg', label: 'Cavg' },
+];
+
+/** Clinical trial simulation → probability of target attainment vs dose, with a
+ * dose recommendation. Virtual population sampled from the dataset + fitted IIV. */
+function ClinsimCard({ r, onRerun, busy }: {
+  r: PharmState['clinsim_results'];
+  onRerun?: (o: { doses?: number[]; metric?: string; threshold?: number | null;
+    direction?: string; target_fraction?: number; n_subjects?: number;
+    param_uncertainty?: boolean }) => void;
+  busy?: boolean;
+}) {
+  const [metric, setMetric] = useState(() => r?.metric ?? 'ctrough');
+  const [threshold, setThreshold] = useState(() => (r?.threshold != null ? String(r.threshold) : ''));
+  const [direction, setDirection] = useState<string>(() => r?.direction ?? 'above');
+  const [targetPct, setTargetPct] = useState(() =>
+    String(Math.round((r?.target_fraction ?? 0.9) * 100)));
+  const [dosesStr, setDosesStr] = useState(() => (r?.doses ?? []).map(d => d.dose).join(', '));
+  const [nSubj, setNSubj] = useState(() => String(r?.n_subjects ?? 500));
+  const [paramUnc, setParamUnc] = useState(() => (r?.n_param_draws ?? 0) > 0);
+  if (!r || r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Clinical trial simulation — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.doses ?? [];
+  const tgt = r.target_fraction ?? 0.9;
+  const rec = r.recommended_dose;
+  const hasPta = rows.some(d => d.pta != null);
+  const W = 560, H = 210, ml = 44, mr = 14, mt = 12, mb = 34;
+  const n = rows.length;
+  const xAt = (i: number) => ml + (n <= 1 ? 0.5 : i / (n - 1)) * (W - ml - mr);
+  // PTA panel (0..1)
+  const syP = (v: number) => H - mb - Math.max(0, Math.min(1, v)) * (H - mt - mb);
+  const ptaPath = rows.filter(d => d.pta != null)
+    .map((d, i) => `${i ? 'L' : 'M'}${xAt(rows.indexOf(d)).toFixed(1)} ${syP(d.pta as number).toFixed(1)}`).join(' ');
+  // Parameter-uncertainty PTA band (present only when param draws were run).
+  const ptaBandRows = rows.filter(d => d.pta_lo != null && d.pta_hi != null);
+  const ptaUp = ptaBandRows.map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syP(d.pta_hi as number).toFixed(1)}`).join(' ');
+  const ptaDn = ptaBandRows.map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syP(d.pta_lo as number).toFixed(1)}`).reverse().join(' ');
+  // Exposure panel domain
+  const evals = rows.flatMap(d => [d.metric_p05, d.metric_p95]).filter(v => v != null) as number[];
+  const emax = (Math.max(...evals, r.threshold ?? 0) || 1) * 1.05;
+  const syE = (v: number) => H - mb - (v / emax) * (H - mt - mb);
+  const band = (key: 'metric_p05' | 'metric_p95') => rows.filter(d => d[key] != null);
+  const up = band('metric_p95').map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syE(d.metric_p95 as number).toFixed(1)}`).join(' ');
+  const dn = band('metric_p05').map(d => `${xAt(rows.indexOf(d)).toFixed(1)},${syE(d.metric_p05 as number).toFixed(1)}`).reverse().join(' ');
+  const medPath = rows.filter(d => d.metric_median != null)
+    .map((d, i) => `${i ? 'L' : 'M'}${xAt(rows.indexOf(d)).toFixed(1)} ${syE(d.metric_median as number).toFixed(1)}`).join(' ');
+  const fmtDose = (d: number) => d >= 1000 ? `${(d / 1000).toFixed(d % 1000 ? 1 : 0)}k` : `${d}`;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · {r.n_subjects} virtual subjects{r.with_iiv ? ' with IIV' : ' (no IIV)'}
+        {r.with_covariates && ' + covariates'} · {r.n_doses}× q{r.tau}h
+      </div>
+      <div style={{ padding: '8px 12px', marginBottom: 8, borderRadius: 6,
+        background: rec != null ? 'rgba(29,122,90,0.12)' : 'rgba(154,91,18,0.12)',
+        border: `1px solid ${rec != null ? 'var(--green)' : 'var(--yellow)'}`, fontSize: 13 }}>
+        {rec != null
+          ? <><b style={{ color: 'var(--green)' }}>Recommended dose: {fmtDose(rec)}</b> — {r.recommendation_note}</>
+          : <span style={{ color: 'var(--yellow)' }}>{r.recommendation_note}</span>}
+      </div>
+      {hasPta && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' }}>
+            Probability of target attainment ({r.metric} {r.direction} {r.threshold})
+            {(r.n_param_draws ?? 0) > 0 && <span> · ▦ {r.n_param_draws}-draw parameter-uncertainty band</span>}
+          </div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+            aria-label="Probability of target attainment vs dose">
+            {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+              <g key={i}>
+                <line x1={ml} y1={syP(f)} x2={W - mr} y2={syP(f)} stroke="var(--border)" strokeOpacity="0.4" />
+                <text x={ml - 6} y={syP(f) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">{(f * 100).toFixed(0)}%</text>
+              </g>
+            ))}
+            {ptaBandRows.length > 1 && <polygon points={`${ptaUp} ${ptaDn}`} fill="var(--accent)" fillOpacity="0.16" />}
+            <line x1={ml} y1={syP(tgt)} x2={W - mr} y2={syP(tgt)} stroke="var(--yellow)" strokeDasharray="4 3" strokeWidth="1.2" />
+            <path d={ptaPath} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
+            {rows.map((d, i) => d.pta == null ? null : (
+              <circle key={i} cx={xAt(i)} cy={syP(d.pta)} r={d.dose === rec ? 4 : 2.6}
+                fill={d.dose === rec ? 'var(--green)' : 'var(--accent)'} />
+            ))}
+            {rows.map((d, i) => (
+              <text key={i} x={xAt(i)} y={H - mb + 14} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{fmtDose(d.dose)}</text>
+            ))}
+            <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="var(--text-dim)">dose</text>
+          </svg>
+        </>
+      )}
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 2px' }}>
+        {r.metric} distribution (median + 5–95%)
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label="Exposure metric vs dose">
+        {up && dn && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.16" />}
+        {r.threshold != null && (
+          <line x1={ml} y1={syE(r.threshold)} x2={W - mr} y2={syE(r.threshold)}
+            stroke="var(--yellow)" strokeDasharray="4 3" strokeWidth="1.2" />
+        )}
+        <path d={medPath} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
+        {rows.map((d, i) => d.metric_median == null ? null :
+          <circle key={i} cx={xAt(i)} cy={syE(d.metric_median)} r="2.6" fill="var(--accent)" />)}
+        <line x1={ml} y1={mt} x2={ml} y2={H - mb} stroke="var(--border)" />
+        {rows.map((d, i) => (
+          <text key={i} x={xAt(i)} y={H - mb + 14} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{fmtDose(d.dose)}</text>
+        ))}
+        <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="var(--text-dim)">dose</text>
+      </svg>
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          margin: '10px 0 0', paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <label style={{ color: 'var(--text-dim)' }}>metric{' '}
+            <select className="model-select" style={{ maxWidth: 160 }} value={metric} disabled={busy}
+              onChange={e => setMetric(e.target.value)}>
+              {CLINSIM_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </label>
+          <label style={{ color: 'var(--text-dim)' }}>
+            <select className="model-select" style={{ maxWidth: 90 }} value={direction} disabled={busy}
+              onChange={e => setDirection(e.target.value)}>
+              <option value="above">above</option>
+              <option value="below">below</option>
+            </select>{' '}
+            <input type="number" value={threshold} disabled={busy} placeholder="threshold"
+              onChange={e => setThreshold(e.target.value)} style={{ width: 84 }} />
+          </label>
+          <label style={{ color: 'var(--text-dim)' }}>target{' '}
+            <input type="number" value={targetPct} disabled={busy}
+              onChange={e => setTargetPct(e.target.value)} style={{ width: 52 }} />%</label>
+          <label style={{ color: 'var(--text-dim)' }}>N{' '}
+            <input type="number" value={nSubj} disabled={busy}
+              onChange={e => setNSubj(e.target.value)} style={{ width: 64 }} /></label>
+          <label style={{ color: 'var(--text-dim)', flex: '1 1 140px' }}>doses{' '}
+            <input type="text" value={dosesStr} disabled={busy} placeholder="comma-separated"
+              onChange={e => setDosesStr(e.target.value)} style={{ width: '65%' }} /></label>
+          <label style={{ color: 'var(--text-dim)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
+            title="Draw the structural parameters from their RSE (needs an NLME fit) → a PTA confidence band + parameter sensitivity">
+            <input type="checkbox" checked={paramUnc} disabled={busy}
+              onChange={e => setParamUnc(e.target.checked)} /> param uncertainty
+          </label>
+          <button className="chip" disabled={busy}
+            onClick={() => {
+              // An empty / non-positive target% must fall back to the backend
+              // default, not send target_fraction:0 (which would trivially
+              // green-light every dose since PTA >= 0).
+              const tf = Number(targetPct) / 100;
+              onRerun({
+                doses: dosesStr.split(',').map(s => Number(s.trim())).filter(x => x > 0),
+                metric, threshold: threshold === '' ? null : Number(threshold), direction,
+                target_fraction: targetPct.trim() === '' || !(tf > 0)
+                  ? undefined : Math.min(1, tf),
+                n_subjects: Number(nSubj), param_uncertainty: paramUnc,
+              });
+            }}>{busy ? 'Simulating…' : 'Recompute'}</button>
+        </div>
+      )}
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Dose</th><th>PTA</th><th>{r.metric} median</th><th>5–95%</th><th>n</th></tr></thead>
+        <tbody>
+          {rows.map((d, i) => (
+            <tr key={i} style={d.dose === rec ? { background: 'rgba(29,122,90,0.12)' } : undefined}>
+              <td>{fmtDose(d.dose)}</td>
+              <td>{d.pta == null ? '–' : `${(d.pta * 100).toFixed(1)}%`}</td>
+              <td>{fmt(d.metric_median ?? undefined, 3)}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{fmt(d.metric_p05 ?? undefined, 3)}–{fmt(d.metric_p95 ?? undefined, 3)}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{d.n}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {r.sensitivity && r.sensitivity.records.length > 0 && (() => {
+        const refDose = rec ?? rows[rows.length - 1]?.dose;
+        const refIdx = rows.findIndex(d => d.dose === refDose);
+        return <ClinsimSensitivityPanel s={r.sensitivity} refDose={refDose} refIdx={refIdx} />;
+      })()}
+    </div>
+  );
+}
+
+/** Parameter sensitivity (Week-12 Ex 4): for each structural parameter, a
+ * scatter of its uncertainty draw vs the resulting PTA at the reference dose —
+ * shows which parameters drive the attainment uncertainty. */
+function ClinsimSensitivityPanel({ s, refDose, refIdx }: {
+  s: NonNullable<PharmState['clinsim_results']>['sensitivity'];
+  refDose?: number; refIdx: number;
+}) {
+  if (!s || refDose == null || refIdx < 0) return null;
+  const W = 210, H = 150, ml = 30, mr = 8, mt = 8, mb = 26;
+  const panel = (p: string) => {
+    const pts = s.records
+      .map(rec => ({ x: rec.theta[p], y: rec.pta[refIdx] }))
+      .filter(pt => pt.x != null && pt.y != null) as { x: number; y: number }[];
+    if (pts.length < 2) return null;
+    const xs = pts.map(pt => pt.x), xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const sx = (v: number) => ml + ((v - xmin) / (xmax - xmin || 1)) * (W - ml - mr);
+    const sy = (v: number) => H - mb - Math.max(0, Math.min(1, v)) * (H - mt - mb);
+    return (
+      <div key={p} style={{ width: W, maxWidth: '100%' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>{p}</div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+          aria-label={`PTA sensitivity to ${p}`}>
+          {[0, 0.5, 1].map((f, i) => (
+            <line key={i} x1={ml} y1={sy(f)} x2={W - mr} y2={sy(f)} stroke="var(--border)" strokeOpacity="0.4" />
+          ))}
+          <text x={ml - 4} y={sy(1) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">100%</text>
+          <text x={ml - 4} y={sy(0) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">0</text>
+          {pts.map((pt, i) => <circle key={i} cx={sx(pt.x)} cy={sy(pt.y)} r="1.8" fill="var(--accent)" fillOpacity="0.55" />)}
+          <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+          <text x={(ml + W) / 2} y={H - 3} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{p} draw</text>
+        </svg>
+      </div>
+    );
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+        Parameter sensitivity — PTA at dose {refDose} vs each parameter draw ({s.n_draws} draws)
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>{s.params.map(panel)}</div>
+    </div>
+  );
+}
+
+/** Simulated exposure covariate forest: horizontal relative-exposure (AUC or
+ * Cmax) rows with a 95% interval, the 0.8–1.25 clinical-relevance band, and the
+ * reference at 1.0. */
+function ExposureForestCard({ r }: { r: PharmState['exposure_forest_results'] }) {
+  const [showMetric, setShowMetric] = useState<'rel_auc' | 'rel_cmax'>('rel_auc');
+  if (!r || r.status !== 'ok' || !r.rows?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Exposure forest — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const rows = r.rows;
+  const band = r.band ?? [0.8, 1.25];
+  const vals = rows.flatMap(x => [x[showMetric].lo, x[showMetric].hi]).filter(v => v != null) as number[];
+  const lo = Math.min(...vals, band[0], 1) * 0.95;
+  const hi = Math.max(...vals, band[1], 1) * 1.05;
+  const W = 600, rowH = 26, padT = 8, padB = 30, ml = 150, mr = 70;
+  const H = padT + rows.length * rowH + padB;
+  // log-scale x so ratios are symmetric around 1.
+  const lnLo = Math.log(Math.max(lo, 1e-3)), lnHi = Math.log(hi);
+  const sx = (v: number) => ml + ((Math.log(Math.max(v, 1e-3)) - lnLo) / (lnHi - lnLo || 1)) * (W - ml - mr);
+  const yAt = (i: number) => padT + i * rowH + rowH / 2;
+  const ticks = [0.5, 0.8, 1, 1.25, 2, 4].filter(t => t >= lo && t <= hi);
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · relative exposure vs reference at dose {r.dose} q{r.tau}h ·
+        {' '}{r.n_draws} uncertainty draws
+        <span style={{ marginLeft: 10 }}>
+          {(['rel_auc', 'rel_cmax'] as const).map(m => (
+            <button key={m} className="chip" style={{
+              padding: '1px 8px', marginLeft: 4,
+              background: showMetric === m ? 'var(--accent)' : undefined,
+              color: showMetric === m ? '#fff' : undefined,
+            }} onClick={() => setShowMetric(m)}>{m === 'rel_auc' ? 'AUC' : 'Cmax'}</button>
+          ))}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label="Exposure covariate forest">
+        <rect x={sx(band[0])} y={padT} width={Math.max(0, sx(band[1]) - sx(band[0]))}
+          height={rows.length * rowH} fill="var(--green)" fillOpacity="0.08" />
+        <line x1={sx(1)} y1={padT} x2={sx(1)} y2={padT + rows.length * rowH} stroke="var(--text-dim)" strokeDasharray="3 3" />
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={sx(t)} y1={padT + rows.length * rowH} x2={sx(t)} y2={padT + rows.length * rowH + 4} stroke="var(--border)" />
+            <text x={sx(t)} y={H - 16} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{t}</text>
+          </g>
+        ))}
+        {rows.map((row, i) => {
+          const m = row[showMetric];
+          if (m.median == null) return null;
+          const within = m.lo != null && m.hi != null && m.lo >= band[0] && m.hi <= band[1];
+          const col = within ? 'var(--green)' : 'var(--accent)';
+          return (
+            <g key={i}>
+              <text x={ml - 8} y={yAt(i) + 3} textAnchor="end" fontSize="10" fill="var(--text)">
+                {row.covariate} = {row.label}</text>
+              {m.lo != null && m.hi != null &&
+                <line x1={sx(m.lo)} y1={yAt(i)} x2={sx(m.hi)} y2={yAt(i)} stroke={col} strokeWidth="1.4" />}
+              <circle cx={sx(m.median)} cy={yAt(i)} r="3.4" fill={col} />
+              <text x={W - mr + 6} y={yAt(i) + 3} fontSize="9" fill="var(--text-dim)">
+                {m.median?.toFixed(2)} [{m.lo?.toFixed(2)}–{m.hi?.toFixed(2)}]</text>
+            </g>
+          );
+        })}
+        <text x={(ml + W - mr) / 2} y={H - 3} textAnchor="middle" fontSize="10" fill="var(--text-dim)">
+          {showMetric === 'rel_auc' ? 'relative AUC' : 'relative Cmax'} (fraction of reference)</text>
+      </svg>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shaded 0.8–1.25 = commonly judged not clinically meaningful; reference (—) = 1.0.
+        Reference AUC {r.reference?.auc}, Cmax {r.reference?.cmax} at WT {r.reference?.wt} kg.
+      </div>
+    </div>
+  );
+}
+
+const SP_METRIC_LABEL: Record<string, string> = {
+  auc_tau: 'AUCss', cmax: 'Cmax,ss', cavg: 'Cavg,ss', ctrough: 'Ctrough,ss',
+};
+
+/** Special-population exposure simulation: per-stratum steady-state exposure
+ * (box = IQR, whiskers = 5–95%, median) across a dose grid, overlaid on the
+ * reference-stratum band, with a per-stratum dose-adjustment verdict. */
+function SpecialPopCard({ r, onRerun, busy }: {
+  r: PharmState['special_pop_results'];
+  onRerun?: (o: { source?: string; stratify_by?: string | null }) => void;
+  busy?: boolean;
+}) {
+  const [metric, setMetric] = useState(() => (r?.metrics && r.metrics[0]) || 'auc_tau');
+  if (!r || r.status !== 'ok' || !r.strata?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Special-population simulation — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}{r?.available && <> · available: {r.available.join(', ')}</>}</div></div>;
+  }
+  const strata = r.strata;
+  const band = r.reference_band?.[metric];
+  const doses = strata[0].doses.map(d => d.dose);
+  // Shared y-domain (log) across panels for comparability.
+  const all = strata.flatMap(s => s.doses.flatMap(d => {
+    const m = d[metric as keyof typeof d] as { p05?: number | null; p95?: number | null } | undefined;
+    return [m?.p05, m?.p95];
+  })).filter(v => v != null) as number[];
+  const lo = Math.max(1e-6, Math.min(...all, band?.lo ?? Infinity) * 0.9);
+  const hi = Math.max(...all, band?.hi ?? 0) * 1.1;
+  const lnLo = Math.log(lo), lnHi = Math.log(hi);
+  const W = 250, H = 170, ml = 40, mr = 8, mt = 8, mb = 30;
+  const sy = (v: number) => H - mb - ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo || 1)) * (H - mt - mb);
+  const n = doses.length;
+  const xAt = (i: number) => ml + (n <= 1 ? 0.5 : (i + 0.5) / n) * (W - ml - mr);
+  const bw = Math.min(22, (W - ml - mr) / (n * 1.7));
+  const panel = (s: SpecialPopStratum) => (
+    <div key={s.label} style={{ width: W, maxWidth: '100%' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+        {s.label} <span style={{ opacity: 0.7 }}>(n = {s.n})</span>
+        {s.recommended_dose != null && <span style={{ color: 'var(--green)' }}> · dose {s.recommended_dose}</span>}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label={`Special-population exposure for ${s.label}`}>
+        {band?.lo != null && band.hi != null &&
+          <rect x={ml} y={sy(band.hi)} width={W - ml - mr} height={Math.max(0, sy(band.lo) - sy(band.hi))}
+            fill="var(--text-dim)" fillOpacity="0.12" />}
+        {band?.median != null &&
+          <line x1={ml} y1={sy(band.median)} x2={W - mr} y2={sy(band.median)} stroke="var(--text-dim)" strokeDasharray="3 3" />}
+        {s.doses.map((d, i) => {
+          const m = d[metric as keyof typeof d] as SpecialPopMetric | undefined;
+          if (!m || m.p50 == null) return null;
+          const x = xAt(i), col = m.within_ref ? 'var(--green)' : 'var(--accent)';
+          return (
+            <g key={i}>
+              {m.p05 != null && m.p95 != null &&
+                <line x1={x} y1={sy(m.p95)} x2={x} y2={sy(m.p05)} stroke={col} strokeWidth="1" />}
+              {m.p25 != null && m.p75 != null &&
+                <rect x={x - bw / 2} y={sy(m.p75)} width={bw} height={Math.max(1, sy(m.p25) - sy(m.p75))}
+                  fill={col} fillOpacity="0.25" stroke={col} strokeWidth="0.8" />}
+              <line x1={x - bw / 2} y1={sy(m.p50)} x2={x + bw / 2} y2={sy(m.p50)} stroke={col} strokeWidth="1.6" />
+            </g>
+          );
+        })}
+        <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+        {s.doses.map((d, i) => (
+          <text key={i} x={xAt(i)} y={H - mb + 12} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{d.dose}</text>
+        ))}
+        <text x={(ml + W) / 2} y={H - 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)">dose</text>
+      </svg>
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · exposure by <b>{r.stratify_by}</b> vs the <b>{r.reference_stratum}</b> band
+        (at dose {r.reference_dose}) · {r.n_per_stratum}/stratum · source: {r.population_source}
+        <span style={{ marginLeft: 10 }}>
+          {(r.metrics ?? ['auc_tau']).map(mk => (
+            <button key={mk} className="chip" style={{ padding: '1px 8px', marginLeft: 4,
+              background: metric === mk ? 'var(--accent)' : undefined, color: metric === mk ? '#fff' : undefined }}
+              onClick={() => setMetric(mk)}>{SP_METRIC_LABEL[mk] ?? mk}</button>
+          ))}
+        </span>
+      </div>
+      {r.covariate_in_model === false &&
+        <div style={{ fontSize: 11, color: 'var(--yellow)', marginBottom: 6 }}>
+          No fitted {r.stratify_by} effect — strata differ only by allometric weight. Run SCM/NLME with this covariate.
+        </div>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>{strata.map(panel)}</div>
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8,
+          paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <span style={{ color: 'var(--text-dim)' }}>population:</span>
+          {(['dataset', 'reference'] as const).map(src => (
+            <button key={src} className="chip" disabled={busy}
+              style={{ background: r.population_source === src ? 'var(--accent)' : undefined,
+                color: r.population_source === src ? '#fff' : undefined }}
+              onClick={() => onRerun({ source: src })}>{src === 'reference' ? 'representative adults' : 'analysis dataset'}</button>
+          ))}
+          {busy && <span style={{ color: 'var(--text-dim)' }}>simulating…</span>}
+        </div>
+      )}
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>{r.stratify_by}</th><th>n</th><th>Adjusted dose</th><th>Verdict</th></tr></thead>
+        <tbody>
+          {strata.map((s, i) => (
+            <tr key={i}>
+              <td>{s.label}</td><td style={{ color: 'var(--text-dim)' }}>{s.n}</td>
+              <td style={{ color: s.recommended_dose != null ? 'var(--green)' : 'var(--text-dim)' }}>
+                {s.recommended_dose ?? '—'}</td>
+              <td style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shaded band = {r.reference_stratum} 5–95% at dose {r.reference_dose}; box = IQR, whiskers = 5–95%, line = median.
+        Green = within the reference range.
+      </div>
+    </div>
+  );
+}
+
+/** Per-subject steady-state exposure (AUCss/Cmax,ss) from the fitted EBEs, with a
+ * per-group (e.g. renal-function) summary — the reference table for special-pop. */
+function IndividualExposuresCard({ r }: { r: PharmState['individual_exposures'] }) {
+  if (!r || r.status !== 'ok' || !r.subjects?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Individual exposures — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · steady-state AUCss / Cmax,ss for {r.subjects.length} subjects at {r.dose} q{r.tau}h (EBEs)
+      </div>
+      {!!r.groups?.length && (
+        <table className="nca-table">
+          <thead><tr><th>Group</th><th>n</th><th>AUCss median [5–95%]</th><th>Cmax,ss median [5–95%]</th></tr></thead>
+          <tbody>
+            {r.groups.map((g, i) => (
+              <tr key={i}>
+                <td>{g.group}</td><td style={{ color: 'var(--text-dim)' }}>{g.n}</td>
+                <td>{fmt(g.auc_ss?.median ?? undefined, 2)} <span style={{ color: 'var(--text-dim)' }}>
+                  [{fmt(g.auc_ss?.p05 ?? undefined, 2)}–{fmt(g.auc_ss?.p95 ?? undefined, 2)}]</span></td>
+                <td>{fmt(g.cmax_ss?.median ?? undefined, 2)} <span style={{ color: 'var(--text-dim)' }}>
+                  [{fmt(g.cmax_ss?.p05 ?? undefined, 2)}–{fmt(g.cmax_ss?.p95 ?? undefined, 2)}]</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/** Pediatric dose-finding: exposure by age×weight stratum vs an adult reference
+ * band, with the %-within-adult-range dose-selection curve (Week-14). */
+const PED_PALETTE = ['#6ea8fe', '#63e6be', '#ffd43b', '#ff922b', '#e599f7', '#ff8787'];
+
+function PediatricCard({ r, onRerun, busy }: {
+  r: PharmState['pediatric_results'];
+  onRerun?: (o: { source?: string; wt_exponent_cl?: number | null; wt_exponent_v?: number | null }) => void;
+  busy?: boolean;
+}) {
+  const [metric, setMetric] = useState(() => (r?.metrics && r.metrics[0]) || 'auc_tau');
+  const [clExp, setClExp] = useState('');
+  const [vExp, setVExp] = useState('');
+  if (!r || r.status !== 'ok' || !r.strata?.length) {
+    return <div className="qc-card conditional"><div className="qc-title">Pediatric simulation — not run</div>
+      <div style={{ fontSize: 12 }}>{r?.message}</div></div>;
+  }
+  const strata = r.strata;
+  const band = r.reference_band?.[metric];
+  const doses = strata[0].doses.map(d => d.dose);
+  const n = doses.length;
+
+  // --- % within adult range: the dose-selection curve (headline) ---
+  const CW = 380, CH = 210, cl = 44, cr = 12, ct = 10, cb = 34;
+  const cx = (i: number) => cl + (n <= 1 ? 0.5 : i / (n - 1)) * (CW - cl - cr);
+  const cy = (p: number) => CH - cb - (p / 100) * (CH - ct - cb);
+
+  // --- boxplots vs the adult band (shared log-y) ---
+  const all = strata.flatMap(s => s.doses.flatMap(d => {
+    const m = d[metric as keyof typeof d] as { p05?: number | null; p95?: number | null } | undefined;
+    return [m?.p05, m?.p95];
+  })).filter(v => v != null) as number[];
+  const lo = Math.max(1e-6, Math.min(...all, band?.lo ?? Infinity) * 0.9);
+  const hi = Math.max(...all, band?.hi ?? 0) * 1.1;
+  const lnLo = Math.log(lo), lnHi = Math.log(hi);
+  const W = 250, H = 156, ml = 40, mr = 8, mt = 8, mb = 26;
+  const sy = (v: number) => H - mb - ((Math.log(Math.max(v, 1e-6)) - lnLo) / (lnHi - lnLo || 1)) * (H - mt - mb);
+  const xAt = (i: number) => ml + (n <= 1 ? 0.5 : (i + 0.5) / n) * (W - ml - mr);
+  const bw = Math.min(20, (W - ml - mr) / (n * 1.7));
+
+  const boxPanel = (s: PediatricStratum) => (
+    <div key={s.label} style={{ width: W, maxWidth: '100%' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', fontWeight: 600 }}>
+        {s.label} <span style={{ opacity: 0.7 }}>(n = {s.n})</span>
+        {s.recommended_dose != null && <span style={{ color: 'var(--green)' }}> · dose {s.recommended_dose}</span>}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
+        aria-label={`Pediatric exposure for ${s.label}`}>
+        {band?.lo != null && band.hi != null &&
+          <rect x={ml} y={sy(band.hi)} width={W - ml - mr} height={Math.max(0, sy(band.lo) - sy(band.hi))}
+            fill="var(--text-dim)" fillOpacity="0.12" />}
+        {band?.median != null &&
+          <line x1={ml} y1={sy(band.median)} x2={W - mr} y2={sy(band.median)} stroke="var(--text-dim)" strokeDasharray="3 3" />}
+        {s.doses.map((d, i) => {
+          const m = d[metric as keyof typeof d] as PediatricMetric | undefined;
+          if (!m || m.p50 == null) return null;
+          const x = xAt(i), col = m.within_ref ? 'var(--green)' : 'var(--accent)';
+          return (
+            <g key={i}>
+              {m.p05 != null && m.p95 != null &&
+                <line x1={x} y1={sy(m.p95)} x2={x} y2={sy(m.p05)} stroke={col} strokeWidth="1" />}
+              {m.p25 != null && m.p75 != null &&
+                <rect x={x - bw / 2} y={sy(m.p75)} width={bw} height={Math.max(1, sy(m.p25) - sy(m.p75))}
+                  fill={col} fillOpacity="0.25" stroke={col} strokeWidth="0.8" />}
+              <line x1={x - bw / 2} y1={sy(m.p50)} x2={x + bw / 2} y2={sy(m.p50)} stroke={col} strokeWidth="1.6" />
+            </g>
+          );
+        })}
+        <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
+        {s.doses.map((d, i) => (
+          <text key={i} x={xAt(i)} y={H - mb + 11} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{d.dose}</text>
+        ))}
+      </svg>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.label} · pediatric exposure by <b>age × weight</b> vs the adult range
+        ({r.reference_source} at {r.reference_dose}) · {r.allometry} allometry · {r.n_per_stratum}/stratum
+        <span style={{ marginLeft: 10 }}>
+          {(r.metrics ?? ['auc_tau']).map(mk => (
+            <button key={mk} className="chip" style={{ padding: '1px 8px', marginLeft: 4,
+              background: metric === mk ? 'var(--accent)' : undefined, color: metric === mk ? '#fff' : undefined }}
+              onClick={() => setMetric(mk)}>{SP_METRIC_LABEL[mk] ?? mk}</button>
+          ))}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600, marginBottom: 2 }}>
+        {SP_METRIC_LABEL[metric] ?? metric} — % of pediatric subjects within the adult range
+      </div>
+      <svg viewBox={`0 0 ${CW} ${CH}`} style={{ width: '100%', maxWidth: CW }} role="img"
+        aria-label="Percent of pediatric subjects within the adult exposure range by dose">
+        {[0, 25, 50, 75, 100].map(p => (
+          <g key={p}>
+            <line x1={cl} y1={cy(p)} x2={CW - cr} y2={cy(p)} stroke="var(--border)" strokeOpacity="0.5" />
+            <text x={cl - 5} y={cy(p) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">{p}</text>
+          </g>
+        ))}
+        {strata.map((s, si) => {
+          const col = PED_PALETTE[si % PED_PALETTE.length];
+          const pts = s.doses.map((d, i) => {
+            const m = d[metric as keyof typeof d] as PediatricMetric | undefined;
+            return m?.pct_within_ref == null ? null : { x: cx(i), y: cy(m.pct_within_ref), rec: d.dose === s.recommended_dose };
+          }).filter(Boolean) as { x: number; y: number; rec: boolean }[];
+          return (
+            <g key={s.label}>
+              <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={col} strokeWidth="1.6" />
+              {pts.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={p.rec ? 3.4 : 2} fill={col}
+                stroke={p.rec ? '#fff' : 'none'} strokeWidth={p.rec ? 1 : 0} />)}
+            </g>
+          );
+        })}
+        <line x1={cl} y1={CH - cb} x2={CW - cr} y2={CH - cb} stroke="var(--border)" />
+        {doses.map((d, i) => (
+          <text key={i} x={cx(i)} y={CH - cb + 12} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{d}</text>
+        ))}
+        <text x={(cl + CW) / 2} y={CH - 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Dose (mg)</text>
+      </svg>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: 10, marginTop: 2 }}>
+        {strata.map((s, si) => (
+          <span key={s.label} style={{ color: 'var(--text-dim)' }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+              background: PED_PALETTE[si % PED_PALETTE.length], marginRight: 3 }} />{s.label}
+          </span>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>{strata.map(boxPanel)}</div>
+
+      {onRerun && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8,
+          paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <span style={{ color: 'var(--text-dim)' }}>pediatric covariates:</span>
+          {(['reference', 'dataset'] as const).map(src => (
+            <button key={src} className="chip" disabled={busy}
+              style={{ background: r.population_source === src ? 'var(--accent)' : undefined,
+                color: r.population_source === src ? '#fff' : undefined }}
+              onClick={() => onRerun({ source: src })}>{src === 'reference' ? 'representative peds' : 'analysis dataset'}</button>
+          ))}
+          <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>WT exponent CL</span>
+          <input type="number" step="0.01" value={clExp} onChange={e => setClExp(e.target.value)}
+            placeholder="0.75" disabled={busy} style={{ width: 56 }} />
+          <span style={{ color: 'var(--text-dim)' }}>V</span>
+          <input type="number" step="0.01" value={vExp} onChange={e => setVExp(e.target.value)}
+            placeholder="1.0" disabled={busy} style={{ width: 56 }} />
+          <button className="chip" disabled={busy}
+            onClick={() => onRerun({ wt_exponent_cl: clExp === '' ? null : Number(clExp),
+              wt_exponent_v: vExp === '' ? null : Number(vExp) })}>Re-simulate</button>
+          {busy && <span style={{ color: 'var(--text-dim)' }}>simulating…</span>}
+        </div>
+      )}
+
+      <table className="nca-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Age</th><th>Weight</th><th>n</th><th>Matched dose</th><th>Basis</th></tr></thead>
+        <tbody>
+          {strata.map((s, i) => (
+            <tr key={i}>
+              <td>{s.age_label}</td><td>{s.wt_label}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{s.n}</td>
+              <td style={{ color: s.recommended_dose != null ? 'var(--green)' : 'var(--text-dim)' }}>
+                {s.recommended_dose ?? '—'}</td>
+              <td style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+        Shaded band = adult 5–95% at dose {r.reference_dose}; box = IQR, whiskers = 5–95%, line = median.
+        Green = median within the adult range. Matched dose maximizes the % of subjects within it.
+      </div>
+    </div>
+  );
+}
+
 const ROLE_OPTIONS = ['', 'ID', 'TIME', 'TAD', 'DV', 'AMT', 'EVID', 'MDV', 'CMT',
   'II', 'ADDL', 'DVID', 'CENS', 'ROUTE', 'PD'];
 
@@ -1454,11 +2676,14 @@ function RolesEditor({ state, onApply, loading }:
 }
 
 function SimChart({ sim }: { sim: PharmState['simulation_results'] }) {
+  // Hooks must run unconditionally and in the same order every render — keep this
+  // above the early return, or a not-run -> ok transition changes hook order and
+  // React throws "Rendered more hooks than during the previous render."
+  const [logY, setLogY] = useState(false);
   if (!sim || sim.status !== 'ok' || !sim.times || !sim.cp) {
     return <div className="qc-card conditional"><div className="qc-title">Simulation — not run</div>
       <div style={{ fontSize: 12 }}>{sim?.message}</div></div>;
   }
-  const [logY, setLogY] = useState(false);
   const W = 580, H = 240, ml = 48, mr = sim.eff ? 48 : 16, mt = 12, mb = 32;
   const t = sim.times, cp = sim.cp, eff = sim.eff;
   const tmax = Math.max(...t) || 1;
@@ -1524,8 +2749,15 @@ function SimChart({ sim }: { sim: PharmState['simulation_results'] }) {
   );
 }
 
-function AuditPanel({ entries, verified }: { entries: AuditEntry[]; verified: boolean }) {
+function AuditPanel({
+  entries,
+  integrity,
+}: {
+  entries: AuditEntry[];
+  integrity: AuditIntegrityStatus | null;
+}) {
   const [open, setOpen] = useState(false);
+  const verified = integrity?.verified === true;
   return (
     <div>
       <span className="audit-toggle" onClick={() => setOpen(o => !o)}>
@@ -1534,6 +2766,12 @@ function AuditPanel({ entries, verified }: { entries: AuditEntry[]; verified: bo
       {verified && (
         <span className="audit-ok" style={{ marginLeft: 8 }}>
           <ShieldCheck size={10} style={{ display: 'inline', marginRight: 3 }} />verified
+        </span>
+      )}
+      {integrity && !verified && (
+        <span style={{ marginLeft: 8, color: 'var(--warning)', fontSize: 10 }}>
+          <AlertTriangle size={10} style={{ display: 'inline', marginRight: 3 }} />
+          {integrity.mode === 'hash_only' ? 'hash-only · unanchored' : 'verification failed'}
         </span>
       )}
       {open && (
@@ -1568,7 +2806,7 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
-  const [auditVerified, setAuditVerified] = useState(false);
+  const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrityStatus | null>(null);
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [currentStep, setCurrentStep] = useState(-1);
   const [pkModels, setPkModels] = useState<PkModelDef[]>([]);
@@ -1585,6 +2823,11 @@ export default function App() {
   const [fcLevels, setFcLevels] = useState('');
   const [fcTarget, setFcTarget] = useState('');
   const [fcMetric, setFcMetric] = useState('cmin');
+  const [seN, setSeN] = useState(20);
+  const [seObsT, setSeObsT] = useState('0.5,1,2,4,8,12,24');
+  const [seDose, setSeDose] = useState(100);
+  const [seNRep, setSeNRep] = useState(5);
+  const [seShowConfirm, setSeShowConfirm] = useState(false);
   const [token, setTokenState] = useState(getToken());
   const [showRoles, setShowRoles] = useState(false);
   const [skills, setSkills] = useState<SkillDef[]>([]);
@@ -1638,7 +2881,7 @@ export default function App() {
     try {
       const a = await api.getAudit(session.id);
       setAudit(a.entries);
-      setAuditVerified(a.verified);
+      setAuditIntegrity(a.integrity);
     } catch { /* best-effort */ }
   }
 
@@ -1707,7 +2950,7 @@ export default function App() {
     setLoading(true);
     setWfStatus('running');
     setCurrentStep(0);
-    const wfLabel = workflow === 'poppk_modeling' ? 'population modeling' : 'NCA';
+    const wfLabel = WF_LABEL[workflow];
     pushMsg({ role: 'user', content: `Starting ${wfLabel} workflow on: ${file.name}`, id: '' });
     try {
       const up = await api.uploadDataset(session.id, file);
@@ -1732,8 +2975,24 @@ export default function App() {
     if (!session) return;
     setLoading(true);
     setWfStatus('running');
-    pushMsg({ role: 'user', content: approve ? 'Approved — generating report.' : 'Rejected — workflow stopped.', id: '' });
+    // Approving runs every remaining step in one call. If any of them is a real
+    // population fit, poll a job instead of holding the request open — and say
+    // what actually happens next rather than assuming the NCA shape.
+    const remaining = WORKFLOW_UI[activeWorkflow].steps.slice(Math.max(currentStep, 0));
+    const isLongLeg = approve && remaining.some(s => HEAVY_STEPS.has(s.key));
+    const note = !approve ? 'Rejected — workflow stopped.'
+      : isLongLeg ? 'Approved — running the population fit (NLME → SCM → diagnostics → forest → VPC).'
+      : 'Approved — generating report.';
+    pushMsg({ role: 'user', content: note, id: '' });
     try {
+      if (isLongLeg) {
+        const { job_id } = await api.resumeWorkflowAsync(session.id);
+        const res = await api.pollJob<WorkflowResponse>(session.id, job_id,
+          s => setJobNote(`Population fit running… ${s}s (several real fits — this can take minutes)`));
+        setJobNote('');
+        handleWorkflowResponse(res);
+        return;
+      }
       const res = await api.resumeWorkflow(session.id, approve);
       handleWorkflowResponse(res);
     } catch (e) {
@@ -1823,12 +3082,17 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
-  async function runVpc() {
+  async function runVpc(opts?: { stratify_by?: string | null; dose_normalize?: boolean; x_by?: string;
+    exposure_check?: boolean; blq_check?: boolean }) {
     if (!session) return;
     setLoading(true);
-    pushMsg({ role: 'user', content: 'VPC / goodness-of-fit', id: '' });
+    const label = opts?.exposure_check ? ' — exposure predictive check'
+      : opts?.blq_check ? ' — BLQ-incidence VPC'
+      : opts?.stratify_by ? ` — stratified by ${opts.stratify_by}`
+      : opts?.dose_normalize ? ' — dose-normalized' : '';
+    pushMsg({ role: 'user', content: `VPC / goodness-of-fit${label}`, id: '' });
     try {
-      const res = await api.vpc(session.id);
+      const res = await api.vpc(session.id, opts);
       setState(res.state);
       pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
       pushMsg({ role: 'assistant', content: '__VPC__', agent: 'modeler', id: '', snap: res.state });
@@ -1917,12 +3181,22 @@ export default function App() {
     }
   }
 
-  async function runNlme(method: string) {
+  async function runNlme(method: string, opts?: { prior_from?: string; prior_var?: number }) {
     if (!session) return;
+    const label: Record<string, string> = {
+      focei: 'FOCE-I only', saem: 'SAEM',
+      focei_saem: 'FOCE-I (SAEM-seeded)', auto: 'Auto (escalating)',
+    };
+    const priorNote = opts?.prior_from
+      ? ` + informative prior (MAP${opts.prior_var != null ? `, var ${opts.prior_var}` : ''})` : '';
     setLoading(true);
-    pushMsg({ role: 'user', content: `NLME fit — ${method.toUpperCase()} (${errorModel} error)`, id: '' });
+    pushMsg({ role: 'user', content: `NLME fit — ${label[method] ?? method} (${errorModel} error)${priorNote}`, id: '' });
     try {
-      const { job_id } = await api.nlme(session.id, { method, error_model: errorModel });
+      const { job_id } = await api.nlme(session.id, {
+        method, error_model: errorModel,
+        ...(opts?.prior_from ? { prior_from: opts.prior_from } : {}),
+        ...(opts?.prior_var != null ? { prior_var: opts.prior_var } : {}),
+      });
       const res = await api.pollJob(session.id, job_id,
         s => setJobNote(`Population fit running… ${s}s`));
       setJobNote('');
@@ -1932,6 +3206,20 @@ export default function App() {
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
     } finally { setJobNote(''); setLoading(false); }
+  }
+
+  async function runPriorCheck() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Prior check (predictive band + shrinkage)', id: '' });
+    try {
+      const res = await api.priorCheck(session.id, { n_draws: 500 });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
+      pushMsg({ role: 'assistant', content: '__PRIORCHECK__', agent: 'modeler', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
+    } finally { setLoading(false); }
   }
 
   async function runScm() {
@@ -1948,6 +3236,30 @@ export default function App() {
       pushMsg({ role: 'assistant', content: '__SCM__', agent: 'modeler', id: '', snap: res.state });
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
+    } finally { setJobNote(''); setLoading(false); }
+  }
+
+  async function runSimest() {
+    if (!session) return;
+    const obs_t = seObsT.split(',').map(s => Number(s.trim())).filter(Number.isFinite);
+    if (!obs_t.length || seN < 2) return;
+    setSeShowConfirm(false);
+    setLoading(true);
+    pushMsg({ role: 'user', content: `Simulation-estimation design check — N=${seN}, ${seNRep} replicate(s)`, id: '' });
+    try {
+      const { job_id } = await api.simest(session.id, {
+        confirm: true,
+        design: { n_subjects: seN, obs_t, dose: seDose, n_doses: 1 },
+        n_rep: seNRep,
+      });
+      const res = await api.pollJob(session.id, job_id,
+        s => setJobNote(`Simulation-estimation running… ${s}s (several real fits — this can take minutes)`));
+      setJobNote('');
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__SIMEST__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
     } finally { setJobNote(''); setLoading(false); }
   }
 
@@ -2006,6 +3318,20 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
+  async function runCovariateForest() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Covariate forest plot', id: '' });
+    try {
+      const res = await api.forest(session.id);
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'modeler', id: '' });
+      pushMsg({ role: 'assistant', content: '__FOREST__', agent: 'modeler', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'modeler', id: '' });
+    } finally { setLoading(false); }
+  }
+
   async function downloadFullReport() {
     if (!session) return;
     setLoading(true);
@@ -2057,6 +3383,95 @@ export default function App() {
       setState(res.state);
       pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
       pushMsg({ role: 'assistant', content: '__SWEEP__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runClinsim(opts?: { doses?: number[]; metric?: string; threshold?: number | null;
+    direction?: string; target_fraction?: number; n_subjects?: number; param_uncertainty?: boolean }) {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Clinical trial simulation (target attainment)', id: '' });
+    try {
+      const res = await api.clinsim(session.id, {
+        ...(opts?.doses?.length ? { doses: opts.doses } : { dose: simDose }),
+        tau: simTau, n_doses: simNDoses,
+        ...(opts?.metric ? { metric: opts.metric } : {}),
+        ...(opts && 'threshold' in opts ? { threshold: opts.threshold } : {}),
+        ...(opts?.direction ? { direction: opts.direction } : {}),
+        ...(opts?.target_fraction != null ? { target_fraction: opts.target_fraction } : {}),
+        ...(opts?.n_subjects ? { n_subjects: opts.n_subjects } : {}),
+        ...(opts?.param_uncertainty ? { param_uncertainty: true } : {}),
+      });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__CLINSIM__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runExposureForest() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Exposure covariate forest', id: '' });
+    try {
+      const res = await api.exposureForest(session.id, { dose: simDose, tau: simTau, n_doses: simNDoses });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__EXPFOREST__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runSpecialPop(opts?: { source?: string; stratify_by?: string | null }) {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Special-population exposure simulation', id: '' });
+    try {
+      const res = await api.specialPopulation(session.id, {
+        dose: simDose, tau: simTau, n_doses: simNDoses,
+        ...(opts?.source ? { source: opts.source } : {}),
+        ...(opts?.stratify_by ? { stratify_by: opts.stratify_by } : {}),
+      });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__SPECIALPOP__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runIndividualExposures() {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Individual steady-state exposures', id: '' });
+    try {
+      const res = await api.individualExposures(session.id, { dose: simDose, tau: simTau, n_doses: simNDoses });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__INDIVEXP__', agent: 'simulator', id: '', snap: res.state });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
+    } finally { setLoading(false); }
+  }
+
+  async function runPediatric(opts?: { source?: string; wt_exponent_cl?: number | null; wt_exponent_v?: number | null }) {
+    if (!session) return;
+    setLoading(true);
+    pushMsg({ role: 'user', content: 'Pediatric dose-finding simulation', id: '' });
+    try {
+      const res = await api.pediatricSimulation(session.id, {
+        tau: simTau, n_doses: simNDoses,
+        ...(opts?.source ? { source: opts.source } : {}),
+        ...(opts?.wt_exponent_cl != null ? { wt_exponent_cl: opts.wt_exponent_cl } : {}),
+        ...(opts?.wt_exponent_v != null ? { wt_exponent_v: opts.wt_exponent_v } : {}),
+      });
+      setState(res.state);
+      pushMsg({ role: 'assistant', content: res.summary, agent: 'simulator', id: '' });
+      pushMsg({ role: 'assistant', content: '__PEDIATRIC__', agent: 'simulator', id: '', snap: res.state });
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'simulator', id: '' });
     } finally { setLoading(false); }
@@ -2135,16 +3550,20 @@ export default function App() {
           </div>
           <div className="sidebar-stat">
             <span className="sidebar-stat-key">Audit</span>
-            <span className="sidebar-stat-val" style={{ color: auditVerified ? 'var(--green)' : 'var(--text-dim)' }}>
-              {audit.length > 0 ? `${audit.length} entries${auditVerified ? ' ✓' : ''}` : '–'}
+            <span className="sidebar-stat-val" style={{
+              color: auditIntegrity?.verified ? 'var(--green)' : 'var(--text-dim)',
+            }}>
+              {audit.length > 0
+                ? `${audit.length} entries${auditIntegrity?.verified ? ' ✓' : ''}`
+                : '–'}
             </span>
           </div>
         </div>
 
         <div className="sidebar-section">
-          <div className="sidebar-label">{activeWorkflow === 'poppk_modeling' ? 'Modeling Workflow' : 'NCA Workflow'}</div>
+          <div className="sidebar-label">{WORKFLOW_UI[activeWorkflow].title}</div>
           <ul className="step-list">
-            {(activeWorkflow === 'poppk_modeling' ? MODELING_STEPS : STEPS).map((s, i) => {
+            {WORKFLOW_UI[activeWorkflow].steps.map((s, i) => {
               const done = currentStep > i || wfStatus === 'complete';
               const active = currentStep === i && wfStatus === 'running';
               const gate = 'gate' in s && s.gate && wfStatus === 'awaiting_review';
@@ -2173,6 +3592,13 @@ export default function App() {
             {loading && wfStatus === 'running' && activeWorkflow === 'poppk_modeling'
               ? <><div className="spinner" /> Running…</>
               : <><Activity size={13} /> Run Modeling + Engines</>}
+          </button>
+          <button className="workflow-btn" disabled={!canRunWorkflow} onClick={() => uploadAndRun('poppk_full')}
+            style={{ marginTop: 8 }}
+            title="Full population PK: structural comparison (gated), NLME fit, SCM covariate build, residual diagnostics, covariate forest, VPC, adversarial review (gated), report">
+            {loading && wfStatus === 'running' && activeWorkflow === 'poppk_full'
+              ? <><div className="spinner" /> Running…</>
+              : <><Activity size={13} /> Run Full PopPK</>}
           </button>
         </div>
       </aside>
@@ -2287,7 +3713,7 @@ export default function App() {
                     <QcCard state={st} />
                     {audit.length > 0 && (
                       <div style={{ marginTop: 10 }}>
-                        <AuditPanel entries={audit} verified={auditVerified} />
+                        <AuditPanel entries={audit} integrity={auditIntegrity} />
                       </div>
                     )}
                   </div>
@@ -2350,12 +3776,16 @@ export default function App() {
               );
             }
             if (m.content === '__VPC__' && st?.vpc_results) {
+              const wide = !!(st.vpc_results.stratified || st.vpc_results.exposure_pc
+                || st.vpc_results.blq_vpc);
               return (
                 <div key={m.id} className="msg agent">
                   <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>VP</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                  <div className="msg-bubble" style={{ maxWidth: wide ? 920 : 640 }}>
                     <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · VPC / GOF</div>
-                    <VpcCard r={st.vpc_results} />
+                    <VpcCard r={st.vpc_results} onRerun={runVpc} busy={loading}
+                      covariates={vpcStrataOptions(st.dataset_metadata as
+                        { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null)} />
                   </div>
                 </div>
               );
@@ -2367,6 +3797,17 @@ export default function App() {
                   <div className="msg-bubble" style={{ maxWidth: 640 }}>
                     <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · NLME (mixed-effects)</div>
                     <NlmeCard r={st.nlme_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__PRIORCHECK__' && st?.prior_check_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>PC</div>
+                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Prior check (Bayesian borrowing)</div>
+                    <PriorCheckCard r={st.prior_check_results} />
                   </div>
                 </div>
               );
@@ -2415,6 +3856,28 @@ export default function App() {
                 </div>
               );
             }
+            if (m.content === '__FOREST__' && st?.forest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CF</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Covariate forest plot</div>
+                    <ForestCard r={st.forest_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__SIMEST__' && st?.simest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SE</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Trial-design precision check</div>
+                    <SimestCard r={st.simest_results} />
+                  </div>
+                </div>
+              );
+            }
             if (m.content === '__SWEEP__' && st?.dose_sweep_results) {
               return (
                 <div key={m.id} className="msg agent">
@@ -2422,6 +3885,61 @@ export default function App() {
                   <div className="msg-bubble" style={{ maxWidth: 640 }}>
                     <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Dose sweep</div>
                     <DoseSweepCard r={st.dose_sweep_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__CLINSIM__' && st?.clinsim_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>CT</div>
+                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Clinical trial simulation</div>
+                    <ClinsimCard r={st.clinsim_results} onRerun={runClinsim} busy={loading} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__EXPFOREST__' && st?.exposure_forest_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>EF</div>
+                  <div className="msg-bubble" style={{ maxWidth: 680 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Exposure covariate forest</div>
+                    <ExposureForestCard r={st.exposure_forest_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__SPECIALPOP__' && st?.special_pop_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SP</div>
+                  <div className="msg-bubble" style={{ maxWidth: 720 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Special-population simulation</div>
+                    <SpecialPopCard r={st.special_pop_results} onRerun={runSpecialPop} busy={loading} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__INDIVEXP__' && st?.individual_exposures) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>IE</div>
+                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Individual exposures</div>
+                    <IndividualExposuresCard r={st.individual_exposures} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__PEDIATRIC__' && st?.pediatric_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>PD</div>
+                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Pediatric dose-finding</div>
+                    <PediatricCard r={st.pediatric_results} onRerun={runPediatric} busy={loading} />
                   </div>
                 </div>
               );
@@ -2530,8 +4048,18 @@ export default function App() {
         {state?.pk_model_results?.status === 'ok' && (
           <div className="quick-actions">
             <span className="quick-actions-label">Population (NLME):</span>
-            <button className="chip" disabled={loading} onClick={() => runNlme('focei')}>FOCE-I</button>
-            <button className="chip" disabled={loading} onClick={() => runNlme('saem')}>SAEM</button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('focei')}
+              title="Single cold start — fastest and fully reproducible. On harder models (several IIV terms, covariates) a cold start can converge to the wrong optimum while still reporting success.">
+              FOCE-I only
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('saem')}
+              title="Stochastic EM — explores rather than descends, so it is far less sensitive to starting values, but gives no exact Laplace OFV or asymptotic standard errors.">
+              SAEM
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runNlme('auto')}
+              title="Runs FOCE-I, then probes with an independent SAEM-seeded start. If the two agree it stops there; if they disagree it escalates to a multi-start search and returns the lowest-OFV fit. Never worse than FOCE-I alone, but much slower whenever it escalates.">
+              Auto
+            </button>
             <label className="sim-field">error
               <select className="model-select" style={{ maxWidth: 130 }} value={errorModel}
                 disabled={loading} onChange={e => setErrorModel(e.target.value)}>
@@ -2540,6 +4068,21 @@ export default function App() {
                 <option value="combined">combined</option>
               </select>
             </label>
+            <button className="chip" disabled={loading || !state?.nlme_results}
+              onClick={() => runNlme('focei', { prior_from: 'nlme' })}
+              title="MAP fit with the current fit as an informative prior (Bayesian borrowing): informative prior from the stored fit's covariance. Fit adults first, then load the sparse (e.g. pediatric) data and click this.">
+              MAP (informative prior)
+            </button>
+            <button className="chip" disabled={loading || !state?.nlme_results}
+              onClick={() => runNlme('focei', { prior_from: 'nlme', prior_var: 1.0 })}
+              title="MAP fit with a WEAKLY informative prior (variance 1.0 on all params) — the estimate follows the data more than the prior.">
+              MAP (weak prior)
+            </button>
+            <button className="chip" disabled={loading || !(state?.nlme_results && state.nlme_results.map)}
+              onClick={runPriorCheck}
+              title="Prior-predictive band vs the data + prior-vs-posterior shrinkage. Needs a MAP fit.">
+              Prior check
+            </button>
             <button className="chip" disabled={loading} onClick={runScm}
               title="Stepwise covariate modeling: forward selection (p<0.05) + backward elimination (p<0.01) over dataset covariates">
               Covariate SCM
@@ -2584,17 +4127,85 @@ export default function App() {
           </div>
         )}
 
+        {state?.nlme_results?.status === 'ok' && !(state.nlme_results.covariate_effects?.length) && (
+          <div className="quick-actions">
+            <span className="quick-actions-label">Trial-design precision check:</span>
+            {!seShowConfirm ? (
+              <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(true)}
+                title="Simulate replicate trials under a proposed design and re-fit each — checks whether the 95% CI lands within 60-140% of its own estimate (up to 10 replicates; runs several real NLME fits, several minutes)">
+                Simulation-estimation…
+              </button>
+            ) : (
+              <>
+                <label className="sim-field">N subjects
+                  <input type="number" value={seN} disabled={loading}
+                    onChange={e => setSeN(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">sample times (h)
+                  <input type="text" style={{ width: 160 }} value={seObsT} disabled={loading}
+                    onChange={e => setSeObsT(e.target.value)} />
+                </label>
+                <label className="sim-field">dose
+                  <input type="number" value={seDose} disabled={loading}
+                    onChange={e => setSeDose(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">replicates (≤10)
+                  <input type="number" min={1} max={10} value={seNRep} disabled={loading}
+                    onChange={e => setSeNRep(Math.max(1, Math.min(10, Number(e.target.value))))} />
+                </label>
+                <button className="chip" disabled={loading} onClick={runSimest}
+                  title="Confirms and runs — several real NLME fits, several minutes to tens of minutes; holds this session while running">
+                  Confirm &amp; run
+                </button>
+                <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(false)}>
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {state?.nlme_results?.status === 'ok' && !!(state.nlme_results.covariate_effects?.length) && (
+          <div className="quick-actions">
+            <span className="quick-actions-label" style={{ color: 'var(--text-dim)' }}>
+              Trial-design precision check unavailable: not supported for models with covariate effects.
+            </span>
+          </div>
+        )}
+
         {state?.pk_model_results?.status === 'ok' && (
           <div className="quick-actions">
             <span className="quick-actions-label">Diagnostics:</span>
-            <button className="chip" disabled={loading} onClick={runVpc}>VPC / goodness-of-fit</button>
+            <button className="chip" disabled={loading} onClick={() => runVpc()}>VPC / goodness-of-fit</button>
             <button className="chip" disabled={loading} onClick={runDiagnostics}>Residual diagnostics</button>
+            <button className="chip" disabled={loading} onClick={runCovariateForest}
+              title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">
+              Covariate forest
+            </button>
+            <button className="chip" disabled={loading} onClick={runExposureForest}
+              title="Simulated exposure forest: relative AUC/Cmax across covariate extremes with the 0.8–1.25 band">
+              Exposure forest
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runSpecialPop()}
+              title="Special-population simulation: steady-state exposure by renal function (or covariate) vs the normal reference band → dose adjustment">
+              Special populations
+            </button>
+            <button className="chip" disabled={loading} onClick={runIndividualExposures}
+              title="Per-subject steady-state AUCss/Cmax,ss from the fitted EBEs (needs an NLME fit)">
+              Individual exposures
+            </button>
+            <button className="chip" disabled={loading} onClick={() => runPediatric()}
+              title="Pediatric dose-finding: age×weight exposure vs the adult range → the dose matching adult exposure (supports estimated allometry)">
+              Pediatric doses
+            </button>
             <label className="sim-field">doses
               <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"
                 value={sweepDoses} disabled={loading}
                 onChange={e => setSweepDoses(e.target.value)} />
             </label>
             <button className="chip" disabled={loading} onClick={runDoseSweep}>Dose sweep</button>
+            <button className="chip" disabled={loading} onClick={() => runClinsim()}
+              title="Clinical trial simulation: virtual population across a dose grid → probability of target attainment + dose recommendation">
+              Trial simulation (PTA)</button>
           </div>
         )}
 

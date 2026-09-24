@@ -12,7 +12,7 @@ from typing import Any
 
 from app.core.audit import AuditChain
 from app.core.pharmstate import PharmState
-from app.tools.base import ToolContext, ToolRegistry
+from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 
 MAX_TOOL_STEPS = 6
 
@@ -54,11 +54,20 @@ class Agent:
             if not choice:
                 break
             try:
+                # allow_expensive is NOT passed: a chat turn runs synchronously, so a
+                # long-running fit here would block the worker AND bypass the job
+                # queue. The registry refuses it (ExpensiveToolError) — enforcing
+                # there, not on `tools`, also covers a tool the LLM names that is not
+                # in this agent's own list.
                 new_state, tool_res = registry.execute(
                     choice["name"], state=result.state, ctx=ctx,
                     args=choice.get("input", {}), audit=audit, timestamp=clock(),
                     actor=actor,
                 )
+            except ExpensiveToolError as exc:
+                result.messages.append(f"{exc} Ask for it from that panel instead.")
+                result.tool_calls.append({"tool": choice["name"], "skipped": "expensive"})
+                break
             except Exception as exc:
                 # A tool failed (e.g. NCA requested before a dataset is loaded).
                 # Surface it as a chat message rather than 500-ing the whole turn.

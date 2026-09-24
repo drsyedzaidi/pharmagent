@@ -130,6 +130,35 @@ def test_volume_agrees_across_methods(focei, saem):
     assert abs(v_foce - v_saem) / v_saem < 0.20, (v_foce, v_saem)
 
 
+# ── CWRES on the SAME converged fit (no new fit — reuses the `focei` fixture) ─
+
+def test_cwres_from_focei_theophylline_is_plausible(subjects, focei):
+    """CWRES computed post-hoc from the real 12-subject FOCE-I fit must be a
+    well-behaved standardized residual: finite, roughly centered, roughly
+    unit-scaled, and every subject's stored EBE reused (no re-optimization —
+    `posthoc_residuals` must never re-run the inner solver when eta is
+    already on the fitted result)."""
+    from app.compute.nlme import cv_pct_to_omega2, posthoc_residuals
+
+    omega2 = {p: cv_pct_to_omega2(cv) for p, cv in focei["omega_cv_pct"].items()}
+    sigma = focei["sigma"]
+    etas = {r["subject"]: r["eta"] for r in focei["individual"]}
+
+    out = posthoc_residuals(
+        "oral_1cmt", subjects, theta=focei["theta"], omega2=omega2,
+        sigma_prop=float(sigma.get("prop") or 0.0), sigma_add=float(sigma.get("add") or 0.0),
+        iiv_params=focei["iiv_params"], error_model=focei["error_model"],
+        covariate_effects=focei.get("covariate_effects"), etas=etas)
+
+    assert out["summary"]["n"] > 0
+    assert out["summary"]["n_etas_resolved"] == 0  # every subject's EBE was reused
+    assert out["summary"]["n_etas_reused"] == out["summary"]["n_subjects_used"]
+    cwres = out["cwres"]
+    assert all(math.isfinite(v) for v in cwres)
+    assert abs(out["summary"]["cwres_mean"]) < 1.0
+    assert 0.3 < out["summary"]["cwres_sd"] < 3.0
+
+
 # ── optional: exact concordance with the user's own tool run ──────────────────
 
 @pytest.mark.skipif(THEOPHYLLINE["tool_reference"] is None,

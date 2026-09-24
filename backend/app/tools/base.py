@@ -33,6 +33,13 @@ class ToolResult:
     action: str = ""                  # audit action description
 
 
+class ExpensiveToolError(RuntimeError):
+    """Raised when a long-running fit is invoked from a path that has no admission
+    control. Callers that ARE admission-controlled (the job-backed endpoints via
+    ``Orchestrator.run_tool``, and workflow templates whose expensive legs sit
+    behind a human gate) opt in with ``allow_expensive=True``."""
+
+
 @dataclass
 class Tool:
     name: str
@@ -40,6 +47,8 @@ class Tool:
     agent: str                        # owning agent (write-access key)
     input_schema: dict[str, Any]
     run: Callable[[PharmState, ToolContext, dict[str, Any]], ToolResult]
+    expensive: bool = False           # long-running fit: endpoint/job-only, never
+    #                                   run synchronously from a chat turn
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
@@ -80,13 +89,25 @@ class ToolRegistry:
         audit: AuditChain,
         timestamp: str,
         actor: str = "",
+        allow_expensive: bool = False,
     ) -> tuple[PharmState, ToolResult]:
         """Run a tool: compute → audit → apply writes. The only execution path.
 
         ``actor`` is the authenticated identity, recorded (tamper-evidently) on
         the audit entry.
+
+        Admission control lives HERE rather than in the agent loop: this is the
+        single choke point every caller funnels through, so a tool named by an
+        LLM that is not in the calling agent's own list cannot slip past it.
+        ``allow_expensive`` must be set explicitly by callers that are themselves
+        admission-controlled — see ExpensiveToolError.
         """
         tool = self.get(name)
+        if tool.expensive and not allow_expensive:
+            raise ExpensiveToolError(
+                f"'{name}' is a long-running fit — launch it from its dedicated "
+                "control (Population NLME / Covariate SCM / Compare engines), which "
+                "runs it as a bounded background job. It cannot run on this path.")
         res = tool.run(state, ctx, args)
         audit.append(
             agent=tool.agent,

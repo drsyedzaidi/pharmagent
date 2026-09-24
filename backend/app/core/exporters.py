@@ -14,12 +14,23 @@ from app.compute.nmexport import build_mrgsolve, build_nonmem
 from app.core.pharmstate import PharmState
 
 
+def sanitize_cell(v: Any) -> Any:
+    """Neutralize CSV formula / DDE injection: a spreadsheet treats a cell that
+    begins (after any leading whitespace) with ``= + - @`` — or with a tab / CR —
+    as a formula, so an uploaded identifier like ``=cmd|'/C calc'!A0`` executes on
+    open. Prefix such string cells with an apostrophe to force literal text."""
+    if isinstance(v, str) and v and (v.lstrip()[:1] in ("=", "+", "-", "@")
+                                     or v[:1] in ("\t", "\r")):
+        return "'" + v
+    return v
+
+
 def _csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
     w.writeheader()
     for r in rows:
-        w.writerow(r)
+        w.writerow({k: sanitize_cell(val) for k, val in r.items()})
     return buf.getvalue()
 
 

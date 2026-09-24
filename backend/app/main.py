@@ -13,10 +13,11 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.core import cdisc, exporters
+from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
-from app.workflows import WORKFLOWS
+from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
 log = logging.getLogger("pharmagent")
@@ -74,6 +75,25 @@ async def job_rejected_handler(request: Request, exc: JobRejected) -> JSONRespon
     return JSONResponse(status_code=429,
                         headers={"X-Request-ID": rid, "Retry-After": "5"},
                         content=_error_body("job_rejected", str(exc), rid))
+
+
+@app.exception_handler(AuditSecurityError)
+async def audit_security_handler(
+    request: Request, exc: AuditSecurityError
+) -> JSONResponse:
+    """Fail closed without disclosing seal/key/anchor internals to API callers."""
+    rid = getattr(request.state, "request_id", "")
+    log.error("audit_security_failure", extra={"request_id": rid,
+              "error_type": type(exc).__name__})
+    return JSONResponse(
+        status_code=423,
+        headers={"X-Request-ID": rid},
+        content=_error_body(
+            "audit_integrity_failure",
+            "session is locked because its audit evidence could not be verified",
+            rid,
+        ),
+    )
 
 
 orch = Orchestrator()
@@ -135,6 +155,12 @@ class WorkflowRequest(BaseModel):
 class ResumeRequest(BaseModel):
     approve: bool = True
     reason: str = ""          # reason-for-change / approval note (audited)
+    # Approving a gate runs every remaining step in one call. For a template
+    # whose remainder is a population fit (poppk_full: NLME -> SCM -> VPC) that
+    # is minutes of compute, so the client can ask for a job id to poll instead
+    # of holding the connection open. Default False keeps existing callers
+    # byte-identical.
+    background: bool = False
 
 
 class RolesRequest(BaseModel):
@@ -171,6 +197,67 @@ class DoseSweepRequest(BaseModel):
     tmax: float | None = None
 
 
+class ClinsimRequest(BaseModel):
+    """Clinical trial simulation / probability of target attainment."""
+    doses: list[float] | None = None
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 1
+    metric: str = "ctrough"
+    threshold: float | None = None
+    direction: str = "above"
+    target_fraction: float = Field(0.9, gt=0.0, le=1.0)
+    n_subjects: int = 500
+    param_uncertainty: bool = False
+    n_param_draws: int = 100
+
+
+class ExposureForestRequest(BaseModel):
+    """Simulated exposure covariate forest options."""
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    percentiles: list[float] | None = None
+    n_draws: int = 500
+
+
+class SpecialPopRequest(BaseModel):
+    """Special-population (renal) exposure simulation options."""
+    stratify_by: str | None = None
+    doses: list[float] | None = None
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    metrics: list[str] | None = None
+    reference_stratum: str = "Normal"
+    reference_dose: float | None = None
+    n_per_stratum: int = 600
+    source: str = "dataset"
+    n_reference: int = 4000
+
+
+class IndividualExposuresRequest(BaseModel):
+    """Per-subject steady-state exposure options."""
+    dose: float = 100.0
+    tau: float = 24.0
+    n_doses: int = 7
+    group_by: str | None = None
+
+
+class PediatricRequest(BaseModel):
+    """Pediatric age×weight dose-matching simulation options."""
+    doses: list[float] | None = None
+    tau: float = 12.0
+    n_doses: int = 14
+    reference_dose: float = 25.0
+    n_per_stratum: int = 1000
+    source: str = "reference"
+    n_pediatric: int = 6000
+    n_reference: int = 4000
+    wt_exponent_cl: float | None = None
+    wt_exponent_v: float | None = None
+
+
 class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
@@ -197,7 +284,8 @@ class FlexplotRequest(BaseModel):
 def health() -> dict:
     return {"status": "ok", "app": settings.app_name, "org": settings.org_name,
             "llm": "mock" if settings.llm_is_mock else settings.model,
-            "auth": "required" if settings.api_token else "open"}
+            "auth": "required" if settings.api_token else "open",
+            "audit": "enforced" if orch.audit_security is not None else "hash_only"}
 
 
 @app.get("/api/workflows")
@@ -262,27 +350,65 @@ def set_roles(sid: str, req: RolesRequest, sess=Depends(owned_session),
     return orch.set_roles(sid, req.overrides, actor=actor, reason=req.reason)
 
 
+def _start_workflow(sid: str, name: str, params: dict | None, actor: str) -> dict:
+    """Start a workflow, handing the leg to the job queue if it reaches a long fit.
+
+    Admission control, not convenience: a leg containing run_nlme/run_scm/
+    run_engine_comparison must not occupy a request thread or bypass the
+    JobManager's concurrency caps, so it is submitted and polled instead.
+    """
+    try:
+        wf = get_workflow(name)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    if orch.workflow_needs_job(wf, 0):
+        job_id = jobs.submit(
+            session_id=sid, kind="workflow_start",
+            fn=lambda: orch.start_workflow(sid, name, params, actor=actor,
+                                           allow_expensive=True))
+        return {"job_id": job_id, "status": "running", "kind": "workflow_start"}
+    return orch.start_workflow(sid, name, params, actor=actor)
+
+
 @app.post("/api/sessions/{sid}/workflow/start")
 def start_workflow_v2(sid: str, req: WorkflowStartRequest, sess=Depends(owned_session),
                       actor: str = Depends(actor_id)) -> dict:
-    try:
-        return orch.start_workflow(sid, req.workflow, req.params, actor=actor)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+    return _start_workflow(sid, req.workflow, req.params, actor)
 
 
 @app.post("/api/sessions/{sid}/workflow")
 def start_workflow(sid: str, req: WorkflowRequest, sess=Depends(owned_session),
                    actor: str = Depends(actor_id)) -> dict:
-    try:
-        return orch.start_workflow(sid, req.name, req.params, actor=actor)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+    return _start_workflow(sid, req.name, req.params, actor)
 
 
 @app.post("/api/sessions/{sid}/workflow/resume")
 def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
                     actor: str = Depends(actor_id)) -> dict:
+    # A rejection does no compute — it records the signed decision and returns,
+    # so it always runs inline. Only an approval can start a long leg.
+    if req.approve:
+        sess_now = orch.get_session(sid)
+        # Approving a gate is a scientific decision, not queue admission: if the
+        # remaining leg reaches a long fit it goes to the job queue regardless of
+        # what the client asked for.
+        needs_job = False
+        if sess_now.state.workflow_name:
+            try:
+                needs_job = orch.workflow_needs_job(
+                    get_workflow(sess_now.state.workflow_name),
+                    sess_now.state.current_step)
+            except KeyError:
+                needs_job = False
+        if req.background or needs_job:
+            if not sess_now.pending_review:
+                raise HTTPException(400, "no pending review to resume")
+            job_id = jobs.submit(
+                session_id=sid, kind="workflow_resume",
+                fn=lambda: orch.resume_workflow(sid, True, actor=actor,
+                                                reason=req.reason,
+                                                allow_expensive=True))
+            return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
     try:
         return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason)
     except (KeyError, ValueError) as e:
@@ -319,10 +445,21 @@ def simulate_pk(sid: str, req: SimulateRequest, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+class VpcRequest(BaseModel):
+    """Optional VPC options; all-default reproduces the plain pooled VPC."""
+    stratify_by: str | None = None
+    dose_normalize: bool = False
+    x_by: str = "time"
+    exposure_check: bool = False
+    blq_check: bool = False
+
+
 @app.post("/api/sessions/{sid}/vpc")
-def run_vpc(sid: str, sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+def run_vpc(sid: str, req: VpcRequest | None = None, sess=Depends(owned_session),
+            actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
     try:
-        return orch.run_tool(sid, "run_vpc", "modeler", {}, actor=actor)
+        return orch.run_tool(sid, "run_vpc", "modeler", args, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -336,22 +473,71 @@ def run_diagnostics(sid: str, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/sessions/{sid}/forest")
+def run_covariate_forest(sid: str, sess=Depends(owned_session),
+                         actor: str = Depends(actor_id)) -> dict:
+    try:
+        return orch.run_tool(sid, "run_covariate_forest", "modeler", {}, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 class NlmeRequest(BaseModel):
     model_config = {"protected_namespaces": ()}
     method: str = "focei"
     model_key: str | None = None
     iiv_params: list[str] | None = None
     error_model: str = "proportional"
+    prior_from: str | None = None        # "nlme" -> MAP with the stored fit as prior
+    prior_var: float | None = None       # prior variance (log scale); None -> from RSE%
 
 
 @app.post("/api/sessions/{sid}/nlme")
 def run_nlme(sid: str, req: NlmeRequest, sess=Depends(owned_session),
              actor: str = Depends(actor_id)) -> dict:
     """Submit the (slow) population fit as a background job; poll /jobs/{id}."""
-    body = req.model_dump()
+    body = req.model_dump(exclude_none=True)
     job_id = jobs.submit(session_id=sid, kind="nlme",
                          fn=lambda: orch.run_tool(sid, "run_nlme", "modeler", body, actor=actor))
     return {"job_id": job_id, "status": "running", "kind": "nlme"}
+
+
+class PriorCheckRequest(BaseModel):
+    n_draws: int = 500
+
+
+@app.post("/api/sessions/{sid}/prior_check")
+def run_prior_check(sid: str, req: PriorCheckRequest | None = None,
+                    sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_prior_check", "modeler", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class SimestRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    confirm: bool = False
+    design: dict = Field(default_factory=dict)
+    n_rep: int = 5
+    params: list[str] | None = None
+    ci_target_pct: float | None = None
+    method: str = "focei"
+
+
+@app.post("/api/sessions/{sid}/simest")
+def run_simest(sid: str, req: SimestRequest, sess=Depends(owned_session),
+               actor: str = Depends(actor_id)) -> dict:
+    """Submit the simulation-estimation precision check as a background job;
+    poll /jobs/{id}. `agent="simulator"` (never "modeler") -- this tool is not
+    LLM-reachable from chat; see app.tools.simest_tools for why that matters.
+    Runs several real NLME fits (minutes to tens of minutes) -- requires
+    `confirm=true` in the request body."""
+    body = req.model_dump()
+    job_id = jobs.submit(session_id=sid, kind="simest",
+                         fn=lambda: orch.run_tool(sid, "run_simest", "simulator", body, actor=actor))
+    return {"job_id": job_id, "status": "running", "kind": "simest"}
 
 
 class EngineComparisonRequest(BaseModel):
@@ -439,6 +625,55 @@ def run_dose_sweep(sid: str, req: DoseSweepRequest, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/sessions/{sid}/clinsim")
+def run_clinsim(sid: str, req: ClinsimRequest, sess=Depends(owned_session),
+                actor: str = Depends(actor_id)) -> dict:
+    try:
+        return orch.run_tool(sid, "run_clinsim", "simulator", req.model_dump(), actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/exposure_forest")
+def run_exposure_forest(sid: str, req: ExposureForestRequest | None = None,
+                        sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_exposure_forest", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/special_population")
+def run_special_population(sid: str, req: SpecialPopRequest | None = None,
+                           sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_special_population", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/individual_exposures")
+def run_individual_exposures(sid: str, req: IndividualExposuresRequest | None = None,
+                             sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump() if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_individual_exposures", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/pediatric_simulation")
+def run_pediatric_simulation(sid: str, req: PediatricRequest | None = None,
+                             sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
+    args = req.model_dump(exclude_none=True) if req is not None else {}
+    try:
+        return orch.run_tool(sid, "run_pediatric_simulation", "simulator", args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/sessions/{sid}/flexplot")
 def run_flexplot(sid: str, req: FlexplotRequest, sess=Depends(owned_session),
                  actor: str = Depends(actor_id)) -> dict:
@@ -464,7 +699,12 @@ def get_audit(sid: str, sess=Depends(owned_session)) -> dict:
     # Take the session lock so a concurrent background job can't be mid-append.
     with orch.session_lock(sid):
         entries = sess.audit.to_list()
-        return {"entries": entries, "verified": sess.audit.verify(), "count": len(entries)}
+        status = orch.audit_status(sid)
+        # ``verified`` now means structural chain + keyed semantic snapshot +
+        # current external anchor. Hash-only development mode is never presented
+        # as authenticated, even when its public chain is internally consistent.
+        return {"entries": entries, "verified": status["verified"],
+                "count": len(entries), "integrity": status}
 
 
 @app.get("/api/sessions/{sid}/state")
@@ -509,6 +749,25 @@ def export_cdisc(sid: str, sess=Depends(owned_session)) -> Response:
         raise HTTPException(404, "run NCA first — no parameters to export as ADaM")
     roles = (sess.state.dataset_metadata or {}).get("detected_roles", {})
     df = sess.ctx.dataset_store.get(sess.state.dataset_id)
+    # Refuse rather than ship a package whose ADPP is fully populated while ADPC is
+    # silently empty — that reads as a complete submission dataset. Check the built
+    # ADPC itself, not just `df is None`: build_adpc also yields zero rows when the
+    # ID/TIME/DV roles are unmapped, or when every DV is non-numeric.
+    if df is None:
+        integrity = (sess.state.dataset_metadata or {}).get("dataset_integrity")
+        raise HTTPException(409, (
+            f"source dataset unavailable ({integrity}) — ADPC would be empty; "
+            "re-import the dataset before exporting"
+            if integrity else
+            "source dataset not loaded — ADPC would be empty; load the dataset first"))
+    missing = [r for r in ("ID", "TIME", "DV") if r not in set(roles.values())]
+    if missing:
+        raise HTTPException(409, f"ADPC would be empty: unmapped role(s) {missing} — "
+                                 "set the dataset roles before exporting")
+    adpc_rows, _ = cdisc.build_adpc(df, roles, sess.state)
+    if not adpc_rows:
+        raise HTTPException(409, "ADPC would be empty: no usable concentration "
+                                 "records in the source dataset")
     body = cdisc.build_package(sess.state, df, roles)
     return Response(content=body, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"'})

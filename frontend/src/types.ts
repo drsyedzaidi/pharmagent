@@ -98,13 +98,21 @@ export interface PharmState {
   poppk_results: PopPkResults | null;
   pk_model_results: PkModelResults | null;
   nlme_results: NlmeResults | null;
+  prior_check_results: PriorCheckResults | null;
   scm_results: ScmResults | null;
   forecast_results: ForecastResults | null;
   simulation_results: SimulationResults | null;
   vpc_results: VpcResults | null;
   diagnostics_results: DiagnosticsResults | null;
+  forest_results: ForestResults | null;
   engine_comparison_results: EngineComparisonResults | null;
   dose_sweep_results: DoseSweepResults | null;
+  clinsim_results: ClinsimResults | null;
+  exposure_forest_results: ExposureForestResults | null;
+  special_pop_results: SpecialPopResults | null;
+  individual_exposures: IndividualExposures | null;
+  pediatric_results: PediatricResults | null;
+  simest_results: SimestResults | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
   qc_checklist: QcCheck[] | null;
@@ -284,6 +292,38 @@ export interface PkRankRow {
   mean_aic: number | null;
 }
 
+export interface PriorPredictiveBin {
+  time: number | null;
+  lo: number | null;
+  med: number | null;
+  hi: number | null;
+}
+
+export interface PriorParamRow {
+  param: string;
+  prior_mean: number | null;
+  prior_sd_log: number | null;
+  post_mean: number | null;
+  post_sd_log: number | null;
+  shrinkage: number | null;
+  ci95: (number | null)[];
+}
+
+export interface PriorCheckResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  prior_predictive?: {
+    status: string;
+    n_draws?: number;
+    band?: PriorPredictiveBin[];
+    coverage_pct?: number | null;
+    observed?: { time: number | null; dv: number | null }[];
+  };
+  diagnostic?: { status: string; params?: PriorParamRow[]; mean_shrinkage?: number | null };
+}
+
 export interface NlmeResults {
   status: string;
   method?: string;
@@ -299,7 +339,22 @@ export interface NlmeResults {
   sigma?: { prop: number | null; add: number | null };
   sigma_rse_pct?: { prop: number | null; add: number | null };
   covariate_effects?: CovariateEffect[];
+  /** Present only for method="auto": which starts were tried and why. */
+  auto?: {
+    escalated: boolean;
+    reason: string;
+    tol: number;
+    n_candidates: number;
+    winner: string;
+    candidate_ofv: Record<string, number | null>;
+  };
+  /** Present only for method="focei_saem": the SAEM burn-in that seeded the fit. */
+  seeded_by?: { method: string; iterations: number; ofv: number; converged: boolean } | null;
   ofv?: number;
+  /** Present only for a MAP fit (informative theta prior / Bayesian borrowing). */
+  map?: boolean;
+  ofv_likelihood?: number;
+  theta_prior?: { names: string[]; mean_log: number[]; sd_log?: number[]; penalty?: number };
   condition_number?: number | null;
   cov_note?: string;
   shrinkage_pct?: Record<string, number>;
@@ -380,13 +435,115 @@ export interface DiagnosticsResults {
   message?: string;
   residuals?: {
     time: number[]; obs: number[]; ipred: number[]; pred: number[];
-    iwres: number[]; iwres_std: number[];
-    summary: { n: number; iwres_mean: number | null; iwres_sd: number | null };
+    iwres: number[]; iwres_std: number[]; tad: (number | null)[];
+    summary: { n: number; iwres_mean: number | null; iwres_sd: number | null; n_tad_null?: number };
   };
   npde?: {
-    time: number[]; pred: number[]; npde: number[];
-    summary: { n: number; mean: number | null; sd: number | null; pct_outside_1_96: number | null };
+    status?: 'needs_nlme' | 'blq_unsupported';
+    message?: string;
+    n_blq?: number;
+    metric?: 'npd';
+    time?: number[]; pred?: number[]; npde?: number[]; tad?: (number | null)[];
+    summary?: {
+      n: number; mean: number | null; sd: number | null; pct_outside_1_96: number | null;
+      n_tad_null?: number; sigma_prop?: number; sigma_add?: number;
+    };
   };
+  cwres?: {
+    status?: 'needs_nlme';
+    message?: string;
+    time?: number[]; obs?: number[]; ipred?: number[]; cpred?: number[];
+    cwres?: number[]; iwres?: number[]; tad?: (number | null)[];
+    skipped_subjects?: string[]; cov_fallback_subjects?: string[];
+    summary?: {
+      n: number; n_subjects_used?: number; n_subjects_skipped?: number;
+      n_blq_dropped?: number; n_floored_dropped?: number; n_tad_null?: number;
+      cov_fallback_n?: number; n_etas_reused?: number; n_etas_resolved?: number;
+      cwres_mean: number | null; cwres_sd: number | null;
+      cwres_pct_outside_1_96: number | null; eps_shrinkage_pct?: number | null;
+      interaction?: boolean; cwres_variant?: 'focei' | 'foce';
+    };
+  };
+  nlme_provenance?: string | null;
+}
+
+export interface ForestRow {
+  param: string;
+  covariate: string;
+  kind: 'power' | 'linear' | 'exponential' | 'categorical';
+  eval_label: string;
+  eval_value: number | string | null;
+  gmr: number | null;
+  ci_lo: number | null;
+  ci_hi: number | null;
+  ci_source: 'wald_loglinear' | 'delta_nonlinear' | 'undefined_extrapolation' | 'unavailable' | 'reference';
+  omega_cv_pct: number | null;
+  allometric_note: boolean;
+  outside_reference_band: boolean;
+}
+
+export interface ForestResults {
+  status: string;
+  message?: string;
+  model_key?: string;
+  label?: string;
+  source?: 'nlme' | 'scm';
+  percentiles?: number[];
+  rows?: ForestRow[];
+  x_range?: [number, number] | null;
+  bounds?: [number, number] | null;
+  ci_level?: number;
+  notes?: string[];
+  summary?: { n_rows: number; n_effects: number };
+  cov_stats?: Record<string, { n_cov: number; cov_min?: number; cov_max?: number; levels?: string[] }>;
+}
+
+export interface SimestPerParam {
+  truth: number | null;
+  gm_point_estimate: number | null;
+  rel_bias_pct: number | null;
+  rmse_pct: number | null;
+  cv_across_replicates_pct: number | null;
+  n_pass_precision_criterion: number;
+  pct_within_60_140_of_own_estimate: number | null;
+  pct_within_60_140_strict: number | null;
+  coverage_wilson_ci_pct: [number | null, number | null];
+  mean_theta_se_log: number | null;
+}
+
+export interface SimestReplicate {
+  theta: Record<string, number>;
+  ci: Record<string, [number, number]> | null;
+}
+
+export interface SimestResults {
+  status: string;
+  message?: string;
+  model_key?: string;
+  params?: string[];
+  rse_convention?: 'log_scale_se';
+  citation?: string;
+  design_limitations?: string[];
+  n_rep_requested?: number;
+  n_rep_planned?: number;
+  n_rep_completed?: number;
+  n_point_evaluable?: number;
+  n_ci_evaluable?: number;
+  n_excluded?: number;
+  excluded_reasons?: Record<string, number>;
+  n_resampled_total?: number;
+  n_negative_draws_total?: number;
+  ci_validity?: 'assessable' | 'unassessable';
+  criterion?: {
+    pct_within_60_140_strict: number | null;
+    pct_within_60_140_of_own_estimate: number | null;
+    target_pct: number | null;
+    criterion_met: boolean | null;
+  };
+  per_param?: Record<string, SimestPerParam>;
+  replicates?: SimestReplicate[];
+  est_minutes_rough?: number | null;
+  elapsed_seconds?: number;
 }
 
 export interface VpcResults {
@@ -400,17 +557,80 @@ export interface VpcResults {
   vpc_dose?: number | null;
   obs_t?: number[];
   obs_c?: number[];
-  pcvpc?: {
+  pcvpc?: PcVpcResult;
+  /** Present only when run_vpc was called with stratify_by / dose_normalize / x_by. */
+  stratified?: {
     status: string;
-    n_bins: number;
-    n_sim: number;
-    bins: {
-      t: number | null; n: number;
-      obs_p05: number | null; obs_p50: number | null; obs_p95: number | null;
-      sim_p05: number | null; sim_p50: number | null; sim_p95: number | null;
-      sim_med_lo: number | null; sim_med_hi: number | null;
-    }[];
+    stratify_by?: string | null;
+    kind?: string;
+    correction?: 'pred' | 'dose' | 'none';
+    x_by?: 'time' | 'tad';
+    message?: string;
+    available?: string[];
+    strata?: { label: string; n: number; bins: PcVpcBin[] }[];
+    skipped?: { label: string; n: number; reason: string }[];
   };
+  /** Present only when run_vpc was called with exposure_check. */
+  exposure_pc?: ExposurePc;
+  /** Present only when run_vpc was called with blq_check. */
+  blq_vpc?: BlqVpc;
+}
+
+export interface ExposureMetric {
+  observed: number;
+  sim_median: number | null;
+  sim_lo: number | null;
+  sim_hi: number | null;
+  within: boolean;
+  hist: { edges: number[]; counts: number[] };
+}
+
+export interface ExposurePc {
+  status: string;
+  group_by?: string | null;
+  kind?: string;
+  n_sim?: number;
+  ci?: number[];
+  message?: string;
+  multiple_dose?: boolean;
+  groups?: { label: string; n: number; auc: ExposureMetric; cmax: ExposureMetric }[];
+  skipped?: { label: string; n: number; reason: string }[];
+}
+
+export interface BlqBin {
+  x: number | null;
+  n: number;
+  obs_frac: number | null;
+  sim_med: number | null;
+  sim_lo: number | null;
+  sim_hi: number | null;
+}
+
+export interface BlqVpc {
+  status: string;
+  n_bins?: number;
+  n_sim?: number;
+  lloq?: number;
+  x_by?: 'time' | 'tad';
+  n_blq?: number;
+  message?: string;
+  bins?: BlqBin[];
+}
+
+export interface PcVpcBin {
+  t: number | null; n: number;
+  obs_p05: number | null; obs_p50: number | null; obs_p95: number | null;
+  sim_p05: number | null; sim_p50: number | null; sim_p95: number | null;
+  sim_med_lo: number | null; sim_med_hi: number | null;
+}
+
+export interface PcVpcResult {
+  status: string;
+  n_bins: number;
+  n_sim: number;
+  correction?: 'pred' | 'dose' | 'none';
+  x_by?: 'time' | 'tad';
+  bins: PcVpcBin[];
 }
 
 export interface DoseProfile {
@@ -433,6 +653,181 @@ export interface DoseSweepResults {
   n_doses?: number;
   tmax?: number;
   profiles?: DoseProfile[];
+}
+
+export interface ClinsimDose {
+  dose: number;
+  n: number;
+  pta: number | null;
+  pta_lo?: number | null;
+  pta_hi?: number | null;
+  metric_p05: number | null;
+  metric_p25: number | null;
+  metric_median: number | null;
+  metric_p75: number | null;
+  metric_p95: number | null;
+}
+
+export interface ClinsimSensitivity {
+  n_draws: number;
+  params: string[];
+  // pta is aligned to the ClinsimResults.doses order.
+  records: { theta: Record<string, number>; pta: (number | null)[] }[];
+}
+
+export interface ClinsimResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  metric?: string;
+  threshold?: number | null;
+  direction?: 'above' | 'below';
+  target_fraction?: number;
+  tau?: number;
+  n_doses?: number;
+  n_subjects?: number;
+  with_covariates?: boolean;
+  with_iiv?: boolean;
+  n_param_draws?: number;
+  sensitivity?: ClinsimSensitivity | null;
+  doses?: ClinsimDose[];
+  recommended_dose?: number | null;
+  recommendation_note?: string;
+}
+
+export interface SpecialPopMetric {
+  p05: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+  within_ref: boolean;
+}
+
+export interface SpecialPopDoseRow {
+  dose: number;
+  auc_tau?: SpecialPopMetric;
+  cmax?: SpecialPopMetric;
+  cavg?: SpecialPopMetric;
+  ctrough?: SpecialPopMetric;
+}
+
+export interface SpecialPopStratum {
+  label: string;
+  n: number;
+  doses: SpecialPopDoseRow[];
+  recommended_dose: number | null;
+  note: string;
+}
+
+export interface SpecialPopResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  stratify_by?: string;
+  kind?: string;
+  metrics?: string[];
+  reference_stratum?: string;
+  reference_dose?: number;
+  tau?: number;
+  n_doses?: number;
+  n_per_stratum?: number;
+  covariate_in_model?: boolean;
+  population_source?: string;
+  available?: string[];
+  reference_band?: Record<string, { lo: number | null; hi: number | null; median: number | null }>;
+  strata?: SpecialPopStratum[];
+  skipped?: { label: string; n: number }[];
+}
+
+export interface PediatricMetric {
+  p05: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+  within_ref: boolean;
+  pct_within_ref: number | null;
+}
+
+export interface PediatricDoseRow {
+  dose: number;
+  auc_tau?: PediatricMetric;
+  cmax?: PediatricMetric;
+}
+
+export interface PediatricStratum {
+  label: string;
+  age_label: string;
+  wt_label: string;
+  n: number;
+  doses: PediatricDoseRow[];
+  recommended_dose: number | null;
+  note: string;
+}
+
+export interface PediatricResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  kind?: string;
+  metrics?: string[];
+  reference_metric?: string;
+  reference_dose?: number;
+  reference_source?: string;
+  population_source?: string;
+  allometry?: string;
+  tau?: number;
+  n_doses?: number;
+  n_per_stratum?: number;
+  reference_band?: Record<string, { lo: number | null; hi: number | null; median: number | null; n?: number }>;
+  strata?: PediatricStratum[];
+}
+
+export interface IndividualExposures {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  dose?: number;
+  tau?: number;
+  n_doses?: number;
+  metrics?: string[];
+  subjects?: { subject: string; auc_ss: number | null; cmax_ss: number | null; group?: string | number | null }[];
+  groups?: { group: string; n: number; auc_ss?: { p05: number | null; median: number | null; p95: number | null };
+    cmax_ss?: { p05: number | null; median: number | null; p95: number | null } }[];
+}
+
+export interface RelExposure {
+  median: number | null;
+  lo: number | null;
+  hi: number | null;
+}
+
+export interface ExposureForestRow {
+  covariate: string;
+  label: string;
+  value: number | string;
+  is_weight: boolean;
+  rel_auc: RelExposure;
+  rel_cmax: RelExposure;
+}
+
+export interface ExposureForestResults {
+  status: string;
+  model_key?: string;
+  label?: string;
+  message?: string;
+  dose?: number;
+  tau?: number;
+  n_doses?: number;
+  n_draws?: number;
+  band?: number[];
+  reference?: { auc: number | null; cmax: number | null; wt: number };
+  rows?: ExposureForestRow[];
 }
 
 export interface SimulationResults {
@@ -540,6 +935,18 @@ export interface AuditEntry {
   entry_hash: string;
   actor?: string;
   reason?: string;
+}
+
+export interface AuditIntegrityStatus {
+  chain_ok: boolean;
+  mode: 'enforced' | 'hash_only';
+  mac_ok: boolean;
+  anchor_ok: boolean;
+  verified: boolean;
+  baseline: 'fresh' | 'operator_attested_legacy' | 'unsealed' | null;
+  generation: number | null;
+  key_id: string | null;
+  trusted_since_index: number | null;
 }
 
 export interface ChatResponse {

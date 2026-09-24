@@ -13,6 +13,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 
 def _num(v: Any) -> float | None:
     """Coerce a cell to float; '.', '', NA -> None."""
@@ -65,13 +67,87 @@ def _dose_times(rows: list[dict], *, time_col: str, amt_col: str,
 
 
 def dose_events(rows: list[dict], *, time_col: str, amt_col: str,
-                ii_col: str | None, addl_col: str | None) -> list[dict]:
-    """Full list of dose administrations [{time, amt}] (ADDL/II expanded)."""
-    times, dose, _tau = _dose_times(rows, time_col=time_col, amt_col=amt_col,
-                                    ii_col=ii_col, addl_col=addl_col)
-    if dose is None:
-        return []
-    return [{"time": t, "amt": dose} for t in times]
+                ii_col: str | None, addl_col: str | None,
+                rate_col: str | None = None,
+                cmt_col: str | None = None) -> list[dict]:
+    """Full list of dose administrations (ADDL/II expanded).
+
+    Each event is ``{"time", "amt"}`` plus, when the dataset supplies them:
+
+    * ``rate`` — a positive RATE makes the dose a zero-order infusion rather
+      than a bolus. Note this disables the matrix-exponential fast path in
+      ``pk_simulate.simulate``, so infusion datasets integrate more slowly.
+    * ``cmt`` — the dosing compartment, converted from the dataset's **1-based**
+      NONMEM ``CMT`` to the **0-based** index ``simulate`` uses. Without the
+      conversion a ``CMT=1`` depot dose would enter compartment index 1 — the
+      central compartment of an oral model — silently turning an extravascular
+      dose into an IV bolus. Values below 1 are ignored rather than converted,
+      since ``CMT=0`` would become ``-1`` and dose the LAST compartment.
+
+    As in NONMEM, a dataset's CMT numbering is written for a specific model;
+    an index past the model's compartment count is a data/model mismatch and
+    ``simulate`` will raise rather than silently redirect the dose.
+
+    Unlike ``_dose_times`` (which collapses a subject to one representative
+    amount for steady-state work), each record keeps its OWN amount, so a
+    within-subject dose change is preserved instead of being overwritten by the
+    last row.
+    """
+    events: list[dict] = []
+    for r in rows:
+        amt = _num(r.get(amt_col))
+        t = _num(r.get(time_col))
+        if amt is None or amt <= 0 or t is None:
+            continue
+        ii = _num(r.get(ii_col)) if ii_col else None
+        addl = _num(r.get(addl_col)) if addl_col else None
+        n_extra = int(addl) if addl is not None and addl > 0 else 0
+        step = ii if (ii is not None and ii > 0) else 0.0
+
+        extra: dict[str, Any] = {}
+        rate = _num(r.get(rate_col)) if rate_col else None
+        if rate is not None and rate > 0:
+            extra["rate"] = rate
+        cmt = _num(r.get(cmt_col)) if cmt_col else None
+        if cmt is not None and cmt >= 1:
+            extra["cmt"] = int(cmt) - 1          # NONMEM 1-based -> 0-based
+
+        for k in range(n_extra + 1):
+            events.append({"time": t + k * step, "amt": amt, **extra})
+    return sorted(events, key=lambda e: e["time"])
+
+
+def time_after_dose(obs_t, doses: list[dict]) -> list[float | None]:
+    """Time-after-dose (TAD) for each observation: elapsed time since the most
+    recent PRIOR dose administration, not the dose amount or column semantics.
+
+    Unlike ``extract_ss_intervals`` (last-interval-only, for steady-state
+    profiles), this is defined at every observation against whichever dose
+    preceded it — the diagnostic-plot convention (pmplots' TAD, NONMEM's
+    ``$INPUT TAD``), useful across an entire multiple-dose record, not just
+    the final interval.
+
+    ``doses``: ``[{"time": ..., "amt": ...}, ...]`` — the same shape consumed
+    by ``app.compute.pk_simulate.simulate`` (typically ``dose_events()``
+    output, or a subject's own ``doses`` list). Only ``"time"`` is read here.
+    A dose record's ``amt`` is trusted to already be a real administration:
+    this function does not itself filter by amount, so passing raw dataset
+    rows (which may repeat AMT on observation rows) rather than expanded
+    dose events would inject spurious dose times and understate TAD.
+
+    Returns one value per ``obs_t``, ``None`` for an observation at or before
+    every dose (nothing yet administered) rather than a negative TAD.
+    """
+    t = np.asarray(obs_t, dtype=float)
+    dose_times = sorted(float(d["time"]) for d in doses if d.get("time") is not None)
+    if t.size == 0 or not dose_times:
+        return [None] * t.size
+    dt = np.asarray(dose_times, dtype=float)
+    idx = np.searchsorted(dt, t, side="right") - 1
+    out: list[float | None] = []
+    for i, ti in zip(idx, t):
+        out.append(None if i < 0 else float(ti - dt[i]))
+    return out
 
 
 def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,

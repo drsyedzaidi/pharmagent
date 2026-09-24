@@ -203,6 +203,51 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
                       [[s["phase"], s["effect"], _fmt(s["delta_ofv"], 2),
                         _fmt(s["crit"], 2), s["df"], s["decision"]] for s in steps])
 
+    dg = state.diagnostics_results
+    if dg and dg.get("status") == "ok":
+        n += 1
+        doc.add_heading(f"{n}. Residual diagnostics", level=1)
+        iw = (dg.get("residuals") or {}).get("summary") or {}
+        cw, npd_ = dg.get("cwres") or {}, dg.get("npde") or {}
+        cws, npds = cw.get("summary") or {}, npd_.get("summary") or {}
+        prov = dg.get("nlme_provenance")
+        doc.add_paragraph(
+            f"Model: {dg.get('label')}. Two-stage IWRES over n = {iw.get('n')} observations. "
+            + (f"CWRES and prediction-discrepancy diagnostics are calibrated from the "
+               f"mixed-effects fit of {prov} (single provenance)."
+               if prov else
+               "No converged NLME fit of this model was available, so CWRES and "
+               "prediction-discrepancy diagnostics were not computed."))
+        rows: list[list[Any]] = [["IWRES (two-stage)", _fmt(iw.get("mean"), 3),
+                                  _fmt(iw.get("sd"), 3), iw.get("n"), "computed"]]
+        rows.append(["CWRES", _fmt(cws.get("cwres_mean"), 3), _fmt(cws.get("cwres_sd"), 3),
+                     cws.get("n", "-"), cw.get("status", "ok")])
+        rows.append(["npd", _fmt(npds.get("mean"), 3), _fmt(npds.get("sd"), 3),
+                     npds.get("n", "-"), npd_.get("status", "ok")])
+        _kv_table(doc, ["Residual", "Mean", "SD", "n", "Status"], rows)
+        if "pct_outside_1_96" in npds:
+            doc.add_paragraph(f"npd outside ±1.96: {_fmt(npds.get('pct_outside_1_96'), 1)}% "
+                              "(≈5% expected under a correctly specified model).")
+        for key, blob in (("CWRES", cw), ("npd", npd_)):
+            if blob.get("status") not in (None, "ok") and blob.get("message"):
+                doc.add_paragraph(f"{key}: {blob['message']}")
+
+    fr = state.forest_results
+    if fr and fr.get("status") == "ok":
+        n += 1
+        doc.add_heading(f"{n}. Covariate effects (forest)", level=1)
+        doc.add_paragraph(
+            f"Covariate effects from the {fr.get('source')} fit of {fr.get('label')}, "
+            f"evaluated at the {fr.get('percentiles')} percentiles of the current dataset; "
+            f"geometric mean ratios with {_fmt(100 * float(fr.get('ci_level') or 0), 0)}% CI.")
+        _kv_table(doc, ["Parameter", "Covariate", "Evaluated at", "GMR", "CI", "CI source"],
+                  [[r["param"], r["covariate"], r["eval_label"], _fmt(r.get("gmr"), 3),
+                    (f"{_fmt(r.get('ci_lo'), 3)}–{_fmt(r.get('ci_hi'), 3)}"
+                     if r.get("ci_lo") is not None else "-"),
+                    r.get("ci_source")] for r in (fr.get("rows") or [])])
+        for note in (fr.get("notes") or []):
+            doc.add_paragraph(str(note))
+
     vp = state.vpc_results
     if vp and vp.get("status") == "ok":
         n += 1

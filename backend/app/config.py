@@ -7,7 +7,9 @@ suite — runs without external calls.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +30,14 @@ class Settings(BaseSettings):
     # Unset (default) = open dev mode.
     api_token: str | None = None
     cors_origins: list[str] = ["*"]   # tighten in production (e.g. your UI origin)
+
+    # Audit authenticity. ``off`` is explicitly hash-only development mode.
+    # Authenticated deployments must use ``enforce`` with a distinct 256-bit+
+    # HMAC keyring and an anchor outside the primary DB writer's trust boundary.
+    audit_mode: Literal["off", "enforce"] = "off"
+    audit_keys_json: SecretStr | None = None
+    audit_active_key_id: str | None = None
+    audit_anchor_path: Path | None = None
 
     # Behaviour
     app_name: str = "PharmAgent"
