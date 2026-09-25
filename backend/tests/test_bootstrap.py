@@ -262,11 +262,11 @@ def test_bootstrap_tool_is_not_llm_reachable():
 
     tool = default_registry()._tools["run_bootstrap"]
     assert tool.agent == "simulator"
-    # "simulator" IS routable now (run_simest is proposable from chat), so the
-    # guardrail for this tool is the expensive flag: the registry refuses it on
-    # the synchronous chat path and the turn skips it — never proposed, never run.
+    # "simulator" IS routable; the expensive flag means the registry refuses this
+    # tool on the synchronous chat path, and proposable means the refusal becomes
+    # a state.pending_tool for a human decision — never run on the turn.
     assert "simulator" in AGENTS and "simulator" in DESCRIPTIONS and "simulator" in KEYWORDS
-    assert tool.expensive and not tool.proposable
+    assert tool.expensive and tool.proposable
 
 
 def test_bootstrap_tool_requires_confirm():

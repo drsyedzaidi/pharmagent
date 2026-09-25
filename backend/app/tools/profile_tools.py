@@ -1,10 +1,10 @@
 """Log-likelihood profiling tool wiring.
 
-SAFETY: ``agent="simulator"`` with ``expensive=True``, like ``run_bootstrap``
-and ``run_sir``. The simulator agent is routable (``run_simest`` is proposable
-from chat); the expensive flag keeps this tool off the chat path --
-``ToolRegistry.execute`` refuses it outside an admission-controlled caller and
-the agent loop skips it (not ``proposable``, so never proposed).
+SAFETY: ``agent="simulator"``, ``expensive=True, proposable=True``, like
+``run_bootstrap`` / ``run_sir`` / ``run_simest``: a chat turn can only PROPOSE
+it (the registry refuses it on the synchronous path; the agent loop records
+``state.pending_tool``), and it runs only after human approval via
+``/chat/pending_tool`` as a JobManager job through ``Orchestrator.run_tool``.
 
 Cost: each profile point is a constrained re-optimization whose every objective
 evaluation is a full population Laplace pass. Measured at ~120 s for ONE
@@ -137,5 +137,5 @@ TOOLS = [
               "ci_level": {"type": "number", "minimum": 0.5, "maximum": 0.999},
           },
           "required": ["confirm"]},
-         run_profile, expensive=True),
+         run_profile, expensive=True, proposable=True),
 ]

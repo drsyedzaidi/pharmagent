@@ -1,10 +1,10 @@
 """Sampling Importance Resampling tool wiring.
 
-SAFETY: registered under ``agent="simulator"`` with ``expensive=True``. The
-simulator agent is routable (``run_simest`` is proposable from chat); this
-tool is kept off the chat path by the expensive flag -- ``ToolRegistry.execute``
-refuses it outside an admission-controlled caller and the agent loop skips
-it (not ``proposable``, so never proposed either).
+SAFETY: ``agent="simulator"``, ``expensive=True, proposable=True`` -- same
+contract as ``run_simest``: a chat turn can only PROPOSE it (the registry
+refuses it on the synchronous path; the agent loop records
+``state.pending_tool``), and it runs only after human approval via
+``/chat/pending_tool`` as a JobManager job through ``Orchestrator.run_tool``.
 
 SIR is much cheaper than a bootstrap — M objective evaluations and NO refits —
 but M is thousands of full population Laplace passes plus one numeric Hessian
@@ -143,5 +143,5 @@ TOOLS = [
               "inflation": {"type": "number", "minimum": 0.1, "maximum": 10.0},
           },
           "required": ["confirm"]},
-         run_sir, expensive=True),
+         run_sir, expensive=True, proposable=True),
 ]

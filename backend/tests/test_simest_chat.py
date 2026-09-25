@@ -14,8 +14,9 @@ never from an automated loop" is preserved by construction:
     human `confirm` the tool requires, and the run is submitted to the
     JobManager (admission-controlled) via `Orchestrator.run_tool`.
   * Bootstrap / SIR / profiling -- the other real-fit tools that used to rely
-    only on the agent being unroutable -- are now `expensive=True` too, so
-    they are still refused on the chat path (skipped, not proposed).
+    only on the agent being unroutable -- are `expensive=True, proposable=True`
+    as well: same proposal -> human decision -> job path. run_nlme / run_scm /
+    run_engine_comparison stay non-proposable (skipped on chat, panel-only).
 
 No test here runs a real fit: `app.compute.nlme.population_fit` is patched.
 """
@@ -125,19 +126,21 @@ def test_supervisor_can_write_pending_tool():
     assert "pending_tool" not in AGENT_WRITE_FIELDS["simulator"]
 
 
-# ── flags: expensive everywhere a real fit runs; proposable only for simest ─
+# ── flags: expensive AND proposable everywhere the simulator runs a real fit ─
 
-def test_real_fit_tools_are_expensive():
+PROPOSABLE = ("run_simest", "run_bootstrap", "run_sir", "run_profile")
+
+
+def test_real_fit_tools_are_expensive_and_proposable():
     reg = default_registry()
-    for name in ("run_simest", "run_bootstrap", "run_sir", "run_profile"):
-        assert reg.get(name).expensive, name
+    for name in PROPOSABLE:
+        assert reg.get(name).expensive and reg.get(name).proposable, name
 
 
-def test_only_run_simest_is_proposable():
+def test_panel_only_fits_and_cheap_tools_are_not_proposable():
     reg = default_registry()
-    assert reg.get("run_simest").proposable
-    for name in ("run_bootstrap", "run_sir", "run_profile", "run_nlme", "run_scm",
-                 "run_engine_comparison", "fit_pk_model", "simulate_pk_profile"):
+    for name in ("run_nlme", "run_scm", "run_engine_comparison", "fit_pk_model",
+                 "simulate_pk_profile"):
         assert not reg.get(name).proposable, name
 
 
@@ -178,7 +181,9 @@ def test_proposal_does_not_inject_confirm_on_the_llms_behalf(monkeypatch):
 
 def test_non_proposable_expensive_tools_are_still_skipped_on_chat(monkeypatch):
     _forbid_real_fit(monkeypatch)
-    for name in ("run_bootstrap", "run_sir", "run_profile"):
+    # the registry is the choke point, so an LLM naming a tool outside its
+    # agent's list gets the same refusal; run_nlme/run_scm are never proposed
+    for name in ("run_nlme", "run_scm"):
         res = Agent(name="simulator", system_prompt="").run_turn(
             state=PharmState(nlme_results=_nlme()), message="x", llm=_PickTool(name),
             registry=default_registry(), ctx=ToolContext(), audit=AuditChain(),
@@ -186,6 +191,45 @@ def test_non_proposable_expensive_tools_are_still_skipped_on_chat(monkeypatch):
         assert any(c.get("skipped") == "expensive" for c in res.tool_calls), name
         assert res.proposal is None, name
         assert res.state.pending_tool is None, name
+
+
+UNCERTAINTY_CASES = (
+    ("run_bootstrap", "bootstrap the parameter uncertainty of this fit", "bootstrap_results"),
+    ("run_sir", "run sampling importance resampling on the fit", "sir_results"),
+    ("run_profile", "likelihood profile CL and V", "profile_results"),
+)
+
+
+def test_chat_proposes_bootstrap_sir_profile_and_computes_nothing(monkeypatch):
+    _forbid_real_fit(monkeypatch)
+    for tool, msg, field in UNCERTAINTY_CASES:
+        orch = _orch(llm=_PickTool(tool, {"n_rep": 2, "confirm": True}))
+        sid = _session_with_fit(orch)
+        out = orch.chat(sid, msg, actor="alice")
+        assert out["agent"] == "simulator", tool
+        assert out["pending_tool"]["tool"] == tool, tool
+        assert out["pending_tool"]["args"] == {"n_rep": 2}, tool     # confirm stripped
+        assert out["state"][field] is None, tool
+        call = orch.take_pending_tool(sid, actor="bob")
+        assert call["args"] == {"n_rep": 2, "confirm": True}, tool
+        actions = [e["action"] for e in orch.get_session(sid).audit.to_list()]
+        assert actions[-2:] == ["propose_tool", "approve_tool"], tool
+
+
+def test_supervisor_routes_uncertainty_requests_to_simulator():
+    sup = Supervisor(MockLLM())
+    for _, msg, _ in UNCERTAINTY_CASES:
+        assert sup.route(msg)[0] == "simulator", msg
+    # "profile" alone still means data profiling
+    assert sup.route("load this csv dataset and profile it")[0] == "data_manager"
+
+
+def test_mock_llm_proposes_bootstrap_sir_profile():
+    tools = default_registry().for_agent("simulator")
+    for tool, msg, _ in UNCERTAINTY_CASES:
+        choice = MockLLM().select_tool("simulator", msg, tools, {"nlme_results": "present"})
+        assert choice and choice["name"] == tool, tool
+        assert "confirm" not in choice["input"], tool
 
 
 def test_mock_llm_proposes_run_simest_for_the_simulator_agent():

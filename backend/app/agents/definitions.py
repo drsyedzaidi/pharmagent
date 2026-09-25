@@ -65,12 +65,14 @@ AGENTS: dict[str, Agent] = {
         system_prompt=(
             "You are the Simulation specialist. From a converged population (NLME) "
             "fit you simulate PK profiles, dose sweeps, clinical-trial / PTA "
-            "simulations, special-population and pediatric exposures, and check a "
-            "proposed sampling design by simulation-estimation (run_simest). "
-            "run_simest is a PROPOSAL: compose its `design` from the request; it "
-            "runs only after the pharmacometrician approves it as a background job, "
-            "so never claim it has run. All numbers come from tools; you never "
-            "invent them."),
+            "simulations, special-population and pediatric exposures, check a "
+            "proposed sampling design by simulation-estimation (run_simest), and "
+            "quantify parameter uncertainty by bootstrap (run_bootstrap), sampling "
+            "importance resampling (run_sir) or likelihood profiling (run_profile). "
+            "Those four are PROPOSALS: compose their arguments from the request; "
+            "each runs only after the pharmacometrician approves it as a background "
+            "job, so never claim one has run. All numbers come from tools; you "
+            "never invent them."),
     ),
     "qc": Agent(
         name="qc",
@@ -119,8 +121,9 @@ DESCRIPTIONS: dict[str, str] = {
     "poppk": "population PK two-stage summary (typical values, IIV, covariates)",
     "modeler": "fit/compare the structural PK model library (1/2/3-cmt, transit, MM, PK/PD)",
     "simulator": ("simulate from a fitted population model: PK profiles, dose sweeps, "
-                  "trial/PTA, pediatric, and simulation-estimation design checks "
-                  "(proposed for human approval)"),
+                  "trial/PTA, pediatric; simulation-estimation design checks and "
+                  "bootstrap / SIR / likelihood-profile uncertainty (proposed for "
+                  "human approval)"),
     "qc": "independent quality-control review of an analysis",
     "reviewer": "adversarial refutation of results — recompute, challenge, flag, loop to a goal",
     "statistician": ("statistical analysis plan: log transform, parametric vs non-parametric "

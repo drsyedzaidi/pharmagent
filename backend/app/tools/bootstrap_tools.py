@@ -1,13 +1,13 @@
 """Non-parametric bootstrap tool wiring.
 
-SAFETY: registered under ``agent="simulator"`` with ``expensive=True``.
-``simulator`` IS a routable agent (``run_simest`` is proposable from chat), so
-what keeps this tool off the chat path is the expensive flag:
-``ToolRegistry.execute`` refuses it unless the caller is admission-controlled
-(``Orchestrator.run_tool`` under a JobManager job), and ``Agent.run_turn``
-skips it -- it is not ``proposable``, so it is never even proposed. A
-bootstrap runs hundreds of real NLME fits -- easily hours -- and the project
-guardrail is "never submit a real NLME/SCM fit from an automated loop".
+SAFETY: ``agent="simulator"``, ``expensive=True, proposable=True`` -- the same
+contract as ``run_simest`` (see app/tools/simest_tools.py): a chat turn can
+only PROPOSE it (``ToolRegistry.execute`` refuses it on the synchronous path;
+the agent loop records ``state.pending_tool``), and it runs only after the
+pharmacometrician approves it via ``/chat/pending_tool``, as a JobManager job
+through ``Orchestrator.run_tool``. A bootstrap runs hundreds of real NLME
+fits -- easily hours -- and the project guardrail is "never submit a real
+NLME/SCM fit from an automated loop".
 
 ``confirm=True`` is required unconditionally. A threshold on subject or
 replicate count would be porous: 200 replicates of a *small* model is still
@@ -173,5 +173,5 @@ TOOLS = [
                          "enum": ["focei", "saem", "focei_saem", "auto"]},
           },
           "required": ["confirm"]},
-         run_bootstrap, expensive=True),
+         run_bootstrap, expensive=True, proposable=True),
 ]

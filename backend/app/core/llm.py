@@ -62,12 +62,18 @@ class MockLLM:
             return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
         if agent == "simulator":
             low = (message or "").lower()
+            # Every choice here is a PROPOSAL (expensive+proposable tools): the
+            # keyless mock never confirms on the human's behalf and cannot
+            # compose a `design`/`params` from prose -- the human fills/approves.
             if any(k in low for k in ("simulation-estimation", "simulation estimation",
                                       "simest", "sim-est")):
-                # The keyless mock cannot compose a `design` from prose; it only
-                # PROPOSES the tool (never confirms on the human's behalf) and
-                # the pharmacometrician supplies/approves the design.
                 return {"name": "run_simest", "input": {}}
+            if "bootstrap" in low:
+                return {"name": "run_bootstrap", "input": {}}
+            if any(k in low for k in ("importance resampling", "sampling importance", " sir")):
+                return {"name": "run_sir", "input": {}}
+            if any(k in low for k in ("likelihood profil", "profile likelihood")):
+                return {"name": "run_profile", "input": {}}
             return None
         return None
 

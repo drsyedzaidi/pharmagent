@@ -206,7 +206,7 @@ def test_profile_tool_is_not_llm_reachable():
     assert tool.agent == "simulator"
     # simulator is routable now; the expensive flag keeps this off the chat path
     assert "simulator" in AGENTS and "simulator" in DESCRIPTIONS and "simulator" in KEYWORDS
-    assert tool.expensive and not tool.proposable
+    assert tool.expensive and tool.proposable
 
 
 def test_profile_tool_requires_confirm():
