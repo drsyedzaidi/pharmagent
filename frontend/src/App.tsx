@@ -11,7 +11,7 @@ import type {
   Session, PharmState, ChatMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
-  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum,
+  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum, ProfileParam,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -1291,6 +1291,197 @@ function SimestCard({ r }: { r: PharmState['simest_results'] }) {
           {r.citation && <li>{r.citation}</li>}
         </ul>
       )}
+    </div>
+  );
+}
+
+const ci = (lo: number | null | undefined, hi: number | null | undefined, d = 3) =>
+  lo == null || hi == null ? '–' : `[${fmt(lo, d)}, ${fmt(hi, d)}]`;
+
+function UncertaintyNotes({ notes }: { notes?: string[] }) {
+  if (!notes?.length) return null;
+  return (
+    <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
+      {notes.map((n, i) => <li key={i}>{n}</li>)}
+    </ul>
+  );
+}
+
+function BootstrapCard({ r }: { r: PharmState['bootstrap_results'] }) {
+  if (!r) return null;
+  if (r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Bootstrap — not run ({r.status})</div>
+      <div style={{ fontSize: 12 }}>{r.message}</div></div>;
+  }
+  const rate = r.success_rate != null ? Math.round(100 * r.success_rate) : null;
+  const lowRate = rate != null && rate < 80;
+  const ratio = new Map((r.comparison ?? []).map(c => [c.parameter, c.width_ratio_boot_over_asymptotic]));
+  const last = r.stability?.length ? r.stability[r.stability.length - 1] : null;
+  const prev = r.stability && r.stability.length > 1 ? r.stability[r.stability.length - 2] : null;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.method} · {r.n_ok}/{r.n_completed} replicates converged
+        {rate != null && <span style={{ color: lowRate ? 'var(--red)' : 'inherit' }}> ({rate}%{lowRate ? ' ⚠' : ''})</span>}
+        {' '}of {r.n_boot_requested} requested · {r.n_subjects} subjects
+        {r.stratified ? ` · stratified (${r.n_strata})` : ' · unstratified'}
+        {' '}· {Math.round((r.ci_level ?? 0.95) * 100)}% percentile CI · {fmt(r.seconds, 0)}s
+        {r.stopped_early && <span style={{ color: 'var(--yellow)' }}> · stopped at budget</span>}
+      </div>
+      <table className="nca-table">
+        <thead><tr><th>Parameter</th><th>Estimate</th><th>Boot median</th><th>Boot CI</th><th>Boot SE</th>
+          <th>Bias%</th><th>Asymptotic CI</th><th title="bootstrap width / asymptotic width — >1 means the asymptotic interval is optimistic (too narrow)">Width ratio</th></tr></thead>
+        <tbody>
+          {(r.parameters ?? []).map(p => {
+            const wr = ratio.get(p.parameter);
+            return (
+              <tr key={p.parameter}>
+                <td>{p.parameter}</td>
+                <td>{fmt(p.estimate ?? undefined, 3)}</td>
+                <td>{fmt(p.boot_median ?? undefined, 3)}</td>
+                <td>{ci(p.boot_lo, p.boot_hi)}</td>
+                <td>{fmt(p.boot_se ?? undefined, 3)}</td>
+                <td>{fmt(p.boot_bias_pct ?? undefined, 1)}</td>
+                <td>{ci(p.asymptotic_lo, p.asymptotic_hi)}</td>
+                <td style={{ color: wr != null && wr > 1.25 ? 'var(--yellow)' : 'inherit' }}>
+                  {wr != null ? fmt(wr, 2) : '–'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {last && (
+        <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 6 }}>
+          CI stability — at {last.n_replicates} replicates:{' '}
+          {last.parameters.map(p => `${p.parameter} ${ci(p.lo, p.hi)}`).join(' · ')}
+          {prev && <> · at {prev.n_replicates}: {prev.parameters.map(p => `${p.parameter} ${ci(p.lo, p.hi)}`).join(' · ')}</>}
+        </div>
+      )}
+      <UncertaintyNotes notes={r.notes} />
+    </div>
+  );
+}
+
+function SirCard({ r }: { r: PharmState['sir_results'] }) {
+  if (!r) return null;
+  if (r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">SIR — not run ({r.status})</div>
+      <div style={{ fontSize: 12 }}>{r.message}</div></div>;
+  }
+  const d = r.diagnostics;
+  const lowEss = d?.ess_fraction_of_m != null && d.ess_fraction_of_m < 0.2;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.method} · M {r.n_samples} ({r.n_usable} usable) → m {r.n_resample} (M/m {fmt(r.m_over_m_ratio, 1)})
+        {' '}· inflation {fmt(r.inflation, 2)} · {Math.round((r.ci_level ?? 0.95) * 100)}% CI · {fmt(r.seconds, 0)}s
+        {r.stopped_early && <span style={{ color: 'var(--yellow)' }}> · stopped at budget</span>}
+      </div>
+      <table className="nca-table">
+        <thead><tr><th>Parameter</th><th>Estimate</th><th>SIR median</th><th>SIR CI</th><th>Asymptotic CI</th>
+          <th title="(upper − estimate) / (estimate − lower); 1 = symmetric">Asymmetry</th></tr></thead>
+        <tbody>
+          {(r.parameters ?? []).map(p => (
+            <tr key={p.parameter}>
+              <td>{p.parameter}</td>
+              <td>{fmt(p.estimate ?? undefined, 3)}</td>
+              <td>{fmt(p.sir_median ?? undefined, 3)}</td>
+              <td>{ci(p.sir_lo, p.sir_hi)}</td>
+              <td>{ci(p.asymptotic_lo, p.asymptotic_hi)}</td>
+              <td>{p.asymmetry_ratio != null ? fmt(p.asymmetry_ratio, 2) : '–'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {d && (
+        <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 6 }}>
+          ESS <span style={{ color: lowEss ? 'var(--red)' : 'inherit' }}>{fmt(d.effective_sample_size ?? undefined, 0)}
+          {' '}({fmt((d.ess_fraction_of_m ?? 0) * 100, 0)}% of m){lowEss ? ' ⚠' : ''}</span>
+          {' '}· resampled dOFV mean {fmt(d.dofv_mean_resampled ?? undefined, 1)} vs df {d.df_reference ?? '–'}
+          {' '}· proposal dOFV mean {fmt(d.dofv_mean_proposal ?? undefined, 1)} · max weight {fmt(d.max_weight ?? undefined, 3)}
+        </div>
+      )}
+      <UncertaintyNotes notes={r.notes} />
+    </div>
+  );
+}
+
+function ProfileSparkline({ p, cutoff }: { p: ProfileParam; cutoff: number }) {
+  const pts = p.profile ?? [];
+  if (pts.length < 2) return null;
+  const W = 150, H = 48, pad = 4;
+  const xs = pts.map(q => q.value), ys = pts.map(q => q.dofv);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const yMax = Math.max(cutoff * 1.2, ...ys.filter(Number.isFinite));
+  const yMin = Math.min(0, ...ys.filter(Number.isFinite));
+  const sx = (v: number) => pad + ((v - x0) / (x1 - x0 || 1)) * (W - 2 * pad);
+  const sy = (v: number) => H - pad - ((v - yMin) / (yMax - yMin || 1)) * (H - 2 * pad);
+  const path = pts.map((q, i) => `${i ? 'L' : 'M'}${sx(q.value).toFixed(1)},${sy(q.dofv).toFixed(1)}`).join(' ');
+  return (
+    <svg width={W} height={H} style={{ display: 'block' }}>
+      <line x1={pad} x2={W - pad} y1={sy(cutoff)} y2={sy(cutoff)} stroke="var(--yellow)" strokeDasharray="3 2" />
+      <line x1={pad} x2={W - pad} y1={sy(0)} y2={sy(0)} stroke="var(--border)" />
+      <path d={path} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
+      {p.estimate != null && <line x1={sx(p.estimate)} x2={sx(p.estimate)} y1={pad} y2={H - pad} stroke="var(--text-dim)" strokeDasharray="2 2" />}
+    </svg>
+  );
+}
+
+function ProfileCard({ r }: { r: PharmState['profile_results'] }) {
+  if (!r) return null;
+  if (r.status !== 'ok') {
+    return <div className="qc-card conditional"><div className="qc-title">Likelihood profiling — not run ({r.status})</div>
+      <div style={{ fontSize: 12 }}>{r.message}</div></div>;
+  }
+  const d = r.diagnostics;
+  const notOpt = !!d?.fit_not_at_optimum && (!Array.isArray(d.fit_not_at_optimum) || d.fit_not_at_optimum.length > 0);
+  const cutoff = r.dofv_cutoff ?? 3.84;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
+        {r.method} · {Math.round((r.ci_level ?? 0.95) * 100)}% CI at dOFV {fmt(cutoff, 2)} · {r.n_parameters} parameter(s)
+        {' '}· {r.n_evaluations} evaluations · {fmt(r.seconds, 0)}s
+      </div>
+      {notOpt && (
+        <div className="qc-card fail" style={{ marginBottom: 6 }}>
+          <div className="qc-title">Fit was not at an optimum</div>
+          <div style={{ fontSize: 12 }}>
+            The profile found a lower OFV than the reported fit
+            {Array.isArray(d!.fit_not_at_optimum) && d!.fit_not_at_optimum.length ? ` for ${d!.fit_not_at_optimum.join(', ')}` : ''}.
+            Re-fit (e.g. method=auto) before trusting any interval.
+          </div>
+        </div>
+      )}
+      {!!d?.non_monotone_parameters?.length && (
+        <div style={{ fontSize: 11, color: 'var(--yellow)', marginBottom: 4 }}>
+          Non-monotone profile: {d.non_monotone_parameters.join(', ')} — multiple optima or a rough objective.
+        </div>
+      )}
+      {!!d?.unbounded_parameters?.length && (
+        <div style={{ fontSize: 11, color: 'var(--yellow)', marginBottom: 4 }}>
+          Limit not reached (unbounded): {d.unbounded_parameters.join(', ')}.
+        </div>
+      )}
+      <table className="nca-table">
+        <thead><tr><th>Parameter</th><th>Estimate</th><th>Profile CI</th><th>Lower</th><th>Upper</th>
+          <th title="(upper − estimate) / (estimate − lower); 1 = symmetric">Asymmetry</th><th>Evals</th><th>dOFV profile</th></tr></thead>
+        <tbody>
+          {(r.parameters ?? []).map(p => (
+            <tr key={p.parameter}>
+              <td>{p.parameter}</td>
+              <td>{fmt(p.estimate ?? undefined, 3)}</td>
+              <td>{ci(p.profile_lo, p.profile_hi)}</td>
+              <td style={{ fontSize: 10.5, color: p.lower_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.lower_reason ?? 'ok'}</td>
+              <td style={{ fontSize: 10.5, color: p.upper_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.upper_reason ?? 'ok'}</td>
+              <td>{p.asymmetry_ratio != null ? fmt(p.asymmetry_ratio, 2) : '–'}</td>
+              <td>{p.n_evaluations}</td>
+              <td><ProfileSparkline p={p} cutoff={cutoff} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <UncertaintyNotes notes={r.notes} />
     </div>
   );
 }
@@ -3088,6 +3279,11 @@ export default function App() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
   }
 
+  const PROPOSAL_CARD: Record<string, string> = {
+    run_simest: '__SIMEST__', run_bootstrap: '__BOOTSTRAP__',
+    run_sir: '__SIR__', run_profile: '__PROFILE__',
+  };
+
   /** Human decision on a chat-proposed expensive tool. Approval is the tool's
    *  `confirm` and runs it as a background job (polled); rejection is inline. */
   async function decidePendingTool(approve: boolean) {
@@ -3111,6 +3307,8 @@ export default function App() {
       setJobNote('');
       setState(job.state);
       pushMsg({ role: 'assistant', content: job.summary, agent: 'simulator', id: '' });
+      const card = PROPOSAL_CARD[tool];
+      if (card) pushMsg({ role: 'assistant', content: card, agent: 'simulator', id: '', snap: job.state });
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
     } finally { setJobNote(''); setLoading(false); }
@@ -4010,6 +4208,39 @@ export default function App() {
                   <div className="msg-bubble" style={{ maxWidth: 660 }}>
                     <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Trial-design precision check</div>
                     <SimestCard r={st.simest_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__BOOTSTRAP__' && st?.bootstrap_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>BS</div>
+                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Bootstrap uncertainty</div>
+                    <BootstrapCard r={st.bootstrap_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__SIR__' && st?.sir_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SR</div>
+                  <div className="msg-bubble" style={{ maxWidth: 700 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · SIR uncertainty</div>
+                    <SirCard r={st.sir_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__PROFILE__' && st?.profile_results) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>LP</div>
+                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Likelihood profiling</div>
+                    <ProfileCard r={st.profile_results} />
                   </div>
                 </div>
               );

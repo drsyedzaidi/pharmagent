@@ -124,6 +124,9 @@ export interface PharmState {
   individual_exposures: IndividualExposures | null;
   pediatric_results: PediatricResults | null;
   simest_results: SimestResults | null;
+  bootstrap_results: BootstrapResults | null;
+  sir_results: SirResults | null;
+  profile_results: ProfileResults | null;
   stats_advice: StatsAdvice | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
@@ -566,6 +569,109 @@ export interface StatsAdvice {
   covariates: { name: string; kind: string; n_levels?: number | null; recommendation: string }[];
   recommendations: { topic: string; recommendation: string; rationale: string }[];
   caveats: string[];
+}
+
+/** run_bootstrap — non-parametric (subject-level) bootstrap of a population fit. */
+export interface BootstrapParam {
+  parameter: string;
+  estimate: number | null;
+  boot_median: number | null;
+  boot_lo: number | null;
+  boot_hi: number | null;
+  boot_se: number | null;
+  asymptotic_lo: number | null;
+  asymptotic_hi: number | null;
+  boot_bias_pct: number | null;
+}
+export interface BootstrapResults {
+  status: string;
+  message?: string;
+  model_key?: string;
+  method?: string;
+  n_subjects?: number;
+  n_boot_requested?: number;
+  n_completed?: number;
+  n_ok?: number;
+  n_failed?: number;
+  success_rate?: number | null;
+  failure_reasons?: Record<string, number>;
+  stratified?: boolean;
+  n_strata?: number;
+  ci_level?: number;
+  stopped_early?: boolean;
+  seconds?: number;
+  parameters?: BootstrapParam[];
+  comparison?: { parameter: string; boot_width: number | null; asymptotic_width: number | null;
+    width_ratio_boot_over_asymptotic: number | null }[];
+  stability?: { n_replicates: number;
+    parameters: { parameter: string; lo: number | null; hi: number | null }[] }[];
+  notes?: string[];
+}
+
+/** run_sir — sampling importance resampling (Dosne et al. 2016). */
+export interface SirParam {
+  parameter: string;
+  estimate: number | null;
+  sir_median: number | null;
+  sir_lo: number | null;
+  sir_hi: number | null;
+  asymptotic_lo: number | null;
+  asymptotic_hi: number | null;
+  asymmetry_ratio: number | null;
+}
+export interface SirResults {
+  status: string;
+  message?: string;
+  method?: string;
+  n_samples?: number;
+  n_usable?: number;
+  n_resample?: number;
+  m_over_m_ratio?: number;
+  inflation?: number;
+  n_failed_objective?: number;
+  stopped_early?: boolean;
+  ci_level?: number;
+  seconds?: number;
+  parameters?: SirParam[];
+  diagnostics?: {
+    effective_sample_size: number | null;
+    ess_fraction_of_m: number | null;
+    dofv_mean_resampled: number | null;
+    df_reference: number | null;
+    dofv_mean_proposal: number | null;
+    max_weight: number | null;
+  };
+  notes?: string[];
+}
+
+/** run_profile — log-likelihood profiling. */
+export interface ProfileParam {
+  parameter: string;
+  estimate: number | null;
+  profile_lo: number | null;
+  profile_hi: number | null;
+  lower_reason: string | null;
+  upper_reason: string | null;
+  asymmetry_ratio: number | null;
+  n_evaluations: number;
+  profile: { value: number; dofv: number }[];
+}
+export interface ProfileResults {
+  status: string;
+  message?: string;
+  method?: string;
+  ci_level?: number;
+  dofv_cutoff?: number;
+  n_parameters?: number;
+  n_evaluations?: number;
+  seconds?: number;
+  parameters?: ProfileParam[];
+  diagnostics?: {
+    fit_not_at_optimum: boolean | string[] | null;
+    non_monotone_parameters: string[];
+    unbounded_parameters: string[];
+  };
+  notes?: string[];
 }
 
 export interface SimestResults {
