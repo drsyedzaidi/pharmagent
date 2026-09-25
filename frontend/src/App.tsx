@@ -8,7 +8,7 @@ import {
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
 import type {
-  Session, PharmState, AgentMessage, AuditEntry, AuditIntegrityStatus,
+  Session, PharmState, ChatMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
   PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum,
@@ -2858,10 +2858,14 @@ export default function App() {
     setMessages(prev => [...prev, { ...m, id: `${Date.now()}-${Math.random()}` }]);
   }, []);
 
-  function extractMessages(raw: AgentMessage[], agent: string): DisplayMsg[] {
+  function extractMessages(raw: ChatMessage[], agent: string): DisplayMsg[] {
     const out: DisplayMsg[] = [];
     for (const m of raw) {
-      if (typeof m.content === 'string') {
+      // Backend agents emit bare strings (AgentResult.messages: list[str]);
+      // render each as an assistant reply attributed to the routing agent.
+      if (typeof m === 'string') {
+        if (m.trim()) out.push({ role: 'assistant', content: m, agent, id: '' });
+      } else if (typeof m.content === 'string') {
         if (m.content.trim()) out.push({ role: m.role, content: m.content, agent, id: '' });
       } else if (Array.isArray(m.content)) {
         for (const block of m.content as ContentBlock[]) {
@@ -2897,7 +2901,7 @@ export default function App() {
     if (e.dataTransfer.files[0]) handleFiles(e.dataTransfer.files[0]);
   }
 
-  function handleWorkflowResponse(res: { status: string; state: PharmState; messages?: AgentMessage[]; audit_ok: boolean }) {
+  function handleWorkflowResponse(res: { status: string; state: PharmState; messages?: ChatMessage[]; audit_ok: boolean }) {
     setState(res.state);
     setCurrentStep(res.state.current_step ?? -1);
 

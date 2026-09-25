@@ -128,3 +128,17 @@ def test_jobmanager_reports_done_and_error():
         time.sleep(0.05)
     assert j2["status"] == "error" and "kaboom" in j2["error"]
     assert jm.get("job_missing") is None
+
+
+def test_chat_messages_are_plain_strings(client):
+    """Contract: ``/chat`` returns ``messages`` as a list of non-empty plain
+    strings (``AgentResult.messages: list[str]``), NOT ``{role, content}``
+    objects. The frontend's ``extractMessages`` must accept bare-string items —
+    it previously only handled ``{role, content}`` and silently dropped every
+    agent text reply (only marker cards rendered)."""
+    sid = client.post("/api/sessions").json()["id"]
+    r = client.post(f"/api/sessions/{sid}/chat", json={"message": f"load dataset {SAMPLE}"}).json()
+    assert r["agent"] == "data_manager"
+    assert isinstance(r["messages"], list) and r["messages"]
+    assert all(isinstance(m, str) and m.strip() for m in r["messages"])
+    assert any(m.startswith("Loaded ") for m in r["messages"])

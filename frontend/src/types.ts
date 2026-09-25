@@ -951,7 +951,7 @@ export interface AuditIntegrityStatus {
 
 export interface ChatResponse {
   agent: string;
-  messages: AgentMessage[];
+  messages: ChatMessage[];
   state: PharmState;
   status: string;
 }
@@ -959,7 +959,7 @@ export interface ChatResponse {
 export interface WorkflowResponse {
   status: 'complete' | 'awaiting_review' | 'error';
   state: PharmState;
-  messages?: AgentMessage[];
+  messages?: ChatMessage[];
   pending_review?: PendingReview;
   audit_ok: boolean;
 }
@@ -975,6 +975,11 @@ export interface AgentMessage {
   role: 'user' | 'assistant';
   content: string | ContentBlock[];
 }
+
+// The backend's `AgentResult.messages` is a plain `list[str]` (human-facing
+// log lines from the routed agent); structured `{role, content}` items are
+// also accepted. Both shapes must render in the chat pane.
+export type ChatMessage = string | AgentMessage;
 
 export interface ContentBlock {
   type: 'text' | 'tool_use' | 'tool_result';
