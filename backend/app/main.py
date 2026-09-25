@@ -142,6 +142,11 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class PendingToolDecision(BaseModel):
+    approve: bool = True
+    reason: str = ""          # audited approval / rejection note
+
+
 class WorkflowStartRequest(BaseModel):
     workflow: str
     params: dict | None = None
@@ -344,6 +349,28 @@ def chat(sid: str, req: ChatRequest, sess=Depends(owned_session),
     return orch.chat(sid, req.message, actor=actor)
 
 
+@app.post("/api/sessions/{sid}/chat/pending_tool")
+def decide_pending_tool(sid: str, req: PendingToolDecision, sess=Depends(owned_session),
+                        actor: str = Depends(actor_id)) -> dict:
+    """Approve or reject the expensive tool the chat agent PROPOSED
+    (``state.pending_tool``, e.g. run_simest). Rejection is inline and computes
+    nothing. Approval is the human ``confirm`` the tool requires: the call is
+    submitted to the JobManager (admission-controlled) and run through
+    Orchestrator.run_tool; poll /jobs/{id}. 400 when nothing is pending — so a
+    repeated approval cannot submit twice."""
+    try:
+        if not req.approve:
+            return orch.reject_pending_tool(sid, actor=actor, reason=req.reason)
+        call = orch.take_pending_tool(sid, actor=actor, reason=req.reason)
+    except KeyError as e:
+        raise HTTPException(400, str(e)) from e
+    kind = f"chat_{call['tool']}"
+    job_id = jobs.submit(session_id=sid, kind=kind,
+                         fn=lambda: orch.run_tool(sid, call["tool"], call["agent"],
+                                                  call["args"], actor=actor))
+    return {"job_id": job_id, "status": "running", "kind": kind, "tool": call["tool"]}
+
+
 @app.post("/api/sessions/{sid}/roles")
 def set_roles(sid: str, req: RolesRequest, sess=Depends(owned_session),
               actor: str = Depends(actor_id)) -> dict:
@@ -530,8 +557,9 @@ class SimestRequest(BaseModel):
 def run_simest(sid: str, req: SimestRequest, sess=Depends(owned_session),
                actor: str = Depends(actor_id)) -> dict:
     """Submit the simulation-estimation precision check as a background job;
-    poll /jobs/{id}. `agent="simulator"` (never "modeler") -- this tool is not
-    LLM-reachable from chat; see app.tools.simest_tools for why that matters.
+    poll /jobs/{id}. `agent="simulator"` (never "modeler"). The chat agent can
+    only PROPOSE this tool (state.pending_tool -> /chat/pending_tool); see
+    app.tools.simest_tools for why that matters.
     Runs several real NLME fits (minutes to tens of minutes) -- requires
     `confirm=true` in the request body."""
     body = req.model_dump()

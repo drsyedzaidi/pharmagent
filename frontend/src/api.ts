@@ -1,5 +1,5 @@
 import type {
-  Session, ChatResponse, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
+  Session, ChatResponse, PendingToolDecision, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
   AuditIntegrityStatus,
 } from './types';
@@ -62,6 +62,14 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message }),
+    }),
+
+  /** Approve (-> background job, poll it) or reject the tool the chat agent proposed. */
+  decidePendingTool: (sid: string, approve: boolean, reason = ''): Promise<PendingToolDecision> =>
+    req(`/sessions/${sid}/chat/pending_tool`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve, reason }),
     }),
 
   startWorkflow: (sid: string, path: string, workflow = 'nca_full'): Promise<WorkflowResponse> =>

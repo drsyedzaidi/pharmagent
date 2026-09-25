@@ -3070,6 +3070,11 @@ export default function App() {
       const res = await api.chat(session.id, text);
       setState(res.state);
       extractMessages(res.messages ?? [], res.agent).forEach(m => pushMsg(m));
+      // An expensive tool the agent PROPOSED (e.g. run_simest): nothing ran —
+      // render the approve/reject card bound to this snapshot's proposal.
+      if (res.pending_tool) {
+        pushMsg({ role: 'assistant', content: '__PENDING_TOOL__', agent: res.agent, id: '', snap: res.state });
+      }
       const marker = AGENT_CARD[res.agent];
       if (marker) pushMsg({ role: 'assistant', content: marker, agent: res.agent, id: '', snap: res.state });
     } catch (e) {
@@ -3081,6 +3086,34 @@ export default function App() {
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  }
+
+  /** Human decision on a chat-proposed expensive tool. Approval is the tool's
+   *  `confirm` and runs it as a background job (polled); rejection is inline. */
+  async function decidePendingTool(approve: boolean) {
+    if (!session) return;
+    const tool = state?.pending_tool?.tool ?? 'proposed tool';
+    setLoading(true);
+    pushMsg({ role: 'user', content: `${approve ? 'Approve' : 'Reject'} ${tool}`, id: '' });
+    try {
+      const res = await api.decidePendingTool(session.id, approve);
+      if (!approve || !res.job_id) {
+        if (res.state) setState(res.state);
+        pushMsg({ role: 'assistant', content: `${tool} rejected — nothing computed.`,
+          agent: 'supervisor', id: '' });
+        return;
+      }
+      // approved: the proposal is already cleared server-side; clear it locally
+      // so the card stops offering buttons, then poll the job.
+      setState(s => (s ? { ...s, pending_tool: null } : s));
+      const job = await api.pollJob(session.id, res.job_id,
+        s => setJobNote(`${tool} running as a background job… ${s}s`));
+      setJobNote('');
+      setState(job.state);
+      pushMsg({ role: 'assistant', content: job.summary, agent: 'simulator', id: '' });
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
+    } finally { setJobNote(''); setLoading(false); }
   }
 
   async function runPkModel(body: { model_key?: string; compare?: boolean }) {
@@ -3823,6 +3856,46 @@ export default function App() {
                   <div className="msg-bubble">
                     <div className="msg-agent-tag" style={{ color: 'var(--agent-report)' }}>Population PK Agent</div>
                     <PopPkCard r={st.poppk_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__PENDING_TOOL__' && st?.pending_tool) {
+              const p = st.pending_tool;
+              // buttons only while THIS proposal is still the live one
+              const live = !!state?.pending_tool
+                && state.pending_tool.tool === p.tool
+                && state.pending_tool.proposed_at === p.proposed_at;
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--yellow)' }}>SM</div>
+                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
+                    <div className="msg-agent-tag" style={{ color: 'var(--yellow)' }}>Simulator · proposal — awaiting your approval</div>
+                    <div className="gate-banner">
+                      <AlertTriangle size={20} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+                      <div className="gate-banner-text">
+                        <div className="gate-banner-title">Run {p.tool}?</div>
+                        <div className="gate-banner-sub">
+                          Long-running fit (minutes to tens of minutes) — runs as a background job.
+                          Nothing has been computed.
+                        </div>
+                        <pre style={{ fontSize: 11, margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>
+                          {JSON.stringify(p.args, null, 1)}
+                        </pre>
+                      </div>
+                      {live ? (
+                        <div className="gate-actions">
+                          <button className="btn btn-green" disabled={loading} onClick={() => decidePendingTool(true)}>
+                            <CheckCircle size={12} /> Approve
+                          </button>
+                          <button className="btn btn-red" disabled={loading} onClick={() => decidePendingTool(false)}>
+                            <XCircle size={12} /> Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="gate-banner-sub">decided</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

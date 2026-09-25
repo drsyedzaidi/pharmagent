@@ -348,9 +348,32 @@ class Orchestrator:
                 actor=actor or "",
             )
             sess.state = res.state
+            pending = None
+            if res.proposal is not None:
+                # A proposable expensive tool the agent selected: record it for a
+                # human decision (tamper-evidently) — nothing was computed.
+                ts = self.clock()
+                previous = sess.state.pending_tool
+                if previous:
+                    # An undecided proposal is being replaced: leave a trace, so the
+                    # chain shows it was abandoned rather than silently vanishing.
+                    sess.audit.append(
+                        agent="supervisor", tool=previous["tool"], action="supersede_tool",
+                        inputs=previous.get("args") or {},
+                        outputs={"status": "superseded", "by": res.proposal["tool"]},
+                        timestamp=ts, actor=actor or "")
+                pending = {**res.proposal, "proposed_at": ts, "proposed_by": actor or "",
+                           "message": message}
+                sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": pending})
+                sess.audit.append(
+                    agent="supervisor", tool=pending["tool"], action="propose_tool",
+                    inputs=pending["args"],
+                    outputs={"status": "pending_approval", "agent": pending["agent"]},
+                    timestamp=ts, actor=actor or "")
             payload = {
                 "agent": agent_name, "routed_by": method,
                 "messages": res.messages, "tool_calls": res.tool_calls,
+                "pending_tool": pending,
                 "state": sess.state.model_dump(),
             }
             sess.history.append({"role": "user", "content": message})
@@ -422,6 +445,49 @@ class Orchestrator:
             return {"agent": agent, "tool": tool, "summary": res.summary,
                     "state": sess.state.model_dump(), "result": res.result,
                     "audit_ok": sess.audit.verify()}
+
+    # -- chat-proposed expensive tools: the human decides ------------------
+    def take_pending_tool(self, sid: str, *, actor: str | None = None,
+                          reason: str = "") -> dict[str, Any]:
+        """Approve ``state.pending_tool``: audit the decision, clear it, and return
+        the call to submit ({tool, agent, args}) with ``confirm=True`` — the
+        human approval IS the confirm the tool requires.
+
+        The proposal is cleared HERE, before any job is submitted, so a repeated
+        approval (double click, retry) finds nothing and cannot double-submit.
+        Raises KeyError when nothing is pending.
+        """
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            pending = sess.state.pending_tool
+            if not pending:
+                raise KeyError("no pending tool proposal")
+            args = {**(pending.get("args") or {}), "confirm": True}
+            sess.audit.append(
+                agent="supervisor", tool=pending["tool"], action="approve_tool",
+                inputs=args, outputs={"status": "approved", "agent": pending["agent"]},
+                timestamp=self.clock(), actor=actor or "", reason=reason)
+            sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": None})
+            self._persist(sess)
+            return {"tool": pending["tool"], "agent": pending["agent"], "args": args}
+
+    def reject_pending_tool(self, sid: str, *, actor: str | None = None,
+                            reason: str = "") -> dict[str, Any]:
+        """Reject ``state.pending_tool``: audited, cleared, nothing computed.
+        Raises KeyError when nothing is pending."""
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            pending = sess.state.pending_tool
+            if not pending:
+                raise KeyError("no pending tool proposal")
+            sess.audit.append(
+                agent="supervisor", tool=pending["tool"], action="reject_tool",
+                inputs=pending.get("args") or {}, outputs={"status": "rejected"},
+                timestamp=self.clock(), actor=actor or "", reason=reason)
+            sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": None})
+            self._persist(sess)
+            return {"status": "rejected", "tool": pending["tool"],
+                    "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
 
     def review_loop(self, sid: str, *, goal: str | None = None, max_iter: int = 3,
                     actor: str | None = None) -> dict[str, Any]:

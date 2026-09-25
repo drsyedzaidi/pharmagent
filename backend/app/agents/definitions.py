@@ -60,6 +60,18 @@ AGENTS: dict[str, Agent] = {
             "or compare candidate models and select by AIC. All fits come from the "
             "fit_pk_model tool; you never invent parameters."),
     ),
+    "simulator": Agent(
+        name="simulator",
+        system_prompt=(
+            "You are the Simulation specialist. From a converged population (NLME) "
+            "fit you simulate PK profiles, dose sweeps, clinical-trial / PTA "
+            "simulations, special-population and pediatric exposures, and check a "
+            "proposed sampling design by simulation-estimation (run_simest). "
+            "run_simest is a PROPOSAL: compose its `design` from the request; it "
+            "runs only after the pharmacometrician approves it as a background job, "
+            "so never claim it has run. All numbers come from tools; you never "
+            "invent them."),
+    ),
     "qc": Agent(
         name="qc",
         system_prompt=(
@@ -106,6 +118,9 @@ DESCRIPTIONS: dict[str, str] = {
     "compartmental": "1- and 2-compartment oral model fitting per subject",
     "poppk": "population PK two-stage summary (typical values, IIV, covariates)",
     "modeler": "fit/compare the structural PK model library (1/2/3-cmt, transit, MM, PK/PD)",
+    "simulator": ("simulate from a fitted population model: PK profiles, dose sweeps, "
+                  "trial/PTA, pediatric, and simulation-estimation design checks "
+                  "(proposed for human approval)"),
     "qc": "independent quality-control review of an analysis",
     "reviewer": "adversarial refutation of results — recompute, challenge, flag, loop to a goal",
     "statistician": ("statistical analysis plan: log transform, parametric vs non-parametric "

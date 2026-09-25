@@ -1,9 +1,10 @@
 """Log-likelihood profiling tool wiring.
 
-SAFETY: ``agent="simulator"``, the deliberately unroutable agent shared with
-``run_simest`` / ``run_bootstrap`` / ``run_sir`` — absent from
-``app.agents.definitions.AGENTS``/``DESCRIPTIONS`` and
-``app.agents.supervisor.KEYWORDS``, so no chat turn can route to it.
+SAFETY: ``agent="simulator"`` with ``expensive=True``, like ``run_bootstrap``
+and ``run_sir``. The simulator agent is routable (``run_simest`` is proposable
+from chat); the expensive flag keeps this tool off the chat path --
+``ToolRegistry.execute`` refuses it outside an admission-controlled caller and
+the agent loop skips it (not ``proposable``, so never proposed).
 
 Cost: each profile point is a constrained re-optimization whose every objective
 evaluation is a full population Laplace pass. Measured at ~120 s for ONE
@@ -136,5 +137,5 @@ TOOLS = [
               "ci_level": {"type": "number", "minimum": 0.5, "maximum": 0.999},
           },
           "required": ["confirm"]},
-         run_profile),
+         run_profile, expensive=True),
 ]

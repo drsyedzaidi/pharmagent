@@ -40,6 +40,10 @@ class PharmState(BaseModel):
     last_agent: str | None = None
     workflow_name: str | None = None
     current_step: int = 0
+    # An expensive tool the chat agent PROPOSED (tool, agent, args, proposed_by,
+    # ...). Written only by the supervisor; cleared by the human's approve /
+    # reject decision. Nothing is computed while it sits here.
+    pending_tool: dict[str, Any] | None = None
 
     # --- data (Data Manager) ----------------------------------------------
     dataset_id: str | None = None
@@ -121,7 +125,8 @@ class PharmState(BaseModel):
 # Per-agent write-access whitelist. The orchestrator enforces this on every
 # state mutation; an agent attempting to write outside its set raises.
 AGENT_WRITE_FIELDS: dict[str, set[str]] = {
-    "supervisor": {"last_agent", "workflow_name", "current_step", "session_id"},
+    "supervisor": {"last_agent", "workflow_name", "current_step", "session_id",
+                   "pending_tool"},
     "data_manager": {"dataset_id", "dataset_path", "dataset_metadata", "data_quality",
                      "widgets", "spaghetti_data", "flexplot_data"},
     "nca": {"nca_parameters", "nca_summary", "widgets", "nca_plot_data"},

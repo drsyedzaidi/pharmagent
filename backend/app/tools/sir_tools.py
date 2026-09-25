@@ -1,10 +1,10 @@
 """Sampling Importance Resampling tool wiring.
 
-SAFETY: registered under ``agent="simulator"``, the deliberately unroutable
-agent used by ``run_simest`` and ``run_bootstrap`` — absent from
-``app.agents.definitions.AGENTS``/``DESCRIPTIONS`` and
-``app.agents.supervisor.KEYWORDS``, so ``Supervisor.route`` cannot select it
-and ``Agent.run_turn`` never shows this tool to an LLM.
+SAFETY: registered under ``agent="simulator"`` with ``expensive=True``. The
+simulator agent is routable (``run_simest`` is proposable from chat); this
+tool is kept off the chat path by the expensive flag -- ``ToolRegistry.execute``
+refuses it outside an admission-controlled caller and the agent loop skips
+it (not ``proposable``, so never proposed either).
 
 SIR is much cheaper than a bootstrap — M objective evaluations and NO refits —
 but M is thousands of full population Laplace passes plus one numeric Hessian
@@ -143,5 +143,5 @@ TOOLS = [
               "inflation": {"type": "number", "minimum": 0.1, "maximum": 10.0},
           },
           "required": ["confirm"]},
-         run_sir),
+         run_sir, expensive=True),
 ]

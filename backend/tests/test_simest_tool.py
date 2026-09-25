@@ -52,37 +52,29 @@ def state():
     return PharmState(dataset_id="d1", nlme_results=_nlme())
 
 
-# ── SAFETY: the LLM chat path can never reach run_simest ────────────────────
+# ── SAFETY: the chat path can PROPOSE run_simest but never run it ──────────
+# (full proposal -> human decision -> job path: tests/test_simest_chat.py)
 
 def test_tool_is_registered_under_simulator_not_modeler():
     tool = default_registry().get("run_simest")
     assert tool.agent == "simulator"
 
 
-def test_simulator_is_absent_from_agents_and_descriptions():
-    # The actual mechanism that makes agent="simulator" unreachable from chat:
-    # AGENTS/DESCRIPTIONS have no "simulator" entry.
-    assert "simulator" not in AGENTS
-    assert "simulator" not in DESCRIPTIONS
+def test_run_simest_is_expensive_and_proposable():
+    # The registry refuses it on the synchronous chat path (expensive) and the
+    # agent loop turns that refusal into state.pending_tool for a human decision.
+    tool = default_registry().get("run_simest")
+    assert tool.expensive and tool.proposable
 
 
-def test_simulator_is_absent_from_supervisor_keywords_and_unroutable():
-    assert "simulator" not in KEYWORDS
-    # score() can only ever produce keys present in KEYWORDS.
-    assert "simulator" not in score("run a simulation estimation study now")
+def test_simulator_is_routable():
+    assert "simulator" in AGENTS and "simulator" in DESCRIPTIONS and "simulator" in KEYWORDS
+    assert score("run a simulation estimation study now")["simulator"] >= 1
 
-
-def test_supervisor_route_can_never_return_simulator(monkeypatch):
-    # Even forcing the LLM-classification fallback path (by making every
-    # keyword score tie at zero) cannot select "simulator", because its
-    # candidate list is `list(DESCRIPTIONS)`, which excludes it.
-    class _StubLLM:
-        def classify(self, message, choices, descriptions):
-            assert "simulator" not in choices
-            return choices[0]
-    sup = Supervisor(_StubLLM())
-    agent_name, method = sup.route("")
-    assert agent_name != "simulator"
+    class _NeverLLM:
+        def classify(self, message, choices, descriptions):  # pragma: no cover
+            raise AssertionError("keyword routing should have decided")
+    assert Supervisor(_NeverLLM()).route("simulation-estimation design check")[0] == "simulator"
 
 
 def test_state_write_access_includes_simest_results():

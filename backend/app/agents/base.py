@@ -22,6 +22,9 @@ class AgentResult:
     state: PharmState
     messages: list[str] = field(default_factory=list)   # human-facing log
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    # A proposable expensive tool the LLM selected: {tool, agent, args}. Not
+    # executed here; the orchestrator records it as state.pending_tool.
+    proposal: dict[str, Any] | None = None
 
 
 @dataclass
@@ -41,7 +44,10 @@ class Agent:
             "compartmental_results": "present" if state.compartmental_results else None,
             "poppk_results": "present" if state.poppk_results else None,
             "pk_model_results": "present" if state.pk_model_results else None,
+            "nlme_results": "present" if (state.nlme_results or {}).get("status") == "ok" else None,
+            "simest_results": "present" if state.simest_results else None,
             "stats_advice": "present" if state.stats_advice else None,
+            "pending_tool": (state.pending_tool or {}).get("tool"),
             "qc_verdict": state.qc_verdict,
             "report_path": state.report_path,
         }
@@ -66,6 +72,23 @@ class Agent:
                     actor=actor,
                 )
             except ExpensiveToolError as exc:
+                tool = registry.get(choice["name"])
+                if tool.proposable:
+                    # Reachable from the agent, never run by it: the refused call
+                    # is handed back as a PROPOSAL. The human's approval is the
+                    # tool's `confirm` (an LLM-supplied confirm is dropped), and
+                    # the orchestrator submits the approved call as a bounded
+                    # background job. Nothing is computed on this turn.
+                    args = {k: v for k, v in (choice.get("input") or {}).items()
+                            if k != "confirm"}
+                    result.proposal = {"tool": tool.name, "agent": self.name, "args": args}
+                    result.messages.append(
+                        f"Proposed {tool.name} — a long-running fit (minutes to tens of "
+                        "minutes). Nothing has been computed. Approve it to run as a "
+                        "background job, or reject it.")
+                    result.tool_calls.append({"tool": tool.name, "proposed": "expensive",
+                                              "args": args})
+                    break
                 result.messages.append(f"{exc} Ask for it from that panel instead.")
                 result.tool_calls.append({"tool": choice["name"], "skipped": "expensive"})
                 break

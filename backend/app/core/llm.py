@@ -60,6 +60,15 @@ class MockLLM:
             return None if s.get("report_path") else {"name": "generate_report", "input": {}}
         if agent == "statistician":
             return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
+        if agent == "simulator":
+            low = (message or "").lower()
+            if any(k in low for k in ("simulation-estimation", "simulation estimation",
+                                      "simest", "sim-est")):
+                # The keyless mock cannot compose a `design` from prose; it only
+                # PROPOSES the tool (never confirms on the human's behalf) and
+                # the pharmacometrician supplies/approves the design.
+                return {"name": "run_simest", "input": {}}
+            return None
         return None
 
 

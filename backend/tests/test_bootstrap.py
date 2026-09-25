@@ -255,19 +255,18 @@ def test_result_is_json_safe():
 def test_bootstrap_tool_is_not_llm_reachable():
     """A bootstrap is hundreds of real NLME fits. The guardrail is "never
     submit a real NLME/SCM fit from an automated loop", so this tool must be
-    unreachable from a chat turn -- HTTP endpoint only, like run_simest."""
+    refused on the chat path (expensive), like run_nlme."""
     from app.agents.definitions import AGENTS, DESCRIPTIONS
     from app.agents.supervisor import KEYWORDS
     from app.tools.builtins import default_registry
 
     tool = default_registry()._tools["run_bootstrap"]
     assert tool.agent == "simulator"
-    # Supervisor.route can only return a key in KEYWORDS, or via its LLM
-    # fallback a key in DESCRIPTIONS; Agent.run_turn scopes tools to the routed
-    # agent. "simulator" in none of them => no chat path can reach this tool.
-    assert "simulator" not in AGENTS
-    assert "simulator" not in DESCRIPTIONS
-    assert "simulator" not in KEYWORDS
+    # "simulator" IS routable now (run_simest is proposable from chat), so the
+    # guardrail for this tool is the expensive flag: the registry refuses it on
+    # the synchronous chat path and the turn skips it — never proposed, never run.
+    assert "simulator" in AGENTS and "simulator" in DESCRIPTIONS and "simulator" in KEYWORDS
+    assert tool.expensive and not tool.proposable
 
 
 def test_bootstrap_tool_requires_confirm():

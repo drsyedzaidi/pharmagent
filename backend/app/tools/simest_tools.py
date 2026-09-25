@@ -1,18 +1,22 @@
 """Simulation-estimation tool wiring.
 
-SAFETY: this Tool is registered under ``agent="simulator"``, which is
-deliberately ABSENT from ``app.agents.definitions.AGENTS``/``DESCRIPTIONS``
-and ``app.agents.supervisor.KEYWORDS`` -- verified empirically:
-``Supervisor.route`` can only return a key present in ``KEYWORDS`` (or, via
-its LLM-classification fallback, a key in ``DESCRIPTIONS``), so it can never
-select ``"simulator"``, and ``Agent.run_turn`` scopes the tool list the LLM
-sees to ``registry.for_agent(self.name)`` for the ROUTED agent only. A chat
-message can therefore never reach this tool -- it is HTTP-endpoint-only, the
-same precedent as ``simulate_pk_profile`` / ``run_dose_sweep``. This matters
-because ``run_simest`` runs several real NLME fits (real minutes to tens of
-minutes); the project's guardrail is "never submit a real NLME/SCM fit from
-an automated loop", and an LLM-reachable registration would violate it on the
-very first chat turn that requested a design check.
+SAFETY: ``run_simest`` runs several real NLME fits (real minutes to tens of
+minutes), and the project's guardrail is "never submit a real NLME/SCM fit
+from an automated loop". It is reachable from the agent (chat) path as a
+PROPOSAL only:
+
+* ``agent="simulator"`` is a routable agent, so a design-check request reaches
+  it and its LLM turn may select this tool and compose ``design``.
+* ``expensive=True``: ``ToolRegistry.execute`` refuses it on the synchronous
+  chat path (same choke point as ``run_nlme``), so the turn can never run it.
+* ``proposable=True``: instead of being skipped, the refused call becomes
+  ``state.pending_tool`` (audited ``propose_tool``). Nothing is computed.
+* The pharmacometrician approves or rejects it
+  (``POST /api/sessions/{sid}/chat/pending_tool``). Approval is the human
+  ``confirm`` this tool requires (an LLM-supplied ``confirm`` is dropped); the
+  approved call is submitted to the JobManager and run via
+  ``Orchestrator.run_tool`` -- the same admission-controlled path as the
+  ``/simest`` endpoint. Skill replay and workflow templates still refuse it.
 
 ``confirm=True`` is required UNCONDITIONALLY (not threshold-gated on a
 subject/replicate count -- a threshold is porous: a routine design well under
@@ -120,5 +124,5 @@ TOOLS = [
               "method": {"type": "string", "enum": ["focei", "saem"]},
           },
           "required": ["confirm", "design"]},
-         run_simest),
+         run_simest, expensive=True, proposable=True),
 ]

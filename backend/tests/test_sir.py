@@ -224,10 +224,11 @@ def test_sir_tool_is_not_llm_reachable():
     from app.agents.supervisor import KEYWORDS
     from app.tools.builtins import default_registry
 
-    assert default_registry()._tools["run_sir"].agent == "simulator"
-    assert "simulator" not in AGENTS
-    assert "simulator" not in DESCRIPTIONS
-    assert "simulator" not in KEYWORDS
+    tool = default_registry()._tools["run_sir"]
+    assert tool.agent == "simulator"
+    # simulator is routable now; the expensive flag keeps this off the chat path
+    assert "simulator" in AGENTS and "simulator" in DESCRIPTIONS and "simulator" in KEYWORDS
+    assert tool.expensive and not tool.proposable
 
 
 def test_sir_tool_requires_confirm_and_writes_nothing_on_refusal():

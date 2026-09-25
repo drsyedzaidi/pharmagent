@@ -82,8 +82,19 @@ export interface EngineComparisonResults {
   n_candidates?: number;
 }
 
+/** An expensive tool the chat agent PROPOSED; runs only after a human approves. */
+export interface PendingTool {
+  tool: string;
+  agent: string;
+  args: Record<string, unknown>;
+  proposed_at?: string;
+  proposed_by?: string;
+  message?: string;
+}
+
 export interface PharmState {
   session_id: string;
+  pending_tool?: PendingTool | null;
   dataset_id: string | null;
   dataset_path: string | null;
   dataset_metadata: Record<string, unknown> | null;
@@ -995,6 +1006,15 @@ export interface ChatResponse {
   messages: ChatMessage[];
   state: PharmState;
   status: string;
+  pending_tool?: PendingTool | null;
+}
+
+export interface PendingToolDecision {
+  status: string;            // 'running' (approved -> job) | 'rejected'
+  job_id?: string;
+  kind?: string;
+  tool?: string;
+  state?: PharmState;        // present on rejection
 }
 
 export interface WorkflowResponse {

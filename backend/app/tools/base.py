@@ -49,6 +49,10 @@ class Tool:
     run: Callable[[PharmState, ToolContext, dict[str, Any]], ToolResult]
     expensive: bool = False           # long-running fit: endpoint/job-only, never
     #                                   run synchronously from a chat turn
+    proposable: bool = False          # expensive tool the chat path may PROPOSE:
+    #                                   the agent loop records it as
+    #                                   state.pending_tool for a human approve /
+    #                                   reject; it is never executed on the turn
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
