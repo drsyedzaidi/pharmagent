@@ -41,6 +41,7 @@ class Agent:
             "compartmental_results": "present" if state.compartmental_results else None,
             "poppk_results": "present" if state.poppk_results else None,
             "pk_model_results": "present" if state.pk_model_results else None,
+            "stats_advice": "present" if state.stats_advice else None,
             "qc_verdict": state.qc_verdict,
             "report_path": state.report_path,
         }

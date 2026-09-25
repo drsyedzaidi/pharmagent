@@ -89,6 +89,9 @@ class PharmState(BaseModel):
     sir_results: dict[str, Any] | None = None             # sampling importance resampling CIs
     profile_results: dict[str, Any] | None = None         # log-likelihood profile CIs
 
+    # --- statistical analysis advice (Statistician Agent) -----------------
+    stats_advice: dict[str, Any] | None = None   # parametric vs non-parametric plan
+
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
     report_sections: dict[str, Any] | None = None
@@ -137,6 +140,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                   "individual_exposures", "pediatric_results",
                   "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
+    "statistician": {"stats_advice", "widgets"},
 }
 
 

@@ -58,6 +58,8 @@ class MockLLM:
             return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
         if agent == "report":
             return None if s.get("report_path") else {"name": "generate_report", "input": {}}
+        if agent == "statistician":
+            return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
         return None
 
 

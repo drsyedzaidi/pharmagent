@@ -384,6 +384,53 @@ function BeCard({ r }: { r: PharmState['be_results'] }) {
   );
 }
 
+function StatsAdviceCard({ r }: { r: PharmState['stats_advice'] }) {
+  if (!r || r.status !== 'ok') return null;
+  const d = r.design;
+  const nonPar = Object.values(r.metrics).filter(m => m.family === 'non-parametric' && m.scale === 'rank').length;
+  const fmtP = (p: number | null | undefined) => (p == null ? '–' : p < 0.001 ? '<0.001' : p.toFixed(3));
+  return (
+    <div className={`qc-card ${nonPar > 1 ? 'conditional' : 'pass'}`}>
+      <div className="qc-title">
+        Statistical analysis plan — {d.design_label}, {d.n_groups} group{d.n_groups === 1 ? '' : 's'}
+        {d.group_var ? ` by ${d.group_var}` : ''}, {d.n_subjects} subjects
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
+        exposures from {d.source === 'nca' ? 'NCA parameters' : 'observed concentrations'}
+        {d.paired ? ' · paired (same subjects in every group)' : ''}
+      </div>
+      <table className="nca-table">
+        <thead><tr><th>Metric</th><th>n</th><th>Shapiro (log)</th><th>Scale</th><th>Family</th><th>Primary test</th></tr></thead>
+        <tbody>
+          {Object.entries(r.metrics).map(([m, v]) => (
+            <tr key={m} title={v.rationale}>
+              <td>{m}</td>
+              <td>{v.n}</td>
+              <td>{fmtP(v.shapiro_log_p)}</td>
+              <td>{v.scale}</td>
+              <td style={{ color: v.family === 'parametric' ? 'var(--green)' : 'var(--yellow)' }}>{v.family}</td>
+              <td style={{ fontSize: 11 }}>{v.primary_test}{v.sensitivity_test ? ` (sensitivity: ${v.sensitivity_test})` : ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul style={{ fontSize: 12, margin: '8px 0 0', paddingLeft: 18 }}>
+        {r.recommendations.map(rec => (
+          <li key={rec.topic}><b>{rec.topic}:</b> {rec.recommendation} <span style={{ opacity: 0.75 }}>— {rec.rationale}</span></li>
+        ))}
+        {r.covariates.map(c => (
+          <li key={c.name}><b>{c.name}</b> ({c.kind}): {c.recommendation}</li>
+        ))}
+      </ul>
+      {r.caveats.length > 0 && (
+        <div style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+          {r.caveats.map((c, i) => <div key={i}>⚠ {c}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DosePropCard({ r }: { r: PharmState['dose_prop_results'] }) {
   if (!r) return null;
   if (r.status !== 'ok') {
@@ -3009,7 +3056,7 @@ export default function App() {
 
   const AGENT_CARD: Record<string, string> = {
     be: '__BE__', dose_prop: '__DP__',
-    compartmental: '__COMPARTMENTAL__', poppk: '__POPPK__',
+    compartmental: '__COMPARTMENTAL__', poppk: '__POPPK__', statistician: '__STATS__',
     nca: '__NCA_TABLE__', qc: '__QC_CARD__',
   };
 
@@ -3486,6 +3533,7 @@ export default function App() {
     { label: 'Compartmental fit', msg: 'fit a one- and two-compartment model' },
     { label: 'Population PK', msg: 'population pk typical values and iiv' },
     { label: 'Bioequivalence', msg: 'run a bioequivalence assessment test vs reference' },
+    { label: 'Stats advice', msg: 'how should I analyze this data: parametric or non-parametric, which test?' },
   ];
   const hasData = !!state?.dataset_id;
   const EXPORT_LABEL: Record<string, string> = {
@@ -3742,6 +3790,17 @@ export default function App() {
                   <div className="msg-bubble">
                     <div className="msg-agent-tag" style={{ color: 'var(--agent-data)' }}>Dose-Proportionality Agent</div>
                     <DosePropCard r={st.dose_prop_results} />
+                  </div>
+                </div>
+              );
+            }
+            if (m.content === '__STATS__' && st?.stats_advice) {
+              return (
+                <div key={m.id} className="msg agent">
+                  <div className="msg-avatar" style={{ color: 'var(--agent-supervisor)' }}>ST</div>
+                  <div className="msg-bubble">
+                    <div className="msg-agent-tag" style={{ color: 'var(--agent-supervisor)' }}>Statistician Agent</div>
+                    <StatsAdviceCard r={st.stats_advice} />
                   </div>
                 </div>
               );

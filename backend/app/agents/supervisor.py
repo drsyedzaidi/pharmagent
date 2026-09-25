@@ -29,6 +29,12 @@ KEYWORDS: dict[str, list[str]] = {
                 "michaelis", "menten", "indirect response", "turnover", "emax model",
                 "pkpd model", "pk/pd", "effect compartment", "model fitting", "best model"],
     "qc": ["qc", "quality control", "diagnostic", "checklist", "review", "verify"],
+    "statistician": ["statistic", "parametric", "nonparametric", "non-parametric",
+                     "normality", "shapiro", "t-test", "t test", "wilcoxon", "mann-whitney",
+                     "mann whitney", "kruskal", "anova", "which test", "what test",
+                     "how to analyze", "how to analyse", "how should i analyze",
+                     "how should i analyse", "analysis plan", "log-transform",
+                     "log transform", "geometric mean", "skew", "distribution"],
     "report": ["report", "docx", "document", "methods section", "write up", "writeup"],
 }
 

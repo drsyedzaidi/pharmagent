@@ -113,6 +113,7 @@ export interface PharmState {
   individual_exposures: IndividualExposures | null;
   pediatric_results: PediatricResults | null;
   simest_results: SimestResults | null;
+  stats_advice: StatsAdvice | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
   qc_checklist: QcCheck[] | null;
@@ -514,6 +515,46 @@ export interface SimestPerParam {
 export interface SimestReplicate {
   theta: Record<string, number>;
   ci: Record<string, [number, number]> | null;
+}
+
+// Statistician agent: parametric vs non-parametric analysis plan
+export interface StatsMetricAdvice {
+  n: number;
+  geometric_mean?: number | null;
+  cv_pct?: number | null;
+  median?: number | null;
+  min?: number | null;
+  max?: number | null;
+  shapiro_raw_p?: number | null;
+  shapiro_log_p?: number | null;
+  skew_log?: number | null;
+  levene_log_p?: number | null;
+  equal_variance?: boolean | null;
+  n_outliers_log?: number;
+  scale: 'log' | 'raw' | 'rank';
+  family: 'parametric' | 'non-parametric' | 'descriptive';
+  primary_test: string;
+  sensitivity_test: string | null;
+  summary_statistic: string;
+  rationale: string;
+}
+
+export interface StatsAdvice {
+  status: string;
+  design: {
+    n_subjects: number;
+    n_groups: number;
+    group_var: string | null;
+    groups: string[];
+    n_per_group: Record<string, number>;
+    paired: boolean;
+    design_label: string;
+    source: 'nca' | 'observed';
+  };
+  metrics: Record<string, StatsMetricAdvice>;
+  covariates: { name: string; kind: string; n_levels?: number | null; recommendation: string }[];
+  recommendations: { topic: string; recommendation: string; rationale: string }[];
+  caveats: string[];
 }
 
 export interface SimestResults {

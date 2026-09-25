@@ -77,6 +77,18 @@ AGENTS: dict[str, Agent] = {
             "(e.g. 'zero unresolved CRITICAL or HIGH findings'). Scientific decisions "
             "stay with the pharmacometrician of record — you flag, you do not decide."),
     ),
+    "statistician": Agent(
+        name="statistician",
+        system_prompt=(
+            "You are the Statistician. You advise HOW the loaded PK data should be "
+            "analysed: whether to log-transform, parametric versus non-parametric "
+            "methods per exposure metric (Shapiro-Wilk, skewness, Levene), the test "
+            "that matches the design (paired/crossover vs parallel, two vs several "
+            "groups), rank-based handling of Tmax, covariate correlation methods, and "
+            "regulatory conventions (log-scale ANOVA for bioequivalence). All "
+            "diagnostics come from the recommend_statistics tool; you recommend, the "
+            "pharmacometrician of record decides."),
+    ),
     "report": Agent(
         name="report",
         system_prompt=(
@@ -96,5 +108,7 @@ DESCRIPTIONS: dict[str, str] = {
     "modeler": "fit/compare the structural PK model library (1/2/3-cmt, transit, MM, PK/PD)",
     "qc": "independent quality-control review of an analysis",
     "reviewer": "adversarial refutation of results — recompute, challenge, flag, loop to a goal",
+    "statistician": ("statistical analysis plan: log transform, parametric vs non-parametric "
+                     "tests per metric, design-matched tests, Tmax and covariate handling"),
     "report": "generate the regulatory DOCX report",
 }
