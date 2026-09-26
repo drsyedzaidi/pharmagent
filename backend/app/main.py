@@ -285,10 +285,52 @@ class FlexplotRequest(BaseModel):
 
 
 # ── public endpoints ─────────────────────────────────────────────────────────
+# ── LLM provider switch (mock / local Ollama / OpenAI "ChatGPT" / Anthropic Claude) ──
+from app.core.llm_config import LlmManager, build_llm, probe  # noqa: E402
+
+llm_manager = LlmManager(Path(settings.data_dir))
+llm_manager.activate(orch)   # the remembered provider/model, when it can be built
+
+
+class LlmChoiceRequest(BaseModel):
+    provider: str | None = None        # mock | local | openai | anthropic
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None         # memory only; never persisted or echoed
+    test_only: bool = False            # probe the model but do not switch
+
+
+@app.get("/api/llm")
+def get_llm_config(owner: str | None = Depends(current_owner)) -> dict:
+    """Active provider/model (no secrets), the provider list, and the models a
+    local Ollama has pulled."""
+    return llm_manager.describe()
+
+
+@app.put("/api/llm")
+def set_llm_config(req: LlmChoiceRequest, owner: str | None = Depends(current_owner)) -> dict:
+    """Test a provider choice and (unless test_only) make it the live LLM for
+    every session. A failed probe leaves the current choice untouched (400)."""
+    try:
+        choice = llm_manager.resolve(req.model_dump())
+        candidate = build_llm(choice)
+    except (ValueError, ImportError) as e:
+        raise HTTPException(400, str(e)) from e
+    result = probe(candidate)
+    if not result["ok"]:
+        raise HTTPException(400, f"{choice.provider} ({choice.model}) did not answer: {result['detail']}")
+    if req.test_only:
+        return {"ok": True, "tested": choice.public(), "detail": result["detail"],
+                "current": llm_manager.choice.public()}
+    llm_manager.apply(choice, orch)
+    return {"ok": True, "current": llm_manager.choice.public(), "detail": result["detail"],
+            "label": settings.llm_label}
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "app": settings.app_name, "org": settings.org_name,
-            "llm": "mock" if settings.llm_is_mock else settings.model,
+            "llm": settings.llm_label,
             "auth": "required" if settings.api_token else "open",
             "audit": "enforced" if orch.audit_security is not None else "hash_only"}
 
@@ -333,8 +375,9 @@ async def upload_for_session(sid: str, file: UploadFile = File(...),
     import pandas as pd
 
     from app.core.schema_extractor import extract_schema
+    from app.tools.data_tools import NONMEM_NA_VALUES
     try:
-        df = pd.read_csv(dest)
+        df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
     except Exception as e:
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"could not parse CSV: {e}")

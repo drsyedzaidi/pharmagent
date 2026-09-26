@@ -1,5 +1,5 @@
 import type {
-  Session, ChatResponse, PendingToolDecision, WorkflowResponse, AuditEntry, PharmState, PkModelDef, JobResult,
+  Session, ChatResponse, PendingToolDecision, WorkflowStartResponse, LlmConfig, LlmChoiceBody, LlmSwitchResult, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
   AuditIntegrityStatus,
 } from './types';
@@ -49,6 +49,12 @@ async function download(path: string, filename: string): Promise<void> {
 export const api = {
   health: () => req<{ status: string; llm: string }>('/health'),
 
+  /** Runtime LLM provider switch (mock / local Ollama / OpenAI "ChatGPT" / Anthropic Claude). */
+  getLlm: () => req<LlmConfig>('/llm'),
+  setLlm: (body: LlmChoiceBody) => req<LlmSwitchResult>('/llm', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }),
+
   createSession: () => req<Session>('/sessions', { method: 'POST' }),
 
   uploadDataset: (sid: string, file: File): Promise<{ dataset_id: string; metadata: Record<string, unknown> }> => {
@@ -72,14 +78,14 @@ export const api = {
       body: JSON.stringify({ approve, reason }),
     }),
 
-  startWorkflow: (sid: string, path: string, workflow = 'nca_full'): Promise<WorkflowResponse> =>
+  startWorkflow: (sid: string, path: string, workflow = 'nca_full'): Promise<WorkflowStartResponse> =>
     req(`/sessions/${sid}/workflow/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workflow, params: { path } }),
     }),
 
-  resumeWorkflow: (sid: string, approve: boolean): Promise<WorkflowResponse> =>
+  resumeWorkflow: (sid: string, approve: boolean): Promise<WorkflowStartResponse> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

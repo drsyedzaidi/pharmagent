@@ -66,6 +66,57 @@ cd frontend && npm ci && npm run dev
 
 The app runs fully **keyless** by default — `MockLLM` (deterministic) stands in for a real model, and the entire test suite is keyless. Set `ANTHROPIC_API_KEY` (see [`backend/.env.example`](backend/.env.example)) to use a real model.
 
+## LLM providers — Claude, free/local (Ollama), or keyless mock
+
+Everything quantitative is a deterministic tool; the LLM only routes a request
+to an agent and picks the next tool. So a small local model is enough, and no
+data leaves the machine.
+
+| provider | set | notes |
+|---|---|---|
+| Claude (Anthropic) | `PHARMAGENT_ANTHROPIC_API_KEY=sk-ant-…` (+ `PHARMAGENT_MODEL`) | best routing / argument composition |
+| **Local, free (Ollama)** | `PHARMAGENT_LLM_PROVIDER=openai` `PHARMAGENT_MODEL=qwen2.5:7b` | `ollama pull qwen2.5:7b` first; default URL `http://127.0.0.1:11434/v1`, no key |
+| LM Studio / vLLM / any OpenAI-compatible server | `PHARMAGENT_LLM_BASE_URL=http://127.0.0.1:1234/v1` `PHARMAGENT_MODEL=<loaded model>` | model must support tool calling |
+| Hosted free tiers (OpenRouter, Groq) | `PHARMAGENT_LLM_BASE_URL=https://openrouter.ai/api/v1` `PHARMAGENT_LLM_API_KEY=…` `PHARMAGENT_MODEL=…` | data leaves the machine |
+| Mock (default) | nothing | deterministic keyword routing, one tool per agent, never confirms expensive runs |
+
+`PHARMAGENT_LLM_PROVIDER` is `auto` by default: Anthropic key → Claude; else a
+base URL → OpenAI-compatible; else mock. Force one with `anthropic` / `openai`
+/ `mock`. `/api/health` reports the active provider and the UI badge shows it.
+Models that only answer in prose (no tool calling) simply pick no tool.
+
+**Switch at runtime from the UI**: click the "Backend online · …" badge → pick
+Mock / Local (Ollama, lists the models you have pulled) / ChatGPT (OpenAI key) /
+Claude (Anthropic key) → *Test* → *Use this model*. The choice applies to every
+session immediately and is remembered (provider, model, URL) in
+`<data_dir>/llm_settings.json`; API keys are held in the backend's memory only
+and must be re-entered after a relaunch unless set in the environment. The same
+switch is `GET/PUT /api/llm` (bearer-token gated when `PHARMAGENT_API_TOKEN` is set).
+
+## Desktop app (macOS)
+
+One process, one window: the FastAPI backend serves the built React frontend
+from the same loopback origin and a native WebKit window (pywebview) opens on
+it. No Node, no Vite, no browser tab. Per-user data (SQLite, uploads, reports)
+lives in `~/Library/Application Support/PharmAgent/`, never inside the bundle.
+
+```bash
+cd backend && .venv/bin/pip install -r requirements-desktop.txt   # pywebview + pyinstaller (once)
+./desktop/build.sh --smoke        # builds frontend, bundles, launches headless, hits /api/health
+open desktop/dist/PharmAgent.app
+```
+
+The bundle is unsigned: on first launch right-click → Open (or
+`xattr -dr com.apple.quarantine desktop/dist/PharmAgent.app`). Run from source
+without bundling: `backend/.venv/bin/python desktop/pharmagent_desktop.py`
+(needs `npm --prefix frontend run build` first). Env knobs:
+`PHARMAGENT_DESKTOP_PORT`, `PHARMAGENT_DESKTOP_DATA_DIR`,
+`PHARMAGENT_DESKTOP_NO_WINDOW=1` (serve only). A real LLM needs
+`PHARMAGENT_ANTHROPIC_API_KEY` in the environment the app is launched from;
+otherwise it runs on the deterministic MockLLM. The nlmixr2 cross-engine
+comparison needs `Rscript` on the launch PATH and is simply unavailable
+otherwise.
+
 ## Tests & CI
 
 ```bash

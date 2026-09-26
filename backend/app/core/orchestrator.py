@@ -95,6 +95,12 @@ class Orchestrator:
         self._locks_guard = threading.Lock()
         self._load_persisted()
 
+    def set_llm(self, llm: LLM) -> None:
+        """Swap the routing/tool-selection model at runtime (UI provider switch).
+        Tools, state and audit are untouched — the LLM only decides what to call."""
+        self.llm = llm
+        self.supervisor = Supervisor(llm)
+
     def session_lock(self, sid: str) -> threading.RLock:
         """Return (creating if needed) the per-session mutation lock."""
         with self._locks_guard:

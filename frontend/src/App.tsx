@@ -11,7 +11,7 @@ import type {
   Session, PharmState, ChatMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
   SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
-  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum, ProfileParam,
+  PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum, ProfileParam, WorkflowStartResponse, LlmProvider, LlmConfig,
 } from './types';
 
 const agentColor: Record<string, string> = {
@@ -1488,19 +1488,178 @@ function ProfileCard({ r }: { r: PharmState['profile_results'] }) {
 
 const SPAG_PALETTE = ['#1F66A6','#1D7A5A','#9A5B12','#4A6FA5','#B23A2E','#3B86C9','#16604A','#C77F2A','#5E7388','#2A8F8F'];
 
+/** The API wraps failures as {"error":{"message"}} (or {"detail"}); show the message, not the JSON. */
+function errorText(e: unknown): string {
+  const raw = (e as Error).message ?? String(e);
+  const start = raw.indexOf('{');
+  if (start >= 0) {
+    try {
+      const j = JSON.parse(raw.slice(start)) as { error?: { message?: string }; detail?: string; message?: string };
+      const m = j.error?.message ?? j.detail ?? j.message;
+      if (m) return m;
+    } catch { /* not JSON */ }
+  }
+  return raw;
+}
+
+const PROVIDER_LABEL: Record<LlmProvider, string> = {
+  mock: 'Mock (keyless, deterministic)', local: 'Local — Ollama (free)',
+  openai: 'ChatGPT — OpenAI API key', anthropic: 'Claude — Anthropic API key',
+};
+
+/** Header popover: pick the model that routes requests and picks tools.
+ *  Keys are sent to the local backend and held in its memory only. */
+function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => void; onClose: () => void }) {
+  const [cfg, setCfg] = useState<LlmConfig | null>(null);
+  const [provider, setProvider] = useState<LlmProvider>('mock');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [busy, setBusy] = useState<'test' | 'apply' | null>(null);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    api.getLlm().then(c => {
+      setCfg(c); setProvider(c.current.provider); setModel(c.current.model);
+      setBaseUrl(c.current.provider === 'local' && c.current.base_url ? c.current.base_url : '');
+    }).catch(e => setNote({ ok: false, text: (e as Error).message }));
+  }, []);
+
+  const pick = (p: LlmProvider) => {
+    setProvider(p); setNote(null); setApiKey('');
+    setModel(cfg && cfg.current.provider === p ? cfg.current.model : (cfg?.defaults[p] ?? ''));
+  };
+  const needsKey = provider === 'openai' || provider === 'anthropic';
+  const keyHeld = !!cfg && cfg.current.provider === provider && cfg.current.has_key;
+
+  const submit = async (testOnly: boolean) => {
+    setBusy(testOnly ? 'test' : 'apply'); setNote(null);
+    try {
+      const r = await api.setLlm({ provider, model, ...(apiKey ? { api_key: apiKey } : {}),
+        ...(baseUrl ? { base_url: baseUrl } : {}), test_only: testOnly });
+      setNote({ ok: true, text: testOnly ? `Test OK — ${r.detail}` : `Switched — ${r.detail}` });
+      if (!testOnly) { setApiKey(''); const c = await api.getLlm(); setCfg(c); onApplied(c.label); }
+    } catch (e) {
+      setNote({ ok: false, text: errorText(e) });
+    } finally { setBusy(null); }
+  };
+
+  const field = { width: '100%', fontSize: 12, padding: '5px 8px', borderRadius: 6,
+    border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' } as const;
+  return (
+    <div style={{ position: 'absolute', right: 0, top: 36, zIndex: 50, width: 360, padding: 12,
+      background: 'var(--bg-panel, var(--bg))', border: '1px solid var(--border)', borderRadius: 10,
+      boxShadow: '0 8px 24px rgba(0,0,0,0.18)', textAlign: 'left' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <strong style={{ fontSize: 13 }}>Language model</strong>
+        <button className="btn btn-ghost" style={{ padding: '2px 8px', fontSize: 11 }} onClick={onClose}>close</button>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8 }}>
+        Only routing and tool choice use the model; every number comes from deterministic code.
+        API keys stay in the local backend&apos;s memory (never on disk, never shown again).
+      </div>
+      {(cfg?.providers ?? (['mock', 'local', 'openai', 'anthropic'] as LlmProvider[])).map(p => (
+        <label key={p} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
+          <input type="radio" name="llm-provider" checked={provider === p} onChange={() => pick(p)} />
+          {PROVIDER_LABEL[p]}
+          {cfg?.current.provider === p && <span style={{ color: 'var(--green)', fontSize: 10 }}>· active</span>}
+        </label>
+      ))}
+      {provider !== 'mock' && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 2 }}>Model</div>
+          <input style={field} value={model} onChange={e => setModel(e.target.value)} list="llm-local-models"
+            placeholder={cfg?.defaults[provider]} />
+          {provider === 'local' && (
+            <datalist id="llm-local-models">{(cfg?.local_models ?? []).map(m => <option key={m} value={m} />)}</datalist>
+          )}
+          {provider === 'local' && !(cfg?.local_models ?? []).length && (
+            <div style={{ fontSize: 10.5, color: 'var(--yellow)', marginTop: 3 }}>
+              No Ollama models found — run <code>ollama pull qwen2.5:7b</code> (Ollama must be running).
+            </div>
+          )}
+        </div>
+      )}
+      {needsKey && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 2 }}>
+            API key {keyHeld ? '(one is held — leave blank to keep it)' : ''}
+          </div>
+          <input style={field} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+            placeholder={provider === 'openai' ? 'sk-…' : 'sk-ant-…'} autoComplete="off" />
+        </div>
+      )}
+      {(provider === 'local' || provider === 'openai') && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 2 }}>Server URL (optional)</div>
+          <input style={field} value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
+            placeholder={provider === 'local' ? 'http://127.0.0.1:11434/v1 (Ollama) · LM Studio: http://127.0.0.1:1234/v1' : 'https://api.openai.com/v1'} />
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <button className="btn btn-ghost" disabled={busy !== null} onClick={() => submit(true)}>
+          {busy === 'test' ? 'Testing…' : 'Test'}
+        </button>
+        <button className="btn btn-green" disabled={busy !== null} onClick={() => submit(false)}>
+          {busy === 'apply' ? 'Switching…' : 'Use this model'}
+        </button>
+      </div>
+      {note && (
+        <div style={{ fontSize: 11, marginTop: 8, color: note.ok ? 'var(--green)' : 'var(--red)', wordBreak: 'break-word' }}>
+          {note.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** /api/health "llm" -> badge text: "mock" | "anthropic:<model>" | "openai:<model>@<url>". */
+function describeLlm(label: string): string {
+  if (!label || label === 'mock') return 'MockLLM (keyless)';
+  const [provider, rest = ''] = label.split(/:(.+)/);
+  if (provider === 'anthropic') return `Claude ${rest}`;
+  if (provider === 'openai') {
+    const [model, url = ''] = rest.split('@');
+    if (url.includes('api.openai.com')) return `ChatGPT ${model}`;
+    const host = url.includes('127.0.0.1') || url.includes('localhost') ? 'local' : url.replace(/^https?:\/\//, '').split('/')[0];
+    return `${model} (${host})`;
+  }
+  return label;
+}
+
+/** "Nice" tick values across [lo, hi] (1/2/5 × 10^k steps), like d3/flexplot. */
+function niceTicks(lo: number, hi: number, count = 5): number[] {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / count, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const out: number[] = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+/** Axis titles were 9 px in the dim text colour — unreadable once the SVG is
+ *  scaled into a chat bubble. Titles use the normal text colour, ticks stay dim. */
+const AXIS_TITLE = { fontSize: 11, fontWeight: 600, fill: 'var(--text)' } as const;
+
 function SpaghettiChart({ data }: { data: SpaghettiData }) {
   const [logY, setLogY] = useState(data.log_scale);
   const [individual, setIndividual] = useState(false);
 
-  const W = 500, H = 200, ml = 44, mr = 10, mt = 12, mb = 28;
+  const W = 500, H = 220, ml = 52, mr = 12, mt = 12, mb = 38;
   const allY = data.series.flatMap(s => s.y).filter(v => v > 0);
   const allX = data.series.flatMap(s => s.x).filter(isFinite);
   if (!allY.length || !allX.length) return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No data to plot.</div>;
 
-  const xmax = Math.max(...allX) * 1.05;
+  // x-range from the DATA, not from 0: a steady-state window sampled at
+  // 168–192 h must not be squashed into the last 12% of a 0–192 h axis.
+  const xlo = Math.min(...allX), xhi = Math.max(...allX);
+  const xpad = (xhi - xlo || xhi || 1) * 0.04;
+  const xmin = xlo - xpad < 0 && xlo >= 0 ? 0 : xlo - xpad;
+  const xmax = xhi + xpad;
   const ymin = Math.min(...allY), ymax = Math.max(...allY) * 1.1;
   const cw = W - ml - mr, ch = H - mt - mb;
-  const sx = (x: number) => ml + (x / xmax) * cw;
+  const sx = (x: number) => ml + ((x - xmin) / (xmax - xmin || 1)) * cw;
   const lmin10 = Math.log10(ymin * 0.8), lmax10 = Math.log10(ymax);
   const syLog = (y: number) => y > 0 ? H - mb - (Math.log10(y) - lmin10) / (lmax10 - lmin10) * ch : H - mb;
   const syLin = (y: number) => H - mb - (y / ymax) * ch;
@@ -1557,6 +1716,9 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
             );
           })}
         </div>
+        <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 6 }}>
+          x: <b>{data.x_label}</b> · y: <b>{data.y_label}</b>{logY ? ' (log scale)' : ''} · one panel per subject, axes per panel
+        </div>
         {data.blq_excluded > 0 && (
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>{data.blq_excluded} BLQ (≤0) excluded</div>
         )}
@@ -1573,7 +1735,7 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
       })()
     : [0.25, 0.5, 0.75, 1.0].map(f => f * ymax);
 
-  const xTicks = [0.25, 0.5, 0.75, 1.0].map(f => Math.round(f * xmax));
+  const xTicks = niceTicks(xmin, xmax, 6).filter(v => v >= xmin && v <= xmax);
 
   return (
     <div>
@@ -1594,12 +1756,12 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
         {xTicks.map((v, k) => (
           <g key={k}>
             <line x1={sx(v)} y1={H - mb} x2={sx(v)} y2={H - mb + 3} stroke="var(--text-dim)" />
-            <text x={sx(v)} y={H - mb + 11} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{v}</text>
+            <text x={sx(v)} y={H - mb + 12} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{v}</text>
           </g>
         ))}
-        <text x={(ml + W - mr) / 2} y={H - 3} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{data.x_label}</text>
-        <text x={10} y={(mt + H - mb) / 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)"
-          transform={`rotate(-90 10 ${(mt + H - mb) / 2})`}>{data.y_label}</text>
+        <text x={(ml + W - mr) / 2} y={H - 6} textAnchor="middle" {...AXIS_TITLE}>{data.x_label}</text>
+        <text x={14} y={(mt + H - mb) / 2} textAnchor="middle" {...AXIS_TITLE}
+          transform={`rotate(-90 14 ${(mt + H - mb) / 2})`}>{data.y_label}{logY ? ' (log)' : ''}</text>
         {data.series.map((s, i) => {
           const color = SPAG_PALETTE[i % SPAG_PALETTE.length];
           const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0);
@@ -1680,6 +1842,9 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
 
   return (
     <div>
+      <div style={{ fontSize: 11, color: 'var(--text)', marginBottom: 2 }}>
+        x: <b>time</b> · y: <b>concentration</b> (log scale) · dashed line = terminal λz fit · one panel per subject
+      </div>
       <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>
         Click points to include/exclude · Refit to apply manual selection
       </div>
@@ -3046,6 +3211,8 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrityStatus | null>(null);
   const [healthy, setHealthy] = useState<boolean | null>(null);
+  const [llmLabel, setLlmLabel] = useState<string>('');
+  const [llmOpen, setLlmOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [pkModels, setPkModels] = useState<PkModelDef[]>([]);
   const [selectedModel, setSelectedModel] = useState('oral_1cmt');
@@ -3080,7 +3247,7 @@ export default function App() {
 
   useEffect(() => {
     api.health()
-      .then(h => setHealthy(h.status === 'ok'))
+      .then(h => { setHealthy(h.status === 'ok'); setLlmLabel(h.llm ?? ''); })
       .catch(() => setHealthy(false));
     api.createSession()
       .then(s => setSession(s))
@@ -3137,6 +3304,22 @@ export default function App() {
     e.preventDefault();
     setDrag(false);
     if (e.dataTransfer.files[0]) handleFiles(e.dataTransfer.files[0]);
+  }
+
+  /** The server decides whether a workflow leg runs inline or as a job (any real
+   *  population fit goes to the queue). Accept either shape: poll a job handle,
+   *  then render the WorkflowResponse. Fixes "Cannot read properties of
+   *  undefined (reading 'current_step')" on Run Modeling + Engines. */
+  async function settleWorkflow(res: WorkflowStartResponse, note = 'Population fit running…') {
+    if ('job_id' in res && res.job_id) {
+      if (!session) return;
+      const done = await api.pollJob<WorkflowResponse>(session.id, res.job_id,
+        s => setJobNote(`${note} ${s}s (several real fits — this can take minutes)`));
+      setJobNote('');
+      handleWorkflowResponse(done);
+      return;
+    }
+    handleWorkflowResponse(res as WorkflowResponse);
   }
 
   function handleWorkflowResponse(res: { status: string; state: PharmState; messages?: ChatMessage[]; audit_ok: boolean }) {
@@ -3204,7 +3387,7 @@ export default function App() {
         id: '',
       });
       const res = await api.startWorkflow(session.id, meta['dataset_path'] as string ?? '', workflow);
-      handleWorkflowResponse(res);
+      await settleWorkflow(res);
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
       setWfStatus('error');
@@ -3236,7 +3419,7 @@ export default function App() {
         return;
       }
       const res = await api.resumeWorkflow(session.id, approve);
-      handleWorkflowResponse(res);
+      await settleWorkflow(res);
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
       setWfStatus('error');
@@ -3791,7 +3974,7 @@ export default function App() {
           PharmAgent
           <span className="topbar-badge">PmatricsAI</span>
         </div>
-        <div className="topbar-right">
+        <div className="topbar-right" style={{ position: "relative" }}>
           <input
             className="token-input"
             type="password"
@@ -3801,9 +3984,11 @@ export default function App() {
             title="Bearer token — required only when the backend has PHARMAGENT_API_TOKEN set"
           />
           <div className="status-dot" style={{ background: healthy === false ? 'var(--red)' : 'var(--green)' }} />
-          <span className="status-text">
-            {healthy === null ? 'connecting…' : healthy ? 'Backend online · MockLLM' : 'Backend offline'}
+          <span className="status-text" style={{ cursor: 'pointer' }} title="Change the language model (local / ChatGPT / Claude)"
+            onClick={() => setLlmOpen(o => !o)}>
+            {healthy === null ? 'connecting…' : healthy ? `Backend online · ${describeLlm(llmLabel)} ▾` : 'Backend offline'}
           </span>
+          {llmOpen && <LlmSettings onApplied={l => setLlmLabel(l)} onClose={() => setLlmOpen(false)} />}
         </div>
       </header>
 

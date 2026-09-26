@@ -82,6 +82,20 @@ export interface EngineComparisonResults {
   n_candidates?: number;
 }
 
+export type LlmProvider = 'mock' | 'local' | 'openai' | 'anthropic';
+export interface LlmCurrent { provider: LlmProvider; model: string; base_url: string | null; has_key: boolean }
+export interface LlmConfig {
+  current: LlmCurrent;
+  providers: LlmProvider[];
+  defaults: Record<LlmProvider, string>;
+  local_models: string[];
+  label: string;
+}
+export interface LlmChoiceBody {
+  provider: LlmProvider; model?: string; base_url?: string; api_key?: string; test_only?: boolean;
+}
+export interface LlmSwitchResult { ok: boolean; current: LlmCurrent; tested?: LlmCurrent; detail: string; label?: string }
+
 /** An expensive tool the chat agent PROPOSED; runs only after a human approves. */
 export interface PendingTool {
   tool: string;
@@ -1130,6 +1144,16 @@ export interface WorkflowResponse {
   pending_review?: PendingReview;
   audit_ok: boolean;
 }
+
+/** The backend hands a workflow leg to the job queue when it reaches a real
+ *  population fit (admission control): the response is then a job handle,
+ *  not a WorkflowResponse. Poll /jobs/{id} to get the WorkflowResponse. */
+export interface WorkflowJobHandle {
+  status: 'running';
+  kind: string;
+  job_id: string;
+}
+export type WorkflowStartResponse = WorkflowResponse | WorkflowJobHandle;
 
 export interface PendingReview {
   step: number;
