@@ -1060,9 +1060,17 @@ export interface NcaSubject {
   accumulation_ratio?: number | null;
 }
 
+export interface DescriptiveParam {
+  parameter: string; n: number;
+  mean: number | null; sd: number | null; cv_pct: number | null; median: number | null;
+  min: number | null; max: number | null; geomean: number | null; geocv_pct: number | null;
+}
+export interface DescriptiveGroup { group: 'all' | number | null; label: string; n: number; parameters: DescriptiveParam[] }
+
 export interface NcaSummary {
   n_subjects: number;
   by_dose: DoseSummary[];
+  descriptive?: DescriptiveGroup[];
   steady_state?: boolean;
   route?: string;
   blq?: { n_below_loq: number; rule: string };

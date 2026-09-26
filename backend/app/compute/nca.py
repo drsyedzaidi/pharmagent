@@ -213,8 +213,64 @@ def _geocv(vals: list[float]) -> float | None:
     return float(100.0 * math.sqrt(math.exp(sd * sd) - 1.0))
 
 
+# Canonical order for the descriptive-statistics table (single dose, then
+# steady-state, then derived). Only parameters present in the data are shown.
+DESCRIPTIVE_PARAMS: tuple[str, ...] = (
+    "Cmax", "Tmax", "Cmin", "Ctrough", "Cavg", "Clast", "Tlast",
+    "AUC_last", "AUC_inf", "AUC_tau", "pct_AUC_extrap",
+    "lambda_z", "t_half", "MRT", "CL_F", "Vz_F", "Vss",
+    "accumulation_ratio", "fluctuation_pct", "swing_pct",
+)
+
+
+def _describe(vals: list[float]) -> dict[str, Any]:
+    """N, mean, SD (n-1), CV%, median, min, max, geometric mean and geo-CV%
+    (log-scale SD -> sqrt(exp(s^2)-1)); geometric stats use positive values only."""
+    v = np.asarray([float(x) for x in vals], dtype=float)
+    n = int(v.size)
+    if n == 0:
+        return {"n": 0, "mean": None, "sd": None, "cv_pct": None, "median": None,
+                "min": None, "max": None, "geomean": None, "geocv_pct": None}
+    mean = float(v.mean())
+    sd = float(v.std(ddof=1)) if n > 1 else None
+    cv = 100.0 * sd / mean if (sd is not None and mean != 0) else None
+    pos = v[v > 0]
+    geomean = float(np.exp(np.log(pos).mean())) if pos.size else None
+    geocv = (100.0 * math.sqrt(math.exp(float(np.log(pos).var(ddof=1))) - 1.0)
+             if pos.size > 1 else None)
+    return {"n": n, "mean": _round(mean), "sd": _round(sd), "cv_pct": _round(cv),
+            "median": _round(float(np.median(v))), "min": _round(float(v.min())),
+            "max": _round(float(v.max())), "geomean": _round(geomean), "geocv_pct": _round(geocv)}
+
+
+def descriptive_stats(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Descriptive statistics per parameter: an ``"all"`` group always, plus one
+    group per dose level when there is more than one. Missing/non-numeric
+    values are excluded from that parameter's N."""
+    def group_block(group: Any, label: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        out: list[dict[str, Any]] = []
+        for k in DESCRIPTIVE_PARAMS:
+            vals = [r[k] for r in rows
+                    if isinstance(r.get(k), (int, float)) and not isinstance(r.get(k), bool)
+                    and math.isfinite(float(r[k]))]
+            if not vals:
+                continue
+            out.append({"parameter": k, **_describe(vals)})
+        return {"group": group, "label": label, "n": len(rows), "parameters": out}
+
+    groups: list[dict[str, Any]] = [group_block("all", "All subjects", params)]
+    by_dose: dict[Any, list[dict[str, Any]]] = {}
+    for r in params:
+        by_dose.setdefault(r.get("dose"), []).append(r)
+    if len(by_dose) > 1:
+        for dose, rows in sorted(by_dose.items(), key=lambda kv: (kv[0] is None, kv[0])):
+            groups.append(group_block(dose, f"Dose {dose}" if dose is not None else "Dose n/a", rows))
+    return groups
+
+
 def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
-    """Dose-group geometric mean and geometric CV% for key parameters."""
+    """Dose-group geometric mean and geometric CV% for key parameters, plus the
+    full descriptive-statistics table (``descriptive``)."""
     keys = ["Cmax", "AUC_last", "AUC_inf", "CL_F", "Vz_F"]
     groups: dict[float, list[dict]] = {}
     for row in params:
@@ -230,6 +286,7 @@ def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
         thalf = [r.get("t_half") for r in rows if r.get("t_half") is not None]
         entry["t_half_median"] = _round(float(np.median(thalf))) if thalf else None
         summary["by_dose"].append(entry)
+    summary["descriptive"] = descriptive_stats(params)
     return summary
 
 

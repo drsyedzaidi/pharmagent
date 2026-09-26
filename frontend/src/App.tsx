@@ -338,10 +338,64 @@ function DoseSummaryTable({ state }: { state: PharmState }) {
   );
 }
 
+const NCA_PARAM_LABEL: Record<string, string> = {
+  Cmax: 'Cmax', Tmax: 'Tmax', Cmin: 'Cmin', Ctrough: 'Ctrough', Cavg: 'Cavg', Clast: 'Clast', Tlast: 'Tlast',
+  AUC_last: 'AUClast', AUC_inf: 'AUCinf', AUC_tau: 'AUCτ', pct_AUC_extrap: '%AUC extrap',
+  lambda_z: 'λz', t_half: 't½', MRT: 'MRT', CL_F: 'CL/F', Vz_F: 'Vz/F', Vss: 'Vss',
+  accumulation_ratio: 'Rac', fluctuation_pct: 'Fluctuation %', swing_pct: 'Swing %',
+};
+
+/** Standard NCA summary statistics per parameter (N, mean, SD, CV%, median,
+ *  min, max, geometric mean, geo-CV%), overall or per dose group. */
+function DescriptiveStatsTable({ state }: { state: PharmState }) {
+  const groups = state.nca_summary?.descriptive ?? [];
+  const [gi, setGi] = useState(0);
+  if (!groups.length) return null;
+  const g = groups[Math.min(gi, groups.length - 1)];
+  const d = (v: number | null, digits = 3) => (v == null ? '–' : fmt(v, digits));
+  const pct = (v: number | null) => (v == null ? '–' : `${fmt(v, 1)}%`);
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Summary statistics</span>
+        {groups.length > 1 && (
+          <select value={gi} onChange={e => setGi(Number(e.target.value))}
+            style={{ fontSize: 11, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}>
+            {groups.map((x, i) => <option key={String(x.group)} value={i}>{x.label} (n={x.n})</option>)}
+          </select>
+        )}
+        {groups.length === 1 && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>· {g.label} (n={g.n})</span>}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="nca-table">
+          <thead>
+            <tr><th>Parameter</th><th>N</th><th>Mean</th><th>SD</th><th>CV%</th><th>Median</th><th>Min</th><th>Max</th><th>Geo. mean</th><th>Geo. CV%</th></tr>
+          </thead>
+          <tbody>
+            {g.parameters.map(p => (
+              <tr key={p.parameter}>
+                <td>{NCA_PARAM_LABEL[p.parameter] ?? p.parameter}</td>
+                <td>{p.n}</td>
+                <td>{d(p.mean)}</td><td>{d(p.sd)}</td><td>{pct(p.cv_pct)}</td>
+                <td>{d(p.median)}</td><td>{d(p.min)}</td><td>{d(p.max)}</td>
+                <td>{d(p.geomean)}</td><td>{pct(p.geocv_pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 4 }}>
+        SD uses n−1; CV% = SD/mean; geometric CV% = √(exp(s²<sub>log</sub>) − 1); N counts subjects with a valid value.
+      </div>
+    </div>
+  );
+}
+
 function NcaTable({ state }: { state: PharmState }) {
   return (
     <div>
       <NcaSubjectTable state={state} />
+      <DescriptiveStatsTable state={state} />
       <DoseSummaryTable state={state} />
     </div>
   );
@@ -683,6 +737,7 @@ function PriorCheckCard({ r }: { r: PharmState['prior_check_results'] }) {
       {hasBand && (
         <>
           <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>Prior-predictive band vs observed data</div>
+          <Zoomable title="VPC panel">
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
             aria-label="Prior-predictive concentration band vs observed data">
             <polygon points={areaPts} fill="var(--accent)" fillOpacity="0.15" />
@@ -692,6 +747,7 @@ function PriorCheckCard({ r }: { r: PharmState['prior_check_results'] }) {
             <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
             <text x={(ml + W) / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Time</text>
           </svg>
+          </Zoomable>
         </>
       )}
       <table className="nca-table" style={{ marginTop: 8 }}>
@@ -1613,6 +1669,85 @@ function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => voi
   );
 }
 
+
+/** Hover a chart → ⤢ opens it full-screen with wheel zoom and drag-to-pan.
+ *  The same JSX is rendered again inside the modal, so nothing is rasterised. */
+function Zoomable({ title, style, children }: { title: string; style?: React.CSSProperties; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="zoomable" style={style}>
+      {children}
+      <button className="zoom-btn" type="button" aria-label={`Open ${title} large`} title="Open large — wheel to zoom, drag to pan"
+        onClick={() => setOpen(true)}>⤢</button>
+      {open && <ZoomModal title={title} onClose={() => setOpen(false)}>{children}</ZoomModal>}
+    </div>
+  );
+}
+
+function ZoomModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const [z, setZ] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(900);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === '+' || e.key === '=') setZ(v => Math.min(8, v * 1.2));
+      if (e.key === '-') setZ(v => Math.max(0.2, v / 1.2));
+      if (e.key === '0') { setZ(1); setPan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener('keydown', onKey);
+    const el = bodyRef.current;
+    // fit the whole chart: width-limited OR height-limited via the SVG's viewBox aspect
+    const fit = () => {
+      if (!el) return;
+      const vb = el.querySelector('svg')?.getAttribute('viewBox')?.split(/\s+/).map(Number);
+      const aspect = vb && vb.length === 4 && vb[3] > 0 ? vb[2] / vb[3] : 2;
+      setWidth(Math.max(320, Math.min(el.clientWidth * 0.92, el.clientHeight * 0.92 * aspect)));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    // non-passive so the page does not scroll behind the modal
+    const onWheel = (e: WheelEvent) => { e.preventDefault(); setZ(v => Math.min(8, Math.max(0.2, v * (e.deltaY < 0 ? 1.1 : 1 / 1.1)))); };
+    el?.addEventListener('wheel', onWheel, { passive: false });
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('resize', fit); el?.removeEventListener('wheel', onWheel); };
+  }, [onClose]);
+
+  const down = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }; setDragging(true); };
+  const move = (e: React.MouseEvent) => {
+    if (!drag.current) return;
+    setPan({ x: drag.current.px + (e.clientX - drag.current.x), y: drag.current.py + (e.clientY - drag.current.y) });
+  };
+  const up = () => { drag.current = null; setDragging(false); };
+
+  return (
+    <div className="zoom-overlay" onClick={onClose} role="dialog" aria-label={`${title} — enlarged`}>
+      <div className="zoom-modal" onClick={e => e.stopPropagation()}>
+        <div className="zoom-toolbar">
+          <span className="zoom-title">{title}</span>
+          <span style={{ color: 'var(--text-dim)' }}>{Math.round(z * 100)}%</span>
+          <button className="btn btn-ghost" onClick={() => setZ(v => Math.max(0.2, v / 1.2))} title="Zoom out (−)">−</button>
+          <button className="btn btn-ghost" onClick={() => setZ(v => Math.min(8, v * 1.2))} title="Zoom in (+)">+</button>
+          <button className="btn btn-ghost" onClick={() => { setZ(1); setPan({ x: 0, y: 0 }); }} title="Reset (0)">reset</button>
+          <button className="btn btn-ghost" onClick={onClose} title="Close (Esc)">close</button>
+        </div>
+        <div ref={bodyRef} className={`zoom-body${dragging ? ' dragging' : ''}`}
+          onMouseDown={down} onMouseMove={move} onMouseUp={up} onMouseLeave={up}>
+          <div className="zoom-canvas" style={{ width, transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${z})` }}>
+            {children}
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', padding: '4px 12px', borderTop: '1px solid var(--border)' }}>
+          wheel / + − to zoom · drag to pan · 0 resets · Esc closes
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** /api/health "llm" -> badge text: "mock" | "anthropic:<model>" | "openai:<model>@<url>". */
 function describeLlm(label: string): string {
   if (!label || label === 'mock') return 'MockLLM (keyless)';
@@ -1642,18 +1777,54 @@ function niceTicks(lo: number, hi: number, count = 5): number[] {
  *  scaled into a chat bubble. Titles use the normal text colour, ticks stay dim. */
 const AXIS_TITLE = { fontSize: 11, fontWeight: 600, fill: 'var(--text)' } as const;
 
+/** Two-thumb time window: from / to sliders over the data's x-range plus a
+ *  numeric readout and reset. Values are clamped and ordered by the caller. */
+function XRangeSlider({ min, max, value, label, onChange, onReset }: {
+  min: number; max: number; value: [number, number]; label: string;
+  onChange: (v: [number, number]) => void; onReset: () => void;
+}) {
+  const span = max - min || 1;
+  const step = span / 200;
+  const isFull = value[0] <= min + 1e-9 && value[1] >= max - 1e-9;
+  const num = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+  const slider = { width: 110, verticalAlign: 'middle', accentColor: 'var(--accent)' } as const;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, fontSize: 10, color: 'var(--text-dim)' }}
+      title={`Restrict the ${label} axis to a time window`}>
+      <span>{label}:</span>
+      <input type="range" min={min} max={max} step={step} value={value[0]} style={slider} aria-label="window start"
+        onChange={e => onChange([Math.min(Number(e.target.value), value[1]), value[1]])} />
+      <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{num(value[0])}–{num(value[1])}</span>
+      <input type="range" min={min} max={max} step={step} value={value[1]} style={slider} aria-label="window end"
+        onChange={e => onChange([value[0], Math.max(Number(e.target.value), value[0])])} />
+      {!isFull && <button onClick={onReset} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, cursor: 'pointer',
+        border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-dim)' }}>reset</button>}
+    </span>
+  );
+}
+
 function SpaghettiChart({ data }: { data: SpaghettiData }) {
   const [logY, setLogY] = useState(data.log_scale);
   const [individual, setIndividual] = useState(false);
+  // user-chosen time window (null = the data's full range); applies to both views
+  const [xr, setXr] = useState<[number, number] | null>(null);
 
   const W = 500, H = 220, ml = 52, mr = 12, mt = 12, mb = 38;
-  const allY = data.series.flatMap(s => s.y).filter(v => v > 0);
-  const allX = data.series.flatMap(s => s.x).filter(isFinite);
-  if (!allY.length || !allX.length) return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No data to plot.</div>;
+  const allYAll = data.series.flatMap(s => s.y).filter(v => v > 0);
+  const allXAll = data.series.flatMap(s => s.x).filter(isFinite);
+  if (!allYAll.length || !allXAll.length) return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No data to plot.</div>;
 
   // x-range from the DATA, not from 0: a steady-state window sampled at
   // 168–192 h must not be squashed into the last 12% of a 0–192 h axis.
-  const xlo = Math.min(...allX), xhi = Math.max(...allX);
+  const dataLo = Math.min(...allXAll), dataHi = Math.max(...allXAll);
+  const xlo = xr ? Math.max(dataLo, Math.min(xr[0], xr[1])) : dataLo;
+  const xhi = xr ? Math.min(dataHi, Math.max(xr[0], xr[1])) : dataHi;
+  const inRange = (x: number) => x >= xlo - 1e-9 && x <= xhi + 1e-9;
+  const allY = data.series.flatMap(s => s.y.filter((v, j) => v > 0 && inRange(s.x[j])));
+  if (!allY.length) return <div>{/* nothing inside the window */}
+    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No observations in {fmt(xlo, 1)}–{fmt(xhi, 1)}.</div>
+    <button className="btn btn-ghost" style={{ marginTop: 4 }} onClick={() => setXr(null)}>Reset time window</button>
+  </div>;
   const xpad = (xhi - xlo || xhi || 1) * 0.04;
   const xmin = xlo - xpad < 0 && xlo >= 0 ? 0 : xlo - xpad;
   const xmax = xhi + xpad;
@@ -1682,42 +1853,69 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
       <span style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 10, marginRight: 4 }}>View:</span>
       {toggleBtn(!individual, 'Overlay', () => setIndividual(false))}
       {toggleBtn(individual, 'Individual', () => setIndividual(true))}
+      <XRangeSlider min={dataLo} max={dataHi} value={[xlo, xhi]} label={data.x_label}
+        onChange={v => setXr(v)} onReset={() => setXr(null)} />
     </div>
   );
 
   if (individual) {
-    const sw = 165, sh = 120, sml = 32, smr = 5, smt = 8, smb = 22;
+    const sw = 210, sh = 150, sml = 42, smr = 8, smt = 8, smb = 28;
+    const xTicksI = niceTicks(xmin, xmax, 3).filter(v => v >= xmin && v <= xmax);
+    const scx = (x: number) => sml + ((x - xmin) / (xmax - xmin || 1)) * (sw - sml - smr);
+    const tickLabel = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v >= 1 ? String(Math.round(v)) : v.toPrecision(1);
     return (
       <div>
         {controls}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {data.series.map((s, i) => {
             const color = SPAG_PALETTE[i % SPAG_PALETTE.length];
-            const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0);
+            const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0 && inRange(p.x));
             if (!pts.length) return null;
-            const ax = Math.max(...pts.map(p => p.x)) * 1.05;
             const ays = pts.map(p => p.y);
-            const aln = Math.log10(Math.min(...ays) * 0.8), alx = Math.log10(Math.max(...ays) * 1.1);
+            const yTop = Math.max(...ays) * 1.1, yBot = Math.min(...ays) * 0.8;
+            const aln = Math.log10(yBot), alx = Math.log10(yTop);
             const ach = sh - smt - smb;
-            const scx = (x: number) => sml + (x / ax) * (sw - sml - smr);
             const scy = (y: number) => logY
-              ? (y > 0 ? sh - smb - (Math.log10(y) - aln) / (alx - aln) * ach : sh - smb)
-              : sh - smb - (y / Math.max(...ays) / 1.1) * ach;
+              ? (y > 0 ? sh - smb - (Math.log10(y) - aln) / (alx - aln || 1) * ach : sh - smb)
+              : sh - smb - (y / yTop) * ach;
+            // y ticks: decades inside the panel's range (log) or quarter steps (linear);
+            // fall back to the panel's min/max so every panel shows at least two labels
+            let yTicksI: number[] = logY
+              ? Array.from({ length: Math.ceil(alx) - Math.floor(aln) + 1 }, (_, k) => Math.pow(10, Math.floor(aln) + k))
+                .filter(v => v >= yBot && v <= yTop)
+              : [0.5, 1.0].map(f => f * yTop / 1.1);
+            if (yTicksI.length < 2) yTicksI = [Math.min(...ays), Math.max(...ays)];
             const poly = pts.map(p => `${scx(p.x).toFixed(1)},${scy(p.y).toFixed(1)}`).join(' ');
             return (
-              <svg key={s.id} viewBox={`0 0 ${sw} ${sh}`} width={sw}
-                style={{ background: 'rgba(31,102,166,0.03)', borderRadius: 4, border: '1px solid var(--border)' }}>
+              <Zoomable key={s.id} title={`${s.id} — ${data.y_label} vs ${data.x_label}`}>
+              <svg viewBox={`0 0 ${sw} ${sh}`} width={sw}
+                style={{ background: 'rgba(31,102,166,0.03)', borderRadius: 4, border: '1px solid var(--border)', display: 'block' }}>
                 <line x1={sml} y1={sh - smb} x2={sw - smr} y2={sh - smb} stroke="var(--border)" />
                 <line x1={sml} y1={smt} x2={sml} y2={sh - smb} stroke="var(--border)" />
+                {yTicksI.map((v, k) => (
+                  <g key={k}>
+                    <line x1={sml - 3} y1={scy(v)} x2={sml} y2={scy(v)} stroke="var(--text-dim)" />
+                    <text x={sml - 4} y={scy(v) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">{tickLabel(v)}</text>
+                  </g>
+                ))}
+                {xTicksI.map((v, k) => (
+                  <g key={k}>
+                    <line x1={scx(v)} y1={sh - smb} x2={scx(v)} y2={sh - smb + 3} stroke="var(--text-dim)" />
+                    <text x={scx(v)} y={sh - smb + 11} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{v}</text>
+                  </g>
+                ))}
                 {pts.length > 1 && <polyline points={poly} fill="none" stroke={color} strokeWidth="1.3" strokeOpacity="0.8" />}
                 {pts.map((p, j) => <circle key={j} cx={scx(p.x)} cy={scy(p.y)} r="2" fill={color} />)}
-                <text x={(sml + sw - smr) / 2} y={sh - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{s.id}</text>
+                <text x={(sml + sw - smr) / 2} y={sh - 3} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text)">{s.id}</text>
+                <text x={10} y={(smt + sh - smb) / 2} textAnchor="middle" fontSize="7.5" fill="var(--text-dim)"
+                  transform={`rotate(-90 10 ${(smt + sh - smb) / 2})`}>{logY ? 'log' : 'linear'}</text>
               </svg>
+              </Zoomable>
             );
           })}
         </div>
         <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 6 }}>
-          x: <b>{data.x_label}</b> · y: <b>{data.y_label}</b>{logY ? ' (log scale)' : ''} · one panel per subject, axes per panel
+          x: <b>{data.x_label}</b> {fmt(xlo, 1)}–{fmt(xhi, 1)} (shared) · y: <b>{data.y_label}</b>{logY ? ' (log scale)' : ''}, scaled per subject
         </div>
         {data.blq_excluded > 0 && (
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>{data.blq_excluded} BLQ (≤0) excluded</div>
@@ -1740,6 +1938,7 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
   return (
     <div>
       {controls}
+      <Zoomable title="Concentration–time">
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }}>
         <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
         <line x1={ml} y1={mt} x2={ml} y2={H - mb} stroke="var(--border)" />
@@ -1764,7 +1963,7 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
           transform={`rotate(-90 14 ${(mt + H - mb) / 2})`}>{data.y_label}{logY ? ' (log)' : ''}</text>
         {data.series.map((s, i) => {
           const color = SPAG_PALETTE[i % SPAG_PALETTE.length];
-          const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0);
+          const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0 && inRange(p.x));
           if (!pts.length) return null;
           const poly = pts.map(p => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
           return (
@@ -1775,6 +1974,7 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
           );
         })}
       </svg>
+      </Zoomable>
       <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>
         {data.n_subjects} subjects{data.blq_excluded > 0 ? ` · ${data.blq_excluded} BLQ excluded` : ''}
       </div>
@@ -2003,6 +2203,7 @@ function pcvpcSvg(bins: PcVpcBin[] | undefined, opts?: {
   const up = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_hi as number).toFixed(1)}`).join(' ');
   const dn = ci.map(b => `${sx(b.t as number).toFixed(1)},${sy(b.sim_med_lo as number).toFixed(1)}`).reverse().join(' ');
   return (
+    <Zoomable title={opts?.ariaLabel ?? "pcVPC"}>
     <svg viewBox={`0 0 ${PW} ${PH}`} style={{ width: '100%', maxWidth: PW, marginTop: 8 }}
       role="img" aria-label={opts?.ariaLabel ?? 'Prediction-corrected VPC'}>
       {ci.length > 1 && <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.18" />}
@@ -2021,6 +2222,7 @@ function pcvpcSvg(bins: PcVpcBin[] | undefined, opts?: {
       <text x={12} y={(pt + PH - pb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
         transform={`rotate(-90 12 ${(pt + PH - pb) / 2})`}>prediction-corrected conc.</text>
     </svg>
+    </Zoomable>
   );
 }
 
@@ -2106,6 +2308,7 @@ function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', 
         <span style={{ color: m.within ? 'var(--green)' : 'var(--red, #c0392b)' }}>
           {m.within ? '✓ within' : '✗ outside'}</span>
       </div>
+      <Zoomable title="VPC panel">
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
         aria-label={`Exposure predictive check ${metric} for ${gb} ${g.label}`}>
         {counts.map((c, i) => (
@@ -2119,6 +2322,7 @@ function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', 
         <text x={W / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--text-dim)">
           {metric === 'auc' ? 'mean AUC (conc·h)' : 'mean Cmax (conc)'}</text>
       </svg>
+      </Zoomable>
     </div>
   );
 }
@@ -2242,7 +2446,8 @@ function VpcCard({ r, onRerun, busy, covariates }: {
     const sx = (v: number) => m + (v / hi) * (W - m - 8);
     const sy = (v: number) => H - m - (v / hi) * (H - m - 8);
     scatter = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="48%" style={{ maxWidth: W }} role="img" aria-label="Observed vs predicted">
+      <Zoomable title="Observed vs predicted" style={{ width: '48%', maxWidth: W }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%' }} role="img" aria-label="Observed vs predicted">
         <line x1={sx(0)} y1={sy(0)} x2={sx(hi)} y2={sy(hi)} stroke="var(--text-dim)" strokeDasharray="3 3" />
         <line x1={m} y1={H - m} x2={W - 8} y2={H - m} stroke="var(--border)" />
         <line x1={m} y1={8} x2={m} y2={H - m} stroke="var(--border)" />
@@ -2251,6 +2456,7 @@ function VpcCard({ r, onRerun, busy, covariates }: {
         <text x={11} y={(8 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
           transform={`rotate(-90 11 ${(8 + H - m) / 2})`}>predicted (IPRED)</text>
       </svg>
+      </Zoomable>
     );
   }
   // VPC band
@@ -2266,7 +2472,8 @@ function VpcCard({ r, onRerun, busy, covariates }: {
     const dn = t.map((x, i) => `${sx(x).toFixed(1)},${sy(p05[i]).toFixed(1)}`).reverse().join(' ');
     const med = t.map((x, i) => `${i ? 'L' : 'M'}${sx(x).toFixed(1)} ${sy(p50[i]).toFixed(1)}`).join(' ');
     band = (
-      <svg viewBox={`0 0 ${W} ${H}`} width="48%" style={{ maxWidth: W }} role="img" aria-label="Visual predictive check">
+      <Zoomable title="Visual predictive check" style={{ width: '48%', maxWidth: W }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%' }} role="img" aria-label="Visual predictive check">
         <polygon points={`${up} ${dn}`} fill="var(--accent)" fillOpacity="0.16" />
         <path d={med} fill="none" stroke="var(--accent)" strokeWidth="1.4" />
         {(r.obs_t ?? []).map((x, i) => <circle key={i} cx={sx(x)} cy={sy((r.obs_c ?? [])[i])} r="1.8" fill="var(--green)" fillOpacity="0.65" />)}
@@ -2276,6 +2483,7 @@ function VpcCard({ r, onRerun, busy, covariates }: {
         <text x={11} y={(8 + H - m) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
           transform={`rotate(-90 11 ${(8 + H - m) / 2})`}>conc.</text>
       </svg>
+      </Zoomable>
     );
   }
   // prediction-corrected VPC — rendered by the shared pcvpcSvg helper, which
@@ -2373,6 +2581,7 @@ function DoseSweepCard({ r }: { r: PharmState['dose_sweep_results'] }) {
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
         {r.label} · {r.n_doses}× q{r.tau}h · {profs.length} dose levels
       </div>
+      <Zoomable title="Dose sweep profiles">
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img" aria-label="Dose sweep profiles">
         <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
         <line x1={ml} y1={mt} x2={ml} y2={H - mb} stroke="var(--border)" />
@@ -2384,6 +2593,7 @@ function DoseSweepCard({ r }: { r: PharmState['dose_sweep_results'] }) {
         <text x={11} y={(mt + H - mb) / 2} textAnchor="middle" fontSize="10" fill="var(--text-dim)"
           transform={`rotate(-90 11 ${(mt + H - mb) / 2})`}>concentration</text>
       </svg>
+      </Zoomable>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, margin: '2px 0 6px' }}>
         {profs.map((p, i) => (
           <span key={i} style={{ color: colors[i % colors.length] }}>— {p.dose}</span>

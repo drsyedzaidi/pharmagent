@@ -107,6 +107,15 @@ def _summary_table(doc: Document, summary: dict[str, Any]) -> None:
             cells[i].text = _fmt(r.get(c), decimals[c])
 
 
+def _descriptive_table(doc: Document, params: list[dict[str, Any]]) -> None:
+    def f(v: Any, d: int = 3) -> str:
+        return "–" if v is None else (f"{v:.{d}f}" if isinstance(v, (int, float)) else str(v))
+    rows = [[p.get("parameter"), p.get("n"), f(p.get("mean")), f(p.get("sd")), f(p.get("cv_pct"), 1),
+             f(p.get("median")), f(p.get("min")), f(p.get("max")), f(p.get("geomean")), f(p.get("geocv_pct"), 1)]
+            for p in params]
+    _kv_table(doc, ["Parameter", "N", "Mean", "SD", "CV%", "Median", "Min", "Max", "GM", "gCV%"], rows)
+
+
 def _kv_table(doc: Document, headers: list[str], rows: list[list[Any]]) -> None:
     table = doc.add_table(rows=1, cols=len(headers))
     table.style = "Light Grid Accent 1"
@@ -304,8 +313,22 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         "extrapolation beyond the last measured concentration.")
     _subject_table(doc, params)
 
+    descriptive = (state.nca_summary or {}).get("descriptive") or []
+    if descriptive:
+        doc.add_heading("3.2 Summary statistics", level=2)
+        doc.add_paragraph(
+            "Descriptive statistics per parameter: N = subjects with a valid value; "
+            "SD uses n−1; CV% = SD/mean; GM = geometric mean; gCV% = geometric CV "
+            "(√(exp(s²_log) − 1)).")
+        grouped = _dose_grouped_meaningfully(state.nca_summary)
+        for g in descriptive:
+            if g.get("group") != "all" and not grouped:
+                continue
+            doc.add_paragraph(f"{g.get('label')} (n = {g.get('n')})")
+            _descriptive_table(doc, g.get("parameters") or [])
+
     if state.nca_summary and _dose_grouped_meaningfully(state.nca_summary):
-        doc.add_heading("3.2 Dose-group summary", level=2)
+        doc.add_heading("3.3 Dose-group summary", level=2)
         doc.add_paragraph(
             "Geometric mean (GM) and geometric CV% by dose level; t½ as median.")
         _summary_table(doc, state.nca_summary)
