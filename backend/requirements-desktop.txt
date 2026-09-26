@@ -1,0 +1,2 @@
+pywebview>=6
+pyinstaller>=6.22
