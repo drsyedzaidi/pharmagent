@@ -9,7 +9,7 @@ from app.compute.compartmental import fit_compartmental, fit_compartmental_ss
 from app.compute.dosing import extract_ss_intervals, is_multiple_dose
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -37,9 +37,43 @@ def _compact(out: dict[str, Any], *, steady_state: bool) -> dict[str, Any]:
     }
 
 
+_MODEL_KEYS = ("1cmt", "2cmt")
+_MODEL_WORDS = {"1": "1cmt", "one": "1cmt", "2": "2cmt", "two": "2cmt"}
+
+
+def normalize_model_names(raw: Any) -> tuple[str, ...]:
+    """Map the names an LLM/user sends ("1-compartment", "one cmt", "2cmt", ...)
+    onto the compute layer's keys, preserving order and dropping duplicates.
+    Empty/None -> both models. Unknown names raise a ValueError naming the
+    accepted keys — never a silent no-op that reports 0 converged."""
+    if raw is None or raw == []:
+        return _MODEL_KEYS
+    items = [raw] if isinstance(raw, str) else list(raw)
+    out: list[str] = []
+    for item in items:
+        text = str(item).strip().lower()
+        key = None
+        if text in _MODEL_KEYS:
+            key = text
+        else:
+            head = text.replace("-", " ").replace("_", " ").split()
+            if head and head[0] in _MODEL_WORDS and any(
+                    w.startswith("c") for w in head[1:2]):   # "1 cmt", "one compartment"
+                key = _MODEL_WORDS[head[0]]
+            elif head and head[0] in ("1cmt", "2cmt", "onecmt", "twocmt"):
+                key = "1cmt" if head[0].startswith(("1", "one")) else "2cmt"
+        if key is None:
+            raise ValueError(
+                f"unknown compartmental model {item!r}; accepted: {', '.join(_MODEL_KEYS)} "
+                "(also spelled '1-compartment' / 'two-compartment')")
+        if key not in out:
+            out.append(key)
+    return tuple(out)
+
+
 def fit_compartmental_models(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid].copy()
+    dsid, df = require_dataset(ctx, state, args)
+    df = df.copy()
     roles = _roles(df, state)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
@@ -93,7 +127,7 @@ def fit_compartmental_models(state: PharmState, ctx: ToolContext, args: dict[str
 
     obs = obs.dropna(subset=[time_col, dv_col])
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
-    models = tuple(args.get("models", ("1cmt", "2cmt")))
+    models = normalize_model_names(args.get("models"))
     out = fit_compartmental(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
                             dose_by_subject=dose_by_subject, models=models)
 
@@ -113,7 +147,10 @@ TOOLS = [
          "compartmental",
          {"type": "object",
           "properties": {"dataset_id": {"type": "string"},
-                         "models": {"type": "array", "items": {"type": "string"}}},
+                         "models": {"type": "array",
+                                    "description": "Candidate models; default both. "
+                                                   "'1cmt' = one-compartment, '2cmt' = two-compartment.",
+                                    "items": {"type": "string", "enum": ["1cmt", "2cmt"]}}},
           "required": []},
          fit_compartmental_models),
 ]

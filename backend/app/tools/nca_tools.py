@@ -11,7 +11,7 @@ from app.compute.nca import run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -21,10 +21,8 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
 
 
 def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    if not dsid or dsid not in ctx.dataset_store:
-        raise ValueError("no dataset loaded — upload a CSV (or run the NCA workflow) first")
-    df = ctx.dataset_store[dsid].copy()
+    dsid, df = require_dataset(ctx, state, args)
+    df = df.copy()
     roles = _roles(df, state)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)

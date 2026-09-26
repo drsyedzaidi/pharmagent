@@ -10,7 +10,7 @@ import pandas as pd
 from app.config import settings
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles, extract_schema
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 
 def _safe_path(path: str) -> Path:
@@ -29,11 +29,17 @@ def _safe_path(path: str) -> Path:
     return p
 
 
+NONMEM_NA_VALUES = ["."]
+
+
 def _read(path: str) -> pd.DataFrame:
     p = _safe_path(path)
     suf = p.suffix.lower()
     if suf == ".csv":
-        return pd.read_csv(p)
+        # NONMEM convention: "." marks a missing value. Without this a DV/AMT
+        # column with any "." parses as text, and downstream typing (flexplot,
+        # covariate screening) calls it categorical.
+        return pd.read_csv(p, na_values=NONMEM_NA_VALUES)
     if suf in (".xpt",):
         return pd.read_sas(p, format="xport")
     if suf == ".sas7bdat":
@@ -65,8 +71,7 @@ def load_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
 
 
 def profile_pk_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
     meta = state.dataset_metadata or extract_schema(df, dataset_id=dsid)
     roles = _roles(df, meta)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
@@ -103,8 +108,7 @@ def profile_pk_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]
 
 
 def validate_cdisc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
     roles = _roles(df, state.dataset_metadata)
     have = set(roles.values())
     checks = []
@@ -136,8 +140,7 @@ def validate_cdisc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
 
 
 def generate_spaghetti_plot(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
     roles = _roles(df, state.dataset_metadata)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)

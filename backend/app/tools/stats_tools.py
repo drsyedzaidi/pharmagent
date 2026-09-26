@@ -15,7 +15,7 @@ import pandas as pd
 from app.compute.stats_advice import advise
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _GROUP_HINTS = ("trt", "treat", "arm", "group", "form", "period", "seq", "cohort")
 _MAX_GROUP_LEVELS = 6
@@ -100,10 +100,7 @@ def _nca_exposures(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, list
 
 
 def recommend_statistics(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    if not dsid or dsid not in ctx.dataset_store:
-        raise ValueError("no dataset loaded — load a dataset before asking for statistical advice")
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
     roles = _roles(state, df)
     id_col, time_col, dv_col = _col(roles, "ID"), _col(roles, "TIME"), _col(roles, "DV")
     if not (id_col and time_col and dv_col):

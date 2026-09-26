@@ -33,6 +33,22 @@ class ToolResult:
     action: str = ""                  # audit action description
 
 
+def require_dataset(ctx: ToolContext, state: PharmState,
+                    args: dict[str, Any] | None = None) -> tuple[str, pd.DataFrame]:
+    """The DataFrame a tool should work on.
+
+    Prefers an explicitly requested ``dataset_id`` when it is loaded; otherwise
+    the session's loaded dataset (an LLM routinely echoes a stale or invented
+    id from its state summary — that must not turn into a bare KeyError).
+    Raises ValueError with a user-facing message when nothing is loaded.
+    """
+    requested = (args or {}).get("dataset_id")
+    for cand in (requested, state.dataset_id):
+        if cand and cand in ctx.dataset_store:
+            return cand, ctx.dataset_store[cand]
+    raise ValueError("no dataset loaded — upload a CSV (or run the NCA workflow) first")
+
+
 class ExpensiveToolError(RuntimeError):
     """Raised when a long-running fit is invoked from a path that has no admission
     control. Callers that ARE admission-controlled (the job-backed endpoints via
@@ -60,6 +76,18 @@ class Tool:
             "name": self.name,
             "description": self.description,
             "input_schema": self.input_schema,
+        }
+
+    def to_openai(self) -> dict[str, Any]:
+        """Tool definition in OpenAI chat-completions function-calling format
+        (also what Ollama / LM Studio / OpenRouter / Groq accept)."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema,
+            },
         }
 
 

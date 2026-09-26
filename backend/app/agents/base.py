@@ -7,6 +7,7 @@ call each other.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,54 @@ from app.core.pharmstate import PharmState
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 
 MAX_TOOL_STEPS = 6
+
+
+def _n(items) -> int:
+    return len(items or [])
+
+
+def idle_hint(agent: str, state: PharmState) -> str:
+    """One line for a turn that selected no tool: what IS loaded and what the
+    user can ask for next. Never raw rows — counts and ids only.
+
+    A bare "no action taken" read as "the app is broken" to a desktop user who
+    typed "load dataset" with nothing uploaded; the hint has to name the
+    prerequisite (upload / path) or the fact that the result already exists.
+    """
+    loaded = state.dataset_id is not None
+    n_subj = (state.dataset_metadata or {}).get("n_subjects")
+    subj = f", {n_subj} subjects" if n_subj is not None else ""
+    n_nca = _n(state.nca_parameters)
+    where = (f"dataset {state.dataset_id}{subj} is loaded" if loaded
+             else "no dataset is loaded — use 'Click to upload' (or drag a CSV in), "
+                  "or tell me the CSV path")
+    if agent == "data_manager":
+        if not loaded:
+            return f"[data_manager] {where}."
+        profiled = state.data_quality is not None
+        return (f"[data_manager] {where}"
+                f"{' and profiled' if profiled else ''}. Next: compute NCA, fit a PK model, "
+                "run the QC review, or ask for the report.")
+    if agent == "nca":
+        if not loaded:
+            return f"[nca] {where}; NCA needs a dataset first."
+        if n_nca:
+            return (f"[nca] NCA already computed for {n_nca} subjects on {state.dataset_id}. "
+                    "Next: QC review, bioequivalence, dose proportionality, or the report.")
+        return f"[nca] {where}; ask me to compute NCA."
+    done = []
+    if n_nca:
+        done.append(f"NCA {n_nca} subjects")
+    if state.pk_model_results:
+        done.append("PK model fit")
+    if (state.nlme_results or {}).get("status") == "ok":
+        done.append("NLME fit")
+    if state.qc_verdict:
+        done.append(f"QC {state.qc_verdict}")
+    if state.report_path:
+        done.append("report")
+    have = f" Done so far: {', '.join(done)}." if done else ""
+    return f"[{agent}] nothing to run for that request — {where}.{have}"
 
 
 @dataclass
@@ -56,10 +105,24 @@ class Agent:
                  ctx: ToolContext, audit: AuditChain, clock, actor: str = "") -> AgentResult:
         tools = registry.for_agent(self.name)
         result = AgentResult(state=state)
+        last_call: tuple[str, str] | None = None
         for _ in range(MAX_TOOL_STEPS):
             choice = llm.select_tool(self.name, message, tools, self._state_summary(result.state))
             if not choice:
                 break
+            # select_tool is stateless (no tool results are fed back), so a model
+            # that does not read the state summary re-picks the same call every
+            # step. Every tool is deterministic, so an identical repeat cannot
+            # produce anything new: stop instead of burning MAX_TOOL_STEPS.
+            this_call = (choice["name"], json.dumps(choice.get("input") or {}, sort_keys=True,
+                                                    default=str))
+            if this_call == last_call:
+                result.messages.append(
+                    f"{choice['name']} already ran with these arguments this turn; "
+                    "stopping (the result is above).")
+                result.tool_calls.append({"tool": choice["name"], "stopped": "repeat"})
+                break
+            last_call = this_call
             try:
                 # allow_expensive is NOT passed: a chat turn runs synchronously, so a
                 # long-running fit here would block the worker AND bypass the job
@@ -102,5 +165,5 @@ class Agent:
             result.messages.append(tool_res.summary)
             result.tool_calls.append({"tool": choice["name"], "summary": tool_res.summary})
         if not result.messages:
-            result.messages.append(f"[{self.name}] no action taken.")
+            result.messages.append(idle_hint(self.name, result.state))
         return result

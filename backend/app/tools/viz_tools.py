@@ -11,15 +11,12 @@ from typing import Any
 
 from app.compute.flexplot import flexplot
 from app.core.pharmstate import PharmState
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 
 def generate_flexplot(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Build a flexplot from the loaded dataset and stash the geometry in state."""
-    dsid = args.get("dataset_id") or state.dataset_id
-    if not dsid or dsid not in ctx.dataset_store:
-        raise ValueError("no dataset loaded — upload a CSV first")
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
 
     y = args.get("y")
     if not y or y not in df.columns:

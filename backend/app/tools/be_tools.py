@@ -14,7 +14,7 @@ from app.compute.bioequivalence import assess_bioequivalence
 from app.compute.nca import Profile, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _TRT_NAMES = {"trt", "treat", "treatment", "form", "formulation", "drug", "period_trt"}
 _REF_TOKENS = {"r", "ref", "reference", "rld"}
@@ -67,8 +67,8 @@ def _pick_levels(levels: list[Any], ref_arg: Any, test_arg: Any) -> tuple[Any, A
 
 
 def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid].copy()
+    dsid, df = require_dataset(ctx, state, args)
+    df = df.copy()
     roles = _roles(df, state)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)

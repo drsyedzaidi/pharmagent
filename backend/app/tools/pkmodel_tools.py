@@ -28,7 +28,7 @@ from app.compute.vpc import (
 )
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _WT_NAMES = {"wt", "weight", "bw", "bwt", "bodyweight"}
 # default candidate set for "compare" on oral data
@@ -154,8 +154,7 @@ def _trim_fit(res: dict[str, Any]) -> dict[str, Any]:
 
 
 def fit_pk_model(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    dsid = args.get("dataset_id") or state.dataset_id
-    df = ctx.dataset_store[dsid]
+    dsid, df = require_dataset(ctx, state, args)
     roles = _roles(df, state)
     subjects, multi, has_pd = _build_subjects(df, roles)
     if not subjects:
