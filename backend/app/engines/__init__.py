@@ -18,6 +18,7 @@ from .base import (
 )
 from .ensemble import build_ensemble
 from .mock import MockEngineAdapter
+from .monolix import MonolixAdapter
 from .native import PharmAgentAdapter
 from .nlmixr2 import Nlmixr2Adapter
 from .runner import run_matrix, run_matrix_subjects
@@ -27,7 +28,7 @@ from .select import SELECTION_METRIC, select_winner
 __all__ = [
     "EngineResult", "CandidateSpec", "EngineAdapter",
     "aic_bic", "k_from_result", "NATIVE_VERSION",
-    "PharmAgentAdapter", "MockEngineAdapter", "Nlmixr2Adapter", "build_ensemble",
+    "PharmAgentAdapter", "MockEngineAdapter", "Nlmixr2Adapter", "MonolixAdapter", "build_ensemble",
     "run_matrix", "run_matrix_subjects",
     "score_predictions", "vpc_coverage",
     "select_winner", "SELECTION_METRIC",

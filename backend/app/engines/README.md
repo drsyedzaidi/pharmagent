@@ -145,3 +145,22 @@ coverage (the cross-engine gate) lives in `tests/test_adversarial.py`.
   external winners need a synthesized nl-dict first.
 - PD-endpoint scoring is out of scope for v0 (scores concentration only).
 - nlmixr2 adapter covers 1-compartment models; add 2-cmt templates as needed.
+
+
+## Monolix adapter (`monolix.py`)
+
+Ported from the PopPK Workbench's Monolix tab. `MonolixAdapter` writes the
+NONMEM-style CSV, generates an mlxtran structural model with the `pkmodel`
+macro (iv 1/2/3-cmt, oral 1-cmt ± lag, oral 2-cmt), and runs `r/monolix_fit.R`
+through the isolated **x86_64** R (`~/.monolix-mamba/envs/monolixR`, Rosetta,
+`DYLD_LIBRARY_PATH` stripped) because `liblixoftConnectors` is Intel-only.
+SAEM + standard errors + log-likelihood; estimates map back to app names
+(`Cl_pop`→`CL`, `omega_X`→CV% via `100·sqrt(exp(ω²)−1)`, `a`/`b`→σ), then are
+scored with `score_from_population` like every engine. `-2LL` is kept as
+within-engine `ofv` only.
+
+- `available()` = isolated Rscript + MonolixSuite present (env overrides
+  `PHARMAGENT_MONOLIX_RSCRIPT`, `PHARMAGENT_MONOLIX_SUITE`).
+- The engine needs a logged-in macOS GUI session; headless it hangs, and
+  `PHARMAGENT_MONOLIX_TIMEOUT` (default 900 s) turns that into a `failed` row.
+- Select with `engines: ["pharmagent_focei", "nlmixr2", "monolix"]`.

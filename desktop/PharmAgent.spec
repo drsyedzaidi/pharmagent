@@ -32,6 +32,7 @@ datas = [
     (str(BACKEND / "sample_data"), "sample_data"),
 ]
 datas += collect_data_files("docx")             # python-docx templates
+datas.append((str(BACKEND / "app" / "engines" / "r"), "app/engines/r"))   # Monolix R driver
 datas += collect_data_files("scipy", includes=["**/*.npz", "**/*.npy"])
 
 a = Analysis(

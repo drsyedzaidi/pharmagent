@@ -13,6 +13,7 @@ from typing import Any
 from app.engines import (
     CandidateSpec,
     MockEngineAdapter,
+    MonolixAdapter,
     Nlmixr2Adapter,
     PharmAgentAdapter,
     run_matrix_subjects,
@@ -29,6 +30,8 @@ _ADAPTER_FACTORY = {
     "pharmagent_saem": lambda: PharmAgentAdapter(method="saem"),
     "nlmixr2": lambda: Nlmixr2Adapter(),
     "nlmixr2_focei": lambda: Nlmixr2Adapter(),
+    "monolix": lambda: MonolixAdapter(),
+    "monolix_saem": lambda: MonolixAdapter(),
     "mock": lambda: MockEngineAdapter(),
 }
 

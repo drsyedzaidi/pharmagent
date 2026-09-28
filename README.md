@@ -25,7 +25,8 @@ The design thesis is *agents decide, tools execute*: a language model plans the 
 
 - **Deterministic PK compute** — NCA (incl. steady-state), bioequivalence, dose-proportionality, compartmental fitting, exposure simulation, VPC / pcVPC, GOF diagnostics, dose sweeps.
 - **True NLME** — FOCE-I and SAEM estimation, covariate modelling, stepwise covariate selection (SCM), MAP/TDM Bayesian forecasting, BLQ/M3 censored likelihood.
-- **Cross-engine orchestration** — run candidate models across estimation engines and rank on *engine-agnostic prediction accuracy* (not incomparable native OFV/AIC/BIC), including a real nlmixr2 (R) adapter.
+- **Cross-engine orchestration** — run candidate models across estimation engines and rank on *engine-agnostic prediction accuracy* (not incomparable native OFV/AIC/BIC), including real nlmixr2 (R) and **Monolix** (lixoftConnectors in an isolated x86_64 R; needs a logged-in GUI session) adapters.
+- **Clinical-pharmacology calculators** (from PharmKit) — half-life/ke, accumulation & time to steady state, loading/maintenance dose, Cockcroft-Gault + CKD-EPI 2021 with dose adjustment, allometric scaling, mg/L↔µM, BE sample size (TOST), analytic one-compartment profiles; chat-routable (`clinpharm` agent) plus a Calculators panel in the UI, every result audited with its formula.
 - **Provenance & governance** — SHA-256 audit hash-chain, human-in-the-loop review gate, run reproducibility reports, exports (CSV / DOCX / CDISC-ADaM / NONMEM `.ctl` / mrgsolve `.cpp`).
 
 ## PharmacometricsBench
