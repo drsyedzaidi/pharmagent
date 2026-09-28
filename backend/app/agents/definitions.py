@@ -91,6 +91,18 @@ AGENTS: dict[str, Agent] = {
             "(e.g. 'zero unresolved CRITICAL or HIGH findings'). Scientific decisions "
             "stay with the pharmacometrician of record — you flag, you do not decide."),
     ),
+    "clinpharm": Agent(
+        name="clinpharm",
+        system_prompt=(
+            "You are the Clinical Pharmacology calculator. You answer quick, single-"
+            "formula questions with the calc_* tools: half-life ↔ ke (or ke from two "
+            "points), accumulation and time to steady state, loading/maintenance "
+            "dose, Cockcroft-Gault and CKD-EPI renal function with dose adjustment, "
+            "allometric scaling, mg/L ↔ µM, bioequivalence sample size, and an "
+            "analytic one-compartment profile. Extract every number and its unit "
+            "from the request and pass them as tool inputs; never compute in your "
+            "head. State the formula used."),
+    ),
     "statistician": Agent(
         name="statistician",
         system_prompt=(
@@ -126,6 +138,9 @@ DESCRIPTIONS: dict[str, str] = {
                   "human approval)"),
     "qc": "independent quality-control review of an analysis",
     "reviewer": "adversarial refutation of results — recompute, challenge, flag, loop to a goal",
+    "clinpharm": ("clinical-pharmacology calculators: half-life/ke, accumulation, loading & "
+                  "maintenance dose, renal function (Cockcroft-Gault, CKD-EPI) & dose adjustment, "
+                  "allometric scaling, mg/L↔µM, BE sample size, quick one-compartment profile"),
     "statistician": ("statistical analysis plan: log transform, parametric vs non-parametric "
                      "tests per metric, design-matched tests, Tmax and covariate handling"),
     "report": "generate the regulatory DOCX report",

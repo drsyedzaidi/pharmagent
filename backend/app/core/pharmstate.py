@@ -96,6 +96,10 @@ class PharmState(BaseModel):
     # --- statistical analysis advice (Statistician Agent) -----------------
     stats_advice: dict[str, Any] | None = None   # parametric vs non-parametric plan
 
+    # --- clinical-pharmacology calculators (ClinPharm Agent) ---------------
+    clinpharm_results: dict[str, Any] | None = None     # last calculator result
+    clinpharm_history: list[dict[str, Any]] | None = None  # bounded, newest last
+
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
     report_sections: dict[str, Any] | None = None
@@ -146,6 +150,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                   "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
     "statistician": {"stats_advice", "widgets"},
+    "clinpharm": {"clinpharm_results", "clinpharm_history", "widgets"},
 }
 
 

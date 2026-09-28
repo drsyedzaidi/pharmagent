@@ -49,6 +49,12 @@ async function download(path: string, filename: string): Promise<void> {
 export const api = {
   health: () => req<{ status: string; llm: string }>('/health'),
 
+  /** Clinical-pharmacology calculator (clinpharm tools only; audited, state-written). */
+  calc: (sid: string, tool: string, args: Record<string, string | number>): Promise<JobResult> =>
+    req(`/sessions/${sid}/calc`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tool, args }),
+    }),
+
   /** Runtime LLM provider switch (mock / local Ollama / OpenAI "ChatGPT" / Anthropic Claude). */
   getLlm: () => req<LlmConfig>('/llm'),
   setLlm: (body: LlmChoiceBody) => req<LlmSwitchResult>('/llm', {

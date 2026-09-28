@@ -392,6 +392,29 @@ def chat(sid: str, req: ChatRequest, sess=Depends(owned_session),
     return orch.chat(sid, req.message, actor=actor)
 
 
+class CalcRequest(BaseModel):
+    tool: str
+    args: dict = {}
+
+
+@app.post("/api/sessions/{sid}/calc")
+def run_calculator(sid: str, req: CalcRequest, sess=Depends(owned_session),
+                   actor: str = Depends(actor_id)) -> dict:
+    """Run one clinical-pharmacology calculator (the `clinpharm` tools only:
+    deterministic closed forms, no dataset, never expensive) with audit +
+    state writes, for the UI's calculator panel."""
+    try:
+        tool = orch.registry.get(req.tool)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    if tool.agent != "clinpharm":
+        raise HTTPException(400, f"{req.tool} is not a calculator; use its own endpoint")
+    try:
+        return orch.run_tool(sid, req.tool, "clinpharm", req.args, actor=actor)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/sessions/{sid}/chat/pending_tool")
 def decide_pending_tool(sid: str, req: PendingToolDecision, sess=Depends(owned_session),
                         actor: str = Depends(actor_id)) -> dict:

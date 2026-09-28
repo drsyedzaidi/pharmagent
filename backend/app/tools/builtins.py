@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.tools import (
     be_tools,
     bootstrap_tools,
+    clinpharm_tools,
     compartmental_tools,
     data_tools,
     dp_tools,
@@ -30,7 +31,7 @@ def default_registry() -> ToolRegistry:
                 bootstrap_tools, sir_tools, profile_tools,
                 poppk_tools, pkmodel_tools, engine_tools, qc_tools, report_tools,
                 regulatory_tools, review_tools, viz_tools, simest_tools,
-                stats_tools):
+                stats_tools, clinpharm_tools):
         for tool in mod.TOOLS:
             reg.register(tool)
     return reg

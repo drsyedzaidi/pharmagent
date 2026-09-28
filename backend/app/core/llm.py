@@ -35,6 +35,23 @@ class LLM(Protocol):
 _PATH_RE = re.compile(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", re.IGNORECASE)
 
 
+_KE_RE = re.compile(r"\bke\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
+_HL_RE = re.compile(r"half[- ]life\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
+
+
+def _mock_numbers(low: str, tool: str) -> dict[str, Any]:
+    """Best-effort numeric extraction for the keyless mock (half-life / ke only;
+    everything else is left for the tool to ask for)."""
+    if tool in ("calc_half_life", "calc_accumulation"):
+        m = _KE_RE.search(low)
+        if m:
+            return {"ke": float(m.group(1))}
+        m = _HL_RE.search(low)
+        if m:
+            return {"half_life": float(m.group(1))}
+    return {}
+
+
 class MockLLM:
     """Deterministic, keyless. Drives the core NCA flow heuristically."""
 
@@ -72,6 +89,26 @@ class MockLLM:
             return None if s.get("report_path") else {"name": "generate_report", "input": {}}
         if agent == "statistician":
             return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
+        if agent == "clinpharm":
+            low = (message or "").lower()
+            # keyword → calculator; the keyless mock passes the numbers it can find
+            # as a best effort and the tool names any input still missing.
+            table = (("calc_renal_function", ("creatinine", "crcl", "egfr", "ckd", "cockcroft", "renal")),
+                     ("calc_be_sample_size", ("sample size", "how many subjects")),
+                     ("calc_dose_regimen", ("loading dose", "maintenance dose")),
+                     ("calc_accumulation", ("accumulation", "steady state", "steady-state")),
+                     ("calc_allometric", ("allometric", "allometry", "body weight scaling")),
+                     ("convert_concentration", ("micromolar", "µm", "umol", "mg/l", "molar mass",
+                                                "molecular weight")),
+                     ("quick_one_compartment", ("compartment profile", "simulate a one")),
+                     ("calc_half_life", ("half-life", "half life", "rate constant", " ke ", "ke is",
+                                         "elimination rate")))
+            for name, keys in table:
+                if any(k in low for k in keys):
+                    if s.get("last_calculation") == name:
+                        return None            # already answered this turn
+                    return {"name": name, "input": _mock_numbers(low, name)}
+            return None
         if agent == "simulator":
             low = (message or "").lower()
             # Every choice here is a PROPOSAL (expensive+proposable tools): the

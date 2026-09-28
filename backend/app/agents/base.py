@@ -96,6 +96,7 @@ class Agent:
             "nlme_results": "present" if (state.nlme_results or {}).get("status") == "ok" else None,
             "simest_results": "present" if state.simest_results else None,
             "stats_advice": "present" if state.stats_advice else None,
+            "last_calculation": (state.clinpharm_results or {}).get("tool"),
             "pending_tool": (state.pending_tool or {}).get("tool"),
             "qc_verdict": state.qc_verdict,
             "report_path": state.report_path,

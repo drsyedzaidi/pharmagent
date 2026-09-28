@@ -142,6 +142,8 @@ export interface PharmState {
   sir_results: SirResults | null;
   profile_results: ProfileResults | null;
   stats_advice: StatsAdvice | null;
+  clinpharm_results?: ClinpharmResult | null;
+  clinpharm_history?: ClinpharmResult[] | null;
   qc_verdict: string | null;
   qc_issues: QcIssue[] | null;
   qc_checklist: QcCheck[] | null;
@@ -565,6 +567,16 @@ export interface StatsMetricAdvice {
   sensitivity_test: string | null;
   summary_statistic: string;
   rationale: string;
+}
+
+export interface ClinpharmResult {
+  status: string;
+  tool: string;
+  label: string;
+  inputs: Record<string, number | string>;
+  outputs: Record<string, unknown>;
+  formula: string;
+  note?: string | null;
 }
 
 export interface StatsAdvice {
