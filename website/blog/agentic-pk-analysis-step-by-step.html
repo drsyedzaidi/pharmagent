@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>How to Run an Agentic PK Analysis: A 2026 Step-by-Step Guide</title>
+  <meta name="description" content="Run an agentic PK analysis end to end: CSV to NCA, QC, a gated FOCE-I popPK fit and a DOCX report. FDA saw 500+ AI-containing submissions, 2016-2023." />
+  <meta name="author" content="Syed Zaidi" />
+  <meta name="color-scheme" content="light" />
+  <meta property="og:title" content="How to Run an Agentic PK Analysis: A 2026 Step-by-Step Guide" />
+  <meta property="og:description" content="Run an agentic PK analysis end to end: CSV to NCA, QC, a gated FOCE-I popPK fit and a DOCX report. FDA saw 500+ AI-containing submissions, 2016-2023." />
+  <meta property="og:type" content="article" />
+  <meta property="og:image" content="assets/cover.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Cover graphic showing a concentration-time curve and the headline: from concentration-time CSV to an audited population PK report" />
+  <meta property="article:published_time" content="2026-09-29" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="stylesheet" href="../styles.v2.css" />
+  <style>
+.post { max-width: 760px; margin: 0 auto; padding: 56px 24px 88px; }
+.post .eyebrow { margin-bottom: 14px; }
+.post .byline { color: var(--ink-muted); font-size: 14.5px; margin: 14px 0 28px; }
+.post h1 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.1; letter-spacing: -1px; }
+.post h2 { font-size: clamp(24px, 2.8vw, 31px); line-height: 1.2; margin: 56px 0 16px; letter-spacing: -.4px; }
+.post h3 { font-size: 20px; margin: 30px 0 10px; }
+.post p, .post li { font-size: 17px; line-height: 1.72; }
+.post p { margin: 0 0 18px; }
+.post ul, .post ol { margin: 0 0 20px; padding-left: 24px; }
+.post li { margin-bottom: 8px; }
+.post a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.post li, .post p { overflow-wrap: anywhere; }
+.post code { font-family: var(--mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; }
+.post img { display: block; max-width: 100%; height: auto; margin: 26px auto; border: 1px solid var(--hairline); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); background: #fff; }
+.post blockquote { margin: 28px 0; padding: 20px 24px; background: var(--accent-soft); border: 1px solid var(--accent-soft-border); border-radius: var(--radius-lg); }
+.post blockquote p { margin: 0 0 8px; }
+.post blockquote ul { margin: 0; }
+.post figure { margin: 34px 0; padding: 20px; background: var(--surface-1, #fff); border: 1px solid var(--hairline); border-radius: var(--radius-lg); text-align: center; color: var(--ink); }
+.post figcaption { font-size: 13px; color: var(--ink-subtle); margin-top: 8px; }
+.post .hero-img { margin: 0 0 32px; box-shadow: none; }
+.post table { width: 100%; border-collapse: collapse; margin: 8px 0 26px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.post th, .post td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hairline); }
+.post thead th { color: var(--ink-muted); font-weight: 600; border-bottom: 1px solid var(--hairline-strong); }
+.post .author-box { margin-top: 48px; padding: 20px 24px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--surface-1, #fff); }
+.post .author-box p { font-size: 15px; margin: 0; color: var(--ink-muted); }
+.post .author-box strong { color: var(--ink); }
+.post a.img-link { display: block; text-decoration: none; }
+@media (max-width: 640px) { .post { padding: 36px 16px 64px; } .post p, .post li { font-size: 16px; } .post figure { padding: 12px; } }
+</style>
+  <script type="application/ld+json">[{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "How to Run an Agentic PK Analysis: A 2026 Step-by-Step Guide", "description": "Run an agentic PK analysis end to end: CSV to NCA, QC, a gated FOCE-I popPK fit and a DOCX report. FDA saw 500+ AI-containing submissions, 2016-2023.", "datePublished": "2026-09-29", "dateModified": "2026-09-29", "author": {"@type": "Person", "name": "Syed Zaidi", "description": "Syed Zaidi is a pharmacokineticist who builds physiologically based and population PK models in R and mrgsolve, and the developer of PharmAgent. Disclosure: this guide describes the author's own software."}, "publisher": {"@type": "Organization", "name": "PmatricsAI"}, "image": "assets/cover.png", "keywords": "population pharmacokinetics, agentic AI, pharmacometrics, NCA, model-informed drug development"}, {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "How long does an agentic PK analysis take?", "acceptedAnswer": {"@type": "Answer", "text": "In our run, NCA on 12 subjects reached its review gate in under a second. The population workflow on 16 subjects compared four structures in seconds. It then ran the FOCE-I fit, four covariate candidates, diagnostics and a 200-simulation VPC as a background job in 180 seconds (PharmAgent run, 2026-09-29). Bigger datasets and richer models take longer."}}, {"@type": "Question", "name": "Can I use NONMEM or nlmixr2 instead of the built-in estimator?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. The export bar writes a NONMEM control stream and an mrgsolve model file, and the cross-engine workflow runs nlmixr2 or Monolix alongside the native fit where installed. Against a 120-subject NONMEM 7.5.0 reference, the native estimator reproduced NONMEM's CWRES at a correlation of 1.000000 (PharmAgent internal validation, 2026)."}}, {"@type": "Question", "name": "What should I do if the QC verdict fails?", "acceptedAnswer": {"@type": "Answer", "text": "Read which of the seven rules failed. Fewer than 6 subjects or more than 20% missing data are dataset problems, not fitting problems. Terminal-slope failures get fixed by refitting λz. A plausibility failure on CL or V usually means a unit or dose-column error, so check column roles before touching the model."}}, {"@type": "Question", "name": "Do I need an API key?", "acceptedAnswer": {"@type": "Answer", "text": "No. The keyless mock model runs all three fixed workflows offline, and the 1,056-test suite runs without a key too. For free-text questions, point the app at a local Ollama model or add a Claude or OpenAI key from the model switcher in the header. Keys stay in memory and are never written to disk."}}, {"@type": "Question", "name": "Will a regulator accept output from an AI-assisted workflow?", "acceptedAnswer": {"@type": "Answer", "text": "Not automatically. FDA's January 2025 draft guidance judges an AI model's credibility for its stated context of use, and ICH M15 on model-informed drug development became final in June 2026 (FDA, M15 General Principles for Model-Informed Drug Development, 2026). Audit trails and human gates support a credibility assessment under the FDA framework. They don't replace your own validation."}}]}]</script>
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a href="../index.html#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">&#8478;</span>
+        <span class="brand-name">PharmAgent</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="../index.html#capabilities">Product</a>
+        <a href="../courses.html">Courses</a>
+        <a href="../index.html#compliance">Compliance</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="../index.html#contact" class="btn btn-primary">Request a walkthrough</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <article class="post">
+      <p class="eyebrow">Guide · Pharmacometrics</p>
+<h1 id="how-to-run-an-agentic-pk-analysis-a-2026-step-by-step-guide">How to Run an Agentic PK Analysis: A 2026 Step-by-Step Guide</h1>
+<p class="byline">By Syed Zaidi · <time datetime="2026-09-29">2026-09-29</time> · 13 min read</p>
+<img class="hero-img" src="assets/cover.svg" alt="Cover graphic showing a concentration-time curve and the headline: from concentration-time CSV to an audited population PK report" width="1200" height="630" fetchpriority="high" />
+<p>FDA's Center for Drug Evaluation and Research reports that it reviewed more than 500 submissions with AI components from 2016 to 2023 (<a href="https://www.fda.gov/about-fda/center-drug-evaluation-and-research-cder/artificial-intelligence-drug-development">FDA, Artificial Intelligence for Drug Development</a>, 2026). So the question for modelling groups isn't whether AI touches pharmacometric work. It's how you'll show the work was done credibly.</p>
+<p>That's hard when a population PK analysis is still a hand-built control stream, diagnostics stitched together in R and a report assembled from screenshots. Every manual hop is a place where a number gets copied wrong, and none of it leaves a trail a reviewer can replay.</p>
+<p>An <strong>agentic PK analysis</strong> is a pharmacokinetic workflow in which AI agents choose and sequence analysis tools while the arithmetic stays in deterministic, tested code and a person approves each gated step. This guide walks one through PharmAgent, end to end. We ran every step on the two datasets bundled with the app on 2026-09-29, and every screenshot comes from those runs.</p>
+<!-- [PERSONAL EXPERIENCE] -->
+<p>In our own first-user testing, an upload came back with a bare "no action taken", and the next complaint was a concentration-time plot with unlabelled axes. Both are fixed: an agent that can't act now says what it needs, and that plot carries axis titles. New to the population approach? Start with our <a href="../courses/pkpd-modeling-sim/index.html">PK/PD modelling and simulation course</a>.</p>
+<blockquote>
+<p><strong>Key Takeaways</strong></p>
+<ul>
+<li>FDA's CDER reviewed more than 500 AI-containing submissions from 2016 to 2023 (FDA, 2026). Credibility of AI-assisted analysis is now a review question.</li>
+<li>Every tool call lands in a SHA-256 audit chain, and the workflow stops at human gates.</li>
+<li>In our run, NCA on 12 subjects reached its review gate in under a second, and a 16-subject population fit took three minutes.</li>
+</ul>
+</blockquote>
+<h2 id="what-you-need-before-your-first-agentic-pk-analysis">What You Need Before Your First Agentic PK Analysis</h2>
+<p>PharmAgent runs keyless with a mock language model, and its test suite collected 1,056 tests on 2026-09-29 (PharmAgent internal repository, 2026). Nothing here needs an API key, a licence or a cluster.</p>
+<ul>
+<li>PharmAgent running locally: the macOS desktop app, or the backend on port 8000 plus the frontend from <code>frontend/</code> via <code>npm run dev</code> (http://localhost:5173)</li>
+<li>A NONMEM-style CSV with at least <code>ID</code>, <code>TIME</code>, <code>DV</code> and <code>AMT</code> columns, plus <code>EVID</code> for dosing records. We use the bundled <code>theoph_pk.csv</code> and <code>cov_pk.csv</code></li>
+<li>Optional: a local Ollama model, or a Claude or OpenAI key, for free-text questions</li>
+<li><strong>Time:</strong> about 30 minutes. <strong>Difficulty:</strong> intermediate</li>
+</ul>
+<p><code>theoph_pk.csv</code> is the classic theophylline dataset distributed with R as <code>Theoph</code> (<a href="https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/Theoph.html">Boeckmann, Sheiner and Beal, NONMEM Users Guide Part V</a>, 1994), with dose converted from mg/kg to mg. Concentrations are in mg/L and time in hours. <code>cov_pk.csv</code> is a 16-subject demonstration dataset that ships with the app, with creatinine clearance and age as covariates.</p>
+<p><a class="img-link" href="assets/step0-landing.png"><img src="assets/step0-landing.png" alt="The PharmAgent landing screen with the upload drop zone, the NCA workflow step list in the sidebar and the three workflow buttons" loading="lazy" decoding="async" width="1280" height="800" /></a></p>
+<p>Want the architecture first? The <a href="../index.html#workflow">How it works section</a> shows how a supervisor routes each request to an agent and the deterministic tools it calls. A <strong>human review gate</strong> is a checkpoint where the workflow pauses until a person approves or rejects the results so far.</p>
+<h2 id="step-1-load-and-profile-the-dataset">Step 1: Load and Profile the Dataset</h2>
+<p><strong>Outcome:</strong> a loaded dataset, a profile of its records and a concentration-time plot. Everything downstream inherits the column roles decided here, so the data manager agent settles them once, in the open.</p>
+<ol type="1">
+<li>Click <strong>Click to upload</strong> or drag <code>theoph_pk.csv</code> onto the drop zone.</li>
+<li><strong>Click Run NCA Workflow.</strong> The sidebar ticks through Load dataset, Profile PK data, Validate format and Spaghetti plot.</li>
+</ol>
+<p><a class="img-link" href="assets/step1-upload.png"><img src="assets/step1-upload.png" alt="The upload zone after selecting theoph_pk.csv, with the file name confirmed in green and the workflow buttons ready" loading="lazy" decoding="async" width="1280" height="800" /></a></p>
+<p>Verification: the sidebar shows <strong>Subjects 12</strong>, and the data manager posts "Dataset loaded: 144 records, 12 subjects, 8 columns." The plot card reports 9 below-quantification points excluded.</p>
+<!-- [UNIQUE INSIGHT] -->
+<p>One detail is easy to miss. NONMEM exports use a bare period for missing values, and most CSV readers keep it as the string ".". PharmAgent registers "." as a missing-value marker before parsing, so <code>AMT</code> on observation rows and <code>DV</code> on dose rows arrive as blanks instead of poisoning the numeric columns. We found this one in our own first-user bug reports.</p>
+<p><a class="img-link" href="assets/step1-spaghetti.png"><img src="assets/step1-spaghetti.png" alt="Concentration-time plot for 12 subjects on a log y-axis, with overlay and individual views, a time-window slider and a zoom button" loading="lazy" decoding="async" width="650" height="247" /></a></p>
+<p>The plot gets its own step because it's where a human spots the absorption lag, the odd subject or the dosing error that no model will fix later.</p>
+<h2 id="step-2-run-nca-and-read-the-summary-statistics">Step 2: Run NCA and Read the Summary Statistics</h2>
+<p>In this run, geometric mean apparent clearance across 12 subjects was 2.745 L/h with a geometric CV of 27.9% (PharmAgent run, 2026-09-29). NCA comes first because it's model-independent and sets the numbers a compartmental fit has to reproduce. You'll finish this step with per-subject parameters and a summary table ready for a study report.</p>
+<ol type="1">
+<li>Let the workflow continue. The NCA agent computes Cmax, Tmax, AUClast, AUCinf, half-life, CL/F and Vz/F per subject.</li>
+<li>Scan the <strong>Per-subject NCA</strong> table. Orange values breach a QC rule.</li>
+<li>Read the <strong>Summary statistics</strong> block: N, mean, SD, CV%, median, range, geometric mean and geometric CV per parameter.</li>
+</ol>
+<p><a class="img-link" href="assets/step2-nca-table.png"><img src="assets/step2-nca-table.png" alt="Per-subject NCA table for 12 subjects with dose, Cmax, Tmax, AUClast, AUCinf, half-life, CL/F, Vz/F and percent extrapolated, one subject flagged in orange" loading="lazy" decoding="async" width="661" height="377" /></a></p>
+<!-- [ORIGINAL DATA] -->
+<p>Verification: subject 1 shows 31.5% of AUCinf extrapolated, flagged in orange. Mean AUCinf was 119.3 mg·h/L with a CV of 32.0%, and mean terminal half-life was 8.2 hours.</p>
+<p>The conventions are printed under the table and again in the DOCX. SD uses n − 1, CV% = 100 × SD/mean, and geometric CV = √(exp(s²) − 1), where s² is the sample variance of the log-transformed values. A reviewer never has to guess which formula produced a number.</p>
+<p><a class="img-link" href="assets/step2-summary-stats.png"><img src="assets/step2-summary-stats.png" alt="Summary statistics table listing N, mean, SD, CV percent, median, min, max, geometric mean and geometric CV for each NCA parameter" loading="lazy" decoding="async" width="661" height="403" /></a></p>
+<h2 id="step-3-check-the-terminal-slope-and-the-qc-verdict">Step 3: Check the Terminal Slope and the QC Verdict</h2>
+<p>The QC agent applies seven rules. In this run, one of 12 subjects (8%) failed the 20% AUC-extrapolation limit, and the other six rules passed (PharmAgent run, 2026-09-29). This is where an automated pipeline is tempted to cut corners, so the workflow slows down on purpose and asks you to accept or correct every terminal-slope fit.</p>
+<ol type="1">
+<li>Open <strong>Terminal Slope (λz) Diagnostics</strong>. Each subject gets a log-scale panel with the selected points and the dashed regression line.</li>
+<li>Click points to include or exclude them, then press <strong>Refit λz</strong>. <strong>Reset</strong> restores the automatic choice.</li>
+<li>Read the <strong>QC Verdict</strong> card. It lists each rule, its threshold and how many subjects fail it.</li>
+</ol>
+<p><a class="img-link" href="assets/step3-lambdaz.png"><img src="assets/step3-lambdaz.png" alt="Per-subject terminal slope panels on a log scale, each with the fitted line, the number of points used, the half-life and the R-squared" loading="lazy" decoding="async" width="742" height="816" /></a></p>
+<p>Verification: every subject used three to six points, and each panel's R² was 0.989 or better. The verdict reads <strong>CONDITIONAL PASS</strong> with one MEDIUM finding, "high %extrap: [1]".</p>
+<p><a class="img-link" href="assets/step3-qc-verdict.png"><img src="assets/step3-qc-verdict.png" alt="QC verdict card reading conditional pass, listing sample size, missing data, lambda-z points, R-squared, AUC extrapolation, parameter plausibility and Tmax rules" loading="lazy" decoding="async" width="780" height="318" /></a></p>
+<!-- [UNIQUE INSIGHT] -->
+<p>The limits sit in the card where you can see them. The QC rules ask for at least 6 subjects, at most 20% missing data, at least 3 terminal points and an adjusted R² of 0.80 or better. They also require at most 20% extrapolated AUC, plausible CL and V, and Tmax before the terminal phase. These are constants in the QC code, so an agent can't relax them mid-run; changing one is a reviewed code change.</p>
+<h2 id="step-4-approve-the-human-gate-and-export-the-report">Step 4: Approve the Human Gate and Export the Report</h2>
+<p>In January 2025, FDA proposed a risk-based framework for AI models. It asks sponsors to establish a model's credibility for a stated context of use (<a href="https://www.fda.gov/news-events/press-announcements/fda-proposes-framework-advance-credibility-ai-models-used-drug-and-biological-product-submissions">FDA, press release on the AI credibility framework</a>, 2025). The gate is one control that supports that kind of assessment, not a substitute for it: agents propose, and a person decides.</p>
+<ol type="1">
+<li>Read the amber <strong>Human Review Required</strong> banner.</li>
+<li>Click <strong>Approve</strong> to generate the report, or <strong>Reject</strong> to stop the run.</li>
+<li>When <strong>Report ready</strong> appears, click <strong>Download DOCX</strong>. <strong>NCA CSV</strong> and <strong>CDISC ADaM (zip)</strong> are in the export bar.</li>
+</ol>
+<p><a class="img-link" href="assets/step4-gate-banner.png"><img src="assets/step4-gate-banner.png" alt="The human review banner with approve and reject buttons, shown after QC completes" loading="lazy" decoding="async" width="988" height="74" /></a></p>
+<p>Verification: the audit counter increments, and the <strong>Audit trail</strong> toggle under the QC card expands to a numbered list of tool calls, each with its agent and a SHA-256 hash prefix.</p>
+<p><a class="img-link" href="assets/step4-audit-trail.png"><img src="assets/step4-audit-trail.png" alt="Expanded audit trail under the QC verdict listing eight entries from session creation through load dataset, profile, validate, spaghetti plot, compute NCA, adversarial review and QC, each with a hash prefix" loading="lazy" decoding="async" width="438" height="537" /></a></p>
+<!-- [UNIQUE INSIGHT] -->
+<p>Notice the label "hash-only · unanchored" beside the toggle. The chain is internally consistent but not yet anchored to an external timestamp. We'd rather say so than show a green badge, because a reviewer can then see exactly what the trail proves.</p>
+<p>The stakes aren't new to regulators. Between 2000 and 2004, pharmacometric analyses were pivotal in more than half of the 42 NDAs that included one, out of about 244 surveyed (<a href="https://doi.org/10.1208/aapsj070351">Bhattaram et al., AAPS Journal</a>, 2005). The next two steps build that kind of model.</p>
+<h2 id="step-5-compare-structures-and-approve-the-population-fit">Step 5: Compare Structures and Approve the Population Fit</h2>
+<p>In this run, four structural models were fitted subject by subject (two-stage) to 144 observations from 16 subjects and ranked by summed AIC within seconds. The one-compartment oral model came out ahead by 16.6 points (PharmAgent run, 2026-09-29). Settling the structure first keeps the expensive population fit from being repeated.</p>
+<ol type="1">
+<li>Reload for a fresh session, upload <code>cov_pk.csv</code> and click <strong>Run Full PopPK</strong>.</li>
+<li>Read the modeler's <strong>Model comparison</strong> table: converged subjects, total AIC and mean AIC per model.</li>
+<li>At the first gate, <strong>click Approve</strong>. The FOCE-I fit, stepwise covariate model, residual diagnostics, covariate forest and VPC then run as one background job.</li>
+</ol>
+<p><a class="img-link" href="assets/step5-model-comparison.png"><img src="assets/step5-model-comparison.png" alt="Model comparison table ranking four oral structural models by AIC, with the one-compartment oral model best, followed by two-stage typical values for CL, V and KA with inter-individual CV" loading="lazy" decoding="async" width="385" height="343" /></a></p>
+<table>
+<thead>
+<tr>
+<th>Structural model</th>
+<th>Converged</th>
+<th>Total AIC</th>
+<th>ΔAIC vs best</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1-cmt oral (linear)</td>
+<td>16/16</td>
+<td>−729.0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>1-cmt oral + lag</td>
+<td>16/16</td>
+<td>−712.4</td>
+<td>16.6</td>
+</tr>
+<tr>
+<td>2-cmt oral (linear)</td>
+<td>16/16</td>
+<td>−683.6</td>
+<td>45.4</td>
+</tr>
+<tr>
+<td>1-cmt oral, transit absorption</td>
+<td>16/16</td>
+<td>−403.1</td>
+<td>325.9</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<svg viewBox="0 0 560 380" style="max-width: 100%; height: auto; font-family: &#39;Public Sans&#39;, system-ui, sans-serif" role="img" aria-label="Lollipop chart of the AIC penalty relative to the best structural model: one-compartment oral 0, with lag 16.6, two-compartment oral 45.4, transit absorption 325.9">
+<title>
+AIC penalty relative to the best structural model
+</title>
+<desc>Delta summed AIC versus the best model, 16 subjects, two-stage fits on cov_pk.csv: 1-cmt oral 0.0; 1-cmt oral plus lag 16.6; 2-cmt oral 45.4; 1-cmt oral transit absorption 325.9. Source: PharmAgent run, 2026-09-29.</desc> <text x="280" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="currentColor">Structural model comparison (ΔAIC vs best)</text> <text x="280" y="46" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.45">144 observations · 16 subjects · two-stage · lower is better</text> <line x1="200" y1="70" x2="200" y2="300" stroke="currentColor" opacity="0.3"/> <line x1="200" y1="300" x2="520" y2="300" stroke="currentColor" opacity="0.3"/> <g font-size="10" fill="currentColor" opacity="0.5"> <text x="200" y="316" text-anchor="middle">0</text> <text x="294" y="316" text-anchor="middle">100</text> <text x="388" y="316" text-anchor="middle">200</text> <text x="482" y="316" text-anchor="middle">300</text> </g> <g stroke="currentColor" opacity="0.08"><line x1="294" y1="70" x2="294" y2="300"/><line x1="388" y1="70" x2="388" y2="300"/><line x1="482" y1="70" x2="482" y2="300"/></g> <g font-size="12" fill="currentColor" opacity="0.8" text-anchor="end"> <text x="190" y="104">1-cmt oral (best)</text> <text x="190" y="158">1-cmt oral + lag</text> <text x="190" y="212">2-cmt oral</text> <text x="190" y="266">1-cmt transit abs.</text> </g> <g stroke="currentColor" opacity="0.15" stroke-width="1"> <line x1="200" y1="154" x2="215.6" y2="154"/> <line x1="200" y1="208" x2="242.7" y2="208"/> <line x1="200" y1="262" x2="506.3" y2="262"/> </g> <circle cx="200" cy="100" r="6" fill="#22c55e"/> <circle cx="215.6" cy="154" r="6" fill="#38bdf8"/> <circle cx="242.7" cy="208" r="6" fill="#a78bfa"/> <circle cx="506.3" cy="262" r="6" fill="#f97316"/> <g font-size="11" font-weight="700" fill="currentColor"> <text x="212" y="104">0.0 (AIC −729.0)</text> <text x="228" y="158">+16.6</text> <text x="255" y="212">+45.4</text> <text x="470" y="250">+325.9</text> </g> <text x="360" y="336" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.5">ΔAIC (summed over subjects)</text> <text x="280" y="372" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.35">Source: PharmAgent run on cov_pk.csv, 2026-09-29</text>
+</svg>
+<figcaption>
+Source: PharmAgent run, 2026-09-29
+</figcaption>
+</figure>
+<p>Verification: when the job finishes, the sidebar marks the five population steps done; ours took 180 seconds. The FOCE-I fit converged at an objective function value of −256.148. The covariate search then tested four candidates and kept creatinine clearance on CL, lowering the objective function to −271.451. That 15.3-point drop for one parameter clears the chi-square thresholds for one degree of freedom at p&lt;0.05 (3.84) and p&lt;0.01 (6.63). However, the tool still warns that stepwise selection makes the retained effect's standard error and p-value optimistic, and asks you to confirm on a pre-specified set or by resampling.</p>
+<!-- [ORIGINAL DATA] -->
+<p>Can you trust the estimator? We tested it against NONMEM. On a real 120-subject, 1,943-observation two-compartment reference fitted with NONMEM 7.5.0 FOCE-I with interaction, PharmAgent reproduced NONMEM's own CWRES column at a correlation of 1.000000. The same dataset exposed a bug in our SAEM combined-error model, which had pushed the additive error SD to 247 against 3.71 in NONMEM. It's fixed and covered by a regression test (PharmAgent internal validation, available on request).</p>
+<h2 id="step-6-read-the-diagnostics-residuals-forest-and-vpc">Step 6: Read the Diagnostics: Residuals, Forest and VPC</h2>
+<p>In this run, CWRES had a mean of −0.047 and an SD of 0.983 against an expected 0 and 1, and 6.9% of normalised prediction distribution values fell outside ±1.96 against an expected 5% (PharmAgent run, 2026-09-29). Those checks decide whether the fit you just approved can carry a conclusion. This step renders residual panels, a covariate forest and a prediction-corrected VPC.</p>
+<ol type="1">
+<li>Click <strong>Residual diagnostics</strong> for IWRES, CWRES and normalised prediction distribution panels against prediction, time and time after dose.</li>
+<li>Click <strong>Covariate forest</strong> for each retained covariate's effect on clearance with a 90% confidence interval.</li>
+<li>Click <strong>VPC / goodness-of-fit</strong>, then <strong>⤢</strong> on the prediction-corrected VPC to open it full screen. Scroll to zoom, drag to pan, press Escape to close.</li>
+</ol>
+<p><a class="img-link" href="assets/step6-residuals.png"><img src="assets/step6-residuals.png" alt="Residual diagnostics card with IWRES, CWRES and npd panels versus prediction, time and time after dose, plus histograms against a standard normal" loading="lazy" decoding="async" width="660" height="581" /></a></p>
+<figure>
+<svg viewBox="0 0 560 380" style="max-width: 100%; height: auto; font-family: &#39;Public Sans&#39;, system-ui, sans-serif" role="img" aria-label="Horizontal bar chart of residual diagnostics relative to their expected values: CWRES SD 0.98, npd SD 1.04, share of npd outside plus or minus 1.96 at 1.39 times the expected 5 percent">
+<title>
+Residual diagnostics relative to their expected values
+</title>
+<desc>Ratio of observed to expected, where 1.0 is ideal: CWRES SD 0.983 over 1 gives 0.98; npd SD 1.037 over 1 gives 1.04; share of npd outside plus or minus 1.96 is 6.9 percent over 5 percent, giving 1.39. Source: PharmAgent run on cov_pk.csv, 2026-09-29.</desc> <text x="280" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="currentColor">Residual checks vs their expected values</text> <text x="280" y="46" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.45">observed ÷ expected · 1.0 = ideal · 144 observations</text> <g stroke="currentColor" opacity="0.08"> <line x1="210" y1="70" x2="210" y2="290"/><line x1="370" y1="70" x2="370" y2="290"/><line x1="450" y1="70" x2="450" y2="290"/> </g> <line x1="130" y1="290" x2="530" y2="290" stroke="currentColor" opacity="0.3"/> <line x1="130" y1="70" x2="130" y2="290" stroke="currentColor" opacity="0.3"/> <line x1="290" y1="62" x2="290" y2="290" stroke="currentColor" opacity="0.55" stroke-dasharray="4 4"/> <text x="290" y="58" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">ideal</text> <g font-size="10" fill="currentColor" opacity="0.5" text-anchor="middle"> <text x="130" y="306">0</text><text x="210" y="306">0.5</text><text x="290" y="306">1.0</text><text x="370" y="306">1.5</text><text x="450" y="306">2.0</text> </g> <g font-size="12" fill="currentColor" opacity="0.8" text-anchor="end"> <text x="122" y="112">CWRES SD</text> <text x="122" y="182">npd SD</text> <text x="122" y="244">npd outside ±1.96</text> <text x="122" y="258" font-size="10" opacity="0.7">(6.9% vs 5%)</text> </g> <rect x="130" y="90" width="157.3" height="34" rx="4" fill="#38bdf8"/> <rect x="130" y="160" width="165.9" height="34" rx="4" fill="#a78bfa"/> <rect x="130" y="230" width="222.2" height="34" rx="4" fill="#f97316"/> <g font-size="12" font-weight="800" fill="currentColor"> <text x="296" y="112">0.98</text> <text x="304" y="182">1.04</text> <text x="360" y="252">1.39</text> </g> <text x="330" y="332" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.5">ratio of observed to expected</text> <text x="280" y="372" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.35">Source: PharmAgent run on cov_pk.csv, 2026-09-29</text>
+</svg>
+<figcaption>
+Source: PharmAgent run, 2026-09-29
+</figcaption>
+</figure>
+<p>Verification: the residual card reports the CWRES and npd summaries above, and goodness of fit gave a log-scale R² of 0.993 across 144 observations. The tail of the npd distribution is the one to watch: 6.9% outside ±1.96 is a little heavy, worth a look but not alarming with 144 observations.</p>
+<!-- [ORIGINAL DATA] -->
+<p><a class="img-link" href="assets/step6-forest.png"><img src="assets/step6-forest.png" alt="Covariate forest plot for creatinine clearance on clearance, 0.71 with a 90 percent interval of 0.59 to 0.85 at 57.5 and 1.45 with an interval of 1.19 to 1.76 at 135.5" loading="lazy" decoding="async" width="660" height="212" /></a></p>
+<p>In this run, clearance was 0.71 of typical (90% CI 0.59 to 0.85) at a creatinine clearance of 57.5 and 1.45 (1.19 to 1.76) at 135.5. With real data, a dosing recommendation would hang on numbers like these, which is why the post-selection warning is repeated under the plot.</p>
+<h3 id="read-the-prediction-corrected-vpc">Read the prediction-corrected VPC</h3>
+<p>A <strong>prediction-corrected VPC</strong> is a visual predictive check in which each observation and simulation is normalised by its typical prediction, so different doses and covariates can share one plot. Pooling dose groups on a raw VPC hides misfit, for instance a dose-dependent bias in absorption. The card says so and offers stratification by dose, creatinine clearance or age, plus dose normalisation, time after dose and a below-quantification VPC.</p>
+<p><a class="img-link" href="assets/step6-vpc-zoom.png"><img src="assets/step6-vpc-zoom.png" alt="Full-screen prediction-corrected VPC with observed 5th, 50th and 95th percentiles, simulated percentiles and the simulated-median confidence band across eight time bins" loading="lazy" decoding="async" width="1280" height="800" /></a></p>
+<p>When you're satisfied, approve the final gate. In our run the adversarial reviewer met its goal of zero unresolved CRITICAL or HIGH findings, and the report was written with 18 audit entries behind it.</p>
+<!-- [PERSONAL EXPERIENCE] -->
+<p>Writing this guide surfaced some rough edges, and we'd rather list them than hide them. The first population gate still shows the NCA wording, "QC complete". Results from the background job light up the sidebar but only appear in the conversation after you click the three buttons above. Both fixes are in progress. Two cosmetic ones remain: the NCA table sorts subject IDs as text (1, 10, 11, 12, 2), and the forest plot draws two overlapping "1.0" tick labels.</p>
+<p>For the compliance side of these exports, including the CDISC bundle and the NONMEM and mrgsolve code files, see the <a href="../index.html#compliance">Compliance section</a>.</p>
+<h2 id="common-mistakes-to-avoid">Common Mistakes to Avoid</h2>
+<p>In our run, 1 of 12 subjects (8%) breached the 20% AUC-extrapolation rule (PharmAgent run, 2026-09-29). It's an easy flag to wave through when the R² looks fine. Here are five mistakes we found while building and testing the workflow.</p>
+<p><strong>1. Accepting the automatic terminal slope.</strong> A three-point fit with an R² of 0.999 can still start before the terminal phase. Check that the first selected point sits well after Tmax, and refit where it doesn't.</p>
+<p><strong>2. Pooling dose groups in the VPC.</strong> Different doses in one time bin blur the percentiles. Stratify or dose-normalise, and read the prediction-corrected version by default.</p>
+<p><strong>3. Quoting stepwise p-values as if pre-specified.</strong> Selection makes them too small and biases retained effects away from the null. Report the effect with its interval, and confirm by bootstrap or on a pre-specified set.</p>
+<p><strong>4. Treating the gate as a click-through.</strong> The audit trail records your decision. Read the QC card first; rejecting now is cheaper than defending an approval later.</p>
+<!-- [PERSONAL EXPERIENCE] -->
+<p><strong>5. Letting an agent loop.</strong> Our testing caught an agent re-issuing an identical tool call with identical arguments in one turn. The loop now stops on a repeat, and expensive runs such as bootstrap, sampling-importance-resampling, likelihood profiling and simulation-estimation only start as proposals a person confirms.</p>
+<h2 id="what-success-looks-like">What Success Looks Like</h2>
+<p>If everything went correctly, you have two DOCX reports and an audit chain of 18 entries behind the population one (PharmAgent run, 2026-09-29). Every sidebar step is green, and the export bar offers model, NLME and VPC CSVs plus NONMEM and mrgsolve code files.</p>
+<ul>
+<li>The NCA report has per-subject parameters, summary statistics with their formulas, dose-group summaries and the QC checks</li>
+<li>The population report adds sections for the structural model, the FOCE-I fit, covariate selection, residual diagnostics, covariate effects and GOF/VPC evaluation</li>
+<li>Every tool call appears in the audit trail with its agent and hash</li>
+</ul>
+<!-- [UNIQUE INSIGHT] -->
+<p>One limit to know: the DOCX carries tables and text, not figures. Take plots from the app, or rebuild them from the NLME and VPC CSV exports.</p>
+<p><a class="img-link" href="assets/step4-report-ready.png"><img src="assets/step4-report-ready.png" alt="Report ready card showing the generated DOCX file name and a download button" loading="lazy" decoding="async" width="988" height="68" /></a></p>
+<p>Stretch goal: click <strong>Run Modeling + Engines</strong> on the same data. It fits PharmAgent's own estimator and, where installed and licensed, nlmixr2 or Monolix. It then ranks engines on prediction error, since objective function values aren't comparable across engines. See the <a href="../index.html#architecture">Architecture section</a>.</p>
+<h2 id="frequently-asked-questions">Frequently Asked Questions</h2>
+<h3 id="how-long-does-an-agentic-pk-analysis-take">How long does an agentic PK analysis take?</h3>
+<p>In our run, NCA on 12 subjects reached its review gate in under a second. The population workflow on 16 subjects compared four structures in seconds. It then ran the FOCE-I fit, four covariate candidates, diagnostics and a 200-simulation VPC as a background job in 180 seconds (PharmAgent run, 2026-09-29). Bigger datasets and richer models take longer.</p>
+<h3 id="can-i-use-nonmem-or-nlmixr2-instead-of-the-built-in-estimator">Can I use NONMEM or nlmixr2 instead of the built-in estimator?</h3>
+<p>Yes. The export bar writes a NONMEM control stream and an mrgsolve model file, and the cross-engine workflow runs nlmixr2 or Monolix alongside the native fit where installed. Against a 120-subject NONMEM 7.5.0 reference, the native estimator reproduced NONMEM's CWRES at a correlation of 1.000000 (PharmAgent internal validation, 2026).</p>
+<h3 id="what-should-i-do-if-the-qc-verdict-fails">What should I do if the QC verdict fails?</h3>
+<p>Read which of the seven rules failed. Fewer than 6 subjects or more than 20% missing data are dataset problems, not fitting problems. Terminal-slope failures get fixed by refitting λz. A plausibility failure on CL or V usually means a unit or dose-column error, so check column roles before touching the model.</p>
+<h3 id="do-i-need-an-api-key">Do I need an API key?</h3>
+<p>No. The keyless mock model runs all three fixed workflows offline, and the 1,056-test suite runs without a key too. For free-text questions, point the app at a local Ollama model or add a Claude or OpenAI key from the model switcher in the header. Keys stay in memory and are never written to disk.</p>
+<h3 id="will-a-regulator-accept-output-from-an-ai-assisted-workflow">Will a regulator accept output from an AI-assisted workflow?</h3>
+<p>Not automatically. FDA's January 2025 draft guidance judges an AI model's credibility for its stated context of use, and ICH M15 on model-informed drug development became final in June 2026 (<a href="https://www.fda.gov/regulatory-information/search-fda-guidance-documents/m15-general-principles-model-informed-drug-development">FDA, M15 General Principles for Model-Informed Drug Development</a>, 2026). Audit trails and human gates support a credibility assessment under the FDA framework. They don't replace your own validation.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>An agentic PK analysis doesn't replace your judgement, and a population PK analysis doesn't have to be a week of hand-offs. In one sitting you've taken a raw concentration-time file through NCA, QC, a gated structural comparison, a FOCE-I fit with covariate selection, the diagnostic set and two reports.</p>
+<ul>
+<li>Agents propose, deterministic tools compute, and a person approves each gate</li>
+<li>QC limits are visible on the card and fixed in code</li>
+<li>The audit chain, exports and code files are the evidence a reviewer will ask for, and the DOCX still needs your figures</li>
+</ul>
+<p>In 2024, a multisector group of pharmacometricians wrote that demand for modellers outmatches the supply from academic programmes (<a href="https://doi.org/10.1007/s10928-023-09878-4">Bonate et al., Journal of Pharmacokinetics and Pharmacodynamics</a>, 2024). Tools that make one careful modeller faster are part of closing that gap. <a href="../index.html#contact">Request a walkthrough</a> to try it on your own data, or take the <a href="../courses/handling-missing-data-r/index.html">handling missing data course</a> to prepare a dataset that passes QC first time.</p>
+<h2 id="watch-population-pk-fundamentals">Watch: Population PK Fundamentals</h2>
+<p>Two NIH Clinical Center lectures from the Principles of Clinical Pharmacology series cover the concepts this guide automates.</p>
+<ul>
+<li><a href="https://www.youtube.com/watch?v=TozOUOj2YvI">Population Pharmacokinetics with Dr. Robert R. Bies</a> (NIH Clinical Center, YouTube)</li>
+<li><a href="https://www.youtube.com/watch?v=cJXC3kc91jM">Pharmacodynamic and Pharmacokinetic Modeling of Data with Dr. Joga Gobburu</a> (NIH Clinical Center, YouTube)</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>FDA, Artificial Intelligence for Drug Development, retrieved 2026-09-29, <a href="https://www.fda.gov/about-fda/center-drug-evaluation-and-research-cder/artificial-intelligence-drug-development" class="uri">https://www.fda.gov/about-fda/center-drug-evaluation-and-research-cder/artificial-intelligence-drug-development</a></li>
+<li>FDA, FDA Proposes Framework to Advance Credibility of AI Models Used for Drug and Biological Product Submissions (press release, 6 January 2025), retrieved 2026-09-29, <a href="https://www.fda.gov/news-events/press-announcements/fda-proposes-framework-advance-credibility-ai-models-used-drug-and-biological-product-submissions" class="uri">https://www.fda.gov/news-events/press-announcements/fda-proposes-framework-advance-credibility-ai-models-used-drug-and-biological-product-submissions</a></li>
+<li>FDA, M15 General Principles for Model-Informed Drug Development (final guidance, June 2026), retrieved 2026-09-29, <a href="https://www.fda.gov/regulatory-information/search-fda-guidance-documents/m15-general-principles-model-informed-drug-development" class="uri">https://www.fda.gov/regulatory-information/search-fda-guidance-documents/m15-general-principles-model-informed-drug-development</a></li>
+<li>Bhattaram VA et al., Impact of pharmacometrics on drug approval and labeling decisions: a survey of 42 new drug applications, AAPS Journal 7(3):E503-12, 2005, retrieved 2026-09-29, <a href="https://doi.org/10.1208/aapsj070351" class="uri">https://doi.org/10.1208/aapsj070351</a></li>
+<li>Bonate PL et al., Training the next generation of pharmacometric modelers: a multisector perspective, Journal of Pharmacokinetics and Pharmacodynamics 2024, retrieved 2026-09-29, <a href="https://doi.org/10.1007/s10928-023-09878-4" class="uri">https://doi.org/10.1007/s10928-023-09878-4</a></li>
+<li>Boeckmann AJ, Sheiner LB, Beal SL, NONMEM Users Guide: Part V (1994), as documented for R's Theoph dataset, retrieved 2026-09-29, <a href="https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/Theoph.html" class="uri">https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/Theoph.html</a></li>
+<li>PharmAgent runs on the bundled datasets theoph_pk.csv and cov_pk.csv, 2026-09-29. Test count and the NONMEM 7.5.0 CWRES and SAEM findings come from PharmAgent's internal repository and validation notes, available on request.</li>
+</ul>
+
+<aside class="author-box"><p><strong>About the author.</strong> Syed Zaidi is a pharmacokineticist who builds physiologically based and population PK models in R and mrgsolve, and the developer of PharmAgent. Disclosure: this guide describes the author&#x27;s own software.</p></aside>
+
+    </article>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a href="../index.html#top" class="brand" aria-label="PharmAgent home">
+        <span class="rx" aria-hidden="true">&#8478;</span>
+        <span class="brand-name" style="font-size:17px">PharmAgent</span>
+      </a>
+      <p>Agents decide, tools execute, people approve.</p>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="../index.html#top">Product</a>
+        <a href="../courses.html">Courses</a>
+        <a href="mailto:syedzaid@iu.edu">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

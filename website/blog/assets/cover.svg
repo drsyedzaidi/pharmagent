@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="From concentration-time CSV to an audited population PK report">
+  <title>How to Run an Agentic PK Analysis</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ECF1F7"/>
+      <stop offset="1" stop-color="#E3EEF9"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F66A6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#1F66A6" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="8" fill="#1F66A6"/>
+  <g font-family="'Public Sans', 'IBM Plex Sans', system-ui, sans-serif">
+    <text x="72" y="104" font-size="22" font-weight="600" letter-spacing="3" fill="#1F66A6">PHARMAGENT · STEP-BY-STEP GUIDE</text>
+  </g>
+  <g font-family="Spectral, Georgia, 'Times New Roman', serif" font-weight="600" fill="#16314A">
+    <text x="72" y="190" font-size="62">How to run an</text>
+    <text x="72" y="262" font-size="62">agentic PK analysis</text>
+  </g>
+  <g font-family="'Public Sans', 'IBM Plex Sans', system-ui, sans-serif" fill="#5E7388">
+    <text x="72" y="322" font-size="26">CSV → NCA → QC → human gate → FOCE-I fit</text>
+    <text x="72" y="358" font-size="26">→ covariates → diagnostics → audited report</text>
+  </g>
+  <g transform="translate(72,420)">
+    <rect width="470" height="132" rx="16" fill="#FFFFFF" stroke="#C5D4E4"/>
+    <text x="28" y="62" font-family="Spectral, Georgia, serif" font-size="48" font-weight="600" fill="#1F66A6">500+</text>
+    <text x="160" y="54" font-family="'Public Sans', system-ui, sans-serif" font-size="20" fill="#16314A">FDA submissions with AI</text>
+    <text x="160" y="80" font-family="'Public Sans', system-ui, sans-serif" font-size="20" fill="#16314A">components, 2016–2023</text>
+    <text x="28" y="112" font-family="'IBM Plex Mono', monospace" font-size="15" fill="#8298AC">Source: FDA CDER, 2026</text>
+  </g>
+  <g transform="translate(640,150)">
+    <rect width="500" height="400" rx="18" fill="#FFFFFF" stroke="#C5D4E4"/>
+    <line x1="60" y1="340" x2="470" y2="340" stroke="#C5D4E4" stroke-width="2"/>
+    <line x1="60" y1="40" x2="60" y2="340" stroke="#C5D4E4" stroke-width="2"/>
+    <path d="M60,340 C85,150 105,90 135,86 C175,82 205,120 245,150 C300,190 360,228 470,272 L470,318 C360,286 300,262 245,232 C205,210 175,176 135,166 C110,162 90,210 60,340 Z" fill="url(#band)"/>
+    <path d="M60,340 C85,165 105,112 135,110 C175,106 205,146 245,180 C300,222 360,256 470,296" fill="none" stroke="#1F66A6" stroke-width="4" stroke-linecap="round"/>
+    <g fill="#1D7A5A">
+      <circle cx="78" cy="220" r="6"/><circle cx="98" cy="140" r="6"/><circle cx="122" cy="104" r="6"/>
+      <circle cx="150" cy="122" r="6"/><circle cx="182" cy="128" r="6"/><circle cx="214" cy="166" r="6"/>
+      <circle cx="252" cy="176" r="6"/><circle cx="300" cy="214" r="6"/><circle cx="352" cy="242" r="6"/>
+      <circle cx="410" cy="266" r="6"/><circle cx="462" cy="300" r="6"/>
+    </g>
+    <text x="265" y="374" text-anchor="middle" font-family="'Public Sans', system-ui, sans-serif" font-size="16" fill="#8298AC">time (h)</text>
+    <text x="30" y="190" text-anchor="middle" transform="rotate(-90 30 190)" font-family="'Public Sans', system-ui, sans-serif" font-size="16" fill="#8298AC">concentration</text>
+    <g transform="translate(330,34)">
+      <rect width="146" height="36" rx="18" fill="#EAF5F0" stroke="#BFE0D2"/>
+      <text x="73" y="24" text-anchor="middle" font-family="'IBM Plex Mono', monospace" font-size="15" fill="#1D7A5A">✓ approved</text>
+    </g>
+  </g>
+</svg>
