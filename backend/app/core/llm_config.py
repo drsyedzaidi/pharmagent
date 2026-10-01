@@ -24,7 +24,7 @@ from typing import Any
 import requests
 
 from app.config import settings
-from app.core.llm import LLM, MockLLM, OpenAICompatLLM, RealLLM
+from app.core.llm import LLM, LOCAL_REASONING_EFFORT, MockLLM, OpenAICompatLLM, RealLLM
 
 log = logging.getLogger("pharmagent")
 
@@ -32,7 +32,7 @@ PROVIDERS: tuple[str, ...] = ("mock", "local", "openai", "anthropic")
 OPENAI_API_URL = "https://api.openai.com/v1"
 DEFAULT_MODELS: dict[str, str] = {
     "mock": "mock",
-    "local": "qwen2.5:7b",
+    "local": "qwen3:8b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-opus-4-8",
 }
@@ -88,7 +88,8 @@ def build_llm(choice: LlmChoice) -> LLM:
     if choice.provider == "anthropic":
         return RealLLM(api_key=choice.api_key, model=choice.model)
     return OpenAICompatLLM(base_url=choice.effective_base_url or OPENAI_API_URL,
-                           model=choice.model, api_key=choice.api_key)
+                           model=choice.model, api_key=choice.api_key,
+                           reasoning_effort=LOCAL_REASONING_EFFORT if choice.provider == "local" else None)
 
 
 def probe(llm: LLM) -> dict[str, Any]:

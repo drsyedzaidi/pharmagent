@@ -76,7 +76,7 @@ data leaves the machine.
 | provider | set | notes |
 |---|---|---|
 | Claude (Anthropic) | `PHARMAGENT_ANTHROPIC_API_KEY=sk-ant-…` (+ `PHARMAGENT_MODEL`) | best routing / argument composition |
-| **Local, free (Ollama)** | `PHARMAGENT_LLM_PROVIDER=openai` `PHARMAGENT_MODEL=qwen2.5:7b` | `ollama pull qwen2.5:7b` first; default URL `http://127.0.0.1:11434/v1`, no key |
+| **Local, free (Ollama)** | `PHARMAGENT_LLM_PROVIDER=openai` `PHARMAGENT_MODEL=qwen3:8b` | `ollama pull qwen3:8b` first (the UI's default local model); default URL `http://127.0.0.1:11434/v1`, no key |
 | LM Studio / vLLM / any OpenAI-compatible server | `PHARMAGENT_LLM_BASE_URL=http://127.0.0.1:1234/v1` `PHARMAGENT_MODEL=<loaded model>` | model must support tool calling |
 | Hosted free tiers (OpenRouter, Groq) | `PHARMAGENT_LLM_BASE_URL=https://openrouter.ai/api/v1` `PHARMAGENT_LLM_API_KEY=…` `PHARMAGENT_MODEL=…` | data leaves the machine |
 | Mock (default) | nothing | deterministic keyword routing, one tool per agent, never confirms expensive runs |

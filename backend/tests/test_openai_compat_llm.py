@@ -186,3 +186,67 @@ def test_trailing_slash_on_base_url_is_tolerated(fake_post):
 def test_tool_protocol_still_satisfied():
     t = Tool("t", "d", "nca", {"type": "object", "properties": {}}, lambda s, c, a: None)
     assert t.to_openai()["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+# ── local reasoning models (qwen3): thinking must be off ───────────────────
+# qwen3 through Ollama spends small token budgets on hidden reasoning and
+# returns empty content, so the router silently fell back to the first agent.
+# Local (loopback) servers get reasoning_effort="none"; hosted APIs never do,
+# because OpenAI rejects the parameter for non-reasoning models.
+
+
+def test_local_choice_turns_reasoning_off(fake_post):
+    from app.core.llm_config import LlmChoice, build_llm
+    calls, replies = fake_post
+    replies.append(_chat("nca"))
+    llm = build_llm(LlmChoice("local", "qwen3:8b"))
+    assert llm.classify("compute NCA", ["data_manager", "nca"], {}) == "nca"
+    assert calls[0]["json"]["reasoning_effort"] == "none"
+
+
+def test_hosted_openai_choice_never_sends_reasoning_effort(fake_post):
+    from app.core.llm_config import LlmChoice, build_llm
+    calls, replies = fake_post
+    replies.append(_chat("nca"))
+    build_llm(LlmChoice("openai", "gpt-4o-mini", None, "sk-test")).classify("x", ["nca"], {})
+    assert "reasoning_effort" not in calls[0]["json"]
+
+
+def test_env_configured_loopback_server_turns_reasoning_off(monkeypatch, fake_post):
+    calls, replies = fake_post
+    replies.append(_chat("nca"))
+    _settings(monkeypatch, llm_base_url="http://127.0.0.1:11434/v1", model="qwen3:8b")
+    get_llm().classify("x", ["nca"], {})
+    assert calls[0]["json"]["reasoning_effort"] == "none"
+
+
+def test_env_configured_hosted_server_keeps_reasoning_default(monkeypatch, fake_post):
+    calls, replies = fake_post
+    replies.append(_chat("nca"))
+    _settings(monkeypatch, llm_base_url="https://openrouter.ai/api/v1", llm_api_key="k", model="m")
+    get_llm().classify("x", ["nca"], {})
+    assert "reasoning_effort" not in calls[0]["json"]
+
+
+def test_classify_with_no_matching_answer_warns_before_falling_back(fake_post, caplog):
+    calls, replies = fake_post
+    replies.append(_chat(""))
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="qwen3:8b", api_key=None)
+    with caplog.at_level("WARNING", logger="pharmagent"):
+        assert llm.classify("x", ["data_manager", "nca"], {}) == "data_manager"
+    assert any(r.getMessage() == "llm_classify_no_match" for r in caplog.records)
+
+
+def test_default_local_model_is_qwen3():
+    from app.core.llm_config import DEFAULT_MODELS
+    assert DEFAULT_MODELS["local"] == "qwen3:8b"
+
+
+def test_tool_selection_keeps_the_model_default_reasoning(fake_post):
+    from app.core.llm_config import LlmChoice, build_llm
+    calls, replies = fake_post
+    replies.append(_chat(tool_calls=[_tc("calc_half_life", {"ke": 0.1})]))
+    llm = build_llm(LlmChoice("local", "qwen3:8b"))
+    tools = default_registry().for_agent("clinpharm")
+    assert llm.select_tool("clinpharm", "half-life for ke 0.1", tools, {})["name"] == "calc_half_life"
+    assert "reasoning_effort" not in calls[0]["json"]

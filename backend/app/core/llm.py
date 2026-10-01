@@ -167,12 +167,20 @@ class RealLLM:
         return None
 
 
+LOCAL_REASONING_EFFORT = "none"
+
+
+def is_loopback(url: str) -> bool:
+    """True for a server on this machine (Ollama, LM Studio), false for hosted APIs."""
+    return "127.0.0.1" in url or "localhost" in url or "[::1]" in url
+
+
 class OpenAICompatLLM:
     """OpenAI chat-completions client (function calling) over plain HTTP.
 
     Works unchanged against Ollama (``http://127.0.0.1:11434/v1``, no key),
     LM Studio (``http://127.0.0.1:1234/v1``), OpenRouter, Groq, vLLM, or the
-    OpenAI API itself. The model must support tool calling (Ollama: qwen2.5,
+    OpenAI API itself. The model must support tool calling (Ollama: qwen3, qwen2.5,
     llama3.1/3.2, mistral-nemo, ...); a model that only answers in prose
     simply selects no tool (the turn ends with an idle hint).
 
@@ -181,18 +189,29 @@ class OpenAICompatLLM:
 
     TIMEOUT_S = 120.0   # local 7B models on CPU can take a while per call
 
-    def __init__(self, *, base_url: str, model: str, api_key: str | None) -> None:
+    def __init__(self, *, base_url: str, model: str, api_key: str | None,
+                 reasoning_effort: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        # Sent on ROUTING calls only. "none" switches off hidden reasoning in
+        # local thinking models (qwen3 on Ollama): with classify's 32-token
+        # budget they spend everything thinking and return empty content. Tool
+        # selection keeps the model's default because qwen3 picks the right
+        # calculator 6/6 with thinking on but 4/6 with it off (measured
+        # 2026-09-30). Never set for hosted OpenAI: it rejects the field for
+        # non-reasoning models.
+        self.reasoning_effort = reasoning_effort
 
     # -- transport ----------------------------------------------------------
     def _chat(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None,
-              max_tokens: int = 512) -> dict[str, Any]:
+              max_tokens: int = 512, quick: bool = False) -> dict[str, Any]:
         body: dict[str, Any] = {"model": self.model, "messages": messages,
                                 "max_tokens": max_tokens, "temperature": 0}
         if tools:
             body["tools"] = tools
+        if quick and self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -228,12 +247,15 @@ class OpenAICompatLLM:
                 "You route a pharmacometrics request to ONE specialist agent. "
                 "Reply with only the agent key, nothing else.\n" + roster)},
             {"role": "user", "content": message},
-        ], max_tokens=32)
+        ], max_tokens=32, quick=True)
         text = (msg.get("content") or "").strip().lower()
         for o in options:
             if o in text:
                 return o
-        return options[0] if options else "data_manager"
+        fallback = options[0] if options else "data_manager"
+        log.warning("llm_classify_no_match",
+                    extra={"model": self.model, "reply": text[:80], "fallback": fallback})
+        return fallback
 
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None:
@@ -269,6 +291,7 @@ def get_llm() -> LLM:
     if provider == "anthropic":
         return RealLLM()
     if provider == "openai":
-        return OpenAICompatLLM(base_url=settings.llm_base_url or settings.DEFAULT_OLLAMA_URL,
-                               model=settings.model, api_key=settings.llm_api_key)
+        url = settings.llm_base_url or settings.DEFAULT_OLLAMA_URL
+        return OpenAICompatLLM(base_url=url, model=settings.model, api_key=settings.llm_api_key,
+                               reasoning_effort=LOCAL_REASONING_EFFORT if is_loopback(url) else None)
     return MockLLM()
