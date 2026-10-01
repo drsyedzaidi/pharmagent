@@ -74,16 +74,45 @@ def test_parse_results_reports_missing_parameters():
 # ── availability ────────────────────────────────────────────────────────────
 
 def test_unavailable_when_isolated_r_is_missing(monkeypatch, tmp_path):
+    mx._probe_cache.clear()
     monkeypatch.setenv("PHARMAGENT_MONOLIX_RSCRIPT", str(tmp_path / "nope"))
-    assert MonolixAdapter().available() is False
+    a = MonolixAdapter()
+    assert a.available() is False and "not installed" in a.unavailable_reason
 
 
-def test_available_when_rscript_and_suite_exist(monkeypatch, tmp_path):
+def _installed(monkeypatch, tmp_path):
+    mx._probe_cache.clear()
     rs = tmp_path / "Rscript"; rs.write_text("#!/bin/sh\n")
     suite = tmp_path / "suite"; suite.mkdir()
     monkeypatch.setenv("PHARMAGENT_MONOLIX_RSCRIPT", str(rs))
     monkeypatch.setenv("PHARMAGENT_MONOLIX_SUITE", str(suite))
-    assert MonolixAdapter().available() is True
+
+
+def test_available_only_when_the_engine_initialises(monkeypatch, tmp_path):
+    _installed(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(mx.subprocess, "run", lambda cmd, **k: (calls.append(cmd), _Proc(out="PHARMAGENT_MONOLIX_OK"))[1])
+    a = MonolixAdapter()
+    assert a.available() is True and a.available() is True
+    assert len(calls) == 1                                   # probe is cached per process
+    assert "initializeLixoftConnectors" in calls[0][-1]
+
+
+def test_expired_licence_makes_the_engine_absent_with_a_reason(monkeypatch, tmp_path):
+    _installed(monkeypatch, tmp_path)
+    monkeypatch.setattr(mx.subprocess, "run",
+                        lambda cmd, **k: _Proc(out="PHARMAGENT_MONOLIX_FAIL", err='[ERROR] Could not initialize the software "monolix".'))
+    a = MonolixAdapter()
+    assert a.available() is False and "licence" in a.unavailable_reason
+
+
+def test_headless_probe_timeout_is_absent_not_a_hang(monkeypatch, tmp_path):
+    _installed(monkeypatch, tmp_path)
+    def run(*a, **k):
+        raise mx.subprocess.TimeoutExpired(cmd="x", timeout=1)
+    monkeypatch.setattr(mx.subprocess, "run", run)
+    a = MonolixAdapter()
+    assert a.available() is False and "GUI session" in a.unavailable_reason
 
 
 def test_unsupported_model_fails_cleanly():
@@ -196,6 +225,7 @@ def test_monolix_is_a_selectable_engine():
 
 def test_runner_records_absent_when_unavailable(monkeypatch, tmp_path):
     from app.engines.runner import run_matrix_subjects
+    mx._probe_cache.clear()
     monkeypatch.setenv("PHARMAGENT_MONOLIX_RSCRIPT", str(tmp_path / "nope"))
     out = run_matrix_subjects(_subjects(), [CandidateSpec(model_key="oral_1cmt")], [MonolixAdapter()])
     rows = out["results"] if isinstance(out, dict) and "results" in out else out
@@ -208,7 +238,7 @@ def test_r_script_is_packaged():
     assert os.access(mx.R_SCRIPT, os.R_OK)
 
 
-@pytest.mark.skipif(not MonolixAdapter().available(), reason="isolated Monolix R not installed")
+@pytest.mark.skipif(not mx._rscript().is_file(), reason="isolated Monolix R not installed")
 def test_real_monolix_binary_is_wired_when_present():
     """On this Mac the isolated R exists; we only check the command shape (no run)."""
     cmd = mx._command(mx._rscript(), "cfg.json")

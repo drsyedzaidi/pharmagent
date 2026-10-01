@@ -159,8 +159,11 @@ SAEM + standard errors + log-likelihood; estimates map back to app names
 scored with `score_from_population` like every engine. `-2LL` is kept as
 within-engine `ofv` only.
 
-- `available()` = isolated Rscript + MonolixSuite present (env overrides
-  `PHARMAGENT_MONOLIX_RSCRIPT`, `PHARMAGENT_MONOLIX_SUITE`).
+- `available()` = isolated Rscript + MonolixSuite present AND one cached
+  `initializeLixoftConnectors` probe (60 s cap, `PHARMAGENT_MONOLIX_PROBE_TIMEOUT`)
+  succeeds — an expired licence or a headless shell makes the engine `absent`
+  with `unavailable_reason`, instead of burning the fit timeout. Env overrides
+  `PHARMAGENT_MONOLIX_RSCRIPT`, `PHARMAGENT_MONOLIX_SUITE`.
 - The engine needs a logged-in macOS GUI session; headless it hangs, and
   `PHARMAGENT_MONOLIX_TIMEOUT` (default 900 s) turns that into a `failed` row.
 - Select with `engines: ["pharmagent_focei", "nlmixr2", "monolix"]`.

@@ -143,11 +143,53 @@ def _env() -> dict[str, str]:
     return env
 
 
+_PROBE_TIMEOUT_S = float(os.environ.get("PHARMAGENT_MONOLIX_PROBE_TIMEOUT", "60"))
+_probe_cache: dict[str, tuple[bool, str]] = {}
+
+
+def engine_ready() -> tuple[bool, str]:
+    """One cached ``initializeLixoftConnectors`` probe (60 s cap).
+
+    A file check alone is not enough: with an expired licence the engine
+    answers FALSE, and from a headless shell it hangs — either way a fit would
+    burn the full fit timeout. The probe turns both into an ``absent`` engine
+    with a reason, once per process."""
+    key = f"{_rscript()}|{_suite()}"
+    if key in _probe_cache:
+        return _probe_cache[key]
+    if not (_rscript().is_file() and _suite().exists() and R_SCRIPT.is_file()):
+        return False, "isolated Monolix R / MonolixSuite not installed"
+    code = ("suppressMessages(library(lixoftConnectors));"
+            f"ok <- initializeLixoftConnectors(software='monolix', path='{_suite()}', force=TRUE);"
+            "cat(if (isTRUE(ok)) 'PHARMAGENT_MONOLIX_OK' else 'PHARMAGENT_MONOLIX_FAIL')")
+    cmd = [str(_rscript()), "-e", code]
+    if platform.system() == "Darwin" and platform.machine() == "arm64" and shutil.which("arch"):
+        cmd = ["arch", "-x86_64", *cmd]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S, env=_env())
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if "PHARMAGENT_MONOLIX_OK" in out:
+            result = (True, "ok")
+        else:
+            result = (False, "Monolix engine did not initialise (licence expired or not activated?): "
+                             + out.strip()[-200:])
+    except subprocess.TimeoutExpired:
+        result = (False, "Monolix engine probe timed out — needs a logged-in GUI session")
+    except OSError as exc:
+        result = (False, f"cannot start the isolated Monolix R: {exc}")
+    _probe_cache[key] = result
+    return result
+
+
 class MonolixAdapter:
     name = "monolix"
 
     def available(self) -> bool:
-        return _rscript().is_file() and _suite().exists() and R_SCRIPT.is_file()
+        return engine_ready()[0]
+
+    @property
+    def unavailable_reason(self) -> str:
+        return engine_ready()[1]
 
     def fit(self, spec: CandidateSpec, subjects: list[dict], *,
             seed: int = 20250614) -> EngineResult:

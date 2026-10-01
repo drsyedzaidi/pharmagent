@@ -68,7 +68,7 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
              "args": {"compare": True}},
             {"agent": "modeler", "tool": "run_engine_comparison",
              "label": "Cross-engine comparison",
-             "args": {"engines": ["pharmagent_focei", "nlmixr2"]}},
+             "args": {"engines": ["pharmagent_focei", "nlmixr2", "monolix"]}},
             {"agent": "reviewer", "tool": "adversarial_review",
              "label": "Adversarial review", "gate": True},
         ],
