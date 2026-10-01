@@ -13,6 +13,7 @@ from app.compute.nca import Profile, nca_subject
 from app.compute.pk_models import get_model
 from app.compute.pk_simulate import simulate_timecourse
 
+from .er_tasks import build_er_taskset
 from .spec import Target, Task
 
 # Sampling times shared by profile-based categories (hours).
@@ -224,10 +225,17 @@ _BASE_SEED = {"nca": 1000, "be": 2000, "dp": 3000, "compartmental": 4000,
               "exposure": 5000}
 
 
-def build_taskset(per_category: int = 6) -> list[Task]:
-    """Generate a reproducible task set: ``per_category`` tasks per category."""
+def build_taskset(per_category: int = 6, *, include_er: bool = False) -> list[Task]:
+    """Generate a reproducible task set: ``per_category`` tasks per category.
+
+    ``include_er`` appends the opt-in exposure-response pack (4 tasks, category
+    ``er``). It is off by default so the frozen v0 set (and any score published
+    on it) is unchanged.
+    """
     tasks: list[Task] = []
     for cat, gen in _GENERATORS.items():
         for i in range(per_category):
             tasks.append(gen(i, _BASE_SEED[cat] + i))
+    if include_er:
+        tasks.extend(build_er_taskset())
     return tasks

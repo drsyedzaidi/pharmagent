@@ -95,14 +95,22 @@ class PharmState(BaseModel):
 
     # --- statistical analysis advice (Statistician Agent) -----------------
     stats_advice: dict[str, Any] | None = None   # parametric vs non-parametric plan
+    indirect_results: dict[str, Any] | None = None   # Bucher indirect comparisons (bounded list)
 
     # --- clinical-pharmacology calculators (ClinPharm Agent) ---------------
     clinpharm_results: dict[str, Any] | None = None     # last calculator result
     clinpharm_history: list[dict[str, Any]] | None = None  # bounded, newest last
 
+    # --- exposure-response & dose selection (ER-Dose Agent) ------------------
+    er_results: dict[str, Any] | None = None           # {"fits": {label: fit}, "last_label": str}
+    er_history: list[dict[str, Any]] | None = None     # bounded, newest last (fits, bootstraps, selections)
+    dose_selection_results: dict[str, Any] | None = None  # Optimus-style utility selection
+
     # --- reporting (Report Agent) -----------------------------------------
     report_path: str | None = None
     report_sections: dict[str, Any] | None = None
+    memo_path: str | None = None            # briefing memo DOCX (numbers traced to audit entries)
+    memo_results: dict[str, Any] | None = None   # sections, memo_text, untraced check outcome
 
     # --- adversarial review (Reviewer Agent) -----------------------------------
     review_results: dict[str, Any] | None = None   # findings, goal, goal_met, counts
@@ -143,14 +151,15 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                 "forest_results", "prior_check_results", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
     "reviewer": {"review_results"},
-    "report": {"report_path", "report_sections"},
+    "report": {"report_path", "report_sections", "memo_path", "memo_results"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
                   "clinsim_results", "exposure_forest_results", "special_pop_results",
                   "individual_exposures", "pediatric_results",
                   "bootstrap_results", "sir_results", "profile_results", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
-    "statistician": {"stats_advice", "widgets"},
+    "statistician": {"stats_advice", "indirect_results", "widgets"},
     "clinpharm": {"clinpharm_results", "clinpharm_history", "widgets"},
+    "er_dose": {"er_results", "er_history", "dose_selection_results", "widgets"},
 }
 
 

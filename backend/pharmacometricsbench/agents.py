@@ -32,6 +32,7 @@ from app.compute.compartmental import fit_one_subject
 from app.compute.dose_proportionality import power_model
 from app.compute.nca import Profile, nca_subject
 
+from .er_tasks import er_naive, er_oracle
 from .spec import Task
 
 
@@ -55,6 +56,8 @@ def oracle_predict(category: str, d: dict[str, Any]) -> dict[str, Any]:
         from .generators import ss_exposure  # shares the ground-truth simulator
         e = ss_exposure(d["model"], d["params"], d["dose"], d["tau"], d["n_doses"])
         return {"Cmax_ss": e["Cmax_ss"], "AUC_tau": e["AUC_tau"]}
+    if category == "er":
+        return er_oracle(d)
     return {}
 
 
@@ -100,6 +103,8 @@ def naive_predict(category: str, d: dict[str, Any]) -> dict[str, Any]:
         auc_tau = d["dose"] / cl
         cmax = auc_tau / d["tau"]
         return {"Cmax_ss": cmax, "AUC_tau": auc_tau}
+    if category == "er":
+        return er_naive(d)
     return {}
 
 

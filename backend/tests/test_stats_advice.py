@@ -150,7 +150,7 @@ def test_advise_covariates_follow_family():
 
 def test_statistician_registered_everywhere():
     assert "statistician" in AGENTS and "statistician" in DESCRIPTIONS and "statistician" in KEYWORDS
-    assert AGENT_WRITE_FIELDS["statistician"] == {"stats_advice", "widgets"}
+    assert AGENT_WRITE_FIELDS["statistician"] == {"stats_advice", "indirect_results", "widgets"}
 
 
 def test_supervisor_routes_statistics_questions():

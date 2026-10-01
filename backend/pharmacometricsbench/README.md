@@ -27,6 +27,19 @@ external data:
 Deferred (need fixtures or literature keys): TDM/forecast, PK/PD, PBPK,
 identifiability, regulatory, reporting — see the design doc.
 
+### Opt-in exposure-response pack (`er`)
+
+Four more tasks (one per analysis), kept OUT of the frozen v0 set so published v0
+scores are unchanged. Enable with `build_taskset(include_er=True)` or
+`build_er_taskset()`; the tool-using agents have a matching `exposure_response` tool.
+
+| Task | Oracle | Graded targets |
+|------|--------|----------------|
+| `logistic_or` | `app.compute.er_models.fit_logistic_er` | OR per unit, OR per SD, slope p |
+| `km_median` | `app.compute.er_survival.kaplan_meier` | KM median, S(t*) |
+| `cox_hr` | `app.compute.er_survival.cox_ph` | HR per unit, HR per SD, p |
+| `optimal_dose` | `app.compute.optimus.select_dose` | selected dose, utility, P_eff, P_tox |
+
 ### Real-drug data: PK-DB loader (`pkdb/`)
 
 `pkdb/loader.py` pulls **real, cited** pharmacokinetic data from

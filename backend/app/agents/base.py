@@ -37,6 +37,10 @@ def idle_hint(agent: str, state: PharmState) -> str:
     where = (f"dataset {state.dataset_id}{subj} is loaded" if loaded
              else "no dataset is loaded — use 'Click to upload' (or drag a CSV in), "
                   "or tell me the CSV path")
+    if agent == "statistician":
+        return (f"[statistician] {where}. Ask which test fits your data, or for a Bucher indirect "
+                "comparison give both direct effects (A vs B and C vs B: estimate with SE, or CI and its "
+                "level) and the scale (HR, OR, RR, MD, RD or SMD).")
     if agent == "data_manager":
         if not loaded:
             return f"[data_manager] {where}."
@@ -51,6 +55,15 @@ def idle_hint(agent: str, state: PharmState) -> str:
             return (f"[nca] NCA already computed for {n_nca} subjects on {state.dataset_id}. "
                     "Next: QC review, bioequivalence, dose proportionality, or the report.")
         return f"[nca] {where}; ask me to compute NCA."
+    if agent == "er_dose":
+        if not loaded:
+            return (f"[er_dose] {where}; exposure-response needs per-subject data (one row per subject "
+                    "with a response, or time and event) and an exposure column or NCA results.")
+        fits = sorted((state.er_results or {}).get("fits") or {})
+        have_fits = (f"stored fits: {', '.join(fits)}" if fits else "no exposure-response fit yet")
+        return (f"[er_dose] {where}; {have_fits}. Name the exposure column and the response column "
+                "(or time and event columns), e.g. 'logistic E-R of AE vs exposure'. With fits labelled "
+                "'efficacy' and 'toxicity' I can select a dose once you declare the utility weight w.")
     done = []
     if n_nca:
         done.append(f"NCA {n_nca} subjects")
@@ -96,10 +109,13 @@ class Agent:
             "nlme_results": "present" if (state.nlme_results or {}).get("status") == "ok" else None,
             "simest_results": "present" if state.simest_results else None,
             "stats_advice": "present" if state.stats_advice else None,
+            "er_fits": sorted((state.er_results or {}).get("fits") or {}) or None,
+            "dose_selection": "present" if state.dose_selection_results else None,
             "last_calculation": (state.clinpharm_results or {}).get("tool"),
             "pending_tool": (state.pending_tool or {}).get("tool"),
             "qc_verdict": state.qc_verdict,
             "report_path": state.report_path,
+            "memo_path": state.memo_path,
         }
 
     def run_turn(self, *, state: PharmState, message: str, llm, registry: ToolRegistry,

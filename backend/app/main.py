@@ -1005,6 +1005,35 @@ def download_report_272(sid: str, filename: str,
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
+class MemoRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/sessions/{sid}/memo")
+def generate_memo(sid: str, req: MemoRequest | None = None, sess=Depends(owned_session),
+                  actor: str = Depends(actor_id)) -> dict:
+    """Build the briefing memo (DOCX): a template filled only from current results,
+    every number tagged with the audit entry that produced it. Fails closed (400) if
+    any number cannot be traced, or when no analysis has been run."""
+    args = {"title": req.title} if req and req.title else {}
+    try:
+        return orch.run_tool(sid, "build_briefing_memo", "report", args, actor=actor)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/sessions/{sid}/memo/{filename}")
+def download_memo(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+    memo_path = sess.state.memo_path
+    if not memo_path or Path(memo_path).name != filename:
+        raise HTTPException(404, "memo not found")
+    p = Path(memo_path)
+    if not p.exists():
+        raise HTTPException(404, "memo file missing")
+    return FileResponse(str(p), filename=filename,
+                        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 # ── static frontend (single-process desktop app) ───────────────────────────────
 # When the React frontend has been built (`npm run build` -> frontend/dist), serve
 # it from the same origin so the whole app runs on one port (no separate Vite dev

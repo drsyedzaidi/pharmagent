@@ -9,7 +9,7 @@ which every computation flows.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pandas as pd
@@ -23,6 +23,10 @@ class ToolContext:
     """Server-side resources tools may use. NEVER serialized to the LLM."""
     dataset_store: dict[str, pd.DataFrame] = field(default_factory=dict)
     data_dir: str = "data"
+    # Read-only snapshot (entry dicts, oldest first) of the audit entries that exist
+    # BEFORE the running tool's own result is appended. Empty unless the registry fills
+    # it for a Tool declared ``uses_audit_trail`` -- never a handle on the live chain.
+    audit_trail: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass
@@ -69,6 +73,8 @@ class Tool:
     #                                   the agent loop records it as
     #                                   state.pending_tool for a human approve /
     #                                   reject; it is never executed on the turn
+    uses_audit_trail: bool = False    # tool cites audit entries (briefing memo): the
+    #                                   registry hands it ``ctx.audit_trail``, a copy
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
@@ -140,7 +146,9 @@ class ToolRegistry:
                 f"'{name}' is a long-running fit — launch it from its dedicated "
                 "control (Population NLME / Covariate SCM / Compare engines), which "
                 "runs it as a bounded background job. It cannot run on this path.")
-        res = tool.run(state, ctx, args)
+        run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
+                   if tool.uses_audit_trail else ctx)
+        res = tool.run(state, run_ctx, args)
         audit.append(
             agent=tool.agent,
             tool=tool.name,

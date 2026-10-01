@@ -29,6 +29,7 @@ _TOOL_CATEGORY = {
     "dose_proportionality": "dp",
     "fit_one_compartment": "compartmental",
     "steady_state_exposure": "exposure",
+    "exposure_response": "er",
 }
 
 _num_array = {"type": "array", "items": {"type": "number"}}
@@ -65,6 +66,22 @@ TOOLS: list[dict[str, Any]] = [
          "dose": {"type": "number"}, "tau": {"type": "number"},
          "n_doses": {"type": "integer"}},
          "required": ["model", "params", "dose", "tau", "n_doses"]}},
+    {"name": "exposure_response",
+     "description": "Exposure-response statistics. analysis=logistic_or (exposure, response): odds ratio "
+                    "per unit and per SD and slope p-value. analysis=km_median (time, event, t_star): "
+                    "Kaplan-Meier median and S(t_star). analysis=cox_hr (time, event, exposure): Cox hazard "
+                    "ratio per unit and per SD and p-value. analysis=optimal_dose (doses, exposure_mapping, "
+                    "efficacy, toxicity, utility_weight, toxicity_cap): the utility-maximising dose with "
+                    "P_eff, P_tox and utility. Pass the dataset fields through unchanged.",
+     "input_schema": {"type": "object", "properties": {
+         "analysis": {"type": "string",
+                      "enum": ["logistic_or", "km_median", "cox_hr", "optimal_dose"]},
+         "exposure": _num_array, "response": _num_array, "time": _num_array, "event": _num_array,
+         "t_star": {"type": "number"}, "doses": _num_array,
+         "exposure_mapping": {"type": "object"}, "efficacy": {"type": "object"},
+         "toxicity": {"type": "object"}, "utility_weight": {"type": "number"},
+         "toxicity_cap": {"type": "number"}},
+         "required": ["analysis"]}},
 ]
 
 

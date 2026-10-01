@@ -21,6 +21,8 @@ from typing import Any
 
 import pandas as pd
 
+from app.compute.memo_review import memo_findings, memo_present
+
 # ── severity + goal ─────────────────────────────────────────────────────────────
 CRITICAL, HIGH, MEDIUM, LOW = "CRITICAL", "HIGH", "MEDIUM", "LOW"
 _RANK = {CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3}
@@ -330,6 +332,9 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
     scm = state_dump.get("scm_results") or {}
     if scm.get("status") == "ok":
         findings += _scm_refute(scm)
+    memo_checked = memo_present(state_dump)
+    if memo_checked:   # briefing memo: every printed number must trace to current state
+        findings += memo_findings(state_dump, _finding)
 
     findings.sort(key=lambda f: _RANK.get(f["severity"], 9))
     counts = {sev: sum(1 for f in findings if f["severity"] == sev)
@@ -343,10 +348,11 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
         "pkmodel": pm.get("status") == "ok",
         "engine": ec.get("status") == "ok",
         "scm": scm.get("status") == "ok",
+        "memo": memo_checked,
     }
     # Fail closed: a review that had nothing to inspect must not report GOAL MET —
     # otherwise an empty/mismatched state silently rubber-stamps as passing.
-    nothing_checked = not any(checked.values())
+    nothing_checked = not any(v for k, v in checked.items() if k != "memo")   # a memo alone checks nothing
     # Fail closed again, one level up: this reviewer's whole point is to recompute
     # the reported numbers from the RAW data. With NCA results present but no
     # dataset to recompute from (file never loaded, or withheld because it failed

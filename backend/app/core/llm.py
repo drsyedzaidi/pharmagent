@@ -52,6 +52,29 @@ def _mock_numbers(low: str, tool: str) -> dict[str, Any]:
     return {}
 
 
+_ER_SELECT = ("optimal dose", "dose selection", "select the dose", "optimus", "utility")
+_ER_FIT = ("logistic", "odds ratio", "hazard ratio", "cox", "kaplan", "exposure-response",
+           "exposure response")
+_ER_TTE = ("hazard", "cox", "kaplan", "survival", "time to event", "time-to-event")
+
+
+def _mock_er_dose(low: str, s: dict[str, Any]) -> dict[str, Any] | None:
+    """Keyless exposure-response choices. The mock cannot read column names, the
+    doses or the utility weight from prose: the tool's own refusal names what is
+    missing. The bootstrap is only ever PROPOSED (expensive+proposable); the mock
+    never confirms on the human's behalf."""
+    if any(k in low for k in _ER_SELECT):
+        return None if s.get("dose_selection") else {"name": "select_optimal_dose", "input": {"doses": []}}
+    if "bootstrap" in low:
+        return {"name": "bootstrap_exposure_response", "input": {}}
+    if any(k in low for k in _ER_FIT):
+        if s.get("er_fits"):
+            return None
+        endpoint = "time_to_event" if any(k in low for k in _ER_TTE) else "binary"
+        return {"name": "fit_exposure_response", "input": {"endpoint": endpoint}}
+    return None
+
+
 class MockLLM:
     """Deterministic, keyless. Drives the core NCA flow heuristically."""
 
@@ -86,9 +109,19 @@ class MockLLM:
         if agent == "qc":
             return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
         if agent == "report":
+            low = (message or "").lower()
+            if "memo" in low or "briefing" in low:
+                return None if s.get("memo_path") else {"name": "build_briefing_memo", "input": {}}
             return None if s.get("report_path") else {"name": "generate_report", "input": {}}
         if agent == "statistician":
+            low = (message or "").lower()
+            # An indirect comparison needs the two direct effects, which the keyless
+            # mock cannot read from prose: stop with the idle hint naming the inputs.
+            if any(k in low for k in ("indirect", "bucher", "common comparator")):
+                return None
             return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
+        if agent == "er_dose":
+            return _mock_er_dose((message or "").lower(), s)
         if agent == "clinpharm":
             low = (message or "").lower()
             # keyword → calculator; the keyless mock passes the numbers it can find

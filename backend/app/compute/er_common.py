@@ -39,6 +39,18 @@ class ErRefusal(Exception):
         self.message = message
 
 
+def fit_core(fit: dict[str, Any]) -> dict[str, Any]:
+    """A stored fit without its later bootstrap: exactly the audited output of the
+    ``fit_exposure_response`` run that produced it."""
+    return {k: v for k, v in fit.items() if k != "bootstrap"}
+
+
+def bootstrap_output(label: str, boot: dict[str, Any]) -> dict[str, Any]:
+    """The audited output of the ``bootstrap_exposure_response`` run that stored ``boot``
+    on fit ``label`` (the stored result without its replicate draws, plus the label)."""
+    return {**{k: v for k, v in boot.items() if k != "draws"}, "label": label}
+
+
 def refusal(status: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"status": status, "message": message, **extra}
 

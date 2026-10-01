@@ -61,6 +61,16 @@ def test_generic_agent_gets_a_state_aware_fallback():
 
 def test_hint_is_a_single_line_without_raw_rows():
     st = PharmState(dataset_id="ds_1", nca_parameters=[{"ID": 1, "AUC": 3.3}])
-    for agent in ("data_manager", "nca", "be", "poppk", "modeler", "simulator", "qc", "report"):
+    for agent in ("data_manager", "nca", "be", "poppk", "modeler", "simulator", "qc", "report", "er_dose"):
         m = idle_hint(agent, st)
         assert "\n" not in m and "AUC" not in m, agent
+
+
+def test_er_dose_hint_names_the_prerequisite_and_the_stored_fits():
+    m = _turn("er_dose", PharmState())[0]
+    assert "no dataset" in m.lower() and "per-subject" in m.lower()
+    st = PharmState(dataset_id="ds_1", er_results={"fits": {"efficacy": {}, "toxicity": {}}})
+    m = _turn("er_dose", st)[0]
+    assert "efficacy" in m and "toxicity" in m and "utility" in m.lower()
+    assert "no exposure-response fit yet" in _turn("er_dose", PharmState(dataset_id="ds_1"))[0].lower()
+    assert "\n" not in m and "no action taken" not in m

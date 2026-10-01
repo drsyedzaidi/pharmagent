@@ -9,6 +9,9 @@ from app.tools import (
     data_tools,
     dp_tools,
     engine_tools,
+    er_tools,
+    indirect_tools,
+    memo_tools,
     nca_tools,
     pkmodel_tools,
     poppk_tools,
@@ -31,7 +34,7 @@ def default_registry() -> ToolRegistry:
                 bootstrap_tools, sir_tools, profile_tools,
                 poppk_tools, pkmodel_tools, engine_tools, qc_tools, report_tools,
                 regulatory_tools, review_tools, viz_tools, simest_tools,
-                stats_tools, clinpharm_tools):
+                stats_tools, clinpharm_tools, er_tools, indirect_tools, memo_tools):
         for tool in mod.TOOLS:
             reg.register(tool)
     return reg
