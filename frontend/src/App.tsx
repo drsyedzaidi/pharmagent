@@ -1862,7 +1862,7 @@ function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => voi
           )}
           {provider === 'local' && !(cfg?.local_models ?? []).length && (
             <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 3 }}>
-              No Ollama models found — run <code>ollama pull qwen3:8b</code> (Ollama must be running).
+              No Ollama models found — run <code>ollama pull gemma4:31b</code> (Ollama must be running).
             </div>
           )}
         </div>

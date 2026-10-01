@@ -180,7 +180,7 @@ class OpenAICompatLLM:
 
     Works unchanged against Ollama (``http://127.0.0.1:11434/v1``, no key),
     LM Studio (``http://127.0.0.1:1234/v1``), OpenRouter, Groq, vLLM, or the
-    OpenAI API itself. The model must support tool calling (Ollama: qwen3, qwen2.5,
+    OpenAI API itself. The model must support tool calling (Ollama: gemma4, qwen3, qwen2.5,
     llama3.1/3.2, mistral-nemo, ...); a model that only answers in prose
     simply selects no tool (the turn ends with an idle hint).
 

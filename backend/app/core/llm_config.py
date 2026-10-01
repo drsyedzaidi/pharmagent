@@ -32,7 +32,7 @@ PROVIDERS: tuple[str, ...] = ("mock", "local", "openai", "anthropic")
 OPENAI_API_URL = "https://api.openai.com/v1"
 DEFAULT_MODELS: dict[str, str] = {
     "mock": "mock",
-    "local": "qwen3:8b",
+    "local": "gemma4:31b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-opus-4-8",
 }

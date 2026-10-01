@@ -237,9 +237,9 @@ def test_classify_with_no_matching_answer_warns_before_falling_back(fake_post, c
     assert any(r.getMessage() == "llm_classify_no_match" for r in caplog.records)
 
 
-def test_default_local_model_is_qwen3():
+def test_default_local_model_is_gemma4_31b():
     from app.core.llm_config import DEFAULT_MODELS
-    assert DEFAULT_MODELS["local"] == "qwen3:8b"
+    assert DEFAULT_MODELS["local"] == "gemma4:31b"
 
 
 def test_tool_selection_keeps_the_model_default_reasoning(fake_post):
