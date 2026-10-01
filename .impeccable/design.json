@@ -1,0 +1,226 @@
+{
+ "schemaVersion": 2,
+ "generatedAt": "2026-09-30T00:00:00Z",
+ "title": "Design System: PharmAgent",
+ "extensions": {
+  "colorMeta": {
+   "clinical-blue": {
+    "role": "primary",
+    "displayName": "Clinical Blue",
+    "tonalRamp": [
+     "#0E2F4D",
+     "#17537F",
+     "#1F66A6",
+     "#3B80BE",
+     "#6FA0D0",
+     "#A9C6E4",
+     "#CFD9E4",
+     "#E8F0F9"
+    ]
+   },
+   "verdict-green": {
+    "role": "tertiary",
+    "displayName": "Verdict Green",
+    "tonalRamp": [
+     "#0D3A2B",
+     "#16604A",
+     "#1D7A5A",
+     "#3C9A78",
+     "#74BBA0",
+     "#BFE0D2",
+     "#D7ECE3",
+     "#E7F3EE"
+    ]
+   },
+   "amber": {
+    "role": "tertiary",
+    "displayName": "Amber",
+    "tonalRamp": [
+     "#4A2C09",
+     "#73440E",
+     "#9A5B12",
+     "#C77F2A",
+     "#E0A964",
+     "#F0D2A8",
+     "#F6E3C9",
+     "#FBF1E4"
+    ]
+   },
+   "verdict-red": {
+    "role": "tertiary",
+    "displayName": "Verdict Red",
+    "tonalRamp": [
+     "#561C16",
+     "#852B22",
+     "#B23A2E",
+     "#C95E53",
+     "#DE928A",
+     "#E9C7C2",
+     "#F2DAD7",
+     "#F9E9E7"
+    ]
+   },
+   "ink-heading": {
+    "role": "neutral",
+    "displayName": "Ink Heading",
+    "tonalRamp": [
+     "#16314A",
+     "#2F4557",
+     "#536A83",
+     "#8298AC",
+     "#CFD9E4",
+     "#E1E8F0",
+     "#EEF2F7",
+     "#F6F8FB"
+    ]
+   }
+  },
+  "shadows": [
+   {
+    "name": "popover",
+    "value": "0 8px 24px rgba(22, 49, 74, 0.14)",
+    "purpose": "Model, token, Actions and Export popovers."
+   },
+   {
+    "name": "drawer",
+    "value": "-8px 0 24px rgba(22, 49, 74, .12)",
+    "purpose": "Review drawer at <=1180px."
+   },
+   {
+    "name": "modal",
+    "value": "0 16px 48px rgba(0,0,0,0.3)",
+    "purpose": "Chart zoom modal over rgba(22,49,74,.55) scrim."
+   }
+  ],
+  "motion": [
+   {
+    "name": "ease",
+    "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+    "purpose": "All state transitions."
+   },
+   {
+    "name": "duration",
+    "value": "150ms",
+    "purpose": "Colour, border and drawer transitions."
+   },
+   {
+    "name": "gate-pulse",
+    "value": "opacity 1.6s ease-in-out infinite",
+    "purpose": "Open review gate dot only."
+   }
+  ],
+  "breakpoints": [
+   {
+    "name": "review-drawer",
+    "value": "1180px"
+   },
+   {
+    "name": "icon-rail",
+    "value": "960px"
+   }
+  ]
+ },
+ "components": [
+  {
+   "name": "Primary Button",
+   "kind": "button",
+   "refersTo": "button-primary",
+   "description": "Only call-to-action fill (Approve, Run, Download).",
+   "html": "<button class=\"ds-btn ds-btn-primary\">Approve</button>",
+   "css": ".ds-btn{height:32px;padding:0 12px;border-radius:6px;font:500 13px 'Public Sans',sans-serif;border:1px solid transparent;cursor:pointer;transition:background 150ms cubic-bezier(.16,1,.3,1)}.ds-btn-primary{background:#1F66A6;border-color:#1F66A6;color:#fff;font-weight:600}.ds-btn-primary:hover{background:#17537F;border-color:#17537F}.ds-btn:focus-visible{outline:2px solid #1F66A6;outline-offset:2px}.ds-btn:disabled{color:#536A83;background:#F6F8FB;border-color:#E1E8F0;cursor:not-allowed}"
+  },
+  {
+   "name": "Ghost Button",
+   "kind": "button",
+   "refersTo": "button-ghost",
+   "description": "Secondary actions.",
+   "html": "<button class=\"ds-btn-ghost\">Export</button>",
+   "css": ".ds-btn-ghost{height:32px;padding:0 12px;border-radius:6px;font:500 13px 'Public Sans',sans-serif;background:#fff;border:1px solid #CFD9E4;color:#16314A;cursor:pointer}.ds-btn-ghost:hover{background:#F6F8FB}.ds-btn-ghost:focus-visible{outline:2px solid #1F66A6;outline-offset:2px}"
+  },
+  {
+   "name": "Reject Button",
+   "kind": "button",
+   "refersTo": "button-reject",
+   "description": "Gate rejection: red text on white.",
+   "html": "<button class=\"ds-btn-reject\">Reject</button>",
+   "css": ".ds-btn-reject{height:36px;padding:0 12px;border-radius:6px;font:600 13px 'Public Sans',sans-serif;background:#fff;border:1px solid #CFD9E4;color:#B23A2E;cursor:pointer}.ds-btn-reject:hover{background:#F9E9E7}.ds-btn-reject:focus-visible{outline:2px solid #1F66A6;outline-offset:2px}"
+  },
+  {
+   "name": "Chip",
+   "kind": "chip",
+   "refersTo": "chip",
+   "description": "Toggle/action chip; aria-pressed fills blue wash.",
+   "html": "<button class=\"ds-chip\" aria-pressed=\"true\">Log scale</button>",
+   "css": ".ds-chip{height:28px;padding:0 10px;border-radius:6px;font:400 12px 'Public Sans',sans-serif;background:#fff;border:1px solid #CFD9E4;color:#2F4557;cursor:pointer}.ds-chip:hover{background:#F6F8FB;color:#16314A}.ds-chip[aria-pressed=true]{background:#E8F0F9;color:#16314A;font-weight:500}.ds-chip:focus-visible{outline:2px solid #1F66A6;outline-offset:2px}"
+  },
+  {
+   "name": "Reason Field",
+   "kind": "input",
+   "refersTo": "input",
+   "description": "Decision-card reason textarea.",
+   "html": "<textarea class=\"ds-input\" rows=\"2\" placeholder=\"Why approve or reject?\"></textarea>",
+   "css": ".ds-input{width:100%;resize:none;padding:8px 10px;border:1px solid #CFD9E4;border-radius:6px;font:400 12px 'Public Sans',sans-serif;color:#16314A;background:#fff}.ds-input::placeholder{color:#536A83}.ds-input:focus-visible{border-color:#1F66A6;outline:2px solid #1F66A6;outline-offset:2px}"
+  },
+  {
+   "name": "Status Pill",
+   "kind": "chip",
+   "refersTo": "status-pill-pending",
+   "description": "Review state, colour plus word.",
+   "html": "<span class=\"ds-pill\">Needs you</span>",
+   "css": ".ds-pill{display:inline-flex;font:600 12px 'Public Sans',sans-serif;border-radius:12px;padding:3px 9px;color:#9A5B12;background:#FBF1E4}"
+  },
+  {
+   "name": "Section Attribution",
+   "kind": "custom",
+   "description": "Result section head with agent, tool and seal.",
+   "html": "<div class=\"ds-sec\"><h2>NCA summary</h2><span>NCA agent · <code>run_nca</code> · sealed <code>3f9a1c2e</code></span></div>",
+   "css": ".ds-sec{display:flex;align-items:baseline;justify-content:space-between;gap:12px;max-width:800px}.ds-sec h2{margin:0;font:600 15px 'Public Sans',sans-serif;color:#16314A}.ds-sec span{font:400 12px 'Public Sans',sans-serif;color:#536A83}.ds-sec code{font:400 11px 'IBM Plex Mono',monospace}"
+  }
+ ],
+ "narrative": {
+  "northStar": "The Sealed Analysis Document",
+  "overview": "A light, cool-paper workspace in three columns: a rail for dataset and step progress, a centre document where each completed tool step is a section of the analysis, and a review column where the human decision lives beside its QC evidence. Chat is a composer under the document, not the stage. The system is flat, quiet and dense where numbers are, roomy everywhere else; one blue carries every call to action, and verdict colours only ever appear with an icon and a word.",
+  "keyCharacteristics": [
+   "Base 13px Public Sans, tabular numerals on by default; IBM Plex Mono for IDs, tool names, hashes, timings.",
+   "Tonal layering (cool-paper / aside / white) instead of shadows; shadows only on floating layers.",
+   "Attribution line on every section: agent, `tool`, sealed hash.",
+   "Every state (hover, focus-visible, disabled, pressed) is drawn; motion only marks state."
+  ],
+  "rules": [
+   {
+    "name": "The One Call-to-Action Rule",
+    "body": "`btn-green` and `btn-primary` share Clinical Blue; the verdict is carried by the copy, never by a second CTA colour.",
+    "section": "colors"
+   },
+   {
+    "name": "The Colour-Plus-Word Rule",
+    "body": "No verdict is colour alone: pills, step trails, QC rows and audit status always carry an icon and a word.",
+    "section": "colors"
+   },
+   {
+    "name": "The Sentence-Case Label Rule",
+    "body": "Labels are 12px sentence case at normal tracking; no uppercase tracked eyebrows anywhere in the shell.",
+    "section": "typography"
+   },
+   {
+    "name": "The Float-Only Shadow Rule",
+    "body": "A shadow means the layer floats above the frame; resting cards and sections never cast one.",
+    "section": "elevation"
+   }
+  ],
+  "dos": [
+   "**Do** put every new result in a `ResultSection` with agent, tool and seal attribution.",
+   "**Do** keep gate decisions in the review column's decision card, Approve in Clinical Blue, Reject as red text on white.",
+   "**Do** pair every verdict colour with a lucide icon and a word.",
+   "**Do** use mono only for IDs, tool names, hashes, timings and subject IDs.",
+   "**Do** give every new control hover, focus-visible (2px blue ring) and disabled states from the button/chip vocabulary."
+  ],
+  "donts": [
+   "**Don't** add a second CTA colour; green buttons are Clinical Blue.",
+   "**Don't** cast shadows on resting cards or sections.",
+   "**Don't** use uppercase tracked labels, accent stripes, gradients or glass.",
+   "**Don't** set body or secondary text below 12px or lighter than Ink Dim; 11px is for mono identities only.",
+   "**Don't** use Unicode glyphs (✓ ✗ ⚠ ▾ !) as icons; use lucide-react with an aria label or adjacent word."
+  ]
+ }
+}

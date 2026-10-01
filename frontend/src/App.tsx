@@ -1,26 +1,74 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { DragEvent, ChangeEvent } from 'react';
 import {
-  FlaskConical, Upload, Send, CheckCircle, XCircle,
-  FileText, ShieldCheck, AlertTriangle, ChevronRight,
-  Download, Loader2, Activity,
+  FlaskConical, Upload, CheckCircle, XCircle,
+  AlertTriangle, ChevronRight, Maximize2,
 } from 'lucide-react';
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
+import type { Decision, GateSigner, Marker, Outcome, VerifyNote, WorkflowName } from './shell/types';
+import { MARKERS, REVIEW_DRAWER_MQ } from './shell/types';
+import { hhmm, integrityFailures, latestEntryFor, sealedDecision, stepTimings } from './shell/format';
+import { agentLabel } from './shell/agents';
+import { Topbar } from './shell/Topbar';
+import { Rail } from './shell/Rail';
+import { ReviewPanel } from './shell/ReviewPanel';
+import { ResultSection } from './shell/ResultSection';
+import { DocumentHeader } from './shell/DocumentHeader';
+import { DatasetProfile } from './shell/DatasetProfile';
+import { ExportMenu } from './shell/ExportMenu';
+import { Composer } from './shell/Composer';
+import { ActionsMenu } from './shell/ActionsMenu';
+import { QcEvidence } from './shell/QcEvidence';
+import { PkModelEvidence } from './shell/PkModelEvidence';
 import type {
   Session, PharmState, ChatMessage, AuditEntry, AuditIntegrityStatus,
   WorkflowStatus, ContentBlock, PkModelDef, ReviewResults, ReviewFinding, Severity, SkillDef,
-  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse,
+  SpaghettiData, NcaPlotData, LzSubject, SimestReplicate, WorkflowResponse, WorkflowExecutedStep,
   PcVpcBin, SpecialPopMetric, SpecialPopStratum, PediatricMetric, PediatricStratum, ProfileParam, WorkflowStartResponse, LlmProvider, LlmConfig,
 } from './types';
 
-const agentColor: Record<string, string> = {
-  supervisor: '#1F66A6', data_manager: '#3B86C9',
-  nca: '#1D7A5A', qc: '#9A5B12', report: '#4A6FA5',
-};
-const agentLabel: Record<string, string> = {
-  supervisor: 'Supervisor', data_manager: 'Data Manager',
-  nca: 'NCA Agent', qc: 'QC Agent', report: 'Report Agent',
+/** Section title + attribution for every transcript result-card marker.
+ *  Typed against the MARKERS tuple, so tsc fails if a marker loses its entry.
+ *  `tool` is set ONLY where the backend registers a Tool of that exact name
+ *  and the workflow/endpoint seals an audit entry under it (verified in
+ *  backend/app/tools/*.py + workflows.py); the section then shows that
+ *  entry's hash. Markers without a confirmed tool get agent-only attribution
+ *  — never a client-side hash. `anchor` gives the section a DOM id. */
+const CARD_META: Record<Marker, { title: string; agent: string; tool?: string; anchor?: string }> = {
+  __SPAGHETTI__:     { title: 'Concentration-time',                 agent: 'data_manager', tool: 'generate_spaghetti_plot' },
+  __NCA_TABLE__:     { title: 'Non-compartmental analysis',         agent: 'nca',          tool: 'compute_nca' },
+  __NCA_LZ__:        { title: 'Terminal slope (λz)',                agent: 'nca',          tool: 'compute_nca', anchor: 'lz' },
+  __QC_CARD__:       { title: 'QC review',                          agent: 'qc',           tool: 'run_qc' },
+  __BE__:            { title: 'Bioequivalence',                     agent: 'be' },
+  __DP__:            { title: 'Dose proportionality',               agent: 'dose_prop' },
+  __CLINPHARM__:     { title: 'Clinical pharmacology calculator',   agent: 'clinpharm' },
+  __STATS__:         { title: 'Statistical advice',                 agent: 'statistician' },
+  __COMPARTMENTAL__: { title: 'Compartmental fit',                  agent: 'compartmental' },
+  __POPPK__:         { title: 'Population PK summary',              agent: 'poppk' },
+  __PENDING_TOOL__:  { title: 'Proposal · needs your confirmation', agent: 'simulator' },
+  __PKMODEL__:       { title: 'Structural model fit',               agent: 'modeler',      tool: 'fit_pk_model', anchor: 'pk-model' },
+  __VPC__:           { title: 'VPC / goodness-of-fit',              agent: 'modeler',      tool: 'run_vpc' },
+  __NLME__:          { title: 'Population (NLME) fit',              agent: 'modeler',      tool: 'run_nlme' },
+  __PRIORCHECK__:    { title: 'Prior check (Bayesian borrowing)',   agent: 'modeler' },
+  __SCM__:           { title: 'Covariate model (SCM)',              agent: 'modeler',      tool: 'run_scm' },
+  __ENGINES__:       { title: 'Cross-engine comparison',            agent: 'modeler',      tool: 'run_engine_comparison' },
+  __FORECAST__:      { title: 'MAP / TDM forecast',                 agent: 'modeler' },
+  __DIAG__:          { title: 'Residual diagnostics',               agent: 'modeler',      tool: 'run_diagnostics' },
+  __FOREST__:        { title: 'Covariate forest',                   agent: 'modeler',      tool: 'run_covariate_forest' },
+  __SIMEST__:        { title: 'Trial-design precision check',       agent: 'simulator',    tool: 'run_simest' },
+  __BOOTSTRAP__:     { title: 'Bootstrap uncertainty',              agent: 'simulator',    tool: 'run_bootstrap' },
+  __SIR__:           { title: 'SIR uncertainty',                    agent: 'simulator',    tool: 'run_sir' },
+  __PROFILE__:       { title: 'Likelihood profiling',               agent: 'simulator',    tool: 'run_profile' },
+  __SWEEP__:         { title: 'Dose sweep',                         agent: 'simulator' },
+  __CLINSIM__:       { title: 'Clinical trial simulation',          agent: 'simulator' },
+  __EXPFOREST__:     { title: 'Exposure covariate forest',          agent: 'simulator' },
+  __SPECIALPOP__:    { title: 'Special-population simulation',      agent: 'simulator' },
+  __INDIVEXP__:      { title: 'Individual exposures',               agent: 'simulator' },
+  __PEDIATRIC__:     { title: 'Pediatric dose-finding',             agent: 'simulator' },
+  __SIM__:           { title: 'Forward simulation',                 agent: 'simulator' },
+  __REVIEW__:        { title: 'Adversarial review',                 agent: 'reviewer',     tool: 'adversarial_review' },
+  __REPORT__:        { title: 'Report',                             agent: 'report' },
 };
 
 const STEPS = [
@@ -57,8 +105,6 @@ const POPPK_FULL_STEPS = [
   { key: 'generate_report',      label: 'Generate report' },
 ] as const;
 
-type WorkflowName = 'nca_full' | 'poppk_modeling' | 'poppk_full';
-
 /** Sidebar presentation per workflow — keeps the step tracker in one place. */
 const WORKFLOW_UI: Record<WorkflowName, { title: string; steps: readonly { key: string; label: string; gate?: boolean }[] }> = {
   nca_full:       { title: 'NCA Workflow',        steps: STEPS },
@@ -72,11 +118,66 @@ const HEAVY_STEPS = new Set<string>([
   'run_nlme', 'run_scm', 'run_engine_comparison', 'run_simest',
 ]);
 
-const WF_LABEL: Record<WorkflowName, string> = {
-  nca_full: 'NCA',
-  poppk_modeling: 'population modeling',
-  poppk_full: 'full population PK',
+/** While a workflow leg runs as a job, re-read the audit trail every this
+ *  many poll ticks (1.5 s each) after the first, so the seals the leg adds
+ *  reach the rail and the review panel before the leg ends. */
+const AUDIT_REFRESH_EVERY_TICKS = 20;
+
+/** Result card each workflow step renders once it has run, keyed by tool, with
+ *  the PharmState slot the card reads. Mirrors what the sidebar chips push, so
+ *  a leg that ran as a background job (the NLME leg) shows the same cards as
+ *  one that ran inline. Steps missing here (and steps whose card is pushed
+ *  from state below) get no message: a step with a section is not narrated,
+ *  and the rest go to the document's folded run log. */
+const STEP_CARD: Record<string, { marker: Marker; key: keyof PharmState }> = {
+  run_nlme:             { marker: '__NLME__',   key: 'nlme_results' },
+  run_scm:              { marker: '__SCM__',    key: 'scm_results' },
+  run_diagnostics:      { marker: '__DIAG__',   key: 'diagnostics_results' },
+  run_covariate_forest: { marker: '__FOREST__', key: 'forest_results' },
+  run_vpc:              { marker: '__VPC__',    key: 'vpc_results' },
 };
+
+/** Human-review banner subtitle: what the gated step just finished and what
+ *  approval runs next. Phrased per step key, falling back to the step labels
+ *  so a new gate never shows another gate's sentence. */
+const GATE_DONE: Record<string, string> = {
+  qc_review: 'QC complete',
+  fit_pk_model: 'Structural comparison complete',
+  adversarial_review: 'Adversarial review complete',
+};
+const GATE_NEXT: Record<string, string> = {
+  generate_report: 'generate the DOCX report',
+  run_nlme: 'run the population fit',
+};
+/** What approval runs, as a chain — named once here, not restated in the title. */
+const GATE_CHAIN: Record<string, string> = {
+  generate_report: 'DOCX report',
+  run_nlme: 'NLME → SCM → diagnostics → forest → VPC',
+};
+/** Reason placeholder per gated step, so each gate shows an example of its own. */
+const GATE_PLACEHOLDER: Record<string, string> = {
+  qc_review: 'e.g. Subject 1 extrapolation accepted; sparse terminal sampling',
+  fit_pk_model: 'e.g. 1-cmt oral accepted; lowest AIC, all converged',
+  adversarial_review: 'e.g. Reviewer concerns addressed; fit accepted',
+};
+
+function gateSubtitle(workflow: WorkflowName, gateIndex: number): string {
+  const steps = WORKFLOW_UI[workflow].steps;
+  const gate = steps[gateIndex];
+  if (!gate) return 'Approve to continue the workflow.';
+  const done = GATE_DONE[gate.key] ?? `${gate.label} complete`;
+  const next = steps[gateIndex + 1];
+  return next ? `${done}. Next: ${GATE_CHAIN[next.key] ?? next.label}.` : `${done}.`;
+}
+
+/** A step summary that opens with its own label ("Adversarial review: GOAL
+ *  MET…") is shown without it: the run log entry is already headed by the
+ *  label, so repeating it would read as a doubled prefix. */
+function stripLabelPrefix(label: string, summary: string): string {
+  const prefix = `${label}:`;
+  if (!summary.toLowerCase().startsWith(prefix.toLowerCase())) return summary;
+  return summary.slice(prefix.length).trimStart();
+}
 
 function fmt(v: number | undefined, d = 2) {
   if (v == null || isNaN(v)) return '–';
@@ -85,66 +186,65 @@ function fmt(v: number | undefined, d = 2) {
 
 // `snap` freezes the PharmState slice a result card reads, so re-running an
 // analysis later does not retroactively rewrite earlier cards in the transcript.
-type DisplayMsg = { role: string; content: string; agent?: string; tool?: string; id: string; snap?: PharmState | null };
+// `seal` is the audit entry hash bound to that snapshot by `bindSeals` (once,
+// from the audit fetched after the card's own response); `seq` is the push
+// order pushMsg stamps so a fetch sent earlier can never bind a later card.
+type DisplayMsg = {
+  role: string; content: string; agent?: string; tool?: string; id: string;
+  snap?: PharmState | null; seal?: string; seq?: number;
+};
+const newMsgId = () => `${Date.now()}-${Math.random()}`;
+
+/** Bind every still-unsealed snapshot card pushed no later than `seqAtFetch`
+ *  to the latest audit entry sealed under its tool in `audit` — the entry of
+ *  the run that produced the card's snapshot, since that audit was fetched
+ *  after the card's response landed. A card is bound once and never rebound,
+ *  so a later re-run (new card, new snapshot) leaves the older card's seal on
+ *  the older numbers. Returns `msgs` itself when nothing binds. */
+function bindSeals(msgs: DisplayMsg[], audit: AuditEntry[], seqAtFetch: number): DisplayMsg[] {
+  let changed = false;
+  const out = msgs.map(m => {
+    if (!m.snap || m.seal !== undefined || (m.seq ?? Infinity) > seqAtFetch) return m;
+    const marker = (MARKERS as readonly string[]).includes(m.content) ? m.content as Marker : null;
+    const hash = marker ? latestEntryFor(audit, CARD_META[marker].tool)?.entry_hash : undefined;
+    if (!hash) return m;
+    changed = true;
+    return { ...m, seal: hash };
+  });
+  return changed ? out : msgs;
+}
 
 function MessageBubble({ msg, agent }: { msg: DisplayMsg; agent?: string }) {
-  const isUser = msg.role === 'user';
+  if (msg.role === 'user') {
+    return <div className="msg user">You · {msg.content}</div>;
+  }
   return (
-    <div className={`msg ${isUser ? 'user' : 'agent'}`}>
-      <div className="msg-avatar" style={!isUser ? { color: agentColor[agent ?? ''] ?? 'var(--accent)' } : {}}>
-        {isUser ? 'You' : (agent ?? 'AI').slice(0, 2).toUpperCase()}
-      </div>
-      <div className="msg-bubble">
-        {!isUser && agent && (
-          <div className="msg-agent-tag" style={{ color: agentColor[agent] ?? 'var(--accent)' }}>
-            {agentLabel[agent] ?? agent}
-          </div>
-        )}
-        <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
-        {msg.tool && (
-          <div className="tool-chip">
-            <ChevronRight size={10} /> {msg.tool}
-          </div>
-        )}
-      </div>
+    <div className="msg agent">
+      {agent && <span className="msg-agent">{agentLabel(agent)}</span>}
+      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+      {msg.tool && (
+        <div className="tool-chip">
+          <ChevronRight size={10} /> {msg.tool}
+        </div>
+      )}
     </div>
   );
 }
 
-function QcCard({ state }: { state: PharmState }) {
+function QcCard({ state, onReviewLz, onReviewInPanel }: { state: PharmState; onReviewLz?: () => void; onReviewInPanel?: () => void }) {
   const v = state.qc_verdict ?? '';
   const cls = v === 'PASS' ? 'pass' : v.includes('CONDITIONAL') ? 'conditional' : 'fail';
+  // One verdict line; the checklist itself lives in the review panel.
   return (
     <div className={`qc-card ${cls}`}>
-      <div className="qc-title">
-        {cls === 'pass' && <CheckCircle size={14} style={{ display: 'inline', marginRight: 6 }} />}
-        {cls === 'fail' && <XCircle size={14} style={{ display: 'inline', marginRight: 6 }} />}
-        {cls === 'conditional' && <AlertTriangle size={14} style={{ display: 'inline', marginRight: 6 }} />}
-        QC Verdict: {v}
-      </div>
-      {state.qc_checklist && state.qc_checklist.length > 0 && (
-        <ul className="qc-issues" style={{ listStyle: 'none', padding: 0 }}>
-          {state.qc_checklist.map((c, i) => (
-            <li key={i}>
-              {c.status === 'PASS' ? '✓' : c.status === 'FAIL' ? '✗' : '!'} {c.check}
-              <span style={{ opacity: 0.7 }}> — {c.detail}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {state.qc_issues && state.qc_issues.length > 0 && (
-        <ul className="qc-issues">
-          {state.qc_issues.map((iss, i) => (
-            <li key={i}>[{iss.severity}] {iss.issue}</li>
-          ))}
-        </ul>
-      )}
+      <QcEvidence verdict={v} checklist={state.qc_checklist} issues={state.qc_issues} subjects={state.nca_parameters}
+        onReviewLz={onReviewLz} onReviewInPanel={onReviewInPanel} compact />
     </div>
   );
 }
 
 const SEVERITY_COLOR: Record<Severity, string> = {
-  CRITICAL: '#B23A2E', HIGH: '#9A5B12', MEDIUM: '#1F66A6', LOW: '#8298AC',
+  CRITICAL: '#B23A2E', HIGH: '#9A5B12', MEDIUM: '#1F66A6', LOW: '#536A83',
 };
 
 function ReviewCard({ r }: { r: ReviewResults }) {
@@ -156,30 +256,30 @@ function ReviewCard({ r }: { r: ReviewResults }) {
         {r.goal_met
           ? <><CheckCircle size={14} style={{ display: 'inline', marginRight: 6 }} />Goal met</>
           : <><AlertTriangle size={14} style={{ display: 'inline', marginRight: 6 }} />Findings block the goal</>}
-        <span style={{ opacity: 0.6, fontWeight: 400 }}> — {r.goal}</span>
+        <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}> — {r.goal}</span>
       </div>
       <div className="review-counts" style={{ display: 'flex', gap: 10, margin: '6px 0 10px' }}>
         {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as Severity[]).map(s => (
-          <span key={s} style={{ fontSize: 12, color: SEVERITY_COLOR[s], opacity: c[s] ? 1 : 0.4 }}>
+          <span key={s} style={{ fontSize: 12, color: c[s] ? SEVERITY_COLOR[s] : 'var(--text-dim)' }}>
             {c[s]} {s.toLowerCase()}
           </span>
         ))}
       </div>
       {r.findings.length === 0 ? (
-        <div style={{ opacity: 0.7, fontSize: 13 }}>
+        <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>
           No findings — the reviewer could not refute any reported value.
         </div>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {r.findings.map((f: ReviewFinding) => (
-            <li key={f.id} style={{ borderLeft: `3px solid ${SEVERITY_COLOR[f.severity]}`, paddingLeft: 10 }}>
+            <li key={f.id}>
               <div style={{ fontSize: 12 }}>
-                <span style={{ color: SEVERITY_COLOR[f.severity], fontWeight: 700 }}>{f.severity}</span>
-                <span style={{ opacity: 0.85 }}> · {f.target}</span>
+                <span className={`sev-pill ${f.severity}`}>{f.severity}</span>
+                <span style={{ color: 'var(--text)' }}> · {f.target}</span>
               </div>
               <div style={{ fontSize: 13, marginTop: 2 }}><strong>Claim:</strong> {f.claim}</div>
-              <div style={{ fontSize: 13, opacity: 0.9 }}><strong>Evidence:</strong> {f.evidence}</div>
-              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>→ {f.suggested_action}</div>
+              <div style={{ fontSize: 13 }}><strong>Evidence:</strong> {f.evidence}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>→ {f.suggested_action}</div>
             </li>
           ))}
         </ul>
@@ -196,7 +296,7 @@ function SkillsPanel({ skills, loading, datasetPath, onRun, onDelete, onMarkdown
   return (
     <div className="quick-actions" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
       {skills.length === 0 ? (
-        <div style={{ opacity: 0.7, fontSize: 13 }}>
+        <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>
           No skills captured yet. Run an analysis, then “Capture as skill”.
         </div>
       ) : (
@@ -204,8 +304,8 @@ function SkillsPanel({ skills, loading, datasetPath, onRun, onDelete, onMarkdown
           {skills.map(s => (
             <li key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600 }}>{s.name}</span>
-              <span style={{ fontSize: 12, opacity: 0.6 }}>v{s.version}</span>
-              <span style={{ fontSize: 12, opacity: 0.7 }}>{s.steps.map(st => st.tool).join(' → ')}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>v{s.version}</span>
+              <span style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{s.steps.map(st => st.tool).join(' → ')}</span>
               <span style={{ flex: 1 }} />
               <button className="chip" disabled={loading || !datasetPath} onClick={() => onRun(s.name)}
                 title={datasetPath ? 'Replay on the current dataset' : 'Load a dataset first'}>Replay</button>
@@ -219,11 +319,41 @@ function SkillsPanel({ skills, loading, datasetPath, onRun, onDelete, onMarkdown
   );
 }
 
-function NcaSubjectTable({ state }: { state: PharmState }) {
-  const rows = state.nca_parameters;
-  if (!rows || rows.length === 0) return null;
+/** %AUC extrapolation above this is flagged in the NCA table, the λz panels
+ *  and the concentration-time chart (same limit the QC agent applies). */
+const EXTRAP_LIMIT = 20;
+/** Subject id → %AUC extrapolated, for every subject over EXTRAP_LIMIT.
+ *  Empty until NCA has run. */
+function flaggedExtrap(st: PharmState | null | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of st?.nca_parameters ?? []) {
+    if ((r.pct_AUC_extrap ?? 0) > EXTRAP_LIMIT) out[String(r.subject)] = r.pct_AUC_extrap as number;
+  }
+  return out;
+}
+/** Natural order for subject ids, so "2" sorts before "10". Returns a new array. */
+function bySubjectId<T>(items: readonly T[], id: (t: T) => unknown): T[] {
+  return [...items].sort((a, b) =>
+    String(id(a)).localeCompare(String(id(b)), undefined, { numeric: true, sensitivity: 'base' }));
+}
+/** Rows shown before "Show all N subjects". */
+const NCA_ROWS_COLLAPSED = 4;
+const NCA_ROWS_THRESHOLD = 6;
+
+function ExtrapBadge() {
+  return (
+    <span className="badge-warn" title="Over the 20% limit" aria-label="over the 20 percent limit">!</span>
+  );
+}
+
+function NcaSubjectTable({ state, limit }: { state: PharmState; limit?: number }) {
+  const raw = state.nca_parameters;
+  if (!raw || raw.length === 0) return null;
+  const rows = bySubjectId(raw, r => r.subject);
+  const shown = limit != null ? rows.slice(0, limit) : rows;
   const ss = state.nca_summary?.steady_state === true;
   const tau = rows.find(r => r.tau != null)?.tau;
+  const u = ncaUnits(state);
 
   const summ = state.nca_summary;
   const meta = summ ? `${summ.route ?? 'extravascular'}${summ.blq ? ` · ${summ.blq.n_below_loq} BLQ` : ''}` : '';
@@ -236,24 +366,24 @@ function NcaSubjectTable({ state }: { state: PharmState }) {
         <table className="nca-table">
           <thead>
             <tr>
-              <th>ID</th><th>Dose</th><th>Cmax,ss</th><th>Cmin</th>
-              <th>AUC<sub>τ</sub></th><th>Cavg</th>
-              <th>CL/F</th><th>t½</th><th>Fluct%</th><th>R<sub>ac</sub></th>
+              <th>ID</th><th className="num">Dose{unitSuffix(u.dose)}</th><th className="num">Cmax,ss{unitSuffix(u.conc)}</th><th className="num">Cmin{unitSuffix(u.conc)}</th>
+              <th className="num">AUC<sub>τ</sub>{unitSuffix(u.auc)}</th><th className="num">Cavg{unitSuffix(u.conc)}</th>
+              <th className="num">CL/F{unitSuffix(u.clf)}</th><th className="num">t½{unitSuffix(u.time)}</th><th className="num">Fluct%</th><th className="num">R<sub>ac</sub></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {shown.map(r => (
               <tr key={String(r.subject)}>
                 <td>{r.subject}</td>
-                <td>{fmt(r.dose, 0)}</td>
-                <td>{fmt(r.Cmax)}</td>
-                <td>{fmt(r.Cmin ?? undefined)}</td>
-                <td>{fmt(r.AUC_tau ?? r.AUC_last, 1)}</td>
-                <td>{fmt(r.Cavg ?? undefined, 1)}</td>
-                <td>{fmt(r.CL_F, 2)}</td>
-                <td>{fmt(r.t_half, 1)}</td>
-                <td>{fmt(r.fluctuation_pct ?? undefined, 0)}</td>
-                <td>{fmt(r.accumulation_ratio ?? undefined, 2)}</td>
+                <td className="num">{fmt(r.dose, 0)}</td>
+                <td className="num">{fmt(r.Cmax)}</td>
+                <td className="num">{fmt(r.Cmin ?? undefined)}</td>
+                <td className="num">{fmt(r.AUC_tau ?? r.AUC_last, 1)}</td>
+                <td className="num">{fmt(r.Cavg ?? undefined, 1)}</td>
+                <td className="num">{fmt(r.CL_F, 2)}</td>
+                <td className="num">{fmt(r.t_half, 1)}</td>
+                <td className="num">{fmt(r.fluctuation_pct ?? undefined, 0)}</td>
+                <td className="num">{fmt(r.accumulation_ratio ?? undefined, 2)}</td>
               </tr>
             ))}
           </tbody>
@@ -270,26 +400,28 @@ function NcaSubjectTable({ state }: { state: PharmState }) {
       <table className="nca-table">
         <thead>
           <tr>
-            <th>ID</th><th>Dose</th><th>Cmax</th><th>Tmax</th>
-            <th>AUC<sub>last</sub></th><th>AUC<sub>inf</sub></th>
-            <th>t½</th><th>CL/F</th><th>Vz/F</th><th>%extrap</th>
+            <th>ID</th><th className="num">Dose{unitSuffix(u.dose)}</th><th className="num">Cmax{unitSuffix(u.conc)}</th><th className="num">Tmax{unitSuffix(u.time)}</th>
+            <th className="num">AUC<sub>last</sub>{unitSuffix(u.auc)}</th><th className="num">AUC<sub>inf</sub>{unitSuffix(u.auc)}</th>
+            <th className="num">t½{unitSuffix(u.time)}</th><th className="num">CL/F{unitSuffix(u.clf)}</th><th className="num">Vz/F{unitSuffix(u.vz)}</th><th className="num">% extrap.</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => {
-            const hi = (r.pct_AUC_extrap ?? 0) > 20;
+          {shown.map(r => {
+            const hi = (r.pct_AUC_extrap ?? 0) > EXTRAP_LIMIT;
             return (
               <tr key={String(r.subject)}>
                 <td>{r.subject}</td>
-                <td>{fmt(r.dose, 0)}</td>
-                <td>{fmt(r.Cmax)}</td>
-                <td>{fmt(r.Tmax)}</td>
-                <td>{fmt(r.AUC_last, 1)}</td>
-                <td>{fmt(r.AUC_inf ?? undefined, 1)}</td>
-                <td>{fmt(r.t_half, 1)}</td>
-                <td>{fmt(r.CL_F, 2)}</td>
-                <td>{fmt(r.Vz_F, 1)}</td>
-                <td style={hi ? { color: 'var(--yellow)' } : {}}>{fmt(r.pct_AUC_extrap ?? undefined, 1)}%</td>
+                <td className="num">{fmt(r.dose, 0)}</td>
+                <td className="num">{fmt(r.Cmax)}</td>
+                <td className="num">{fmt(r.Tmax)}</td>
+                <td className="num">{fmt(r.AUC_last, 1)}</td>
+                <td className="num">{fmt(r.AUC_inf ?? undefined, 1)}</td>
+                <td className="num">{fmt(r.t_half, 1)}</td>
+                <td className="num">{fmt(r.CL_F, 2)}</td>
+                <td className="num">{fmt(r.Vz_F, 1)}</td>
+                <td className={`num ${hi ? 'extrap-hi' : ''}`}>
+                  {fmt(r.pct_AUC_extrap ?? undefined, 1)}%{hi && <> <ExtrapBadge /></>}
+                </td>
               </tr>
             );
           })}
@@ -359,8 +491,8 @@ function DescriptiveStatsTable({ state }: { state: PharmState }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Summary statistics</span>
         {groups.length > 1 && (
-          <select value={gi} onChange={e => setGi(Number(e.target.value))}
-            style={{ fontSize: 11, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}>
+          <select value={gi} onChange={e => setGi(Number(e.target.value))} aria-label="Summary statistics group"
+            style={{ fontSize: 12, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--border-strong)', background: 'var(--bg-card)', color: 'var(--text-h)' }}>
             {groups.map((x, i) => <option key={String(x.group)} value={i}>{x.label} (n={x.n})</option>)}
           </select>
         )}
@@ -384,19 +516,120 @@ function DescriptiveStatsTable({ state }: { state: PharmState }) {
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
         SD uses n−1; CV% = SD/mean; geometric CV% = √(exp(s²<sub>log</sub>) − 1); N counts subjects with a valid value.
       </div>
     </div>
   );
 }
 
+/** 'h' after a time-based value only when the dataset's time axis is
+ *  labelled in hours — units are never invented. */
+function timeInHours(st: PharmState | null | undefined): boolean {
+  return /hour|\(h\)|\bh\b/i.test(st?.spaghetti_data?.x_label ?? '');
+}
+
+/** Units as stated by the dataset's own column labels (e.g. "Dose (mg)",
+ *  "Conc(mg/L)", "Time(h)") — never invented. Derived NCA units (AUC, CL/F,
+ *  Vz/F) are stated only when they follow unambiguously from those labels. */
+interface NcaUnits {
+  time: string | null; dose: string | null; conc: string | null;
+  auc: string | null; clf: string | null; vz: string | null;
+}
+
+function roleColumnUnit(st: PharmState | null | undefined, role: string): string | null {
+  const roles = st?.dataset_metadata?.detected_roles;
+  if (!roles || typeof roles !== 'object') return null;
+  for (const [col, r] of Object.entries(roles as Record<string, unknown>)) {
+    const u = r === role ? labelUnit(col) : null;
+    if (u) return u;
+  }
+  return null;
+}
+
+function ncaUnits(st: PharmState | null | undefined): NcaUnits {
+  const time = timeInHours(st) ? 'h'
+    : labelUnit(st?.spaghetti_data?.x_label ?? '') ?? roleColumnUnit(st, 'TIME');
+  const conc = labelUnit(st?.spaghetti_data?.y_label ?? '') ?? roleColumnUnit(st, 'DV');
+  const dose = roleColumnUnit(st, 'AMT');
+  const slash = conc ? conc.indexOf('/') : -1;
+  const [cNum, cDen] = conc && slash > 0 ? [conc.slice(0, slash), conc.slice(slash + 1)] : [conc, null];
+  const auc = conc && time ? (cDen ? `${cNum}·${time}/${cDen}` : `${conc}·${time}`) : null;
+  const volume = dose && cDen && cNum === dose ? cDen : null;
+  return { time, dose, conc, auc, clf: volume && time ? `${volume}/${time}` : null, vz: volume };
+}
+
+/** " (unit)" for a column header, or nothing when the unit is unknown. */
+function unitSuffix(u: string | null): string {
+  return u ? ` (${u})` : '';
+}
+
+/** 3 significant figures, no exponent notation (267.84 → "268"). */
+function sig3(v: number): string {
+  return Number(v.toPrecision(3)).toString();
+}
+
+/** One-line geometric-mean summary under the NCA table, built ONLY from the
+ *  fields present in nca_summary.descriptive (group 'all' or the first
+ *  group). Units are never invented: each comes from ncaUnits (the dataset's
+ *  own column labels). Returns null when nothing can be stated. */
+function ncaFooterParts(state: PharmState): React.ReactNode[] {
+  const groups = state.nca_summary?.descriptive ?? [];
+  const g = groups.find(x => x.group === 'all') ?? groups[0];
+  if (!g) return [];
+  const param = (name: string) => g.parameters.find(p => p.parameter === name);
+  const u = ncaUnits(state);
+  const parts: React.ReactNode[] = [];
+  const cl = param('CL_F');
+  if (cl?.geomean != null) {
+    parts.push(<span key="cl">Geometric mean CL/F <b>{fmt(cl.geomean, 3)}{u.clf ? ` ${u.clf}` : ''}</b>{cl.geocv_pct != null && <> (gCV {fmt(cl.geocv_pct, 1)} %)</>}</span>);
+  }
+  const th = param('t_half');
+  if (th?.median != null) {
+    parts.push(<span key="th">t½ <b>{fmt(th.median, 1)}{u.time ? ` ${u.time}` : ''}</b></span>);
+  }
+  const auc = param('AUC_inf');
+  if (auc?.geomean != null) {
+    parts.push(<span key="auc">AUCinf <b>{fmt(auc.geomean, 1)}{u.auc ? ` ${u.auc}` : ''}</b>{auc.geocv_pct != null && <> (gCV {fmt(auc.geocv_pct, 1)} %)</>}</span>);
+  }
+  return parts;
+}
+
 function NcaTable({ state }: { state: PharmState }) {
+  const n = state.nca_parameters?.length ?? 0;
+  const collapsible = n > NCA_ROWS_THRESHOLD;
+  const [showAll, setShowAll] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const hasStats = !!state.nca_summary?.descriptive?.length || !!state.nca_summary?.by_dose?.length;
+  const footer = ncaFooterParts(state);
   return (
     <div>
-      <NcaSubjectTable state={state} />
-      <DescriptiveStatsTable state={state} />
-      <DoseSummaryTable state={state} />
+      <NcaSubjectTable state={state} limit={collapsible && !showAll ? NCA_ROWS_COLLAPSED : undefined} />
+      {(footer.length > 0 || collapsible || hasStats) && (
+        <div className="nca-foot">
+          <span className="nca-foot-stats">
+            {footer.map((f, i) => <span key={i}>{i > 0 && ' · '}{f}</span>)}
+          </span>
+          <span className="nca-foot-links">
+            {collapsible && (
+              <button type="button" className="link-btn" onClick={() => setShowAll(v => !v)}>
+                {showAll ? 'Show fewer' : `Show all ${n} subjects`}
+              </button>
+            )}
+            {hasStats && (
+              <button type="button" className="link-btn" aria-expanded={showStats} onClick={() => setShowStats(v => !v)}>
+                Summary statistics
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+      {showStats && (
+        <>
+          <DescriptiveStatsTable state={state} />
+          <DoseSummaryTable state={state} />
+        </>
+      )}
     </div>
   );
 }
@@ -415,7 +648,7 @@ function BeCard({ r }: { r: PharmState['be_results'] }) {
             : <XCircle size={14} style={{ display: 'inline', marginRight: 6 }} />}
         {be ? 'Bioequivalent' : 'Not bioequivalent'} — {r.test_level} vs {r.reference_level}
       </div>
-      <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
         {r.design} · limits {r.limits?.[0]}–{r.limits?.[1]}% · n {r.n_test}/{r.n_reference}
       </div>
       <table className="nca-table">
@@ -449,7 +682,7 @@ function StatsAdviceCard({ r }: { r: PharmState['stats_advice'] }) {
         Statistical analysis plan — {d.design_label}, {d.n_groups} group{d.n_groups === 1 ? '' : 's'}
         {d.group_var ? ` by ${d.group_var}` : ''}, {d.n_subjects} subjects
       </div>
-      <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
         exposures from {d.source === 'nca' ? 'NCA parameters' : 'observed concentrations'}
         {d.paired ? ' · paired (same subjects in every group)' : ''}
       </div>
@@ -470,14 +703,14 @@ function StatsAdviceCard({ r }: { r: PharmState['stats_advice'] }) {
       </table>
       <ul style={{ fontSize: 12, margin: '8px 0 0', paddingLeft: 18 }}>
         {r.recommendations.map(rec => (
-          <li key={rec.topic}><b>{rec.topic}:</b> {rec.recommendation} <span style={{ opacity: 0.75 }}>— {rec.rationale}</span></li>
+          <li key={rec.topic}><b>{rec.topic}:</b> {rec.recommendation} <span style={{ color: 'var(--text-dim)' }}>— {rec.rationale}</span></li>
         ))}
         {r.covariates.map(c => (
           <li key={c.name}><b>{c.name}</b> ({c.kind}): {c.recommendation}</li>
         ))}
       </ul>
       {r.caveats.length > 0 && (
-        <div style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--text)', marginTop: 6 }}>
           {r.caveats.map((c, i) => <div key={i}>⚠ {c}</div>)}
         </div>
       )}
@@ -497,7 +730,7 @@ function DosePropCard({ r }: { r: PharmState['dose_prop_results'] }) {
       <div className="qc-title">
         {prop ? 'Dose-proportional' : 'Not dose-proportional'} (power model)
       </div>
-      <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
         dose levels {(r.dose_levels ?? []).join(', ')} mg
       </div>
       <table className="nca-table">
@@ -1029,7 +1262,7 @@ function ForecastCard({ r }: { r: PharmState['forecast_results'] }) {
       </div>
       {chart}
       {chart && (
-        <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
           <span style={{ color: 'var(--accent)' }}>—</span> individual ·{' '}
           <span style={{ color: 'var(--text-dim)' }}>– –</span> population ·{' '}
           <span style={{ color: 'var(--green)' }}>●</span> measured
@@ -1251,7 +1484,7 @@ function ForestCard({ r }: { r: PharmState['forest_results'] }) {
         })}
       </svg>
       {!!r.notes?.length && (
-        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '4px 0 0', paddingLeft: 16 }}>
+        <ul style={{ fontSize: 11, color: 'var(--text-dim)', margin: '4px 0 0', paddingLeft: 16 }}>
           {r.notes.map((n, i) => <li key={i}>{n}</li>)}
         </ul>
       )}
@@ -1335,14 +1568,14 @@ function SimestCard({ r }: { r: PharmState['simest_results'] }) {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
           {params.map(p => (
             <div key={p}>
-              <div style={{ fontSize: 10.5, color: 'var(--text-dim)' }}>{p} per replicate</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{p} per replicate</div>
               <SimestReplicatePlot replicates={r.replicates!} param={p} />
             </div>
           ))}
         </div>
       )}
       {!!r.design_limitations?.length && (
-        <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
+        <ul style={{ fontSize: 11, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
           {r.design_limitations.map((n, i) => <li key={i}>{n}</li>)}
           {r.citation && <li>{r.citation}</li>}
         </ul>
@@ -1357,7 +1590,7 @@ const ci = (lo: number | null | undefined, hi: number | null | undefined, d = 3)
 function UncertaintyNotes({ notes }: { notes?: string[] }) {
   if (!notes?.length) return null;
   return (
-    <ul style={{ fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
+    <ul style={{ fontSize: 11, color: 'var(--text-dim)', margin: '8px 0 0', paddingLeft: 16 }}>
       {notes.map((n, i) => <li key={i}>{n}</li>)}
     </ul>
   );
@@ -1408,7 +1641,7 @@ function BootstrapCard({ r }: { r: PharmState['bootstrap_results'] }) {
         </tbody>
       </table>
       {last && (
-        <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 6 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
           CI stability — at {last.n_replicates} replicates:{' '}
           {last.parameters.map(p => `${p.parameter} ${ci(p.lo, p.hi)}`).join(' · ')}
           {prev && <> · at {prev.n_replicates}: {prev.parameters.map(p => `${p.parameter} ${ci(p.lo, p.hi)}`).join(' · ')}</>}
@@ -1451,7 +1684,7 @@ function SirCard({ r }: { r: PharmState['sir_results'] }) {
         </tbody>
       </table>
       {d && (
-        <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 6 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
           ESS <span style={{ color: lowEss ? 'var(--red)' : 'inherit' }}>{fmt(d.effective_sample_size ?? undefined, 0)}
           {' '}({fmt((d.ess_fraction_of_m ?? 0) * 100, 0)}% of m){lowEss ? ' ⚠' : ''}</span>
           {' '}· resampled dOFV mean {fmt(d.dofv_mean_resampled ?? undefined, 1)} vs df {d.df_reference ?? '–'}
@@ -1528,8 +1761,8 @@ function ProfileCard({ r }: { r: PharmState['profile_results'] }) {
               <td>{p.parameter}</td>
               <td>{fmt(p.estimate ?? undefined, 3)}</td>
               <td>{ci(p.profile_lo, p.profile_hi)}</td>
-              <td style={{ fontSize: 10.5, color: p.lower_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.lower_reason ?? 'ok'}</td>
-              <td style={{ fontSize: 10.5, color: p.upper_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.upper_reason ?? 'ok'}</td>
+              <td style={{ fontSize: 11, color: p.lower_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.lower_reason ?? 'ok'}</td>
+              <td style={{ fontSize: 11, color: p.upper_reason ? 'var(--yellow)' : 'var(--text-dim)' }}>{p.upper_reason ?? 'ok'}</td>
               <td>{p.asymmetry_ratio != null ? fmt(p.asymmetry_ratio, 2) : '–'}</td>
               <td>{p.n_evaluations}</td>
               <td><ProfileSparkline p={p} cutoff={cutoff} /></td>
@@ -1603,9 +1836,7 @@ function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => voi
   const field = { width: '100%', fontSize: 12, padding: '5px 8px', borderRadius: 6,
     border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' } as const;
   return (
-    <div style={{ position: 'absolute', right: 0, top: 36, zIndex: 50, width: 360, padding: 12,
-      background: 'var(--bg-panel, var(--bg))', border: '1px solid var(--border)', borderRadius: 10,
-      boxShadow: '0 8px 24px rgba(0,0,0,0.18)', textAlign: 'left' }}>
+    <div style={{ width: 360, padding: 2, background: 'var(--bg-card)', textAlign: 'left' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <strong style={{ fontSize: 13 }}>Language model</strong>
         <button className="btn btn-ghost" style={{ padding: '2px 8px', fontSize: 11 }} onClick={onClose}>close</button>
@@ -1618,7 +1849,7 @@ function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => voi
         <label key={p} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
           <input type="radio" name="llm-provider" checked={provider === p} onChange={() => pick(p)} />
           {PROVIDER_LABEL[p]}
-          {cfg?.current.provider === p && <span style={{ color: 'var(--green)', fontSize: 10 }}>· active</span>}
+          {cfg?.current.provider === p && <span style={{ color: 'var(--green)', fontSize: 11 }}>· active</span>}
         </label>
       ))}
       {provider !== 'mock' && (
@@ -1630,8 +1861,8 @@ function LlmSettings({ onApplied, onClose }: { onApplied: (label: string) => voi
             <datalist id="llm-local-models">{(cfg?.local_models ?? []).map(m => <option key={m} value={m} />)}</datalist>
           )}
           {provider === 'local' && !(cfg?.local_models ?? []).length && (
-            <div style={{ fontSize: 10.5, color: 'var(--yellow)', marginTop: 3 }}>
-              No Ollama models found — run <code>ollama pull qwen2.5:7b</code> (Ollama must be running).
+            <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 3 }}>
+              No Ollama models found — run <code>ollama pull qwen3:8b</code> (Ollama must be running).
             </div>
           )}
         </div>
@@ -1677,8 +1908,8 @@ function Zoomable({ title, style, children }: { title: string; style?: React.CSS
   return (
     <div className="zoomable" style={style}>
       {children}
-      <button className="zoom-btn" type="button" aria-label={`Open ${title} large`} title="Open large — wheel to zoom, drag to pan"
-        onClick={() => setOpen(true)}>⤢</button>
+      <button className="zoom-btn" type="button" aria-label="Open full screen" title={`Open ${title} full screen — wheel to zoom, drag to pan`}
+        onClick={() => setOpen(true)}><Maximize2 size={13} aria-hidden="true" /></button>
       {open && <ZoomModal title={title} onClose={() => setOpen(false)}>{children}</ZoomModal>}
     </div>
   );
@@ -1827,7 +2058,7 @@ function ClinpharmCard({ r }: { r: PharmState['clinpharm_results'] }) {
         </table>
       </div>
       {profile && profile.length > 1 && <OneCompProfile pts={profile} />}
-      {r.note && <div style={{ fontSize: 10.5, color: 'var(--yellow)', marginTop: 6 }}>{r.note}</div>}
+      {r.note && <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 6 }}>{r.note}</div>}
     </div>
   );
 }
@@ -1880,14 +2111,13 @@ function CalculatorsPanel({ sessionId, busy, onResult }: {
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', marginTop: 6, background: 'var(--bg-panel)' }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
         {CALC_FORMS.map((f, i) => (
-          <button key={f.tool} className="chip" onClick={() => pick(i)}
-            style={i === idx ? { background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' } : {}}>{f.label}</button>
+          <button key={f.tool} type="button" className="chip" aria-pressed={i === idx} onClick={() => pick(i)}>{f.label}</button>
         ))}
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{form.hint}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         {form.fields.map(f => (
-          <label key={f.name} style={{ fontSize: 10.5, color: 'var(--text-dim)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <label key={f.name} style={{ fontSize: 11, color: 'var(--text-dim)', display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>{f.label}{f.unit ? ` (${f.unit})` : ''}{f.optional ? '' : ' *'}</span>
             {f.options ? (
               <select style={field} value={vals[f.name] ?? f.options[0]} onChange={e => setVals({ ...vals, [f.name]: e.target.value })}>
@@ -1908,7 +2138,7 @@ function CalculatorsPanel({ sessionId, busy, onResult }: {
 
 /** /api/health "llm" -> badge text: "mock" | "anthropic:<model>" | "openai:<model>@<url>". */
 function describeLlm(label: string): string {
-  if (!label || label === 'mock') return 'MockLLM (keyless)';
+  if (!label || label === 'mock') return 'Keyless mock model';
   const [provider, rest = ''] = label.split(/:(.+)/);
   if (provider === 'anthropic') return `Claude ${rest}`;
   if (provider === 'openai') {
@@ -1947,27 +2177,57 @@ function XRangeSlider({ min, max, value, label, onChange, onReset }: {
   const num = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
   const slider = { width: 110, verticalAlign: 'middle', accentColor: 'var(--accent)' } as const;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, fontSize: 10, color: 'var(--text-dim)' }}
-      title={`Restrict the ${label} axis to a time window`}>
-      <span>{label}:</span>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-dim)', flexWrap: 'wrap' }}
+      title="Restrict the time axis to a window">
+      <span>{label}</span>
       <input type="range" min={min} max={max} step={step} value={value[0]} style={slider} aria-label="window start"
         onChange={e => onChange([Math.min(Number(e.target.value), value[1]), value[1]])} />
       <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{num(value[0])}–{num(value[1])}</span>
       <input type="range" min={min} max={max} step={step} value={value[1]} style={slider} aria-label="window end"
         onChange={e => onChange([value[0], Math.max(Number(e.target.value), value[0])])} />
-      {!isFull && <button onClick={onReset} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, cursor: 'pointer',
-        border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-dim)' }}>reset</button>}
+      {!isFull && <button type="button" className="link-btn" onClick={onReset}>Reset time window</button>}
     </span>
   );
 }
 
-function SpaghettiChart({ data }: { data: SpaghettiData }) {
+/** Sentence for the chart caption naming the subjects whose terminal phase
+ *  is flagged in the NCA table below. */
+function flaggedSentence(ids: string[]): string {
+  if (ids.length === 0) return '';
+  if (ids.length === 1) return ` · subject ${ids[0]} highlighted because its terminal phase is flagged below`;
+  return ` · subjects ${ids.join(', ')} highlighted because their terminal phases are flagged below`;
+}
+
+const TICK_TEXT = { fontFamily: 'var(--mono)', fill: 'var(--text-dim)' } as const;
+
+/** Unit written inside the raw column label, e.g. 'DV (mg/L)' or 'TIME [h]'. */
+function labelUnit(raw: string): string | null {
+  const m = /[([]\s*([^)\]]+?)\s*[)\]]/.exec(raw);
+  return m && !/^log$/i.test(m[1]) ? m[1] : null;
+}
+
+/** Sentence-case axis titles for the concentration–time chart. The unit is
+ *  shown only when the raw column label states it — never invented. */
+function spaghettiAxisLabels(data: SpaghettiData): { x: string; y: string } {
+  const xUnit = labelUnit(data.x_label);
+  const hours = /hour|\(h\)|\bh\b/i.test(data.x_label);
+  const yUnit = labelUnit(data.y_label);
+  return {
+    x: `Time${hours ? ' (h)' : xUnit ? ` (${xUnit})` : ''}`,
+    y: `Concentration${yUnit ? ` (${yUnit})` : ''}`,
+  };
+}
+
+function SpaghettiChart({ data, flagged = [] }: { data: SpaghettiData; flagged?: string[] }) {
   const [logY, setLogY] = useState(data.log_scale);
   const [individual, setIndividual] = useState(false);
   // user-chosen time window (null = the data's full range); applies to both views
   const [xr, setXr] = useState<[number, number] | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const flaggedSet = new Set(flagged);
+  const axis = spaghettiAxisLabels(data);
 
-  const W = 500, H = 220, ml = 52, mr = 12, mt = 12, mb = 38;
+  const W = 760, H = 220, ml = 52, mr = 12, mt = 12, mb = 38;
   const allYAll = data.series.flatMap(s => s.y).filter(v => v > 0);
   const allXAll = data.series.flatMap(s => s.x).filter(isFinite);
   if (!allYAll.length || !allXAll.length) return <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No data to plot.</div>;
@@ -1981,7 +2241,7 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
   const allY = data.series.flatMap(s => s.y.filter((v, j) => v > 0 && inRange(s.x[j])));
   if (!allY.length) return <div>{/* nothing inside the window */}
     <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No observations in {fmt(xlo, 1)}–{fmt(xhi, 1)}.</div>
-    <button className="btn btn-ghost" style={{ marginTop: 4 }} onClick={() => setXr(null)}>Reset time window</button>
+    <button type="button" className="link-btn" style={{ marginTop: 4 }} onClick={() => setXr(null)}>Reset time window</button>
   </div>;
   const xpad = (xhi - xlo || xhi || 1) * 0.04;
   const xmin = xlo - xpad < 0 && xlo >= 0 ? 0 : xlo - xpad;
@@ -1994,25 +2254,36 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
   const syLin = (y: number) => H - mb - (y / ymax) * ch;
   const sy = logY ? syLog : syLin;
 
-  const toggleBtn = (active: boolean, label: string, onClick: () => void) => (
-    <button onClick={onClick} style={{
-      fontSize: 10, padding: '2px 8px', borderRadius: 10, cursor: 'pointer', marginLeft: 4,
-      border: '1px solid var(--border)',
-      background: active ? 'var(--accent)' : 'transparent',
-      color: active ? '#fff' : 'var(--text-dim)',
-    }}>{label}</button>
-  );
+  // Series colour: with a flagged subject present, the flagged one is red and
+  // the rest recede to the accent (as in the comp); otherwise the per-subject
+  // palette so individual curves can still be told apart.
+  const anyFlagged = data.series.some(s => flaggedSet.has(String(s.id)));
+  const seriesColor = (id: string, i: number) =>
+    flaggedSet.has(id) ? 'var(--red)' : anyFlagged ? 'var(--accent)' : SPAG_PALETTE[i % SPAG_PALETTE.length];
+  const seriesOpacity = (id: string) => (flaggedSet.has(id) ? 0.9 : anyFlagged ? 0.5 : 0.7);
+
+  const caption = `${data.n_subjects} subjects`
+    + (data.blq_excluded > 0 ? ` · ${data.blq_excluded} points below the LLOQ excluded` : '')
+    + flaggedSentence(flagged.filter(id => data.series.some(s => String(s.id) === id)));
 
   const controls = (
-    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 2 }}>
-      <span style={{ fontSize: 10, color: 'var(--text-dim)', marginRight: 4 }}>Y axis:</span>
-      {toggleBtn(logY, 'Log', () => setLogY(true))}
-      {toggleBtn(!logY, 'Linear', () => setLogY(false))}
-      <span style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 10, marginRight: 4 }}>View:</span>
-      {toggleBtn(!individual, 'Overlay', () => setIndividual(false))}
-      {toggleBtn(individual, 'Individual', () => setIndividual(true))}
-      <XRangeSlider min={dataLo} max={dataHi} value={[xlo, xhi]} label={data.x_label}
+    <div className="chart-controls">
+      <div className="seg" role="group" aria-label="Y axis scale">
+        <button type="button" aria-pressed={logY} onClick={() => setLogY(true)}>Log</button>
+        <button type="button" aria-pressed={!logY} onClick={() => setLogY(false)}>Linear</button>
+      </div>
+      <div className="seg" role="group" aria-label="View">
+        <button type="button" aria-pressed={!individual} onClick={() => setIndividual(false)}>Overlay</button>
+        <button type="button" aria-pressed={individual} onClick={() => setIndividual(true)}>Individual</button>
+      </div>
+      <XRangeSlider min={dataLo} max={dataHi} value={[xlo, xhi]} label="Time window"
         onChange={v => setXr(v)} onReset={() => setXr(null)} />
+      {!individual && (
+        <button type="button" className="chart-expand" aria-label="Open concentration–time chart full screen"
+          title="Open full screen — wheel to zoom, drag to pan" onClick={() => setExpanded(true)}>
+          <Maximize2 size={13} aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 
@@ -2022,11 +2293,12 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
     const scx = (x: number) => sml + ((x - xmin) / (xmax - xmin || 1)) * (sw - sml - smr);
     const tickLabel = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v >= 1 ? String(Math.round(v)) : v.toPrecision(1);
     return (
-      <div>
+      <figure className="chart-figure">
         {controls}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {data.series.map((s, i) => {
-            const color = SPAG_PALETTE[i % SPAG_PALETTE.length];
+            const id = String(s.id);
+            const color = seriesColor(id, i);
             const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0 && inRange(p.x));
             if (!pts.length) return null;
             const ays = pts.map(p => p.y);
@@ -2045,27 +2317,28 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
             if (yTicksI.length < 2) yTicksI = [Math.min(...ays), Math.max(...ays)];
             const poly = pts.map(p => `${scx(p.x).toFixed(1)},${scy(p.y).toFixed(1)}`).join(' ');
             return (
-              <Zoomable key={s.id} title={`${s.id} — ${data.y_label} vs ${data.x_label}`}>
-              <svg viewBox={`0 0 ${sw} ${sh}`} width={sw}
-                style={{ background: 'rgba(31,102,166,0.03)', borderRadius: 4, border: '1px solid var(--border)', display: 'block' }}>
+              <Zoomable key={s.id} title={`${s.id} — ${axis.y} vs ${axis.x}`}>
+              <svg viewBox={`0 0 ${sw} ${sh}`} width={sw} role="img"
+                aria-label={`Subject ${s.id}: ${axis.y} vs ${axis.x}${flaggedSet.has(id) ? ', terminal phase flagged' : ''}`}
+                style={{ background: 'rgba(31,102,166,0.03)', borderRadius: 4, border: `1px solid ${flaggedSet.has(id) ? 'var(--red)' : 'var(--border)'}`, display: 'block' }}>
                 <line x1={sml} y1={sh - smb} x2={sw - smr} y2={sh - smb} stroke="var(--border)" />
                 <line x1={sml} y1={smt} x2={sml} y2={sh - smb} stroke="var(--border)" />
                 {yTicksI.map((v, k) => (
                   <g key={k}>
                     <line x1={sml - 3} y1={scy(v)} x2={sml} y2={scy(v)} stroke="var(--text-dim)" />
-                    <text x={sml - 4} y={scy(v) + 3} textAnchor="end" fontSize="8" fill="var(--text-dim)">{tickLabel(v)}</text>
+                    <text x={sml - 4} y={scy(v) + 3} textAnchor="end" fontSize="9" {...TICK_TEXT}>{tickLabel(v)}</text>
                   </g>
                 ))}
                 {xTicksI.map((v, k) => (
                   <g key={k}>
                     <line x1={scx(v)} y1={sh - smb} x2={scx(v)} y2={sh - smb + 3} stroke="var(--text-dim)" />
-                    <text x={scx(v)} y={sh - smb + 11} textAnchor="middle" fontSize="8" fill="var(--text-dim)">{v}</text>
+                    <text x={scx(v)} y={sh - smb + 12} textAnchor="middle" fontSize="9" {...TICK_TEXT}>{v}</text>
                   </g>
                 ))}
                 {pts.length > 1 && <polyline points={poly} fill="none" stroke={color} strokeWidth="1.3" strokeOpacity="0.8" />}
                 {pts.map((p, j) => <circle key={j} cx={scx(p.x)} cy={scy(p.y)} r="2" fill={color} />)}
-                <text x={(sml + sw - smr) / 2} y={sh - 3} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text)">{s.id}</text>
-                <text x={10} y={(smt + sh - smb) / 2} textAnchor="middle" fontSize="7.5" fill="var(--text-dim)"
+                <text x={(sml + sw - smr) / 2} y={sh - 3} textAnchor="middle" fontSize="10" fontWeight="600" fill="var(--text)">{s.id}</text>
+                <text x={10} y={(smt + sh - smb) / 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)"
                   transform={`rotate(-90 10 ${(smt + sh - smb) / 2})`}>{logY ? 'log' : 'linear'}</text>
               </svg>
               </Zoomable>
@@ -2073,12 +2346,10 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
           })}
         </div>
         <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 6 }}>
-          x: <b>{data.x_label}</b> {fmt(xlo, 1)}–{fmt(xhi, 1)} (shared) · y: <b>{data.y_label}</b>{logY ? ' (log scale)' : ''}, scaled per subject
+          x: <b>{axis.x}</b> {fmt(xlo, 1)}–{fmt(xhi, 1)} (shared) · y: <b>{axis.y}</b>{logY ? ' (log scale)' : ''}, scaled per subject
         </div>
-        {data.blq_excluded > 0 && (
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>{data.blq_excluded} BLQ (≤0) excluded</div>
-        )}
-      </div>
+        <figcaption className="figcap">{caption}</figcaption>
+      </figure>
     );
   }
 
@@ -2093,11 +2364,13 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
 
   const xTicks = niceTicks(xmin, xmax, 6).filter(v => v >= xmin && v <= xmax);
 
-  return (
-    <div>
-      {controls}
-      <Zoomable title="Concentration–time">
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }}>
+  // Flagged series are drawn last so they sit on top of the others.
+  const ordered = data.series.map((s, i) => ({ s, i }))
+    .sort((a, b) => Number(flaggedSet.has(String(a.s.id))) - Number(flaggedSet.has(String(b.s.id))));
+
+  const overlaySvg = (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', display: 'block' }} role="img"
+        aria-label={`${logY ? 'Log-scale' : 'Linear'} ${axis.y} vs ${axis.x} for ${data.n_subjects} subjects`}>
         <line x1={ml} y1={H - mb} x2={W - mr} y2={H - mb} stroke="var(--border)" />
         <line x1={ml} y1={mt} x2={ml} y2={H - mb} stroke="var(--border)" />
         {yTicks.map((v, k) => {
@@ -2106,37 +2379,50 @@ function SpaghettiChart({ data }: { data: SpaghettiData }) {
           return (
             <g key={k}>
               <line x1={ml - 3} y1={yy} x2={ml} y2={yy} stroke="var(--text-dim)" />
-              <text x={ml - 5} y={yy + 3.5} textAnchor="end" fontSize="8" fill="var(--text-dim)">{lbl}</text>
+              <text x={ml - 5} y={yy + 3.5} textAnchor="end" fontSize="10" {...TICK_TEXT}>{lbl}</text>
             </g>
           );
         })}
         {xTicks.map((v, k) => (
           <g key={k}>
             <line x1={sx(v)} y1={H - mb} x2={sx(v)} y2={H - mb + 3} stroke="var(--text-dim)" />
-            <text x={sx(v)} y={H - mb + 12} textAnchor="middle" fontSize="9" fill="var(--text-dim)">{v}</text>
+            <text x={sx(v)} y={H - mb + 13} textAnchor="middle" fontSize="10" {...TICK_TEXT}>{v}</text>
           </g>
         ))}
-        <text x={(ml + W - mr) / 2} y={H - 6} textAnchor="middle" {...AXIS_TITLE}>{data.x_label}</text>
+        <text x={(ml + W - mr) / 2} y={H - 6} textAnchor="middle" {...AXIS_TITLE}>{axis.x}</text>
         <text x={14} y={(mt + H - mb) / 2} textAnchor="middle" {...AXIS_TITLE}
-          transform={`rotate(-90 14 ${(mt + H - mb) / 2})`}>{data.y_label}{logY ? ' (log)' : ''}</text>
-        {data.series.map((s, i) => {
-          const color = SPAG_PALETTE[i % SPAG_PALETTE.length];
+          transform={`rotate(-90 14 ${(mt + H - mb) / 2})`}>{axis.y}</text>
+        {ordered.map(({ s, i }) => {
+          const id = String(s.id);
+          const isFlagged = flaggedSet.has(id);
+          const color = seriesColor(id, i);
           const pts = s.x.map((x, j) => ({ x, y: s.y[j] })).filter(p => p.y > 0 && inRange(p.x));
           if (!pts.length) return null;
           const poly = pts.map(p => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+          const last = pts[pts.length - 1];
           return (
             <g key={s.id}>
-              {pts.length > 1 && <polyline points={poly} fill="none" stroke={color} strokeWidth="1.2" strokeOpacity="0.7" />}
-              {pts.map((p, j) => <circle key={j} cx={sx(p.x)} cy={sy(p.y)} r="2" fill={color} fillOpacity="0.85" />)}
+              {pts.length > 1 && <polyline points={poly} fill="none" stroke={color}
+                strokeWidth={isFlagged ? '1.5' : '1.2'} strokeOpacity={seriesOpacity(id)} />}
+              {pts.map((p, j) => <circle key={j} cx={sx(p.x)} cy={sy(p.y)} r={isFlagged ? 2.5 : 2}
+                fill={color} fillOpacity={isFlagged ? 0.9 : 0.85} />)}
+              {isFlagged && (
+                <text x={Math.min(sx(last.x), W - mr) - 4} y={sy(last.y) - 5} textAnchor="end"
+                  fontSize="11" fill="var(--red)">subject {id}</text>
+              )}
             </g>
           );
         })}
       </svg>
-      </Zoomable>
-      <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>
-        {data.n_subjects} subjects{data.blq_excluded > 0 ? ` · ${data.blq_excluded} BLQ excluded` : ''}
-      </div>
-    </div>
+  );
+
+  return (
+    <figure className="chart-figure">
+      {controls}
+      {overlaySvg}
+      {expanded && <ZoomModal title="Concentration–time" onClose={() => setExpanded(false)}>{overlaySvg}</ZoomModal>}
+      <figcaption className="figcap">{caption}</figcaption>
+    </figure>
   );
 }
 
@@ -2147,8 +2433,24 @@ interface LzManualFit {
   fit_x: number[]; fit_y: number[];
 }
 
-function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }) {
-  const subjects = data.subjects;
+/** Panels shown before "All N subjects". */
+const LZ_PANELS_COLLAPSED = 4;
+/** Radius of the transparent hit circle around each λz point: 12 viewBox
+ *  units = 24px at the panel's 1:1 rendering, the minimum touch target. Per
+ *  panel it is clamped to half the smallest x-gap between neighbouring points
+ *  (never below LZ_HIT_R_MIN) so hit circles cannot cover a neighbour's dot —
+ *  the later sibling would otherwise win the click and toggle the wrong point. */
+const LZ_HIT_R = 12;
+const LZ_HIT_R_MIN = 4;
+
+function NcaLzPlot({ data, sessionId, flagged = {}, hours = false }: {
+  data: NcaPlotData; sessionId: string;
+  /** subject id → %AUC extrapolated, for subjects over the 20 % limit (from the NCA table). */
+  flagged?: Record<string, number>;
+  /** true when the dataset's time axis is labelled in hours — the only case an 'h' is printed. */
+  hours?: boolean;
+}) {
+  const subjects = useMemo(() => bySubjectId(data.subjects, s => s.id), [data.subjects]);
 
   const [selections, setSelections] = useState<Record<string, Set<string>>>(() => {
     const s: Record<string, Set<string>> = {};
@@ -2158,6 +2460,7 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
   const [localFits, setLocalFits] = useState<Record<string, LzManualFit>>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showAll, setShowAll] = useState(false);
 
   const toggle = (sid: string, tk: string) => {
     setSelections(prev => {
@@ -2196,21 +2499,33 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
   };
 
   if (!subjects.length) return null;
-  const sw = 175, sh = 118, sml = 34, smr = 6, smt = 10, smb = 20;
+  const sw = 164, sh = 84, sml = 34, smr = 6, smt = 10, smb = 20;
+  const h = hours ? ' h' : '';
+  const collapsible = subjects.length > LZ_PANELS_COLLAPSED;
+  const visible = collapsible && !showAll ? subjects.slice(0, LZ_PANELS_COLLAPSED) : subjects;
+  // One sentence per flagged subject, from the NCA row (n_pts = points in the
+  // current λz fit; the %AUC figure is the NCA table's own value).
+  const flaggedSentences = subjects
+    .filter(s => flagged[s.id] != null)
+    .map(s => ` Subject ${s.id} uses ${s.n_pts ?? '?'} late points and extrapolates ${fmt(flagged[s.id], 1)} % of its AUC.`)
+    .join('');
 
   return (
-    <div>
-      <div style={{ fontSize: 11, color: 'var(--text)', marginBottom: 2 }}>
-        x: <b>time</b> · y: <b>concentration</b> (log scale) · dashed line = terminal λz fit · one panel per subject
+    <div className="lz-block">
+      <div className="lz-head">
+        <p className="lz-intro">Click points to include or exclude them, then refit.{flaggedSentences}</p>
+        {collapsible && (
+          <button type="button" className="link-btn" aria-expanded={showAll} onClick={() => setShowAll(v => !v)}>
+            {showAll ? `First ${LZ_PANELS_COLLAPSED} subjects` : `All ${subjects.length} subjects`}
+          </button>
+        )}
       </div>
-      <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>
-        Click points to include/exclude · Refit to apply manual selection
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {subjects.map((s: LzSubject) => {
+      <div className="lz-grid">
+        {visible.map((s: LzSubject) => {
           const sel = selections[s.id] ?? new Set<string>();
           const fit = localFits[s.id];
           const isLoading = loadingId === s.id;
+          const isFlagged = flagged[s.id] != null;
 
           const allObs = s.x.map((x, i) => ({ x, y: s.y[i] })).filter(p => p.y > 0);
           const activeFitX = fit ? fit.fit_x : s.fit_x;
@@ -2237,13 +2552,21 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
           const fitPoly = activeFitX.map((x, i) =>
             `${scx(x).toFixed(1)},${scy(activeFitY[i]).toFixed(1)}`).join(' ');
 
+          // Hit radius for this panel: no circle may reach a neighbour's centre.
+          const obsPx = allObs.map(p => scx(p.x)).sort((a, b) => a - b);
+          const minGap = obsPx.slice(1).reduce((m, x, k) => Math.min(m, x - obsPx[k]), Infinity);
+          const hitR = Math.max(LZ_HIT_R_MIN, Math.min(LZ_HIT_R, minGap / 2));
+
           const nSel = sel.size;
           const canRefit = nSel >= 3;
+          const tHalfText = activeTHalf != null ? `t½ ${activeTHalf.toFixed(1)}${h}` : null;
+          const svgLabel = `Subject ${s.id} terminal slope, ${activeN ?? '?'} points`
+            + (activeTHalf != null ? `, half-life ${activeTHalf.toFixed(1)}${hours ? ' hours' : ''}` : '')
+            + (isFlagged ? `, extrapolation ${fmt(flagged[s.id], 1)} percent, over the limit` : '');
 
           return (
-            <div key={s.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-              <svg viewBox={`0 0 ${sw} ${sh}`} width={sw}
-                style={{ background: 'rgba(31,102,166,0.03)', borderRadius: 4, border: '1px solid var(--border)', display: 'block' }}>
+            <figure key={s.id} className={`lz-panel ${isFlagged ? 'flagged' : ''}`}>
+              <svg viewBox={`0 0 ${sw} ${sh}`} width={sw} role="group" aria-label={svgLabel} className="lz-svg">
                 <line x1={sml} y1={sh - smb} x2={sw - smr} y2={sh - smb} stroke="var(--border)" />
                 <line x1={sml} y1={smt} x2={sml} y2={sh - smb} stroke="var(--border)" />
                 {yTicks.map((v, k) => {
@@ -2251,7 +2574,7 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
                   return (
                     <g key={k}>
                       <line x1={sml - 3} y1={yy} x2={sml} y2={yy} stroke="var(--border)" />
-                      <text x={sml - 4} y={yy + 3} textAnchor="end" fontSize="7" fill="var(--text-dim)">
+                      <text x={sml - 4} y={yy + 3} textAnchor="end" fontSize="9" {...TICK_TEXT}>
                         {v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v >= 1 ? String(Math.round(v)) : v.toPrecision(1)}
                       </text>
                     </g>
@@ -2262,76 +2585,61 @@ function NcaLzPlot({ data, sessionId }: { data: NcaPlotData; sessionId: string }
                   return v > 0 ? (
                     <g key={k}>
                       <line x1={scx(v)} y1={sh - smb} x2={scx(v)} y2={sh - smb + 3} stroke="var(--border)" />
-                      <text x={scx(v)} y={sh - smb + 9} textAnchor="middle" fontSize="7" fill="var(--text-dim)">{v}</text>
+                      <text x={scx(v)} y={sh - smb + 12} textAnchor="middle" fontSize="9" {...TICK_TEXT}>{v}</text>
                     </g>
                   ) : null;
                 })}
                 {activeFitX.length > 1 && (
-                  <polyline points={fitPoly} fill="none" stroke="#9A5B12" strokeWidth="1.4" strokeDasharray="4 3" />
+                  <polyline points={fitPoly} fill="none" stroke={isFlagged ? 'var(--yellow)' : 'var(--text-dim)'}
+                    strokeWidth="1.4" strokeDasharray="4 3" />
                 )}
                 {allObs.map((p, j) => {
                   const tk = p.x.toFixed(4);
                   const isSelected = sel.has(tk);
                   const cx = scx(p.x), cy = scy(p.y);
                   return (
-                    <g key={j} style={{ cursor: 'pointer' }} onClick={() => toggle(s.id, tk)}>
-                      <circle cx={cx} cy={cy} r="7" fill="transparent" />
-                      <circle cx={cx} cy={cy} r={isSelected ? 3.5 : 2.5}
-                        fill={isSelected ? 'var(--accent)' : 'var(--text-dim)'}
-                        fillOpacity={isSelected ? 1 : 0.4}
-                        stroke={isSelected ? '#fff' : 'none'} strokeWidth="0.5" />
+                    <g key={j}>
+                      {/* transparent hit target (≤24px, clamped so neighbours never overlap), keyboard-reachable; the visible dot sits on top */}
+                      <circle className="lz-hit" cx={cx} cy={cy} r={hitR} fill="transparent"
+                        tabIndex={0} role="button" aria-pressed={isSelected}
+                        aria-label={`t = ${p.x}: ${isSelected ? 'included in λz' : 'excluded from λz'}`}
+                        onClick={() => toggle(s.id, tk)}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(s.id, tk); } }} />
+                      <circle cx={cx} cy={cy} r={isSelected ? 3 : 2.5} pointerEvents="none"
+                        fill={isSelected ? 'var(--accent)' : 'var(--border-strong)'} />
                     </g>
                   );
                 })}
-                <text x={(sml + sw - smr) / 2} y={sh - smb + 13}
-                  textAnchor="middle" fontSize="8" fill="var(--text-dim)" fontWeight="600">{s.id}</text>
               </svg>
-
-              {activeTHalf != null && (
-                <div style={{ fontSize: 7, color: 'var(--text-dim)', textAlign: 'center' }}>
-                  {`t½=${activeTHalf.toFixed(1)}h · n=${activeN ?? '?'} · R²=${activeR2?.toFixed(3) ?? '–'}`}
-                  {fit && <span style={{ color: 'var(--accent)', marginLeft: 3 }}>✓ manual</span>}
-                </div>
-              )}
-
-              <div style={{ fontSize: 7, color: nSel >= 3 ? 'var(--text-dim)' : '#B23A2E', textAlign: 'center' }}>
-                {nSel} pt{nSel !== 1 ? 's' : ''} selected{nSel < 3 ? ' (≥3 req.)' : ''}
-              </div>
-
-              {errors[s.id] && (
-                <div style={{ fontSize: 7, color: '#B23A2E', textAlign: 'center', maxWidth: sw, wordBreak: 'break-word' }}>
-                  {errors[s.id]}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: 3 }}>
-                <button onClick={() => doRefit(s)} disabled={!canRefit || isLoading}
-                  style={{
-                    fontSize: 9, padding: '2px 8px', borderRadius: 8,
-                    cursor: canRefit && !isLoading ? 'pointer' : 'default',
-                    border: '1px solid var(--border)',
-                    background: canRefit ? 'var(--accent)' : 'transparent',
-                    color: canRefit ? '#fff' : 'var(--text-dim)',
-                    opacity: isLoading ? 0.5 : 1,
-                  }}>
-                  {isLoading ? '…' : 'Refit λz'}
-                </button>
-                <button onClick={() => reset(s)}
-                  style={{
-                    fontSize: 9, padding: '2px 6px', borderRadius: 8, cursor: 'pointer',
-                    border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-dim)',
-                  }}>
-                  Reset
-                </button>
-              </div>
-            </div>
+              <figcaption className="lz-cap">
+                <span className="lz-cap-row lz-cap-main">
+                  <b>{s.id}</b>{tHalfText && <> · {tHalfText}</>} · {activeN ?? '?'} pts
+                </span>
+                <span className="lz-cap-row">
+                  <span>
+                    {activeR2 != null ? <>R² {activeR2.toFixed(3)}</> : 'R² –'}
+                    {nSel !== activeN && <> · {nSel} selected</>}
+                    {fit && <> · manual</>}
+                  </span>
+                  <span className="lz-links">
+                    <button type="button" className="link-btn" onClick={() => doRefit(s)} disabled={!canRefit || isLoading}
+                      title={canRefit ? 'Refit λz with the selected points' : 'Select at least 3 points'}>
+                      {isLoading ? 'Refitting…' : 'Refit'}
+                    </button>
+                    <button type="button" className="link-btn" onClick={() => reset(s)} disabled={isLoading}>Reset</button>
+                  </span>
+                </span>
+              </figcaption>
+              {errors[s.id] && <div className="lz-error" role="alert">{errors[s.id]}</div>}
+            </figure>
           );
         })}
       </div>
-      <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-dim)', marginTop: 8 }}>
-        <span><span style={{ color: 'var(--accent)' }}>●</span> Selected for λz</span>
-        <span><span style={{ color: 'var(--text-dim)', opacity: 0.45 }}>●</span> Excluded</span>
-        <span><span style={{ color: '#9A5B12' }}>– –</span> Regression fit</span>
+      {/* swatches are empty coloured spans, not glyphs, so no low-contrast "text" is rendered */}
+      <div className="lz-legend">
+        <span><span className="lz-swatch dot" style={{ background: 'var(--accent)' }} aria-hidden="true" /> Included in λz</span>
+        <span><span className="lz-swatch dot" style={{ background: 'var(--border-strong)' }} aria-hidden="true" /> Excluded</span>
+        <span><span className="lz-swatch dash" aria-hidden="true" /> Regression fit (amber when flagged)</span>
       </div>
     </div>
   );
@@ -2426,7 +2734,7 @@ function StratifiedVpcPanels({ s }: { s: NonNullable<PharmState['vpc_results']>[
         {s.strata.map(st => (
           <div key={st.label} style={{ width: tile, maxWidth: '100%' }}>
             <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
-              {label} = {st.label} <span style={{ opacity: 0.7 }}>(n = {st.n})</span>
+              {label} = {st.label} <span>(n = {st.n})</span>
             </div>
             {pcvpcSvg(st.bins, { width: tile, height: 200, xLabel, yMax,
               ariaLabel: `pcVPC for ${label} = ${st.label}` })}
@@ -2462,7 +2770,7 @@ function expHistSvg(g: NonNullable<ExpMetricT>[number], metric: 'auc' | 'cmax', 
   return (
     <div key={g.label} style={{ width: W, maxWidth: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-        {gb} = {g.label} <span style={{ opacity: 0.7 }}>(n = {g.n})</span>{' '}
+        {gb} = {g.label} <span>(n = {g.n})</span>{' '}
         <span style={{ color: m.within ? 'var(--green)' : 'var(--red, #c0392b)' }}>
           {m.within ? '✓ within' : '✗ outside'}</span>
       </div>
@@ -3028,11 +3336,9 @@ function ExposureForestCard({ r }: { r: PharmState['exposure_forest_results'] })
         {' '}{r.n_draws} uncertainty draws
         <span style={{ marginLeft: 10 }}>
           {(['rel_auc', 'rel_cmax'] as const).map(m => (
-            <button key={m} className="chip" style={{
-              padding: '1px 8px', marginLeft: 4,
-              background: showMetric === m ? 'var(--accent)' : undefined,
-              color: showMetric === m ? '#fff' : undefined,
-            }} onClick={() => setShowMetric(m)}>{m === 'rel_auc' ? 'AUC' : 'Cmax'}</button>
+            <button key={m} type="button" className="chip" aria-pressed={showMetric === m}
+              style={{ padding: '1px 8px', marginLeft: 4 }}
+              onClick={() => setShowMetric(m)}>{m === 'rel_auc' ? 'AUC' : 'Cmax'}</button>
           ))}
         </span>
       </div>
@@ -3111,7 +3417,7 @@ function SpecialPopCard({ r, onRerun, busy }: {
   const panel = (s: SpecialPopStratum) => (
     <div key={s.label} style={{ width: W, maxWidth: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
-        {s.label} <span style={{ opacity: 0.7 }}>(n = {s.n})</span>
+        {s.label} <span>(n = {s.n})</span>
         {s.recommended_dose != null && <span style={{ color: 'var(--green)' }}> · dose {s.recommended_dose}</span>}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
@@ -3151,8 +3457,8 @@ function SpecialPopCard({ r, onRerun, busy }: {
         (at dose {r.reference_dose}) · {r.n_per_stratum}/stratum · source: {r.population_source}
         <span style={{ marginLeft: 10 }}>
           {(r.metrics ?? ['auc_tau']).map(mk => (
-            <button key={mk} className="chip" style={{ padding: '1px 8px', marginLeft: 4,
-              background: metric === mk ? 'var(--accent)' : undefined, color: metric === mk ? '#fff' : undefined }}
+            <button key={mk} type="button" className="chip" aria-pressed={metric === mk}
+              style={{ padding: '1px 8px', marginLeft: 4 }}
               onClick={() => setMetric(mk)}>{SP_METRIC_LABEL[mk] ?? mk}</button>
           ))}
         </span>
@@ -3167,9 +3473,7 @@ function SpecialPopCard({ r, onRerun, busy }: {
           paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 12 }}>
           <span style={{ color: 'var(--text-dim)' }}>population:</span>
           {(['dataset', 'reference'] as const).map(src => (
-            <button key={src} className="chip" disabled={busy}
-              style={{ background: r.population_source === src ? 'var(--accent)' : undefined,
-                color: r.population_source === src ? '#fff' : undefined }}
+            <button key={src} type="button" className="chip" disabled={busy} aria-pressed={r.population_source === src}
               onClick={() => onRerun({ source: src })}>{src === 'reference' ? 'representative adults' : 'analysis dataset'}</button>
           ))}
           {busy && <span style={{ color: 'var(--text-dim)' }}>simulating…</span>}
@@ -3230,7 +3534,7 @@ function IndividualExposuresCard({ r }: { r: PharmState['individual_exposures'] 
 
 /** Pediatric dose-finding: exposure by age×weight stratum vs an adult reference
  * band, with the %-within-adult-range dose-selection curve (Week-14). */
-const PED_PALETTE = ['#6ea8fe', '#63e6be', '#ffd43b', '#ff922b', '#e599f7', '#ff8787'];
+const PED_PALETTE = ['#1F66A6', '#1D7A5A', '#9A5B12', '#B23A2E', '#4A6FA5', '#2A8F8F'];
 
 function PediatricCard({ r, onRerun, busy }: {
   r: PharmState['pediatric_results'];
@@ -3269,8 +3573,8 @@ function PediatricCard({ r, onRerun, busy }: {
 
   const boxPanel = (s: PediatricStratum) => (
     <div key={s.label} style={{ width: W, maxWidth: '100%' }}>
-      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', fontWeight: 600 }}>
-        {s.label} <span style={{ opacity: 0.7 }}>(n = {s.n})</span>
+      <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 600 }}>
+        {s.label} <span>(n = {s.n})</span>
         {s.recommended_dose != null && <span style={{ color: 'var(--green)' }}> · dose {s.recommended_dose}</span>}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} role="img"
@@ -3310,8 +3614,8 @@ function PediatricCard({ r, onRerun, busy }: {
         ({r.reference_source} at {r.reference_dose}) · {r.allometry} allometry · {r.n_per_stratum}/stratum
         <span style={{ marginLeft: 10 }}>
           {(r.metrics ?? ['auc_tau']).map(mk => (
-            <button key={mk} className="chip" style={{ padding: '1px 8px', marginLeft: 4,
-              background: metric === mk ? 'var(--accent)' : undefined, color: metric === mk ? '#fff' : undefined }}
+            <button key={mk} type="button" className="chip" aria-pressed={metric === mk}
+              style={{ padding: '1px 8px', marginLeft: 4 }}
               onClick={() => setMetric(mk)}>{SP_METRIC_LABEL[mk] ?? mk}</button>
           ))}
         </span>
@@ -3348,7 +3652,7 @@ function PediatricCard({ r, onRerun, busy }: {
         ))}
         <text x={(cl + CW) / 2} y={CH - 2} textAnchor="middle" fontSize="9" fill="var(--text-dim)">Dose (mg)</text>
       </svg>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: 10, marginTop: 2 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: 11, marginTop: 2 }}>
         {strata.map((s, si) => (
           <span key={s.label} style={{ color: 'var(--text-dim)' }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
@@ -3364,17 +3668,15 @@ function PediatricCard({ r, onRerun, busy }: {
           paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 12 }}>
           <span style={{ color: 'var(--text-dim)' }}>pediatric covariates:</span>
           {(['reference', 'dataset'] as const).map(src => (
-            <button key={src} className="chip" disabled={busy}
-              style={{ background: r.population_source === src ? 'var(--accent)' : undefined,
-                color: r.population_source === src ? '#fff' : undefined }}
+            <button key={src} type="button" className="chip" disabled={busy} aria-pressed={r.population_source === src}
               onClick={() => onRerun({ source: src })}>{src === 'reference' ? 'representative peds' : 'analysis dataset'}</button>
           ))}
           <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>WT exponent CL</span>
           <input type="number" step="0.01" value={clExp} onChange={e => setClExp(e.target.value)}
-            placeholder="0.75" disabled={busy} style={{ width: 56 }} />
+            aria-label="Weight exponent on clearance" placeholder="0.75" disabled={busy} style={{ width: 56 }} />
           <span style={{ color: 'var(--text-dim)' }}>V</span>
           <input type="number" step="0.01" value={vExp} onChange={e => setVExp(e.target.value)}
-            placeholder="1.0" disabled={busy} style={{ width: 56 }} />
+            aria-label="Weight exponent on volume" placeholder="1.0" disabled={busy} style={{ width: 56 }} />
           <button className="chip" disabled={busy}
             onClick={() => onRerun({ wt_exponent_cl: clExp === '' ? null : Number(clExp),
               wt_exponent_v: vExp === '' ? null : Number(vExp) })}>Re-simulate</button>
@@ -3431,7 +3733,7 @@ function RolesEditor({ state, onApply, loading }:
               <td style={{ color: 'var(--text-dim)' }}>{c.dtype}</td>
               <td>
                 <select className="model-select" style={{ maxWidth: 140 }} value={roleFor(c.name)}
-                  disabled={loading}
+                  disabled={loading} aria-label={`Role for column ${c.name}`}
                   onChange={e => setEdits(p => ({ ...p, [c.name]: e.target.value }))}>
                   {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r || '—'}</option>)}
                 </select>
@@ -3520,52 +3822,6 @@ function SimChart({ sim }: { sim: PharmState['simulation_results'] }) {
   );
 }
 
-function AuditPanel({
-  entries,
-  integrity,
-}: {
-  entries: AuditEntry[];
-  integrity: AuditIntegrityStatus | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const verified = integrity?.verified === true;
-  return (
-    <div>
-      <span className="audit-toggle" onClick={() => setOpen(o => !o)}>
-        {open ? '▾' : '▸'} Audit trail ({entries.length} entries)
-      </span>
-      {verified && (
-        <span className="audit-ok" style={{ marginLeft: 8 }}>
-          <ShieldCheck size={10} style={{ display: 'inline', marginRight: 3 }} />verified
-        </span>
-      )}
-      {integrity && !verified && (
-        <span style={{ marginLeft: 8, color: 'var(--warning)', fontSize: 10 }}>
-          <AlertTriangle size={10} style={{ display: 'inline', marginRight: 3 }} />
-          {integrity.mode === 'hash_only' ? 'hash-only · unanchored' : 'verification failed'}
-        </span>
-      )}
-      {open && (
-        <div className="audit-list">
-          {entries.map(e => (
-            <div className="audit-row" key={e.index} title={e.reason ? `reason: ${e.reason}` : undefined}>
-              <span className="audit-row-idx">#{e.index}</span>
-              <span className="audit-row-agent">{e.agent}</span>
-              <span className="audit-row-tool">{e.tool}</span>
-              {e.actor && e.actor !== 'anonymous' && (
-                <span className="audit-row-actor" style={{ fontSize: 10, color: 'var(--text-dim)' }}>
-                  by {e.actor}
-                </span>
-              )}
-              <span style={{ marginLeft: 'auto', fontSize: 10 }}>{e.entry_hash.slice(0, 12)}…</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<PharmState | null>(null);
@@ -3579,10 +3835,32 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrityStatus | null>(null);
   const [healthy, setHealthy] = useState<boolean | null>(null);
+  /** /api/health `auth`: null until known. Drives the gate's attribution copy. */
+  const [authMode, setAuthMode] = useState<'required' | 'open' | null>(null);
   const [llmLabel, setLlmLabel] = useState<string>('');
   const [llmOpen, setLlmOpen] = useState(false);
+  /** Client-side gate wait only: 'pending' from the moment a gate arrives
+   *  until the next run (or a rejection) clears it. Approved / Rejected are
+   *  never held here — `decisionView` below reads them from the sealed
+   *  human_review audit entry, so nothing can show a decision the backend
+   *  did not record. */
+  const [decision, setDecision] = useState<Decision>(null);
+  /** A gate decision is in flight (its POST unanswered): the gate stays up
+   *  with its reason, and the review pill shows progress instead. */
+  const [deciding, setDeciding] = useState(false);
+  const [verifyNote, setVerifyNote] = useState<VerifyNote | null>(null);
+  /** ≤1180px the review column is a drawer; this is its open state. */
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
+  /** Index of the step the workflow is paused at (from the gate payload). */
+  const [gateStep, setGateStep] = useState(-1);
+  /** Executed workflow steps that put no section in the document (load,
+   *  validate, adversarial review…): shown once, folded, as the run log. */
+  const [runLog, setRunLog] = useState<WorkflowExecutedStep[]>([]);
+  /** Id of the upload-time "Dataset loaded" note; dropped once the workflow's
+   *  own load_dataset step has reported the same fact. */
+  const loadedNoteId = useRef('');
   const [pkModels, setPkModels] = useState<PkModelDef[]>([]);
   const [selectedModel, setSelectedModel] = useState('oral_1cmt');
   const [simDose, setSimDose] = useState(100);
@@ -3607,6 +3885,9 @@ export default function App() {
   const [skills, setSkills] = useState<SkillDef[]>([]);
   const [showSkills, setShowSkills] = useState(false);
   const [showFlexplot, setShowFlexplot] = useState(false);
+  /** Actions popover above the composer (quick-action rows live inside it). */
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLButtonElement>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const shownMarkers = useRef(new Set<string>());
@@ -3616,7 +3897,7 @@ export default function App() {
 
   useEffect(() => {
     api.health()
-      .then(h => { setHealthy(h.status === 'ok'); setLlmLabel(h.llm ?? ''); })
+      .then(h => { setHealthy(h.status === 'ok'); setLlmLabel(h.llm ?? ''); setAuthMode(h.auth ?? null); })
       .catch(() => setHealthy(false));
     api.createSession()
       .then(s => setSession(s))
@@ -3626,10 +3907,15 @@ export default function App() {
       .catch(() => { /* library unavailable */ });
   }, []);
 
-  // Accept an optional `id` (some call sites pass `id: ''` as a placeholder) but
-  // always assign a fresh unique id here so React keys stay stable and distinct.
+  // Accept an optional `id` (most call sites pass `id: ''` as a placeholder) and
+  // assign a fresh unique id when none is given, so React keys stay stable and
+  // distinct; a caller passes its own (newMsgId) only to remove the row later.
+  /** Push order of the last message (see DisplayMsg.seq); read synchronously
+   *  at pushMsg time, before React commits the push. */
+  const msgSeq = useRef(0);
   const pushMsg = useCallback((m: Omit<DisplayMsg, 'id'> & { id?: string }) => {
-    setMessages(prev => [...prev, { ...m, id: `${Date.now()}-${Math.random()}` }]);
+    const seq = ++msgSeq.current;
+    setMessages(prev => [...prev, { ...m, id: m.id || newMsgId(), seq }]);
   }, []);
 
   function extractMessages(raw: ChatMessage[], agent: string): DisplayMsg[] {
@@ -3663,6 +3949,58 @@ export default function App() {
     } catch { /* best-effort */ }
   }
 
+  // Audit freshness: seals and step timings follow every state change (chat,
+  // tool and calculator responses), not only workflow gates. Async then-branch
+  // only; the `alive` flag drops a stale response after unmount/re-run. This
+  // fetch is sent after the response that changed `state` landed, so it is
+  // the one that binds the cards pushed with that response (bindSeals);
+  // `seqAtFetch` keeps it from binding a card pushed after it was sent.
+  useEffect(() => {
+    if (!session || !state) return;
+    let alive = true;
+    const seqAtFetch = msgSeq.current;
+    api.getAudit(session.id).then(r => {
+      if (!alive) return;
+      setAudit(r.entries);
+      setAuditIntegrity(r.integrity);
+      setMessages(prev => bindSeals(prev, r.entries, seqAtFetch));
+      setVerifyNote(null);
+    }).catch(() => { /* best-effort */ });
+    return () => { alive = false; };
+  }, [session, state]);
+
+  /** Explicit chain check from the audit trail: re-reads the chain and reports
+   *  the backend's own integrity verdict beside the link. */
+  async function verifyChain() {
+    if (!session) return;
+    try {
+      const r = await api.getAudit(session.id);
+      setAudit(r.entries);
+      setAuditIntegrity(r.integrity);
+      const { mode, chain_ok, verified } = r.integrity;
+      if (verified) {
+        setVerifyNote({ tone: 'ok', text: 'Chain verified' });
+      } else if (mode === 'hash_only' && chain_ok) {
+        // Hash-only (dev) mode has no MAC or anchor: structure is all we can say.
+        setVerifyNote({ tone: 'dim', text: 'Chain structure intact (unauthenticated)' });
+      } else {
+        const failed = integrityFailures(r.integrity);
+        setVerifyNote({
+          tone: 'bad',
+          text: failed.length ? `Chain not verified: ${failed.join(', ')} failed` : 'Chain not verified',
+        });
+      }
+    } catch {
+      setVerifyNote({ tone: 'bad', text: 'Chain not verified' });
+    }
+  }
+
+  /** v1: a fresh session is a page reload — App holds 40+ state slots plus the
+   *  `shownMarkers` ref, so an in-place reset is a follow-up. */
+  function newSession() {
+    window.location.reload();
+  }
+
   function handleFiles(f: File) {
     setFile(f);
   }
@@ -3682,16 +4020,54 @@ export default function App() {
   async function settleWorkflow(res: WorkflowStartResponse, note = 'Population fit running…') {
     if ('job_id' in res && res.job_id) {
       if (!session) return;
-      const done = await api.pollJob<WorkflowResponse>(session.id, res.job_id,
-        s => setJobNote(`${note} ${s}s (several real fits — this can take minutes)`));
-      setJobNote('');
-      handleWorkflowResponse(done);
+      handleWorkflowResponse(await pollWorkflowJob(session.id, res.job_id, note));
       return;
     }
     handleWorkflowResponse(res as WorkflowResponse);
   }
 
-  function handleWorkflowResponse(res: { status: string; state: PharmState; messages?: ChatMessage[]; audit_ok: boolean }) {
+  /** Poll a workflow leg the backend queued. The audit trail is re-read on
+   *  the first tick and periodically after it, so the seals the leg adds —
+   *  the human_review entry first — reach the rail and the review pill while
+   *  the leg runs: both read the sealed decision, never the click. */
+  async function pollWorkflowJob(sid: string, jobId: string, note: string): Promise<WorkflowResponse> {
+    let ticks = 0;
+    try {
+      return await api.pollJob<WorkflowResponse>(sid, jobId, s => {
+        setJobNote(`${note} ${s}s (several real fits — this can take minutes)`);
+        ticks += 1;
+        if (ticks === 1 || ticks % AUDIT_REFRESH_EVERY_TICKS === 0) void refreshAudit();
+      });
+    } finally {
+      setJobNote('');
+    }
+  }
+
+  /** A leg the backend accepted lost its client-side tracking — the job poll
+   *  failed after its retries, or the job itself reported an error. The
+   *  backend session is the truth: reload its state and audit so the document
+   *  and the trail show what was actually sealed, then settle the status from
+   *  that state — complete when the workflow's last step ran, otherwise idle
+   *  so the run can be repeated. Never a dead 'error'. */
+  async function reconcileRun(err: Error, workflow: WorkflowName) {
+    pushMsg({
+      role: 'assistant', agent: 'supervisor', id: '',
+      content: `Error: ${err.message} — session state reloaded; the audit trail shows what was sealed.`,
+    });
+    if (!session) return;
+    let finished = false;
+    try {
+      const st = await api.getState(session.id);
+      setState(st);
+      setCurrentStep(st.current_step ?? -1);
+      finished = st.workflow_name === workflow
+        && (st.current_step ?? -1) >= WORKFLOW_UI[workflow].steps.length;
+    } catch { /* the audit refresh below still reconciles the trail */ }
+    await refreshAudit();
+    setWfStatus(finished ? 'complete' : 'idle');
+  }
+
+  function handleWorkflowResponse(res: WorkflowResponse) {
     setState(res.state);
     setCurrentStep(res.state.current_step ?? -1);
 
@@ -3700,37 +4076,94 @@ export default function App() {
       extractMessages(res.messages, agent).forEach(m => pushMsg(m));
     }
 
+    // Backend tools whose result section this leg puts in the document. A step
+    // that has one is not narrated as well — the section's attribution line
+    // already names agent, tool and seal; the rest go to the folded run log.
+    const sectioned = new Set<string>();
+    if (res.state.dataset_metadata) sectioned.add('profile_pk_dataset');
+    const pushCard = (marker: Marker, agent: string) => {
+      pushMsg({ role: 'assistant', content: marker, agent, id: '', snap: res.state });
+      const tool = CARD_META[marker].tool;
+      if (tool) sectioned.add(tool);
+    };
+
+    // One result card per step the leg ran. `executed` is the only per-step
+    // record a workflow leg returns — a leg polled from a job (NLME → SCM →
+    // diagnostics → forest → VPC) arrives here exactly like an inline one, so
+    // this is what keeps the document complete. Every card below is pushed
+    // once per run: `shownMarkers` is cleared by uploadAndRun and each template
+    // tool runs once, so a resumed leg (gate approve/reject) must not re-emit a
+    // section the page already shows. The key is the marker, not the audit
+    // seal — `audit` is refreshed after these pushes, so a seal is not known here.
+    const executed = res.executed ?? [];
+    for (const step of executed) {
+      const agent = step.agent || res.state.last_agent || 'supervisor';
+      const card = STEP_CARD[step.tool];
+      if (card && res.state[card.key] && !shownMarkers.current.has(card.marker)) {
+        shownMarkers.current.add(card.marker);
+        pushCard(card.marker, agent);
+      }
+    }
+
     if (res.state.spaghetti_data && !shownMarkers.current.has('spaghetti')) {
       shownMarkers.current.add('spaghetti');
-      pushMsg({ role: 'assistant', content: '__SPAGHETTI__', agent: 'data_manager', id: '', snap: res.state });
+      pushCard('__SPAGHETTI__', 'data_manager');
     }
-    if (res.state.nca_summary) {
-      pushMsg({ role: 'assistant', content: '__NCA_TABLE__', agent: 'nca', id: '', snap: res.state });
+    if (res.state.nca_summary && !shownMarkers.current.has('nca')) {
+      shownMarkers.current.add('nca');
+      pushCard('__NCA_TABLE__', 'nca');
     }
     if (res.state.nca_plot_data && !shownMarkers.current.has('nca_lz')) {
       shownMarkers.current.add('nca_lz');
-      pushMsg({ role: 'assistant', content: '__NCA_LZ__', agent: 'nca', id: '', snap: res.state });
+      pushCard('__NCA_LZ__', 'nca');
     }
     if (res.state.pk_model_results?.status === 'ok' && !shownMarkers.current.has('pkmodel')) {
       shownMarkers.current.add('pkmodel');
-      pushMsg({ role: 'assistant', content: '__PKMODEL__', agent: 'modeler', id: '', snap: res.state });
+      pushCard('__PKMODEL__', 'modeler');
     }
     if (res.state.engine_comparison_results && !shownMarkers.current.has('engines')) {
       shownMarkers.current.add('engines');
-      pushMsg({ role: 'assistant', content: '__ENGINES__', agent: 'modeler', id: '', snap: res.state });
+      pushCard('__ENGINES__', 'modeler');
     }
-    if (res.state.qc_verdict) {
-      pushMsg({ role: 'assistant', content: '__QC_CARD__', agent: 'qc', id: '', snap: res.state });
+    if (res.state.qc_verdict && !shownMarkers.current.has('qc')) {
+      shownMarkers.current.add('qc');
+      pushCard('__QC_CARD__', 'qc');
+    }
+
+    // Steps with no section of their own are logged, not narrated; the upload
+    // note is dropped once load_dataset has reported the same fact.
+    const unsectioned = executed.filter(s => !sectioned.has(s.tool));
+    if (unsectioned.length) setRunLog(prev => [...prev, ...unsectioned]);
+    if (loadedNoteId.current && executed.some(s => s.tool === 'load_dataset')) {
+      const noteId = loadedNoteId.current;
+      loadedNoteId.current = '';
+      setMessages(prev => prev.filter(m => m.id !== noteId));
     }
 
     if (res.status === 'awaiting_review') {
+      setGateStep(res.review?.after_step ?? (res.state.current_step ?? 0) - 1);
+      setDecision('pending');
       setWfStatus('awaiting_review');
+      // ≤1180px the panel is a closed drawer: a gate opens it, so a paused run
+      // is never signalled by the topbar toggle alone (ReviewPanel then focuses
+      // its heading in the same commit).
+      if (window.matchMedia(REVIEW_DRAWER_MQ).matches) setReviewOpen(true);
       refreshAudit();
     } else if (res.status === 'complete') {
       setWfStatus('complete');
+      // Same drawer rule: the report / complete card lives only in the panel
+      // (chat suppresses __REPORT__), so a narrow viewport must open it.
+      if (window.matchMedia(REVIEW_DRAWER_MQ).matches) setReviewOpen(true);
       if (res.state.report_path) {
         pushMsg({ role: 'assistant', content: '__REPORT__', agent: 'report', id: '' });
       }
+      refreshAudit();
+    } else if (res.status === 'rejected') {
+      // Still maps to idle (re-run possible). The rejection is not held
+      // client-side: the refreshed audit's sealed human_review entry is what
+      // the rail and the review panel read (`decisionView`).
+      setWfStatus('idle');
+      setDecision(null);
       refreshAudit();
     } else {
       setWfStatus('idle');
@@ -3740,35 +4173,55 @@ export default function App() {
   async function uploadAndRun(workflow: WorkflowName = 'nca_full') {
     if (!session || !file) return;
     shownMarkers.current.clear();
+    setRunLog([]);
+    loadedNoteId.current = '';
+    setDecision(null);
+    // A new run has no gate yet: an earlier run's sealed decision at the same
+    // step must not read as this run's.
+    setGateStep(-1);
     setActiveWorkflow(workflow);
     setLoading(true);
     setWfStatus('running');
     setCurrentStep(0);
-    const wfLabel = WF_LABEL[workflow];
-    pushMsg({ role: 'user', content: `Starting ${wfLabel} workflow on: ${file.name}`, id: '' });
+    // No chat echo of the start: the document header already names the run.
+    let accepted = false;
     try {
       const up = await api.uploadDataset(session.id, file);
       const meta = up.metadata;
+      loadedNoteId.current = newMsgId();
       pushMsg({
         role: 'assistant',
         content: `Dataset loaded: ${meta['n_records']} records, ${meta['n_subjects']} subjects, ${meta['n_columns']} columns.`,
         agent: 'data_manager',
-        id: '',
+        id: loadedNoteId.current,
       });
       const res = await api.startWorkflow(session.id, meta['dataset_path'] as string ?? '', workflow);
+      accepted = true;
       await settleWorkflow(res);
     } catch (e) {
-      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
-      setWfStatus('error');
+      if (accepted) {
+        await reconcileRun(e as Error, workflow);
+      } else {
+        // Nothing ran (a bad CSV, a refused start): back to idle, so the file
+        // can be replaced and the run repeated without a reload.
+        pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
+        setWfStatus('idle');
+      }
     } finally {
+      setJobNote('');
       setLoading(false);
     }
   }
 
-  async function resume(approve: boolean) {
+  async function resume(approve: boolean, reason = '') {
     if (!session) return;
     setLoading(true);
-    setWfStatus('running');
+    setDeciding(true);
+    // The gate stays exactly as it is — wfStatus 'awaiting_review', decision
+    // 'pending', the decision card and its reason mounted — until the backend
+    // has taken the decision. A request that fails therefore leaves the gate
+    // open to decide again, and nothing can read as Approved or Rejected
+    // before the human_review entry exists (`decisionView` reads the seal).
     // Approving runs every remaining step in one call. If any of them is a real
     // population fit, poll a job instead of holding the request open — and say
     // what actually happens next rather than assuming the NCA shape.
@@ -3778,21 +4231,31 @@ export default function App() {
       : isLongLeg ? 'Approved — running the population fit (NLME → SCM → diagnostics → forest → VPC).'
       : 'Approved — generating report.';
     pushMsg({ role: 'user', content: note, id: '' });
+    let accepted = false;
     try {
       if (isLongLeg) {
-        const { job_id } = await api.resumeWorkflowAsync(session.id);
-        const res = await api.pollJob<WorkflowResponse>(session.id, job_id,
-          s => setJobNote(`Population fit running… ${s}s (several real fits — this can take minutes)`));
-        setJobNote('');
-        handleWorkflowResponse(res);
+        const { job_id } = await api.resumeWorkflowAsync(session.id, reason);
+        accepted = true;
+        setWfStatus('running');
+        handleWorkflowResponse(await pollWorkflowJob(session.id, job_id, 'Population fit running…'));
         return;
       }
-      const res = await api.resumeWorkflow(session.id, approve);
+      const res = await api.resumeWorkflow(session.id, approve, reason);
+      accepted = true;
+      setWfStatus('running');
       await settleWorkflow(res);
     } catch (e) {
-      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
-      setWfStatus('error');
+      if (accepted) {
+        await reconcileRun(e as Error, activeWorkflow);
+      } else {
+        pushMsg({
+          role: 'assistant', agent: 'supervisor', id: '',
+          content: `Error: ${(e as Error).message} — the decision was not recorded; the gate is still open, decide again to retry.`,
+        });
+      }
     } finally {
+      setDeciding(false);
+      setJobNote('');
       setLoading(false);
     }
   }
@@ -4195,6 +4658,18 @@ export default function App() {
     }
   }
 
+  /** Review-panel "Download DOCX": the report already exists, so fetch it
+   *  through the authenticated blob path (a bare <a href> cannot send the
+   *  bearer header and 401s when auth is required). */
+  async function downloadExistingReport() {
+    if (!session || !state?.report_path) return;
+    try {
+      await api.downloadReportFile(session.id, state.report_path);
+    } catch (e) {
+      pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'report', id: '' });
+    }
+  }
+
   async function exportControl(kind: 'nonmem' | 'mrgsolve') {
     if (!session) return;
     try {
@@ -4335,171 +4810,252 @@ export default function App() {
 
   const canRunWorkflow = !!session && !!file && wfStatus === 'idle' && !loading;
 
+  const wfSteps = WORKFLOW_UI[activeWorkflow].steps;
+  const timings = stepTimings(audit, wfSteps);
+  const datasetMeta = (state?.dataset_metadata ?? null) as
+    { n_records?: unknown; n_subjects?: unknown; n_columns?: unknown } | null;
+  /** What the backend will seal as the gate actor (main.py current_owner):
+   *  token:<sha256[:16]> only when auth is required AND a non-blank token is
+   *  set; with auth open the token is ignored and the entry is anonymous. */
+  const gateSigner: GateSigner = authMode === 'open' ? 'open'
+    : authMode === 'required' && token.trim() !== '' ? 'token'
+    : 'anonymous';
+  const statusLabel = healthy === null ? 'connecting…'
+    : healthy ? `Backend online · ${describeLlm(llmLabel)}` : 'Backend offline';
+
+  // ── Review panel inputs (all read from live state + the sealed audit) ──
+  const gateDef = wfSteps[gateStep];
+  const nextDef = wfSteps[gateStep + 1];
+  const gate = wfStatus === 'awaiting_review' && gateDef ? {
+    title: `Approve to ${nextDef ? (GATE_NEXT[nextDef.key] ?? `run "${nextDef.label}"`) : 'finish the workflow'}`,
+    subtitle: gateSubtitle(activeWorkflow, gateStep),
+    stepLabel: gateDef.label,
+    placeholder: GATE_PLACEHOLDER[gateDef.key] ?? 'e.g. Evidence reviewed; accepted',
+  } : null;
+  /** What the rail and the review panel show for the gate: Approved / Rejected
+   *  only from the sealed human_review entry for this run's gate; otherwise
+   *  the client-side wait ('pending' at an open gate, and while the taken
+   *  decision's leg runs). */
+  const decisionView: Decision = sealedDecision(audit, wfSteps, gateStep) ?? decision;
+  const longLeg = wfSteps.slice(Math.max(currentStep, 0)).some(s => HEAVY_STEPS.has(s.key));
+  /** QC evidence belongs to the workflow that runs QC (nca_full's qc_review
+   *  gate) — and to a chat "qc" turn, whose default workflow is that one. The
+   *  backend never clears qc_verdict, so under a population workflow it is an
+   *  earlier run's and must not shadow that run's gate evidence (fit_pk_model /
+   *  adversarial_review below). */
+  const runsQc = wfSteps.some(s => s.key === 'qc_review');
+  const qc = runsQc && state?.qc_verdict ? {
+    verdict: state.qc_verdict,
+    checklist: state.qc_checklist,
+    issues: state.qc_issues,
+    hash: latestEntryFor(audit, 'run_qc')?.entry_hash ?? null,
+    subjects: state.nca_parameters,
+  } : null;
+  /** Jump to the latest structural-model section in the document (id lands in
+   *  its ResultSection; a re-run adds a newer section, so take the last). */
+  const onSeeComparison = () => {
+    const els = document.querySelectorAll<HTMLElement>('#pk-model');
+    els[els.length - 1]?.scrollIntoView({ block: 'start' });
+  };
+  const evidence = gateDef?.key === 'adversarial_review' && state?.review_results
+    ? <ReviewCard r={state.review_results} />
+    : gateDef?.key === 'fit_pk_model' && state?.pk_model_results
+      ? <PkModelEvidence r={state.pk_model_results}
+          seal={latestEntryFor(audit, 'fit_pk_model')?.entry_hash ?? null}
+          onSeeComparison={onSeeComparison} />
+      : null;
+  const outcome: Outcome | null =
+    wfStatus === 'complete' && state?.report_path && session ? {
+      kind: 'report',
+      filename: state.report_path.split('/').pop() ?? 'report.docx',
+      onDocx: () => { downloadExistingReport(); },
+      onCsv: state.nca_parameters?.length ? () => { exportCsv('nca'); } : undefined,
+      onCdisc: state.nca_parameters?.length ? () => { exportCdisc(); } : undefined,
+    }
+    : wfStatus === 'complete' ? { kind: 'complete' }
+    : decisionView && wfStatus === 'running' ? {
+      kind: 'running',
+      note: decisionView === 'approved'
+        ? (longLeg
+          ? 'Approved — running the population fit (NLME → SCM → diagnostics → forest → VPC)'
+          : 'Approved — generating report')
+        : '',
+    }
+    : decisionView === 'rejected' && wfStatus === 'idle' ? {
+      kind: 'rejected',
+      stepLabel: gateDef?.label ?? 'the gate',
+      entryIndex: [...audit].reverse().find(e => e.tool === 'human_review' && e.action.startsWith('rejected'))?.index ?? null,
+      hint: activeWorkflow === 'nca_full'
+        ? 'Refit λz or replace the dataset, then run again.'
+        : 'Adjust the analysis, then run again.',
+    }
+    : null;
+  /** Jump to the latest λz section in the document (id lands in S4; a re-run
+   *  adds a newer section, so take the last) and focus its first control. */
+  const onReviewLz = () => {
+    const els = document.querySelectorAll<HTMLElement>('#lz');
+    const el = els[els.length - 1];
+    el?.scrollIntoView({ block: 'start' });
+    (el?.querySelector('button') as HTMLElement | null)?.focus();
+  };
+  /** Hand focus to the review panel's heading. ≤1180px the panel is a drawer
+   *  (visibility:hidden when closed), so open it first; ReviewPanel then
+   *  focuses the heading itself when `open` flips. */
+  const onReviewInPanel = () => {
+    if (window.matchMedia(REVIEW_DRAWER_MQ).matches) setReviewOpen(true);
+    document.getElementById('review-heading')?.focus();
+  };
+  /** Closing the drawer hands focus back to the topbar toggle (only rendered ≤1180px). */
+  const closeReview = () => {
+    setReviewOpen(false);
+    document.getElementById('review-toggle')?.focus();
+  };
+
+  // ── Document (centre column) inputs ──
+  /** Live seal for a marker's tool: the latest audit entry sealed under that
+   *  backend tool name (refreshed by the state-keyed audit effect). Never a
+   *  client-side hash; null when the marker has no registered tool. Only for
+   *  cards that render live state — a snapshot card shows the seal bound to
+   *  its own snapshot (bindSeals), so a re-run never relabels older numbers. */
+  const sealFor = (k: Marker) => latestEntryFor(audit, CARD_META[k].tool)?.entry_hash ?? null;
+  /** ResultSection attribution props for one marker message. */
+  const sectionProps = (k: Marker, m: DisplayMsg) => {
+    const meta = CARD_META[k];
+    const seal = m.snap ? (m.seal ?? null) : sealFor(k);
+    return {
+      id: meta.anchor, title: meta.title, agent: m.agent ?? meta.agent,
+      tool: meta.tool, seal, sealing: !!meta.tool && !seal,
+    };
+  };
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const nSubjects = num(datasetMeta?.n_subjects);
+  const docTitle = (messages.length === 0 && !file) ? 'New analysis'
+    : ({ nca_full: 'NCA analysis', poppk_modeling: 'Modeling analysis', poppk_full: 'Population PK analysis' })[activeWorkflow];
+  const startedAt = session?.created_at ? hhmm(session.created_at) : '';
+  const docSubtitle = [
+    file?.name,
+    nSubjects != null && `${nSubjects} subjects`,
+    startedAt && `started ${startedAt}`,
+    audit.length > 0 && `${audit.length} sealed entries`,
+  ].filter(Boolean).join(' · ') || 'Upload a PK dataset and choose a workflow.';
+  /** Dataset profile stats — only values that exist in PharmState (no dashes; units only when the dataset labels them). */
+  const profileItems: { label: string; value: string }[] = [];
+  if (state?.dataset_metadata) {
+    const dq = (state.data_quality ?? {}) as Record<string, unknown>;
+    const nRecords = num(datasetMeta?.n_records);
+    const nObs = num(dq.n_observations);
+    const blq = num(state.spaghetti_data?.blq_excluded) ?? num(state.nca_summary?.blq?.n_below_loq);
+    const doses = (state.nca_parameters ?? []).map(r => r.dose).filter((d): d is number => num(d) != null);
+    if (nSubjects != null) profileItems.push({ label: 'Subjects', value: String(nSubjects) });
+    if (nRecords != null) profileItems.push({ label: 'Records', value: String(nRecords) });
+    if (nObs != null) profileItems.push({ label: 'Observations', value: String(nObs) });
+    if (blq != null) profileItems.push({ label: 'Below LLOQ, excluded', value: String(blq) });
+    if (doses.length) {
+      const lo = sig3(Math.min(...doses)), hi = sig3(Math.max(...doses));
+      const doseUnit = ncaUnits(state).dose;
+      profileItems.push({ label: 'Dose range', value: `${lo === hi ? lo : `${lo}–${hi}`}${doseUnit ? ` ${doseUnit}` : ''}` });
+    }
+  }
+  const profileSeal = latestEntryFor(audit, 'profile_pk_dataset')?.entry_hash ?? null;
+  /** Export menu items — the same handlers and conditions as the former export chips. */
+  const exportItems = [
+    { id: 'docx', label: 'Full report (DOCX)', onClick: () => { downloadFullReport(); } },
+    ...exportKinds.map(k => ({ id: `csv-${k}`, label: `${EXPORT_LABEL[k] ?? k} CSV`, onClick: () => { exportCsv(k); } })),
+    ...(state?.nca_parameters?.length
+      ? [{ id: 'cdisc', label: 'CDISC ADaM (zip)', onClick: () => { exportCdisc(); } }] : []),
+    ...(state?.nlme_results?.status === 'ok' ? [
+      { id: 'nonmem', label: 'NONMEM (.ctl)', title: 'NONMEM control stream (.ctl) seeded from the population fit',
+        onClick: () => { exportControl('nonmem'); } },
+      { id: 'mrgsolve', label: 'mrgsolve (.cpp)', title: 'mrgsolve model (.cpp) seeded from the population fit',
+        onClick: () => { exportControl('mrgsolve'); } },
+    ] : []),
+  ];
+
   return (
     <>
-      <header className="topbar">
-        <div className="topbar-logo">
-          <FlaskConical size={18} />
-          PharmAgent
-          <span className="topbar-badge">PmatricsAI</span>
-        </div>
-        <div className="topbar-right" style={{ position: "relative" }}>
-          <input
-            className="token-input"
-            type="password"
-            placeholder="API token (optional)"
-            value={token}
-            onChange={e => { setTokenState(e.target.value); setToken(e.target.value); }}
-            title="Bearer token — required only when the backend has PHARMAGENT_API_TOKEN set"
-          />
-          <div className="status-dot" style={{ background: healthy === false ? 'var(--red)' : 'var(--green)' }} />
-          <span className="status-text" style={{ cursor: 'pointer' }} title="Change the language model (local / ChatGPT / Claude)"
-            onClick={() => setLlmOpen(o => !o)}>
-            {healthy === null ? 'connecting…' : healthy ? `Backend online · ${describeLlm(llmLabel)} ▾` : 'Backend offline'}
-          </span>
-          {llmOpen && <LlmSettings onApplied={l => setLlmLabel(l)} onClose={() => setLlmOpen(false)} />}
-        </div>
-      </header>
+      <Topbar
+        sessionId={session?.id ?? null}
+        title={file?.name ?? 'New session'}
+        healthy={healthy}
+        statusLabel={statusLabel}
+        llmOpen={llmOpen}
+        onLlmToggle={() => setLlmOpen(o => !o)}
+        onLlmClose={() => setLlmOpen(false)}
+        llmPanel={<LlmSettings onApplied={l => setLlmLabel(l)} onClose={() => setLlmOpen(false)} />}
+        token={token}
+        onTokenChange={v => { setTokenState(v); setToken(v); }}
+        review={{
+          open: reviewOpen,
+          pending: decisionView === 'pending' && wfStatus === 'awaiting_review',
+          onToggle: () => setReviewOpen(o => !o),
+        }}
+      />
 
-      <aside className="sidebar">
-        <div className="sidebar-section">
-          <div className="sidebar-label">Session</div>
-          <div className="sidebar-stat">
-            <span className="sidebar-stat-key">ID</span>
-            <span className="sidebar-stat-val" style={{ fontSize: 11, fontFamily: 'var(--mono)' }}>
-              {session ? session.id.slice(0, 16) + '…' : '–'}
-            </span>
-          </div>
-          <div className="sidebar-stat">
-            <span className="sidebar-stat-key">Subjects</span>
-            <span className="sidebar-stat-val">
-              {state?.dataset_metadata ? String(state.dataset_metadata['n_subjects'] ?? '–') : '–'}
-            </span>
-          </div>
-          <div className="sidebar-stat">
-            <span className="sidebar-stat-key">QC</span>
-            <span className="sidebar-stat-val" style={{
-              color: state?.qc_verdict === 'PASS' ? 'var(--green)'
-                : state?.qc_verdict ? 'var(--yellow)' : 'var(--text-dim)',
-            }}>
-              {state?.qc_verdict ?? '–'}
-            </span>
-          </div>
-          <div className="sidebar-stat">
-            <span className="sidebar-stat-key">Audit</span>
-            <span className="sidebar-stat-val" style={{
-              color: auditIntegrity?.verified ? 'var(--green)' : 'var(--text-dim)',
-            }}>
-              {audit.length > 0
-                ? `${audit.length} entries${auditIntegrity?.verified ? ' ✓' : ''}`
-                : '–'}
-            </span>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-label">{WORKFLOW_UI[activeWorkflow].title}</div>
-          <ul className="step-list">
-            {WORKFLOW_UI[activeWorkflow].steps.map((s, i) => {
-              const done = currentStep > i || wfStatus === 'complete';
-              const active = currentStep === i && wfStatus === 'running';
-              const gate = 'gate' in s && s.gate && wfStatus === 'awaiting_review';
-              const cls = gate ? 'gate' : done ? 'done' : active ? 'active' : 'pending';
-              return (
-                <li key={s.key} className={`step-item ${cls}`}>
-                  <span className="step-dot" />
-                  {s.label}
-                  {active && <Loader2 size={10} style={{ marginLeft: 'auto', animation: 'spin 1s linear infinite' }} />}
-                  {gate && <AlertTriangle size={10} style={{ marginLeft: 'auto' }} />}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-
-        <div className="sidebar-section" style={{ marginTop: 'auto' }}>
-          <button className="workflow-btn" disabled={!canRunWorkflow} onClick={() => uploadAndRun('nca_full')}>
-            {loading && wfStatus === 'running' && activeWorkflow === 'nca_full'
-              ? <><div className="spinner" /> Running…</>
-              : <><Activity size={13} /> Run NCA Workflow</>}
-          </button>
-          <button className="workflow-btn" disabled={!canRunWorkflow} onClick={() => uploadAndRun('poppk_modeling')}
-            style={{ marginTop: 8 }}
-            title="Fit structural models, then confirm across estimation engines (native FOCE-I + nlmixr2 + Monolix when installed), reviewed and QC-gated">
-            {loading && wfStatus === 'running' && activeWorkflow === 'poppk_modeling'
-              ? <><div className="spinner" /> Running…</>
-              : <><Activity size={13} /> Run Modeling + Engines</>}
-          </button>
-          <button className="workflow-btn" disabled={!canRunWorkflow} onClick={() => uploadAndRun('poppk_full')}
-            style={{ marginTop: 8 }}
-            title="Full population PK: structural comparison (gated), NLME fit, SCM covariate build, residual diagnostics, covariate forest, VPC, adversarial review (gated), report">
-            {loading && wfStatus === 'running' && activeWorkflow === 'poppk_full'
-              ? <><div className="spinner" /> Running…</>
-              : <><Activity size={13} /> Run Full PopPK</>}
-          </button>
-        </div>
-      </aside>
-
-      <main className="main">
-        {wfStatus === 'idle' && (
-          <div
+      <Rail
+        workflowName={activeWorkflow}
+        steps={wfSteps}
+        currentStep={currentStep}
+        gateStep={gateStep}
+        wfStatus={wfStatus}
+        decision={decisionView}
+        timings={timings}
+        file={file}
+        datasetMeta={datasetMeta}
+        fileInput={<input ref={fileRef} type="file" accept=".csv" hidden onChange={onFileChange} />}
+        dropZone={
+          <button
+            type="button"
             className={`upload-zone ${drag ? 'drag' : ''}`}
+            aria-labelledby="upload-zone-label"
+            aria-describedby="upload-zone-hint"
             onDragOver={e => { e.preventDefault(); setDrag(true); }}
             onDragLeave={() => setDrag(false)}
             onDrop={onDrop}
             onClick={() => fileRef.current?.click()}
           >
-            <input ref={fileRef} type="file" accept=".csv" onChange={onFileChange} />
-            <Upload size={22} style={{ color: 'var(--text-dim)', marginBottom: 8 }} />
-            <div className="upload-label">
+            <Upload size={22} style={{ color: 'var(--text-dim)', marginBottom: 8 }} aria-hidden="true" />
+            <span id="upload-zone-label" className="upload-label">
               <strong>Click to upload</strong> or drag & drop
-            </div>
-            <div className="upload-hint">CSV · NONMEM-style (ID / TIME / DV / AMT columns)</div>
-            {file && (
-              <div className="upload-file-name">
-                <CheckCircle size={13} /> {file.name}
-              </div>
-            )}
-          </div>
-        )}
+            </span>
+            <span id="upload-zone-hint" className="upload-hint">CSV · NONMEM-style (ID / TIME / DV / AMT columns)</span>
+          </button>
+        }
+        canReplace={wfStatus === 'idle'}
+        onReplace={() => fileRef.current?.click()}
+        onToggleRoles={() => setShowRoles(s => !s)}
+        rolesEnabled={hasData}
+        workflows={[
+          { key: 'nca_full', label: 'Run NCA workflow', primary: true },
+          { key: 'poppk_modeling', label: 'Run modeling + engines',
+            title: 'Fit structural models, then confirm across estimation engines (native FOCE-I + nlmixr2 + Monolix when installed), reviewed and QC-gated' },
+          { key: 'poppk_full', label: 'Run full population PK',
+            title: 'Full population PK: structural comparison (gated), NLME fit, SCM covariate build, residual diagnostics, covariate forest, VPC, adversarial review (gated), report' },
+        ]}
+        canRun={canRunWorkflow}
+        running={loading && wfStatus === 'running' ? activeWorkflow : null}
+        onRun={uploadAndRun}
+        onNewSession={newSession}
+      />
 
-        {wfStatus === 'awaiting_review' && (
-          <div className="gate-banner">
-            <AlertTriangle size={20} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
-            <div className="gate-banner-text">
-              <div className="gate-banner-title">Human Review Required</div>
-              <div className="gate-banner-sub">QC complete — approve to generate DOCX report.</div>
-            </div>
-            <div className="gate-actions">
-              <button className="btn btn-green" disabled={loading} onClick={() => resume(true)}>
-                <CheckCircle size={12} /> Approve
-              </button>
-              <button className="btn btn-red" disabled={loading} onClick={() => resume(false)}>
-                <XCircle size={12} /> Reject
-              </button>
-            </div>
-          </div>
-        )}
-
-        {wfStatus === 'complete' && state?.report_path && (
-          <div className="report-banner">
-            <FileText size={20} style={{ color: 'var(--green)', flexShrink: 0 }} />
-            <div className="report-banner-text">
-              <div className="report-banner-title">Report ready</div>
-              <div className="report-banner-sub">{state.report_path.split('/').pop()}</div>
-            </div>
-            <a className="btn btn-green" href={api.downloadReport(session!.id, state.report_path)} download>
-              <Download size={12} /> Download DOCX
-            </a>
-          </div>
-        )}
-
+      <main className="main">
+        {/* The human-review gate and the report card live in the review panel (S3). */}
         <div className="messages">
+          <DocumentHeader
+            title={docTitle}
+            subtitle={docSubtitle}
+            right={<ExportMenu disabled={loading || exportKinds.length === 0} items={exportItems} />}
+          />
+          {state?.dataset_metadata && (
+            <ResultSection title="Dataset profile" agent="data_manager" tool="profile_pk_dataset"
+              seal={profileSeal} sealing={!profileSeal}>
+              <DatasetProfile items={profileItems} />
+            </ResultSection>
+          )}
           {messages.length === 0 && (
             <div className="empty">
               <FlaskConical size={36} />
-              <span>Upload a PK dataset and run the NCA workflow</span>
-              <span style={{ fontSize: 12 }}>Or type a message to chat with agents directly</span>
+              <span>Upload a PK dataset and choose a workflow.</span>
+              <span style={{ fontSize: 12 }}>Or ask the agents directly.</span>
             </div>
           )}
           {messages.map(m => {
@@ -4508,119 +5064,73 @@ export default function App() {
             const st = m.snap ?? state;
             if (m.content === '__SPAGHETTI__' && st?.spaghetti_data) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-data)' }}>DM</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-data)' }}>Data Manager</div>
-                    <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 6 }}>Concentration–Time Plot</div>
-                    <SpaghettiChart data={st.spaghetti_data as SpaghettiData} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SPAGHETTI__', m)}>
+                  <SpaghettiChart data={st.spaghetti_data as SpaghettiData} flagged={Object.keys(flaggedExtrap(st))} />
+                </ResultSection>
               );
             }
             if (m.content === '__NCA_TABLE__' && st?.nca_summary) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>NC</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>NCA Agent</div>
-                    <NcaTable state={st} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__NCA_TABLE__', m)}>
+                  <NcaTable state={st} />
+                </ResultSection>
               );
             }
             if (m.content === '__NCA_LZ__' && st?.nca_plot_data) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>NC</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>NCA Agent</div>
-                    <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 6 }}>Terminal Slope (λz) Diagnostics</div>
-                    <NcaLzPlot data={st.nca_plot_data as NcaPlotData} sessionId={session?.id ?? ''} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__NCA_LZ__', m)}>
+                  <NcaLzPlot data={st.nca_plot_data as NcaPlotData} sessionId={session?.id ?? ''}
+                    flagged={flaggedExtrap(st)} hours={/^(h|hrs?|hours?)$/i.test(ncaUnits(st).time ?? '')} />
+                </ResultSection>
               );
             }
             if (m.content === '__QC_CARD__' && st?.qc_verdict) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-qc)' }}>QC</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-qc)' }}>QC Agent</div>
-                    <QcCard state={st} />
-                    {audit.length > 0 && (
-                      <div style={{ marginTop: 10 }}>
-                        <AuditPanel entries={audit} integrity={auditIntegrity} />
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__QC_CARD__', m)}>
+                  <QcCard state={st} onReviewLz={onReviewLz} onReviewInPanel={qc ? onReviewInPanel : undefined} />
+                </ResultSection>
               );
             }
             if (m.content === '__BE__' && st?.be_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-qc)' }}>BE</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-qc)' }}>Bioequivalence Agent</div>
-                    <BeCard r={st.be_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__BE__', m)}>
+                  <BeCard r={st.be_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__DP__' && st?.dose_prop_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-data)' }}>DP</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-data)' }}>Dose-Proportionality Agent</div>
-                    <DosePropCard r={st.dose_prop_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__DP__', m)}>
+                  <DosePropCard r={st.dose_prop_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__CLINPHARM__' && st?.clinpharm_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-supervisor)' }}>CP</div>
-                  <div className="msg-bubble" style={{ maxWidth: 700 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-supervisor)' }}>Clinical Pharmacology · calculator</div>
-                    <ClinpharmCard r={st.clinpharm_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__CLINPHARM__', m)} maxWidth={700}>
+                  <ClinpharmCard r={st.clinpharm_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__STATS__' && st?.stats_advice) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-supervisor)' }}>ST</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-supervisor)' }}>Statistician Agent</div>
-                    <StatsAdviceCard r={st.stats_advice} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__STATS__', m)}>
+                  <StatsAdviceCard r={st.stats_advice} />
+                </ResultSection>
               );
             }
             if (m.content === '__COMPARTMENTAL__' && st?.compartmental_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CM</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Compartmental Agent</div>
-                    <CompartmentalCard r={st.compartmental_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__COMPARTMENTAL__', m)}>
+                  <CompartmentalCard r={st.compartmental_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__POPPK__' && st?.poppk_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-report)' }}>PK</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-report)' }}>Population PK Agent</div>
-                    <PopPkCard r={st.poppk_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__POPPK__', m)}>
+                  <PopPkCard r={st.poppk_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__PENDING_TOOL__' && st?.pending_tool) {
@@ -4630,618 +5140,555 @@ export default function App() {
                 && state.pending_tool.tool === p.tool
                 && state.pending_tool.proposed_at === p.proposed_at;
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--yellow)' }}>SM</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--yellow)' }}>Simulator · proposal — awaiting your approval</div>
-                    <div className="gate-banner">
-                      <AlertTriangle size={20} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
-                      <div className="gate-banner-text">
-                        <div className="gate-banner-title">Run {p.tool}?</div>
-                        <div className="gate-banner-sub">
-                          Long-running fit (minutes to tens of minutes) — runs as a background job.
-                          Nothing has been computed.
-                        </div>
-                        <pre style={{ fontSize: 11, margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>
-                          {JSON.stringify(p.args, null, 1)}
-                        </pre>
+                <ResultSection key={m.id} {...sectionProps('__PENDING_TOOL__', m)} maxWidth={640}>
+                  <div className="gate-banner">
+                    <AlertTriangle size={20} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+                    <div className="gate-banner-text">
+                      <div className="gate-banner-title">Run {p.tool}?</div>
+                      <div className="gate-banner-sub">
+                        Long-running fit (minutes to tens of minutes) — runs as a background job.
+                        Nothing has been computed.
                       </div>
-                      {live ? (
-                        <div className="gate-actions">
-                          <button className="btn btn-green" disabled={loading} onClick={() => decidePendingTool(true)}>
-                            <CheckCircle size={12} /> Approve
-                          </button>
-                          <button className="btn btn-red" disabled={loading} onClick={() => decidePendingTool(false)}>
-                            <XCircle size={12} /> Reject
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="gate-banner-sub">decided</div>
-                      )}
+                      <pre style={{ fontSize: 11, margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>
+                        {JSON.stringify(p.args, null, 1)}
+                      </pre>
                     </div>
+                    {live ? (
+                      <div className="gate-actions">
+                        <button className="btn btn-green" disabled={loading} onClick={() => decidePendingTool(true)}>
+                          <CheckCircle size={12} /> Approve
+                        </button>
+                        <button className="btn btn-red" disabled={loading} onClick={() => decidePendingTool(false)}>
+                          <XCircle size={12} /> Reject
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="gate-banner-sub">decided</div>
+                    )}
                   </div>
-                </div>
+                </ResultSection>
               );
             }
             if (m.content === '__PKMODEL__' && st?.pk_model_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>MD</div>
-                  <div className="msg-bubble">
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler Agent</div>
-                    <PkModelCard r={st.pk_model_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__PKMODEL__', m)}>
+                  <PkModelCard r={st.pk_model_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__VPC__' && st?.vpc_results) {
               const wide = !!(st.vpc_results.stratified || st.vpc_results.exposure_pc
                 || st.vpc_results.blq_vpc);
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>VP</div>
-                  <div className="msg-bubble" style={{ maxWidth: wide ? 920 : 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · VPC / GOF</div>
-                    <VpcCard r={st.vpc_results} onRerun={runVpc} busy={loading}
-                      covariates={vpcStrataOptions(st.dataset_metadata as
-                        { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null)} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__VPC__', m)} maxWidth={wide ? 920 : 640}>
+                  <VpcCard r={st.vpc_results} onRerun={runVpc} busy={loading}
+                    covariates={vpcStrataOptions(st.dataset_metadata as
+                      { columns?: { name: string }[]; detected_roles?: Record<string, string> } | null)} />
+                </ResultSection>
               );
             }
             if (m.content === '__NLME__' && st?.nlme_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>NL</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · NLME (mixed-effects)</div>
-                    <NlmeCard r={st.nlme_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__NLME__', m)} maxWidth={640}>
+                  <NlmeCard r={st.nlme_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__PRIORCHECK__' && st?.prior_check_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>PC</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Prior check (Bayesian borrowing)</div>
-                    <PriorCheckCard r={st.prior_check_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__PRIORCHECK__', m)} maxWidth={640}>
+                  <PriorCheckCard r={st.prior_check_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__SCM__' && st?.scm_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CM</div>
-                  <div className="msg-bubble" style={{ maxWidth: 680 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Covariate model (SCM)</div>
-                    <ScmCard r={st.scm_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SCM__', m)} maxWidth={680}>
+                  <ScmCard r={st.scm_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__ENGINES__' && st?.engine_comparison_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CE</div>
-                  <div className="msg-bubble" style={{ maxWidth: 700 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Cross-engine comparison</div>
-                    <EngineComparisonCard r={st.engine_comparison_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__ENGINES__', m)} maxWidth={700}>
+                  <EngineComparisonCard r={st.engine_comparison_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__FORECAST__' && st?.forecast_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>FC</div>
-                  <div className="msg-bubble" style={{ maxWidth: 560 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · MAP / TDM forecast</div>
-                    <ForecastCard r={st.forecast_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__FORECAST__', m)} maxWidth={560}>
+                  <ForecastCard r={st.forecast_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__DIAG__' && st?.diagnostics_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>DG</div>
-                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Residual diagnostics</div>
-                    <DiagnosticsCard r={st.diagnostics_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__DIAG__', m)} maxWidth={660}>
+                  <DiagnosticsCard r={st.diagnostics_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__FOREST__' && st?.forest_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-nca)' }}>CF</div>
-                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-nca)' }}>Modeler · Covariate forest plot</div>
-                    <ForestCard r={st.forest_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__FOREST__', m)} maxWidth={660}>
+                  <ForestCard r={st.forest_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__SIMEST__' && st?.simest_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SE</div>
-                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Trial-design precision check</div>
-                    <SimestCard r={st.simest_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SIMEST__', m)} maxWidth={660}>
+                  <SimestCard r={st.simest_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__BOOTSTRAP__' && st?.bootstrap_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>BS</div>
-                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Bootstrap uncertainty</div>
-                    <BootstrapCard r={st.bootstrap_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__BOOTSTRAP__', m)} maxWidth={760}>
+                  <BootstrapCard r={st.bootstrap_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__SIR__' && st?.sir_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SR</div>
-                  <div className="msg-bubble" style={{ maxWidth: 700 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · SIR uncertainty</div>
-                    <SirCard r={st.sir_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SIR__', m)} maxWidth={700}>
+                  <SirCard r={st.sir_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__PROFILE__' && st?.profile_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>LP</div>
-                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Likelihood profiling</div>
-                    <ProfileCard r={st.profile_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__PROFILE__', m)} maxWidth={760}>
+                  <ProfileCard r={st.profile_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__SWEEP__' && st?.dose_sweep_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>DS</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Dose sweep</div>
-                    <DoseSweepCard r={st.dose_sweep_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SWEEP__', m)} maxWidth={640}>
+                  <DoseSweepCard r={st.dose_sweep_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__CLINSIM__' && st?.clinsim_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>CT</div>
-                  <div className="msg-bubble" style={{ maxWidth: 660 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Clinical trial simulation</div>
-                    <ClinsimCard r={st.clinsim_results} onRerun={runClinsim} busy={loading} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__CLINSIM__', m)} maxWidth={660}>
+                  <ClinsimCard r={st.clinsim_results} onRerun={runClinsim} busy={loading} />
+                </ResultSection>
               );
             }
             if (m.content === '__EXPFOREST__' && st?.exposure_forest_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>EF</div>
-                  <div className="msg-bubble" style={{ maxWidth: 680 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Exposure covariate forest</div>
-                    <ExposureForestCard r={st.exposure_forest_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__EXPFOREST__', m)} maxWidth={680}>
+                  <ExposureForestCard r={st.exposure_forest_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__SPECIALPOP__' && st?.special_pop_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SP</div>
-                  <div className="msg-bubble" style={{ maxWidth: 720 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Special-population simulation</div>
-                    <SpecialPopCard r={st.special_pop_results} onRerun={runSpecialPop} busy={loading} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SPECIALPOP__', m)} maxWidth={720}>
+                  <SpecialPopCard r={st.special_pop_results} onRerun={runSpecialPop} busy={loading} />
+                </ResultSection>
               );
             }
             if (m.content === '__INDIVEXP__' && st?.individual_exposures) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>IE</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Individual exposures</div>
-                    <IndividualExposuresCard r={st.individual_exposures} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__INDIVEXP__', m)} maxWidth={640}>
+                  <IndividualExposuresCard r={st.individual_exposures} />
+                </ResultSection>
               );
             }
             if (m.content === '__PEDIATRIC__' && st?.pediatric_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>PD</div>
-                  <div className="msg-bubble" style={{ maxWidth: 760 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator · Pediatric dose-finding</div>
-                    <PediatricCard r={st.pediatric_results} onRerun={runPediatric} busy={loading} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__PEDIATRIC__', m)} maxWidth={760}>
+                  <PediatricCard r={st.pediatric_results} onRerun={runPediatric} busy={loading} />
+                </ResultSection>
               );
             }
             if (m.content === '__SIM__' && st?.simulation_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--accent)' }}>SM</div>
-                  <div className="msg-bubble" style={{ maxWidth: 640 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--accent)' }}>Simulator</div>
-                    <SimChart sim={st.simulation_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__SIM__', m)} maxWidth={640}>
+                  <SimChart sim={st.simulation_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__REVIEW__' && st?.review_results) {
               return (
-                <div key={m.id} className="msg agent">
-                  <div className="msg-avatar" style={{ color: 'var(--agent-qc)' }}>AR</div>
-                  <div className="msg-bubble" style={{ maxWidth: 720 }}>
-                    <div className="msg-agent-tag" style={{ color: 'var(--agent-qc)' }}>Reviewer · Adversarial review</div>
-                    <ReviewCard r={st.review_results} />
-                  </div>
-                </div>
+                <ResultSection key={m.id} {...sectionProps('__REVIEW__', m)} maxWidth={720}>
+                  <ReviewCard r={st.review_results} />
+                </ResultSection>
               );
             }
             if (m.content === '__REPORT__') return null;
             return <MessageBubble key={m.id} msg={m} agent={m.agent} />;
           })}
+          {/* Executed steps that put no section above (load, validate, review…), folded. */}
+          {runLog.length > 0 && (
+            <section className="section run-log">
+              <details>
+                <summary>
+                  <ChevronRight size={14} className="run-log-chev" aria-hidden="true" />
+                  <h2>Run log</h2>
+                  <span className="section-attr">
+                    {runLog.length} step{runLog.length === 1 ? '' : 's'} without a result section
+                  </span>
+                </summary>
+                <ol className="run-log-list">
+                  {runLog.map((s, i) => (
+                    <li key={`${s.step}-${i}`}>
+                      <div className="run-log-head">
+                        <span className="run-log-label">{s.label}</span>
+                        <span className="section-attr">{agentLabel(s.agent)} · <code>{s.tool}</code></span>
+                      </div>
+                      <div className="run-log-summary">{stripLabelPrefix(s.label, s.summary)}</div>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            </section>
+          )}
+          {/* Panels toggled from the Actions menu render as document sections (no attribution). */}
+          {showRoles && state && (
+            <ResultSection title="Column roles">
+              <RolesEditor state={state} onApply={applyRoles} loading={loading} />
+            </ResultSection>
+          )}
+          {showFlexplot && session && (
+            <ResultSection title="Flexplot">
+              <FlexplotPanel sessionId={session.id} />
+            </ResultSection>
+          )}
+          {showSkills && (
+            <ResultSection title="Skills">
+              <SkillsPanel skills={skills} loading={loading}
+                datasetPath={state?.dataset_path ?? null}
+                onRun={runSkill} onDelete={deleteSkill} onMarkdown={n => api.skillMarkdown(n)} />
+            </ResultSection>
+          )}
+          {calcOpen && session && (
+            <ResultSection title="Clinical pharmacology calculators">
+              <CalculatorsPanel sessionId={session.id} busy={loading} onResult={(st, summary) => {
+                setState(st);
+                pushMsg({ role: 'assistant', content: summary, agent: 'clinpharm', id: '' });
+                pushMsg({ role: 'assistant', content: '__CLINPHARM__', agent: 'clinpharm', id: '', snap: st });
+              }} />
+            </ResultSection>
+          )}
           <div ref={messagesEnd} />
         </div>
 
-        {hasData && (
-          <div className="quick-actions" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-            <div>
-              <span className="quick-actions-label">Data:</span>
-              <button className="chip" disabled={loading} onClick={() => setShowRoles(s => !s)}>
-                {showRoles ? 'Hide columns' : 'Columns / roles'}
-              </button>
-            </div>
-            {showRoles && state && <RolesEditor state={state} onApply={applyRoles} loading={loading} />}
-          </div>
-        )}
-
-        {hasData && (
-          <div className="quick-actions" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-            <div>
-              <span className="quick-actions-label">Visualize:</span>
-              <button className="chip" disabled={loading} onClick={() => setShowFlexplot(s => !s)}>
-                {showFlexplot ? 'Hide flexplot' : 'Flexplot'}
-              </button>
-            </div>
-            {showFlexplot && session && <FlexplotPanel sessionId={session.id} />}
-          </div>
-        )}
-
-        {hasData && pkModels.length > 0 && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">PK model library:</span>
-            <select
-              className="model-select"
-              value={selectedModel}
-              onChange={e => setSelectedModel(e.target.value)}
-              disabled={loading}
-            >
-              {['IV linear', 'Oral', 'Nonlinear', 'PK/PD'].map(group => (
-                <optgroup key={group} label={group}>
-                  {pkModels.filter(m => m.group === group).map(m => (
-                    <option key={m.key} value={m.key}>{m.label}{m.has_pd ? ' (needs PD)' : ''}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            <button className="chip" disabled={loading} onClick={() => runPkModel({ model_key: selectedModel })}>
-              Fit model
-            </button>
-            <button className="chip" disabled={loading} onClick={() => runPkModel({ compare: true })}>
-              Compare oral models
-            </button>
-          </div>
-        )}
-
-        {state?.pk_model_results?.status === 'ok' && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Forecast:</span>
-            <label className="sim-field">dose
-              <input type="number" value={simDose} disabled={loading}
-                onChange={e => setSimDose(Number(e.target.value))} />
-            </label>
-            <label className="sim-field">q (h)
-              <input type="number" value={simTau} disabled={loading}
-                onChange={e => setSimTau(Number(e.target.value))} />
-            </label>
-            <label className="sim-field"># doses
-              <input type="number" value={simNDoses} disabled={loading}
-                onChange={e => setSimNDoses(Number(e.target.value))} />
-            </label>
-            <label className="sim-field">to (h)
-              <input type="number" placeholder="auto" value={simTmax} disabled={loading}
-                onChange={e => setSimTmax(e.target.value === '' ? '' : Number(e.target.value))} />
-            </label>
-            <button className="chip" disabled={loading} onClick={runSimulate}>Simulate forward</button>
-          </div>
-        )}
-
-        {state?.pk_model_results?.status === 'ok' && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Population (NLME):</span>
-            <button className="chip" disabled={loading} onClick={() => runNlme('focei')}
-              title="Single cold start — fastest and fully reproducible. On harder models (several IIV terms, covariates) a cold start can converge to the wrong optimum while still reporting success.">
-              FOCE-I only
-            </button>
-            <button className="chip" disabled={loading} onClick={() => runNlme('saem')}
-              title="Stochastic EM — explores rather than descends, so it is far less sensitive to starting values, but gives no exact Laplace OFV or asymptotic standard errors.">
-              SAEM
-            </button>
-            <button className="chip" disabled={loading} onClick={() => runNlme('auto')}
-              title="Runs FOCE-I, then probes with an independent SAEM-seeded start. If the two agree it stops there; if they disagree it escalates to a multi-start search and returns the lowest-OFV fit. Never worse than FOCE-I alone, but much slower whenever it escalates.">
-              Auto
-            </button>
-            <label className="sim-field">error
-              <select className="model-select" style={{ maxWidth: 130 }} value={errorModel}
-                disabled={loading} onChange={e => setErrorModel(e.target.value)}>
-                <option value="proportional">proportional</option>
-                <option value="additive">additive</option>
-                <option value="combined">combined</option>
-              </select>
-            </label>
-            <button className="chip" disabled={loading || !state?.nlme_results}
-              onClick={() => runNlme('focei', { prior_from: 'nlme' })}
-              title="MAP fit with the current fit as an informative prior (Bayesian borrowing): informative prior from the stored fit's covariance. Fit adults first, then load the sparse (e.g. pediatric) data and click this.">
-              MAP (informative prior)
-            </button>
-            <button className="chip" disabled={loading || !state?.nlme_results}
-              onClick={() => runNlme('focei', { prior_from: 'nlme', prior_var: 1.0 })}
-              title="MAP fit with a WEAKLY informative prior (variance 1.0 on all params) — the estimate follows the data more than the prior.">
-              MAP (weak prior)
-            </button>
-            <button className="chip" disabled={loading || !(state?.nlme_results && state.nlme_results.map)}
-              onClick={runPriorCheck}
-              title="Prior-predictive band vs the data + prior-vs-posterior shrinkage. Needs a MAP fit.">
-              Prior check
-            </button>
-            <button className="chip" disabled={loading} onClick={runScm}
-              title="Stepwise covariate modeling: forward selection (p<0.05) + backward elimination (p<0.01) over dataset covariates">
-              Covariate SCM
-            </button>
-            <button className="chip" disabled={loading} onClick={runEngineComparison}
-              title="Fit the model across estimation engines (native FOCE-I + nlmixr2 + Monolix if installed); winner chosen by prediction accuracy, not cross-engine OFV">
-              Compare engines
-            </button>
-          </div>
-        )}
-
-        {state?.nlme_results?.status === 'ok' && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">TDM / MAP forecast:</span>
-            <label className="sim-field">dose
-              <input type="number" value={fcDose} disabled={loading}
-                onChange={e => setFcDose(Number(e.target.value))} />
-            </label>
-            <label className="sim-field">q (h)
-              <input type="number" value={fcTau} disabled={loading}
-                onChange={e => setFcTau(Number(e.target.value))} />
-            </label>
-            <label className="sim-field">levels (t,conc; …)
-              <input type="text" style={{ width: 150 }} placeholder="e.g. 48.5,1.2; 72,0.4"
-                value={fcLevels} disabled={loading} onChange={e => setFcLevels(e.target.value)} />
-            </label>
-            <label className="sim-field">target
-              <input type="text" style={{ width: 60 }} placeholder="opt." value={fcTarget}
-                disabled={loading} onChange={e => setFcTarget(e.target.value)} />
-            </label>
-            <select className="model-select" style={{ maxWidth: 90 }} value={fcMetric}
-              disabled={loading} onChange={e => setFcMetric(e.target.value)}>
-              <option value="cmin">Cmin</option>
-              <option value="cmax">Cmax</option>
-              <option value="cavg">Cavg</option>
-              <option value="auc_tau">AUCτ</option>
-            </select>
-            <button className="chip" disabled={loading} onClick={runForecast}
-              title="MAP/empirical-Bayes individualization from the fitted population model + measured levels">
-              MAP forecast
-            </button>
-          </div>
-        )}
-
-        {state?.nlme_results?.status === 'ok' && !(state.nlme_results.covariate_effects?.length) && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Trial-design precision check:</span>
-            {!seShowConfirm ? (
-              <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(true)}
-                title="Simulate replicate trials under a proposed design and re-fit each — checks whether the 95% CI lands within 60-140% of its own estimate (up to 10 replicates; runs several real NLME fits, several minutes)">
-                Simulation-estimation…
-              </button>
-            ) : (
-              <>
-                <label className="sim-field">N subjects
-                  <input type="number" value={seN} disabled={loading}
-                    onChange={e => setSeN(Number(e.target.value))} />
-                </label>
-                <label className="sim-field">sample times (h)
-                  <input type="text" style={{ width: 160 }} value={seObsT} disabled={loading}
-                    onChange={e => setSeObsT(e.target.value)} />
-                </label>
-                <label className="sim-field">dose
-                  <input type="number" value={seDose} disabled={loading}
-                    onChange={e => setSeDose(Number(e.target.value))} />
-                </label>
-                <label className="sim-field">replicates (≤10)
-                  <input type="number" min={1} max={10} value={seNRep} disabled={loading}
-                    onChange={e => setSeNRep(Math.max(1, Math.min(10, Number(e.target.value))))} />
-                </label>
-                <button className="chip" disabled={loading} onClick={runSimest}
-                  title="Confirms and runs — several real NLME fits, several minutes to tens of minutes; holds this session while running">
-                  Confirm &amp; run
-                </button>
-                <button className="chip" disabled={loading} onClick={() => setSeShowConfirm(false)}>
-                  Cancel
-                </button>
-              </>
+        <Composer
+          value={input}
+          onChange={setInput}
+          onKeyDown={onKeyDown}
+          onSend={() => sendChat()}
+          textDisabled={!session || loading}
+          sendDisabled={!input.trim() || !session || loading}
+          loading={loading}
+          jobNote={jobNote}
+          actionsOpen={actionsOpen}
+          onToggleActions={() => setActionsOpen(o => !o)}
+          actionsRef={actionsRef}
+        >
+          <ActionsMenu open={actionsOpen} onClose={() => setActionsOpen(false)} anchorRef={actionsRef}>
+            {hasData && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Run on this data</span>
+                {QUICK_ACTIONS.map(qa => (
+                  <button
+                    key={qa.label}
+                    className="chip"
+                    disabled={loading}
+                    onClick={() => sendChat(qa.msg)}
+                  >
+                    {qa.label}
+                  </button>
+                ))}
+              </div>
             )}
-          </div>
-        )}
-        {state?.nlme_results?.status === 'ok' && !!(state.nlme_results.covariate_effects?.length) && (
-          <div className="quick-actions">
-            <span className="quick-actions-label" style={{ color: 'var(--text-dim)' }}>
-              Trial-design precision check unavailable: not supported for models with covariate effects.
-            </span>
-          </div>
-        )}
 
-        {state?.pk_model_results?.status === 'ok' && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Diagnostics:</span>
-            <button className="chip" disabled={loading} onClick={() => runVpc()}>VPC / goodness-of-fit</button>
-            <button className="chip" disabled={loading} onClick={runDiagnostics}>Residual diagnostics</button>
-            <button className="chip" disabled={loading} onClick={runCovariateForest}
-              title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">
-              Covariate forest
-            </button>
-            <button className="chip" disabled={loading} onClick={runExposureForest}
-              title="Simulated exposure forest: relative AUC/Cmax across covariate extremes with the 0.8–1.25 band">
-              Exposure forest
-            </button>
-            <button className="chip" disabled={loading} onClick={() => runSpecialPop()}
-              title="Special-population simulation: steady-state exposure by renal function (or covariate) vs the normal reference band → dose adjustment">
-              Special populations
-            </button>
-            <button className="chip" disabled={loading} onClick={runIndividualExposures}
-              title="Per-subject steady-state AUCss/Cmax,ss from the fitted EBEs (needs an NLME fit)">
-              Individual exposures
-            </button>
-            <button className="chip" disabled={loading} onClick={() => runPediatric()}
-              title="Pediatric dose-finding: age×weight exposure vs the adult range → the dose matching adult exposure (supports estimated allometry)">
-              Pediatric doses
-            </button>
-            <label className="sim-field">doses
-              <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"
-                value={sweepDoses} disabled={loading}
-                onChange={e => setSweepDoses(e.target.value)} />
-            </label>
-            <button className="chip" disabled={loading} onClick={runDoseSweep}>Dose sweep</button>
-            <button className="chip" disabled={loading} onClick={() => runClinsim()}
-              title="Clinical trial simulation: virtual population across a dose grid → probability of target attainment + dose recommendation">
-              Trial simulation (PTA)</button>
-          </div>
-        )}
+            {hasData && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Data</span>
+                <button className="chip" data-keep-open disabled={loading} onClick={() => setShowRoles(s => !s)}>
+                  {showRoles ? 'Hide columns' : 'Columns / roles'}
+                </button>
+              </div>
+            )}
 
-        {exportKinds.length > 0 && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Export:</span>
-            <button className="chip" disabled={loading} onClick={downloadFullReport}>Full report (DOCX)</button>
-            {exportKinds.map(k => (
-              <button key={k} className="chip" disabled={loading} onClick={() => exportCsv(k)}>
-                {EXPORT_LABEL[k] ?? k} CSV
-              </button>
-            ))}
-            {state?.nca_parameters?.length ? (
-              <button className="chip" disabled={loading} onClick={exportCdisc}>CDISC ADaM (zip)</button>
-            ) : null}
-            {state?.nlme_results?.status === 'ok' ? (
-              <>
-                <button className="chip" disabled={loading} onClick={() => exportControl('nonmem')}
-                  title="NONMEM control stream (.ctl) seeded from the population fit">NONMEM (.ctl)</button>
-                <button className="chip" disabled={loading} onClick={() => exportControl('mrgsolve')}
-                  title="mrgsolve model (.cpp) seeded from the population fit">mrgsolve (.cpp)</button>
-              </>
-            ) : null}
-          </div>
-        )}
+            {hasData && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Visualize</span>
+                <button className="chip" data-keep-open disabled={loading} onClick={() => setShowFlexplot(s => !s)}>
+                  {showFlexplot ? 'Hide flexplot' : 'Flexplot'}
+                </button>
+              </div>
+            )}
 
-        {(state?.nca_parameters?.length || state?.nlme_results?.status === 'ok') && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Review &amp; skills:</span>
-            <button className="chip" disabled={loading} onClick={runReview}
-              title="Adversarial reviewer: independently recompute and challenge every result; loop to a checkable goal">
-              Adversarial review
-            </button>
-            <button className="chip" disabled={loading} onClick={captureSkill}
-              title="Capture this session's analysis sequence as a reusable, replayable skill">
-              Capture as skill
-            </button>
-            <button className="chip" disabled={loading}
-              onClick={() => { setShowSkills(s => !s); if (!showSkills) refreshSkills(); }}>
-              {showSkills ? 'Hide skills' : `Skills${skills.length ? ` (${skills.length})` : ''}`}
-            </button>
-          </div>
-        )}
+            {hasData && pkModels.length > 0 && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">PK model library</span>
+                <select
+                  className="model-select"
+                  aria-label="PK model"
+                  value={selectedModel}
+                  onChange={e => setSelectedModel(e.target.value)}
+                  disabled={loading}
+                >
+                  {['IV linear', 'Oral', 'Nonlinear', 'PK/PD'].map(group => (
+                    <optgroup key={group} label={group}>
+                      {pkModels.filter(m => m.group === group).map(m => (
+                        <option key={m.key} value={m.key}>{m.label}{m.has_pd ? ' (needs PD)' : ''}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <button className="chip" disabled={loading} onClick={() => runPkModel({ model_key: selectedModel })}>
+                  Fit model
+                </button>
+                <button className="chip" disabled={loading} onClick={() => runPkModel({ compare: true })}>
+                  Compare oral models
+                </button>
+              </div>
+            )}
 
-        {showSkills && (
-          <SkillsPanel skills={skills} loading={loading}
-            datasetPath={state?.dataset_path ?? null}
-            onRun={runSkill} onDelete={deleteSkill} onMarkdown={n => api.skillMarkdown(n)} />
-        )}
+            {state?.pk_model_results?.status === 'ok' && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Forecast</span>
+                <label className="sim-field">dose
+                  <input type="number" value={simDose} disabled={loading}
+                    onChange={e => setSimDose(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">q (h)
+                  <input type="number" value={simTau} disabled={loading}
+                    onChange={e => setSimTau(Number(e.target.value))} />
+                </label>
+                <label className="sim-field"># doses
+                  <input type="number" value={simNDoses} disabled={loading}
+                    onChange={e => setSimNDoses(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">to (h)
+                  <input type="number" placeholder="auto" value={simTmax} disabled={loading}
+                    onChange={e => setSimTmax(e.target.value === '' ? '' : Number(e.target.value))} />
+                </label>
+                <button className="chip" disabled={loading} onClick={runSimulate}>Simulate forward</button>
+              </div>
+            )}
 
-        <div className="quick-actions">
-          <span className="quick-actions-label">Calculators:</span>
-          <button className="chip" onClick={() => setCalcOpen(o => !o)}>{calcOpen ? 'Hide calculators' : 'Clinical pharmacology calculators'}</button>
-        </div>
-        {calcOpen && session && (
-          <CalculatorsPanel sessionId={session.id} busy={loading} onResult={(st, summary) => {
-            setState(st);
-            pushMsg({ role: 'assistant', content: summary, agent: 'clinpharm', id: '' });
-            pushMsg({ role: 'assistant', content: '__CLINPHARM__', agent: 'clinpharm', id: '', snap: st });
-          }} />
-        )}
-        {hasData && (
-          <div className="quick-actions">
-            <span className="quick-actions-label">Run on this data:</span>
-            {QUICK_ACTIONS.map(qa => (
-              <button
-                key={qa.label}
-                className="chip"
-                disabled={loading}
-                onClick={() => sendChat(qa.msg)}
-              >
-                {qa.label}
-              </button>
-            ))}
-          </div>
-        )}
+            {state?.pk_model_results?.status === 'ok' && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Population (NLME)</span>
+                <button className="chip" disabled={loading} onClick={() => runNlme('focei')}
+                  title="Single cold start — fastest and fully reproducible. On harder models (several IIV terms, covariates) a cold start can converge to the wrong optimum while still reporting success.">
+                  FOCE-I only
+                </button>
+                <button className="chip" disabled={loading} onClick={() => runNlme('saem')}
+                  title="Stochastic EM — explores rather than descends, so it is far less sensitive to starting values, but gives no exact Laplace OFV or asymptotic standard errors.">
+                  SAEM
+                </button>
+                <button className="chip" disabled={loading} onClick={() => runNlme('auto')}
+                  title="Runs FOCE-I, then probes with an independent SAEM-seeded start. If the two agree it stops there; if they disagree it escalates to a multi-start search and returns the lowest-OFV fit. Never worse than FOCE-I alone, but much slower whenever it escalates.">
+                  Auto
+                </button>
+                <label className="sim-field">error
+                  <select className="model-select" style={{ maxWidth: 130 }} value={errorModel}
+                    disabled={loading} onChange={e => setErrorModel(e.target.value)}>
+                    <option value="proportional">proportional</option>
+                    <option value="additive">additive</option>
+                    <option value="combined">combined</option>
+                  </select>
+                </label>
+                <button className="chip" disabled={loading || !state?.nlme_results}
+                  onClick={() => runNlme('focei', { prior_from: 'nlme' })}
+                  title="MAP fit with the current fit as an informative prior (Bayesian borrowing): informative prior from the stored fit's covariance. Fit adults first, then load the sparse (e.g. pediatric) data and click this.">
+                  MAP (informative prior)
+                </button>
+                <button className="chip" disabled={loading || !state?.nlme_results}
+                  onClick={() => runNlme('focei', { prior_from: 'nlme', prior_var: 1.0 })}
+                  title="MAP fit with a WEAKLY informative prior (variance 1.0 on all params) — the estimate follows the data more than the prior.">
+                  MAP (weak prior)
+                </button>
+                <button className="chip" disabled={loading || !(state?.nlme_results && state.nlme_results.map)}
+                  onClick={runPriorCheck}
+                  title="Prior-predictive band vs the data + prior-vs-posterior shrinkage. Needs a MAP fit.">
+                  Prior check
+                </button>
+                <button className="chip" disabled={loading} onClick={runScm}
+                  title="Stepwise covariate modeling: forward selection (p<0.05) + backward elimination (p<0.01) over dataset covariates">
+                  Covariate SCM
+                </button>
+                <button className="chip" disabled={loading} onClick={runEngineComparison}
+                  title="Fit the model across estimation engines (native FOCE-I + nlmixr2 + Monolix if installed); winner chosen by prediction accuracy, not cross-engine OFV">
+                  Compare engines
+                </button>
+              </div>
+            )}
 
-        {jobNote && (
-          <div className="job-note">
-            <span className="job-spinner" /> {jobNote}
-          </div>
-        )}
+            {state?.nlme_results?.status === 'ok' && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">TDM / MAP forecast</span>
+                <label className="sim-field">dose
+                  <input type="number" value={fcDose} disabled={loading}
+                    onChange={e => setFcDose(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">q (h)
+                  <input type="number" value={fcTau} disabled={loading}
+                    onChange={e => setFcTau(Number(e.target.value))} />
+                </label>
+                <label className="sim-field">levels (t,conc; …)
+                  <input type="text" style={{ width: 150 }} placeholder="e.g. 48.5,1.2; 72,0.4"
+                    value={fcLevels} disabled={loading} onChange={e => setFcLevels(e.target.value)} />
+                </label>
+                <label className="sim-field">target
+                  <input type="text" style={{ width: 60 }} placeholder="opt." value={fcTarget}
+                    disabled={loading} onChange={e => setFcTarget(e.target.value)} />
+                </label>
+                <select className="model-select" style={{ maxWidth: 90 }} value={fcMetric}
+                  disabled={loading} aria-label="Forecast target metric" onChange={e => setFcMetric(e.target.value)}>
+                  <option value="cmin">Cmin</option>
+                  <option value="cmax">Cmax</option>
+                  <option value="cavg">Cavg</option>
+                  <option value="auc_tau">AUCτ</option>
+                </select>
+                <button className="chip" disabled={loading} onClick={runForecast}
+                  title="MAP/empirical-Bayes individualization from the fitted population model + measured levels">
+                  MAP forecast
+                </button>
+              </div>
+            )}
 
-        <div className="input-bar">
-          <textarea
-            rows={1}
-            placeholder="Ask agents anything — load dataset, compute NCA, run QC…"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={!session || loading}
-          />
-          <button
-            className="btn btn-primary btn-icon"
-            disabled={!input.trim() || !session || loading}
-            onClick={() => sendChat()}
-            title="Send"
-          >
-            {loading
-              ? <Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />
-              : <Send size={14} />}
-          </button>
-        </div>
+            {state?.nlme_results?.status === 'ok' && !(state.nlme_results.covariate_effects?.length) && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Trial-design precision check</span>
+                {!seShowConfirm ? (
+                  <button className="chip" data-keep-open disabled={loading} onClick={() => setSeShowConfirm(true)}
+                    title="Simulate replicate trials under a proposed design and re-fit each — checks whether the 95% CI lands within 60-140% of its own estimate (up to 10 replicates; runs several real NLME fits, several minutes)">
+                    Simulation-estimation…
+                  </button>
+                ) : (
+                  <>
+                    <label className="sim-field">N subjects
+                      <input type="number" value={seN} disabled={loading}
+                        onChange={e => setSeN(Number(e.target.value))} />
+                    </label>
+                    <label className="sim-field">sample times (h)
+                      <input type="text" style={{ width: 160 }} value={seObsT} disabled={loading}
+                        onChange={e => setSeObsT(e.target.value)} />
+                    </label>
+                    <label className="sim-field">dose
+                      <input type="number" value={seDose} disabled={loading}
+                        onChange={e => setSeDose(Number(e.target.value))} />
+                    </label>
+                    <label className="sim-field">replicates (≤10)
+                      <input type="number" min={1} max={10} value={seNRep} disabled={loading}
+                        onChange={e => setSeNRep(Math.max(1, Math.min(10, Number(e.target.value))))} />
+                    </label>
+                    <button className="chip" disabled={loading} onClick={runSimest}
+                      title="Confirms and runs — several real NLME fits, several minutes to tens of minutes; holds this session while running">
+                      Confirm &amp; run
+                    </button>
+                    <button className="chip" data-keep-open disabled={loading} onClick={() => setSeShowConfirm(false)}>
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {state?.nlme_results?.status === 'ok' && !!(state.nlme_results.covariate_effects?.length) && (
+              <div className="quick-actions">
+                <span className="quick-actions-label" style={{ color: 'var(--text-dim)' }}>
+                  Trial-design precision check unavailable: not supported for models with covariate effects.
+                </span>
+              </div>
+            )}
+
+            {state?.pk_model_results?.status === 'ok' && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Diagnostics</span>
+                <button className="chip" disabled={loading} onClick={() => runVpc()}>VPC / goodness-of-fit</button>
+                <button className="chip" disabled={loading} onClick={runDiagnostics}>Residual diagnostics</button>
+                <button className="chip" disabled={loading} onClick={runCovariateForest}
+                  title="Covariate GMR forest plot from a converged run_nlme or run_scm covariate model">
+                  Covariate forest
+                </button>
+                <button className="chip" disabled={loading} onClick={runExposureForest}
+                  title="Simulated exposure forest: relative AUC/Cmax across covariate extremes with the 0.8–1.25 band">
+                  Exposure forest
+                </button>
+                <button className="chip" disabled={loading} onClick={() => runSpecialPop()}
+                  title="Special-population simulation: steady-state exposure by renal function (or covariate) vs the normal reference band → dose adjustment">
+                  Special populations
+                </button>
+                <button className="chip" disabled={loading} onClick={runIndividualExposures}
+                  title="Per-subject steady-state AUCss/Cmax,ss from the fitted EBEs (needs an NLME fit)">
+                  Individual exposures
+                </button>
+                <button className="chip" disabled={loading} onClick={() => runPediatric()}
+                  title="Pediatric dose-finding: age×weight exposure vs the adult range → the dose matching adult exposure (supports estimated allometry)">
+                  Pediatric doses
+                </button>
+                <label className="sim-field">doses
+                  <input type="text" style={{ width: 130 }} placeholder="e.g. 2500,5000,10000"
+                    value={sweepDoses} disabled={loading}
+                    onChange={e => setSweepDoses(e.target.value)} />
+                </label>
+                <button className="chip" disabled={loading} onClick={runDoseSweep}>Dose sweep</button>
+                <button className="chip" disabled={loading} onClick={() => runClinsim()}
+                  title="Clinical trial simulation: virtual population across a dose grid → probability of target attainment + dose recommendation">
+                  Trial simulation (PTA)</button>
+                <span className="quick-actions-note">Dose sweep uses the Forecast q / # doses / to values.</span>
+              </div>
+            )}
+
+            {(state?.nca_parameters?.length || state?.nlme_results?.status === 'ok') && (
+              <div className="quick-actions">
+                <span className="quick-actions-label">Review &amp; skills</span>
+                <button className="chip" disabled={loading} onClick={runReview}
+                  title="Adversarial reviewer: independently recompute and challenge every result; loop to a checkable goal">
+                  Adversarial review
+                </button>
+                <button className="chip" disabled={loading} onClick={captureSkill}
+                  title="Capture this session's analysis sequence as a reusable, replayable skill">
+                  Capture as skill
+                </button>
+                <button className="chip" data-keep-open disabled={loading}
+                  onClick={() => { setShowSkills(s => !s); if (!showSkills) refreshSkills(); }}>
+                  {showSkills ? 'Hide skills' : `Skills${skills.length ? ` (${skills.length})` : ''}`}
+                </button>
+              </div>
+            )}
+
+            <div className="quick-actions">
+              <span className="quick-actions-label">Calculators</span>
+              <button className="chip" data-keep-open onClick={() => setCalcOpen(o => !o)}>{calcOpen ? 'Hide calculators' : 'Clinical pharmacology calculators'}</button>
+            </div>
+          </ActionsMenu>
+        </Composer>
       </main>
+
+      <ReviewPanel
+        open={reviewOpen}
+        onClose={closeReview}
+        wfStatus={wfStatus}
+        decision={decisionView}
+        deciding={deciding}
+        loading={loading}
+        jobNote={jobNote}
+        gate={gate}
+        signer={gateSigner}
+        onApprove={r => resume(true, r)}
+        onReject={r => resume(false, r)}
+        qc={qc}
+        evidence={evidence}
+        outcome={outcome}
+        audit={audit}
+        integrity={auditIntegrity}
+        onVerify={verifyChain}
+        verifyNote={verifyNote}
+        onReviewLz={onReviewLz}
+      />
     </>
   );
 }

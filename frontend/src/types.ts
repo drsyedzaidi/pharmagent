@@ -1062,6 +1062,10 @@ export interface NcaSubject {
   Vz_F: number;
   lambda_z: number;
   pct_AUC_extrap: number | null;
+  // λz fit + last sample (used by the QC checklist to name flagged subjects)
+  lambda_z_n_points?: number | null;
+  lambda_z_r2_adj?: number | null;
+  Tlast?: number | null;
   // steady-state extras (present when nca_summary.steady_state)
   steady_state?: boolean;
   tau?: number;
@@ -1158,11 +1162,25 @@ export interface PendingToolDecision {
 }
 
 export interface WorkflowResponse {
-  status: 'complete' | 'awaiting_review' | 'error';
+  status: 'complete' | 'awaiting_review' | 'rejected' | 'error';
   state: PharmState;
   messages?: ChatMessage[];
-  pending_review?: PendingReview;
+  /** Every template step this leg ran, in order (orchestrator `_advance`).
+   *  This is the only record of a leg's steps, whether it ran inline or as a
+   *  polled job: a step with a result section is not narrated as well, and
+   *  the rest go to the document's folded run log (no prose message). */
+  executed?: WorkflowExecutedStep[];
+  /** Present when status is 'awaiting_review' — the gate the run paused at. */
+  review?: WorkflowGate;
   audit_ok: boolean;
+}
+
+export interface WorkflowExecutedStep {
+  step: number;
+  label: string;
+  tool: string;
+  agent: string;
+  summary: string;
 }
 
 /** The backend hands a workflow leg to the job queue when it reaches a real
@@ -1175,11 +1193,12 @@ export interface WorkflowJobHandle {
 }
 export type WorkflowStartResponse = WorkflowResponse | WorkflowJobHandle;
 
-export interface PendingReview {
-  step: number;
-  step_name: string;
-  prompt: string;
-  state_snapshot: PharmState;
+/** Orchestrator gate payload (`pending_review`): `after_step` is the 0-based
+ *  index of the gated step in the template's step list, `label` its template
+ *  label. The review banner derives its subtitle from `after_step`. */
+export interface WorkflowGate {
+  after_step: number;
+  label: string | null;
 }
 
 export interface AgentMessage {

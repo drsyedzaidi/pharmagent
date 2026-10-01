@@ -6,6 +6,13 @@ import type {
 
 const BASE = '/api';
 
+const POLL_INTERVAL_MS = 1500;
+/** Consecutive failed job-status reads a poll tolerates before giving up. */
+const POLL_MAX_CONSECUTIVE_FAILURES = 5;
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+type JobStatus = { status: string; kind: string; result: JobResult | null; error: string | null };
+
 const TOKEN_KEY = 'pharmagent_token';
 let _token = (typeof localStorage !== 'undefined' && localStorage.getItem(TOKEN_KEY)) || '';
 
@@ -47,7 +54,9 @@ async function download(path: string, filename: string): Promise<void> {
 }
 
 export const api = {
-  health: () => req<{ status: string; llm: string }>('/health'),
+  /** `auth`: 'required' when the backend has an api_token (bearer enforced,
+   *  actor = pseudonymous token:<sha256[:16]>), 'open' when it ignores tokens. */
+  health: () => req<{ status: string; llm: string; auth?: 'required' | 'open' }>('/health'),
 
   /** Clinical-pharmacology calculator (clinpharm tools only; audited, state-written). */
   calc: (sid: string, tool: string, args: Record<string, string | number>): Promise<JobResult> =>
@@ -91,11 +100,13 @@ export const api = {
       body: JSON.stringify({ workflow, params: { path } }),
     }),
 
-  resumeWorkflow: (sid: string, approve: boolean): Promise<WorkflowStartResponse> =>
+  // `reason` is the reviewer's free-text note; the backend seals it into the
+  // human_review audit entry (ResumeRequest.reason, default "").
+  resumeWorkflow: (sid: string, approve: boolean, reason = ''): Promise<WorkflowStartResponse> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve }),
+      body: JSON.stringify({ approve, reason }),
     }),
 
   // Approving a gate runs every remaining step in one call. When that remainder
@@ -239,20 +250,33 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  getJob: (sid: string, jobId: string):
-    Promise<{ status: string; kind: string; result: JobResult | null; error: string | null }> =>
+  getJob: (sid: string, jobId: string): Promise<JobStatus> =>
     req(`/sessions/${sid}/jobs/${jobId}`),
 
-  // Poll a background job to completion. onTick fires each poll with elapsed seconds.
+  // Poll a background job to completion. onTick fires each poll with elapsed
+  // seconds. A status read that fails (a proxy 502, a dropped connection) is
+  // retried with backoff up to POLL_MAX_CONSECUTIVE_FAILURES times: the backend
+  // job keeps running through such a blip, so one failed GET must not end the
+  // tracking of a multi-minute fit. A job that reports `error` throws at once.
   pollJob: async <T = JobResult>(sid: string, jobId: string,
                   onTick?: (elapsedSec: number) => void): Promise<T> => {
     const start = Date.now();
+    let failures = 0;
     for (;;) {
-      const j = await api.getJob(sid, jobId);
+      let j: JobStatus;
+      try {
+        j = await api.getJob(sid, jobId);
+        failures = 0;
+      } catch (e) {
+        failures += 1;
+        if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) throw e;
+        await sleep(POLL_INTERVAL_MS * failures);
+        continue;
+      }
       if (j.status === 'done' && j.result) return j.result as unknown as T;
       if (j.status === 'error') throw new Error(j.error || 'job failed');
       onTick?.(Math.round((Date.now() - start) / 1000));
-      await new Promise(r => setTimeout(r, 1500));
+      await sleep(POLL_INTERVAL_MS);
     }
   },
 

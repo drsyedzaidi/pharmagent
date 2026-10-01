@@ -29,9 +29,7 @@
   gap: 3px;
 }
 .flexplot-field-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
@@ -59,7 +57,7 @@
   accent-color: var(--accent);
 }
 .flexplot-check-off {
-  opacity: 0.45;
+  color: var(--text-dim);
   cursor: not-allowed;
 }
 .flexplot-mini {
