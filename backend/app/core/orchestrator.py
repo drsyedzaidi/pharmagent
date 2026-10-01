@@ -716,7 +716,8 @@ class Orchestrator:
                         "audit_ok": sess.audit.verify()}
             self._log_command(sess, step.get("agent", ""), step["tool"], args)
             executed.append({"step": i, "label": step.get("label", step["tool"]),
-                             "tool": step["tool"], "summary": res.summary})
+                             "tool": step["tool"], "agent": step.get("agent", ""),
+                             "summary": res.summary})
             i += 1
             sess.state = apply_writes(sess.state, "supervisor", {"current_step": i})
             if step.get("gate"):

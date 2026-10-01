@@ -121,9 +121,18 @@ def test_poppk_full_runs_to_the_structural_gate_and_stops(tmp_path):
 
     assert out["status"] == "awaiting_review"
     assert out["review"]["label"] == "Compare structural models"
+    # 0-based index of the gated step; the UI review banner keys its text off it.
+    assert out["review"]["after_step"] == 4
     ran = [e["tool"] for e in out["executed"]]
     assert ran == ["load_dataset", "profile_pk_dataset", "validate_cdisc",
                    "generate_spaghetti_plot", "fit_pk_model"]
+    # Every entry names its template step, label and owning agent, so the chat
+    # can attribute each step's summary (the same shape a resumed job returns).
+    steps = get_workflow("poppk_full")["steps"]
+    for e in out["executed"]:
+        assert set(e) == {"step", "label", "tool", "agent", "summary"}
+        assert e["label"] == steps[e["step"]]["label"]
+        assert e["agent"] == steps[e["step"]]["agent"]
     # The expensive leg is untouched — this is the whole point of the gate.
     assert out["state"]["nlme_results"] is None
     assert out["state"]["scm_results"] is None
@@ -169,6 +178,16 @@ def test_background_resume_returns_a_job_that_completes_the_workflow(client):
     assert job["status"] == "done", job.get("error")
     assert job["result"]["status"] == "complete"
     assert job["result"]["audit_ok"]
+    # UI contract: a job-completed leg must carry the same per-step record an
+    # inline leg does — the chat renders one agent message (label + summary)
+    # per entry, and picks the result card off `tool`/`agent`. Without this the
+    # transcript shows nothing for a leg that ran in the background.
+    executed = job["result"]["executed"]
+    assert [e["tool"] for e in executed] == ["generate_report"]
+    assert executed[0]["step"] == 7
+    assert executed[0]["label"] == "Generate report"
+    assert executed[0]["agent"] == "report"
+    assert isinstance(executed[0]["summary"], str) and executed[0]["summary"]
     # The signed approval still landed in the chain, just from the job thread.
     audit = client.get(f"/api/sessions/{sid}/audit").json()
     assert audit["integrity"]["chain_ok"] is True
