@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Activity, Check, CheckCircle, FileText, Loader2, X } from 'lucide-react';
+import { Activity, BookOpen, Check, CheckCircle, FileText, Loader2, X } from 'lucide-react';
 import type { WorkflowStatus } from '../types';
 import type { Decision, StepView, WorkflowName } from './types';
 
@@ -26,7 +26,7 @@ function metaLine(meta: DatasetMeta | null): string {
 export function Rail({
   workflowName, steps, currentStep, gateStep, wfStatus, decision, timings,
   file, datasetMeta, dropZone, fileInput, canReplace, onReplace, onToggleRoles, rolesEnabled,
-  workflows, canRun, running, onRun, onNewSession,
+  workflows, canRun, running, onRun, onNewSession, onEvidence, evidenceActive = false,
 }: {
   workflowName: string;
   steps: readonly StepView[];
@@ -48,6 +48,9 @@ export function Rail({
   running: WorkflowName | null;
   onRun: (key: WorkflowName) => void;
   onNewSession: () => void;
+  /** Toggles the Evidence workspace; undefined (no session yet) disables the button. */
+  onEvidence?: () => void;
+  evidenceActive?: boolean;
 }) {
   const meta = metaLine(datasetMeta);
   return (
@@ -146,6 +149,11 @@ export function Rail({
               : <><Activity size={13} aria-hidden="true" /> <span>{w.label}</span></>}
           </button>
         ))}
+        <button type="button" className="workflow-btn ev-rail-btn" disabled={!onEvidence}
+          aria-pressed={evidenceActive} onClick={onEvidence}
+          title={onEvidence ? 'Publications: upload, screen against criteria, extract verified records' : 'Available once a session exists'}>
+          <BookOpen size={13} aria-hidden="true" /> <span>Evidence</span>
+        </button>
         <button type="button" className="link-btn rail-new-session" onClick={onNewSession}
           title="Starts a fresh session and audit chain">
           New session

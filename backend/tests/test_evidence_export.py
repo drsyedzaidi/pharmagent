@@ -245,13 +245,23 @@ def test_export_endpoint_with_nothing_approved_is_400(client, papers):
     assert r.status_code == 400 and "approved record" in r.json()["error"]["message"]
 
 
+def assert_download_refused(r, name: str) -> None:
+    """404 from the dataset route. With frontend/dist built, main.py's SPA fallback answers a URL whose
+    dot-segments the client normalised away from /dataset/ with the index.html shell (200, text/html):
+    accepted only as that shell, never a file's bytes."""
+    if r.status_code == 200:
+        assert r.headers["content-type"].startswith("text/html"), (name, r.headers["content-type"])
+        assert r.content.lstrip().lower().startswith(b"<!doctype html"), name
+        return
+    assert r.status_code == 404, (name, r.status_code)
+
+
 @pytest.mark.parametrize("name", ["../pharmagent.db", "%2e%2e%2fpharmagent.db", "..%2F..%2Fpharmagent.db",
                                   "/etc/passwd", "pharmagent.db", "evidence_other.csv"])
 def test_download_refuses_other_names(client, papers, name):
     sid = _ready(client, papers)
     client.post(EV.format(sid=sid) + "/export", json={})
-    r = client.get(EV.format(sid=sid) + f"/dataset/{name}")
-    assert r.status_code == 404, (name, r.status_code)
+    assert_download_refused(client.get(EV.format(sid=sid) + f"/dataset/{name}"), name)
 
 
 def test_download_before_any_export_is_404(client, papers):

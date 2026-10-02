@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
+import { EvidenceWorkspace } from './evidence';
 import type { Decision, GateSigner, Marker, Outcome, VerifyNote, WorkflowName } from './shell/types';
 import { MARKERS, REVIEW_DRAWER_MQ } from './shell/types';
 import { hhmm, integrityFailures, latestEntryFor, sealedDecision, stepTimings } from './shell/format';
@@ -3885,6 +3886,7 @@ export default function App() {
   const [skills, setSkills] = useState<SkillDef[]>([]);
   const [showSkills, setShowSkills] = useState(false);
   const [showFlexplot, setShowFlexplot] = useState(false);
+  const [showEvidence, setShowEvidence] = useState(false);
   /** Actions popover above the composer (quick-action rows live inside it). */
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLButtonElement>(null);
@@ -3917,6 +3919,11 @@ export default function App() {
     const seq = ++msgSeq.current;
     setMessages(prev => [...prev, { ...m, id: m.id || newMsgId(), seq }]);
   }, []);
+  /** Evidence workspace result: new state (the audit refresh follows it) + the tool summary. */
+  const onEvidenceResult = useCallback((st: PharmState, summary: string) => {
+    setState(st);
+    if (summary) pushMsg({ role: 'assistant', content: summary, agent: 'evidence', id: '' });
+  }, [pushMsg]);
 
   function extractMessages(raw: ChatMessage[], agent: string): DisplayMsg[] {
     const out: DisplayMsg[] = [];
@@ -5035,6 +5042,8 @@ export default function App() {
         running={loading && wfStatus === 'running' ? activeWorkflow : null}
         onRun={uploadAndRun}
         onNewSession={newSession}
+        onEvidence={session ? () => setShowEvidence(s => !s) : undefined}
+        evidenceActive={showEvidence}
       />
 
       <main className="main">
@@ -5358,6 +5367,9 @@ export default function App() {
             <ResultSection title="Flexplot">
               <FlexplotPanel sessionId={session.id} />
             </ResultSection>
+          )}
+          {showEvidence && session && (
+            <EvidenceWorkspace sessionId={session.id} audit={audit} busy={loading} onResult={onEvidenceResult} />
           )}
           {showSkills && (
             <ResultSection title="Skills">

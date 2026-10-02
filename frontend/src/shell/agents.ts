@@ -10,6 +10,7 @@ export const AGENT_LABEL: Record<string, string> = {
   reviewer: 'Reviewer',
   clinpharm: 'Clinical pharmacology',
   statistician: 'Statistician',
+  evidence: 'Evidence agent',
   be: 'Bioequivalence agent',
   dose_prop: 'Dose-proportionality agent',
   compartmental: 'Compartmental agent',

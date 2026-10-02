@@ -122,3 +122,87 @@ def test_evidence_routes_are_registered():
     assert {base, base + "/upload", base + "/criteria", base + "/template",
             base + "/sources/{src_id}/pages/{n}", base + "/sources/{src_id}/pdf"} <= set(paths)
     assert len(paths) >= 6
+
+
+# ------------------------------------------------- S8: pipeline response shapes --
+# frontend/src/evidence/types.ts mirrors every set below (ToolEnvelope, ScreenRow, RecordRow, ...).
+
+TOOL_ENVELOPE_KEYS = {"agent", "tool", "summary", "state", "result", "audit_ok"}
+SCREEN_ROW_KEYS = {"id", "session_id", "source_id", "criteria_hash", "verdict", "score", "reasoning", "criteria",
+                   "method", "status", "decided_by", "decided_at", "decision_reason", "created_at"}
+SCREEN_RESULT_KEYS = {"screens", "skipped", "criteria_hash", "n_new", "n_screened", "method"}
+SCREENING_RESULTS_KEYS = {"criteria_hash", "n_screened", "verdicts", "proposed", "approved", "rejected", "method",
+                          "updated_at"}
+SCREEN_DECIDE_KEYS = {"decided", "summary", "state", "screening_results"}
+RECORD_ROW_KEYS = {"id", "session_id", "source_id", "template_hash", "field", "group_label", "value", "value_num",
+                   "unit", "locator", "extractor", "verify_status", "verify_reason", "flags", "status",
+                   "decided_by", "decided_at", "decision_reason", "record_hash", "created_at"}
+LOCATOR_KEYS = {"page", "kind", "snippet", "span", "literal", "cell", "column", "decimal_style"}
+EXTRACT_RESULT_KEYS = {"records", "sources", "skipped", "template_hash", "method", "n_candidates", "pass", "fail",
+                       "flagged", "n_new"}
+EXTRACT_SOURCE_KEYS = {"source_id", "method", "note", "n_candidates", "pass", "fail", "flagged", "n_new",
+                       "unmatched_headers", "dropped"}
+EXTRACTION_RESULTS_KEYS = {"template_hash", "n_records", "proposed", "approved", "rejected", "verify_fail",
+                           "flagged", "method", "updated_at"}
+VERIFY_RESULT_KEYS = {"n_checked", "pass", "fail", "changed", "records"}
+RECORD_DECIDE_KEYS = {"decided", "summary", "state", "extraction_results"}
+RECORD_DECIDED_KEYS = {"record", "record_hash", "source_sha256", "locator", "value", "unit", "verify_status",
+                       "decision", "reason"}
+EXPORT_RESULT_KEYS = {"dataset", "long_path", "wide_path", "long_sha256", "wide_sha256", "record_hashes",
+                      "n_records", "n_sources", "template_hash", "long_columns", "wide_columns"}
+DATASET_ROW_KEYS = {"id", "session_id", "template_hash", "long_path", "wide_path", "long_sha256", "wide_sha256",
+                    "record_hashes", "n_records", "n_sources", "exported_by", "exported_at"}
+
+
+def _post(client, sid: str, path: str, body: dict) -> dict:
+    r = client.post(EV.format(sid=sid) + path, json=body)
+    assert r.status_code == 200, f"{path}: {r.status_code} {r.text}"
+    return r.json()
+
+
+def test_pipeline_response_shapes(client, tmp_path):
+    paths = fx.build_all(tmp_path / "papers")
+    sid = client.post("/api/sessions").json()["id"]
+    client.post(EV.format(sid=sid) + "/upload",
+                files={"file": ("paper_a.pdf", paths["paper_a"].read_bytes(), "application/pdf")})
+    _post(client, sid, "/criteria", {"criteria": [
+        {"id": "c1", "text": "human PK", "kind": "inclusion", "required": True, "keywords": ["pharmacokinetic"]}]})
+
+    screen = _post(client, sid, "/screen", {})
+    assert set(screen) == TOOL_ENVELOPE_KEYS and screen["tool"] == "screen_publications"
+    assert set(screen["result"]) == SCREEN_RESULT_KEYS
+    row = screen["result"]["screens"][0]
+    assert set(row) == SCREEN_ROW_KEYS and row["verdict"] == "include"
+    assert set(screen["state"]["screening_results"]) == SCREENING_RESULTS_KEYS
+    assert set(screen["state"]["screening_results"]["verdicts"]) == {"include", "exclude", "unsure"}
+
+    dec = _post(client, sid, "/screen/decide", {"decisions": [
+        {"screen_id": row["id"], "decision": "approve", "reason": "human PK"}]})
+    assert set(dec) == SCREEN_DECIDE_KEYS and set(dec["decided"][0]) == SCREEN_ROW_KEYS
+    assert dec["decided"][0]["status"] == "approved"
+
+    _post(client, sid, "/template", {"fields": [
+        {"name": "cmax", "type": "number", "unit": "ng/mL", "aliases": ["Cmax"]}]})
+    ext = _post(client, sid, "/extract", {})
+    assert set(ext) == TOOL_ENVELOPE_KEYS and set(ext["result"]) == EXTRACT_RESULT_KEYS
+    assert set(ext["result"]["sources"][0]) == EXTRACT_SOURCE_KEYS
+    rec = ext["result"]["records"][0]
+    assert set(rec) == RECORD_ROW_KEYS and set(rec["locator"]) == LOCATOR_KEYS
+    assert set(ext["state"]["extraction_results"]) == EXTRACTION_RESULTS_KEYS
+
+    ver = _post(client, sid, "/records/verify", {})
+    assert set(ver) == TOOL_ENVELOPE_KEYS and set(ver["result"]) == VERIFY_RESULT_KEYS
+
+    passing = next(r for r in client.get(EV.format(sid=sid)).json()["records"] if r["verify_status"] == "pass")
+    rdec = _post(client, sid, "/records/decide", {"decisions": [
+        {"record_id": passing["id"], "decision": "approve", "reason": "on page"}]})
+    assert set(rdec) == RECORD_DECIDE_KEYS and set(rdec["decided"][0]) == RECORD_DECIDED_KEYS
+    assert set(rdec["decided"][0]["record"]) == RECORD_ROW_KEYS
+
+    exp = _post(client, sid, "/export", {})
+    assert set(exp) == TOOL_ENVELOPE_KEYS and set(exp["result"]) == EXPORT_RESULT_KEYS
+    assert set(exp["result"]["dataset"]) == DATASET_ROW_KEYS
+    snap = client.get(EV.format(sid=sid)).json()
+    assert set(snap["datasets"][0]) == DATASET_ROW_KEYS and set(snap["screens"][0]) == SCREEN_ROW_KEYS
+    assert set(snap["records"][0]) == RECORD_ROW_KEYS
+    assert snap["summary"]["wide_path"] == exp["result"]["wide_path"]

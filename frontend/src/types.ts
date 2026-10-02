@@ -1,3 +1,5 @@
+import type { EvidenceSummary, ExtractionResults, ScreeningResults } from './evidence/types';
+
 export interface Session {
   id: string;
   created_at: string;
@@ -153,6 +155,11 @@ export interface PharmState {
   workflow_name: string | null;
   current_step: number | null;
   last_agent: string | null;
+  /** Evidence pipeline mirrors (owner 'evidence'); summaries only — the evidence DB is the ledger. */
+  evidence_summary?: EvidenceSummary | null;
+  screening_results?: ScreeningResults | null;
+  extraction_results?: ExtractionResults | null;
+  evidence_dataset_path?: string | null;
 }
 
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';

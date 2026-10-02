@@ -1,0 +1,97 @@
+/* Evidence workspace. Design tokens only (index.css :root); no accent stripes, no
+   uppercase labels, no decorative motion. Verdict colours always sit beside an icon + word. */
+
+.ev-workspace { display: flex; flex-direction: column; gap: 12px; }
+.ev-panel { display: flex; flex-direction: column; gap: 12px; }
+
+.ev-counts, .ev-intro, .ev-hint, .ev-prov, .ev-empty { margin: 0; font-size: 12px; color: var(--text-dim); }
+.ev-intro { color: var(--text); max-width: 72ch; }
+.ev-prov code, .ev-counts code { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.ev-empty { padding: 12px 0; }
+
+.ev-error { color: var(--red); margin: 0; max-width: none; }
+.ev-problem { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--yellow); }
+
+.ev-dim { color: var(--text-dim); }
+.ev-ok { color: var(--green); }
+.ev-bad { color: var(--red); }
+
+/* ── form controls ── */
+.ev-field { display: flex; flex-direction: column; gap: 4px; }
+.ev-label { font-size: 12px; font-weight: 600; color: var(--text-h); }
+.ev-input {
+  height: 32px;
+  min-width: 0;
+  width: 100%;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--text-h);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--duration) var(--ease);
+}
+.ev-input::placeholder { color: var(--text-dim); }
+.ev-input:focus-visible { border-color: var(--accent); }
+.ev-input:disabled { color: var(--text-dim); background: var(--bg-hover); border-color: var(--border); cursor: not-allowed; }
+.ev-input.mono { font-family: var(--mono); font-size: 12px; }
+.ev-input.num { text-align: right; }
+.ev-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.ev-icon-btn { width: 32px; padding: 0; justify-content: center; }
+
+/* ── library ── */
+.ev-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 280px); gap: 12px; align-items: stretch; }
+.ev-drop { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 12px; }
+.ev-licence { justify-content: flex-end; }
+
+.ev-uploads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ev-upload {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding: 6px 0; font-size: 12px; color: var(--text);
+  border-top: 1px solid var(--border-subtle);
+}
+.ev-upload-name { font-weight: 500; color: var(--text-h); overflow-wrap: anywhere; }
+.ev-upload-state { font-weight: 600; }
+.ev-upload.done .ev-upload-state { color: var(--green); }
+.ev-upload.error .ev-upload-state { color: var(--red); }
+.ev-upload.uploading .ev-upload-state { color: var(--accent); }
+.ev-upload-note { flex-basis: 100%; padding-left: 21px; color: var(--text-dim); overflow-wrap: anywhere; }
+
+.ev-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ev-table th {
+  text-align: left; font-size: 12px; font-weight: 600; color: var(--text-dim);
+  padding: 6px 8px; border-bottom: 1px solid var(--border-strong);
+}
+.ev-table td { padding: 8px; vertical-align: top; border-bottom: 1px solid var(--border-subtle); }
+.ev-table .num { text-align: right; }
+.ev-src-name { font-weight: 600; color: var(--text-h); overflow-wrap: anywhere; }
+.ev-src-title { color: var(--text); overflow-wrap: anywhere; }
+.ev-table .ev-prov { margin-top: 2px; overflow-wrap: anywhere; }
+
+/* ── criteria / template rows ── */
+.ev-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ev-row { display: grid; gap: 8px; align-items: center; padding: 10px 0; }
+.ev-row + .ev-row { border-top: 1px solid var(--border-subtle); }
+.ev-crit-row { grid-template-columns: 88px 128px minmax(0, 1fr) 32px; }
+.ev-crit-row .ev-check { grid-column: 1 / 3; }
+.ev-crit-row .ev-span { grid-column: 3 / 5; }
+.ev-field-row { grid-template-columns: 120px 140px minmax(0, 1fr) 72px 72px 32px; }
+.ev-field-row .ev-span-wide { grid-column: 3 / 7; }
+.ev-span-all { grid-column: 1 / -1; }
+
+.ev-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ev-push { margin-left: auto; }
+.ev-run {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding-top: 12px; border-top: 1px solid var(--border);
+}
+
+/* ── rail entry ── */
+.workflow-btn.ev-rail-btn[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .ev-upload-row { grid-template-columns: minmax(0, 1fr); }
+  .ev-crit-row, .ev-field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ev-crit-row > *, .ev-field-row > * { grid-column: auto; }
+  .ev-crit-row .ev-span, .ev-field-row .ev-span-wide, .ev-span-all { grid-column: 1 / -1; }
+}

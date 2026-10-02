@@ -33,7 +33,7 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return h;
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+export async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, { ...init, headers: authHeaders(init?.headers as Record<string, string>) });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
@@ -42,7 +42,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function download(path: string, filename: string): Promise<void> {
+export async function download(path: string, filename: string): Promise<void> {
   const res = await fetch(BASE + path, { headers: authHeaders() });
   if (!res.ok) throw new Error((await res.text().catch(() => res.statusText)) || `HTTP ${res.status}`);
   const blob = await res.blob();

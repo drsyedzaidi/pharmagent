@@ -26,6 +26,7 @@ from app.evidence.prompts import EVIDENCE_SYSTEM
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
 from tests import evidence_fixtures as fx
+from tests.test_evidence_export import assert_download_refused
 from tests.test_evidence_extract import TEMPLATE
 from tests.test_evidence_llm import FakeLLM
 from tests.test_evidence_records_api import _setup
@@ -234,7 +235,7 @@ def _exported(client, papers) -> tuple[str, dict]:
 @pytest.mark.parametrize("name", TRAVERSAL)
 def test_download_refuses_traversal_and_foreign_names(client, papers, name):
     sid, _ = _exported(client, papers)
-    assert client.get(EV.format(sid=sid) + f"/dataset/{name}").status_code == 404
+    assert_download_refused(client.get(EV.format(sid=sid) + f"/dataset/{name}"), name)
 
 
 def test_download_before_export_and_from_another_session_is_404(client, papers):
