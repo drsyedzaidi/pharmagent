@@ -11,17 +11,19 @@ from typing import Any
 
 from app.evidence import models as M
 from app.evidence.normalize import numbers_in
+from app.evidence.unit_norm import normalise_unit, same_unit
+
+__all__ = ["normalise_unit", "same_value", "scripted_flags", "merge_llm_flags", "slot_key", "group_key",
+           "is_interval_field"]
 
 MAX_CODE_CHARS, MAX_MESSAGE_CHARS = 40, 300
+_CODE_RE = re.compile(r"[a-z0-9_]{1,40}")          # a model flag code is an identifier, never text
 _SE_RE = re.compile(r"(^|[^a-z])(se|sd|sem|cv|rse)($|[^a-z])")          # 'cmax_se', '%cv', 'sd(cl)'
 # A bound names its interval by a suffix ('cl_lower', 'cl_ucl') or a separated prefix ('Lower 95% CI').
 _BOUNDS = {"lower": ("lower", "low", "lo", "lcl"), "upper": ("upper", "high", "hi", "ucl")}
 _BOUND_RES = {side: (re.compile(r"^(?P<stem>.*?)[_\s]?(" + "|".join(words) + r")$"),
                      re.compile(r"^(" + "|".join(words) + r")[_\s](?P<stem>.+)$")) for side, words in _BOUNDS.items()}
 _RANGE_NAME = re.compile(r"(^|[_\s])(range|min|max|minimum|maximum)($|[_\s])")
-_UNIT_SYNONYMS = ((re.compile(r"\b(hrs?|hours?)\b"), "h"), (re.compile(r"\b(liters?|litres?)\b"), "l"),
-                  (re.compile(r"\bmcg\b"), "ug"), (re.compile(r"\b(seconds?|sec)\b"), "s"))
-_UNIT_STRIP = re.compile(r"[\s·*×.]+")
 _NUMERIC_TYPES = ("number", "integer")
 
 Key = tuple[str, str]            # (source_id, group)
@@ -30,14 +32,6 @@ Key = tuple[str, str]            # (source_id, group)
 def _flag(code: str, severity: str, message: str, field: str, group: str) -> dict[str, Any]:
     return {"code": code, "severity": severity, "message": message, "field": field, "group": group,
             "origin": "script"}
-
-
-def normalise_unit(unit: str | None) -> str:
-    """Comparison form: NFKC, casefold, µ/μ -> 'u', hr -> h, separators (space · * × .) removed."""
-    u = unicodedata.normalize("NFKC", unit or "").casefold().replace("μ", "u").replace("µ", "u")
-    for pattern, rep in _UNIT_SYNONYMS:
-        u = pattern.sub(rep, u)
-    return _UNIT_STRIP.sub("", u)
 
 
 def _field_index(template: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -190,6 +184,10 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
 
 
 def same_value(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """One claim for a slot: equal numbers (or value text) AND the same unit -- 2.31 L/h and 2.31 mL/min
+    are a conflict, never a repeat."""
+    if not same_unit(a.get("unit"), b.get("unit")):
+        return False
     if a.get("value_num") is not None and b.get("value_num") is not None:
         return float(a["value_num"]) == float(b["value_num"])
     return str(a.get("value") or "").strip() == str(b.get("value") or "").strip()
@@ -241,7 +239,7 @@ def merge_llm_flags(existing: list[dict[str, Any]] | None, proposed: list[Any] |
         code = str(p.get("code") or "").strip()[:MAX_CODE_CHARS]
         message = str(p.get("message") or "").strip()[:MAX_MESSAGE_CHARS]
         severity = p.get("severity")
-        if not code or not message or severity not in M.FLAG_SEVERITIES:
+        if not _CODE_RE.fullmatch(code) or not message or severity not in M.FLAG_SEVERITIES:
             continue
         key = (code, str(p.get("field") or ""), str(p.get("group") or ""))
         if key in seen:

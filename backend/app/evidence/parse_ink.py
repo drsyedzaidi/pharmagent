@@ -7,8 +7,9 @@ document's forms are initialised before any page loads) and the verdict comes fr
 
 1. pdfium's text page lists every glyph with its text object, origin and tight ink box (user space).
 2. Text objects are grouped so that no two objects in a group overlap (greedy colouring of their
-   boxes, at most MAX_GROUPS). B is the page rendered with every text object switched to an
-   invisible render mode (clip modes keep their clip); R_g shows only group g's text. Pixels where
+   boxes, at most MAX_GROUPS; a stroked object's box includes its stroke: pdfium's object bounds).
+   B is the page rendered with every text object switched to an invisible render mode (clip modes
+   keep their clip); R_g shows only group g's text. Pixels where
    R_g and B differ by at least INK_DELTA (max over RGB, 0-255) are group g's VISIBLE ink: anything
    that covers, clips or matches the text is identical in both renders, and an overlapping hidden
    layer is in another group, so it can neither lend ink to nor take ink from this one.
@@ -23,7 +24,10 @@ document's forms are initialised before any page loads) and the verdict comes fr
    baseline, within DRIFT_PT: a Standard-14 width disagreement), else it is dropped as hidden; when
    more than MAX_UNMATCHED of a page's chars have none, the page is not judged. Glyphs at a char's
    origin that decode to other number text (/ActualText) and number glyphs whose ink is odd
-   (parse_marks.ink_odd) are reported per page in ``InkChecker.flags``.
+   (parse_marks.ink_odd), or that a stroked text object of another group paints over (a wide
+   stroke laid over a number as a black bar: the page with all text shown differs from the
+   glyph's own group render on COVER_FRACTION of its box), are reported per page in
+   ``InkChecker.flags``.
 
 Costs are bounded: 2 + groups renders per page at <= RENDER_SCALE (scaled down to MAX_RENDER_PIXELS),
 at most RENDER_MAX_PAGES pages and RENDER_BUDGET_S seconds per document. A page that cannot be judged
@@ -44,6 +48,7 @@ from typing import Any
 
 import numpy as np
 
+from app.evidence.parse_ink_match import _transfer
 from app.evidence.parse_marks import CRITICAL as OVERLAP_CRITICAL
 from app.evidence.parse_marks import MAX_INK_CHARS, ink_odd
 
@@ -57,13 +62,9 @@ INK_FRACTION = 0.05
 MIN_INSIDE_FRACTION = 0.5          # at least half the box inside the CropBox render
 PAD_PX = 1
 MAX_GROUPS = 8
-MATCH_PT = 0.5
-EXACT_PT = 0.05                    # origins of one glyph agree to ~1e-4 pt between the two libraries
-MAX_UNMATCHED = 0.2
 DUPLICATE_PT = 1.0
-DRIFT_PT = 3.0                     # a run's origins may drift this far apart (Standard-14 widths)
-MISMATCH, INK_MISMATCH = "glyph_text_mismatch", "glyph_ink_mismatch"
-_DASHES = str.maketrans({c: "-" for c in "‐‑‒–—―−﹘﹣－"})
+COVER_FRACTION = 0.1               # share of a number glyph's box another group's stroked text may change
+_STROKE_MODES = frozenset({1, 2, 5, 6})
 _UNOWNED = ("Mn", "Me", "Sk", "Lm")   # combining marks / modifiers sit on another glyph by design
 
 
@@ -79,10 +80,6 @@ def _open_document(path: str) -> Any:
         doc.close()
         raise
     return doc
-
-
-def _norm(text: str) -> str:
-    return unicodedata.normalize("NFKC", text)
 
 
 def duplicate_ids(chars: list[dict[str, Any]]) -> set[int]:
@@ -130,13 +127,28 @@ def _glyphs(page: Any) -> tuple[list[str], np.ndarray, np.ndarray, list[int], di
     return texts, np.array(origins, float).reshape(-1, 2), np.array(boxes, float).reshape(-1, 4), keys, handles
 
 
-def _groups(keys: list[int], boxes: np.ndarray) -> dict[int, int] | None:
+def _stroke_bounds(handles: dict[int, Any], modes: dict[int, int]) -> dict[int, np.ndarray]:
+    """[l, b, r, t] of every stroked text object, stroke included (glyph boxes leave it out)."""
+    import pypdfium2.raw as raw
+    out = {}
+    for key, obj in handles.items():
+        if modes.get(key) in _STROKE_MODES:
+            v = [ctypes.c_float() for _ in range(4)]
+            if raw.FPDFPageObj_GetBounds(obj, *(ctypes.byref(x) for x in v)):
+                out[key] = np.array([x.value for x in v], float)
+    return out
+
+
+def _groups(keys: list[int], boxes: np.ndarray, strokes: dict[int, np.ndarray] | None = None
+            ) -> dict[int, int] | None:
     """Text object -> group so that no two objects of a group overlap; None above MAX_GROUPS."""
     objs = sorted(set(keys))
     index = {k: i for i, k in enumerate(objs)}
     lo, hi = np.full((len(objs), 2), np.inf), np.full((len(objs), 2), -np.inf)
-    for k, b in zip(keys, boxes, strict=True):
-        i = index[k]
+    for k, b in [*zip(keys, boxes, strict=True), *(strokes or {}).items()]:
+        i = index.get(k)
+        if i is None:
+            continue
         lo[i] = np.minimum(lo[i], b[:2])
         hi[i] = np.maximum(hi[i], b[2:])
     group = np.full(len(objs), -1)
@@ -214,13 +226,14 @@ def _pad(px: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
 
 
 def _judge(texts: list[str], boxes: np.ndarray, groups: list[int], renders: dict[int, np.ndarray],
-           blank: np.ndarray, posconv: Any) -> tuple[np.ndarray, np.ndarray]:
+           blank: np.ndarray, posconv: Any, full: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(visible, odd) per pdfium glyph: the visible verdict (module docstring, step 3) and
     parse_marks.ink_odd (a number glyph whose ink is not the plain glyph). A glyph's region is its tight box
     (overlaps inside one text object are normal kerning: a period under an italic 'T') plus a PAD_PX
     ring of pixels no other glyph box claims (pdfium's box can sit a pixel off a hairline's
     anti-aliased ink). Glyphs sharing one exact box (a ligature that pdfium reports as 'f' + 'i') are
-    one glyph: the first claims and decides."""
+    one glyph: the first claims and decides. *full* (all text shown; given when stroked text exists)
+    marks a number glyph odd when other groups' text changes COVER_FRACTION of its box."""
     px, area = _pixel_boxes(boxes, posconv, blank.shape)
     padded = _pad(px, blank.shape)
     first: dict[tuple, int] = {}
@@ -239,83 +252,11 @@ def _judge(texts: list[str], boxes: np.ndarray, groups: list[int], renders: dict
         visible[sel] = ((inside[sel] >= MIN_INSIDE_FRACTION * area[sel])
                         & (own_ink >= np.maximum(1, INK_FRACTION * own_area)))
         odd |= ink_odd(texts, boxes, px, area, ink, sel & claims & visible, blank, INK_DELTA)
+        if full is not None:
+            crit = sel & np.array([t in OVERLAP_CRITICAL for t in texts], bool)
+            covered = _box_sums(_ink(full, img), px) >= COVER_FRACTION * np.maximum(inside, 1)
+            odd |= crit & covered
     return visible[canon], odd[canon]
-
-
-# ---------------------------------------------------------- pdfplumber side ---
-
-def _pdfminer_ctm(page: Any) -> np.ndarray:
-    """pdfminer's page CTM (pdf user space -> its device space) as a 3x3 matrix."""
-    x0, y0, x1, y1 = page.page_obj.mediabox
-    a, b, c, d, e, f = {90: (0, -1, 1, 0, -y0, x1), 180: (-1, 0, 0, -1, x1, y1),
-                        270: (0, 1, -1, 0, y1, -x0)}.get(page.page_obj.rotate, (1, 0, 0, 1, -x0, -y0))
-    return np.array([[a, c, e], [b, d, f], [0, 0, 1]], dtype=float)
-
-
-def _fold(text: str) -> str:
-    return _norm(text).translate(_DASHES)
-
-
-def _decoded_apart(text: str, exact: list[int], texts: list[str]) -> set[str]:
-    """Number characters of a char and the glyphs at its exact origin that decode to OTHER text
-    (pdfium follows /ActualText, pdfminer reads the drawn code): the text layer is in doubt. A side
-    that could not decode the glyph at all ('(cid:1)', a control or private-use code) is no evidence."""
-    if text.startswith("(cid:"):
-        return set()
-    decoded = [t for t in (_fold(texts[k]) for k in exact) if t and t != "\ufffd"
-               and not unicodedata.category(t[0]).startswith("C")]
-    out = {ch for t in decoded if t != _fold(text) for ch in t + _fold(text)}
-    return out & OVERLAP_CRITICAL
-
-
-def _drifted(prev: int | None, ux: float, uy: float, text: str, origins: np.ndarray, norm: list[str]) -> list:
-    """[(0, k)] for the glyph right after *prev* in pdfium's order when it has this char's text on the
-    same baseline within DRIFT_PT: the two libraries' advances disagree (a Standard-14 width) and
-    every later origin of the run is shifted."""
-    for k in range(prev + 1, min(prev + 4, len(norm))) if prev is not None else ():
-        if (norm[k] and (norm[k] in text or text in norm[k]) and abs(origins[k, 1] - uy) <= EXACT_PT
-                and abs(origins[k, 0] - ux) <= DRIFT_PT):
-            return [(0.0, k)]
-    return []
-
-
-def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins: np.ndarray,
-              visible: np.ndarray, odd: np.ndarray) -> tuple[set[int], dict[str, set[str]]] | None:
-    """(ids of pdfplumber chars whose matching pdfium glyph is hidden (or that have none),
-    {glyph_check code: number characters in doubt}); None when too many chars have no glyph."""
-    grid: dict[tuple[int, int], list[int]] = {}
-    for k, (x, y) in enumerate(origins):
-        grid.setdefault((int(x // 2), int(y // 2)), []).append(k)
-    inv = np.linalg.inv(_pdfminer_ctm(page))
-    norm = [_norm(t) for t in texts]
-    hidden, unmatched, judged, prev = set(), 0, 0, None
-    flags: dict[str, set[str]] = {MISMATCH: set(), INK_MISMATCH: set()}
-    for c in chars:
-        text = _norm(str(c.get("text", "")))
-        if not text.strip():
-            continue
-        judged += 1
-        ux, uy, _ = inv @ np.array([float(c["matrix"][4]), float(c["matrix"][5]), 1.0])
-        near = [k for i in (-1, 0, 1) for j in (-1, 0, 1) for k in grid.get((int(ux // 2) + i, int(uy // 2) + j), [])]
-        near = [(float(np.hypot(origins[k, 0] - ux, origins[k, 1] - uy)), k) for k in near]
-        same = sorted((d, k) for d, k in near if d <= MATCH_PT and norm[k] and (norm[k] in text or text in norm[k]))
-        same = same or _drifted(prev, ux, uy, text, origins, norm)
-        if same:
-            used = [k for d, k in same if d <= same[0][0] + EXACT_PT]
-            ok = any(visible[k] for k in used)
-        else:                      # same glyph, decoded differently ('(cid:1)', U+2010 vs '-'): all must show
-            used = [k for d, k in near if d <= EXACT_PT]
-            unmatched += not used
-            ok = bool(used) and all(visible[k] for k in used)
-            flags[MISMATCH] |= _decoded_apart(text, used, texts)
-        prev = used[0] if used else None
-        if any(odd[k] for k in used):
-            flags[INK_MISMATCH] |= set(_fold(text)) & OVERLAP_CRITICAL
-        if not ok:
-            hidden.add(id(c))
-    if judged and unmatched > MAX_UNMATCHED * judged:
-        return None
-    return hidden, {code: chars_ for code, chars_ in flags.items() if chars_}
 
 
 class InkChecker:
@@ -347,26 +288,32 @@ class InkChecker:
                 pdf_page.close()                           # pages and bitmaps must not pile up
         if out is None:
             return None
-        self.flags = out[1]
-        return out[0]
+        hidden, self.flags, respell = out
+        for c in chars:                                    # a space char that draws a minus reads '-'
+            if id(c) in respell:
+                c["text"] = respell[id(c)]
+        return hidden
 
     def _hidden(self, pdf_page: Any, page: Any, chars: list[dict[str, Any]]
-                ) -> tuple[set[int], dict[str, set[str]]] | None:
+                ) -> tuple[set[int], dict[str, set[str]], dict[int, str]] | None:
         import pypdfium2.raw as raw
         w, h = pdf_page.get_size()
         scale = min(RENDER_SCALE, (MAX_RENDER_PIXELS / max(w * h, 1.0)) ** 0.5)
         texts, origins, boxes, keys, handles = _glyphs(pdf_page)
         if len(texts) > MAX_INK_CHARS:
             return None
-        groups = _groups(keys, boxes) if keys else {}
+        modes = {k: raw.FPDFTextObj_GetTextRenderMode(o) for k, o in handles.items()}
+        strokes = _stroke_bounds(handles, modes)
+        groups = _groups(keys, boxes, strokes) if keys else {}
         if scale < MIN_RENDER_SCALE or groups is None:
             return None
-        modes = {k: raw.FPDFTextObj_GetTextRenderMode(o) for k, o in handles.items()}
         blank = _render(pdf_page, scale, handles, modes, set())
         renders = {g: _render(pdf_page, scale, handles, modes, {k for k in handles if groups[k] == g}).to_numpy()
                    for g in sorted(set(groups.values()))}
+        full = (_render(pdf_page, scale, handles, modes, set(handles)).to_numpy()
+                if strokes and len(renders) > 1 else None)
         visible, odd = (_judge(texts, boxes, [groups[k] for k in keys], renders, blank.to_numpy(),
-                               blank.get_posconv(pdf_page)) if keys else (np.zeros(0, bool), np.zeros(0, bool)))
+                               blank.get_posconv(pdf_page), full) if keys else (np.zeros(0, bool), np.zeros(0, bool)))
         return _transfer(page, chars, texts, origins, visible, odd)
 
     def close(self) -> None:

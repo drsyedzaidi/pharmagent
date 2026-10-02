@@ -13,12 +13,16 @@ import re
 import unicodedata
 from typing import NamedTuple
 
+from app.evidence.number_glue import glued
+
 IdxMap = list[int]
 
-_DASHES = "‐‑‒–—―−﹘﹣－"
+_DASHES = "‐‑‒–—―−﹘﹣－˗➖⁃⸺⸻"        # look-alike minus signs fold to '-'
+_PLUSES = "﹢＋"
 _SPACES = "              　"
 _APOSTROPHES = "’ʼ′"          # typographic apostrophe / modifier letter / prime: Swiss digit grouping too
 _FOLD = str.maketrans({**{c: "-" for c in _DASHES}, **{c: " " for c in _SPACES}, **{c: "'" for c in _APOSTROPHES},
+                       **{c: "+" for c in _PLUSES},
                        "µ": "μ"})
 _DROP = {"­", "​", "‌", "‍", "﻿"}        # soft hyphen, zero-width marks
 _ASCII_DIGITS = set("0123456789")
@@ -45,8 +49,11 @@ _ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v"})   # 1:1, matches
 _SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _GAP = r"[ \x00]{0,2}"
 _EXP = r"(?:\^[ \x00]?(?P<pow>[+-]?\d{1,4})(?!\d)|(?P<sup>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]{1,4})|(?P<odd>[+-]\d{1,4}(?!\d)))"
+# Multiplier: x, *, or ANY non-ASCII character other than a comparison or plus-minus sign ('×', '·',
+# look-alikes '⋅ ∙ • ⨯ ✕ ✖ х'): a symbol between a number and '10' is never read as a token boundary.
+_MULTIPLIER = r"(?:[xX*]|[^\x00-\x7f±∓≤≥≦≧≈≃≅≠∼<>=])"
 _SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|[ \x00]{1,2}[eE](?P<eg>[+-]?\d{1,4})(?![\w.,]\d|\w)|"
-                     + _GAP + r"[xX×·*]" + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
+                     + _GAP + _MULTIPLIER + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
 _POW_RE = re.compile(_EXP)
 MAX_EXPONENT = 300
 
@@ -186,7 +193,10 @@ def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
             last_end = m.end()
             continue
         sci = _scientific(folded, m.end(), value, bare_ten)
-        out.append(NumToken(start, m.end(), value) if sci is None else NumToken(start, sci[0], sci[1], value))
+        tok = NumToken(start, m.end(), value) if sci is None else NumToken(start, sci[0], sci[1], value)
+        if glued(folded, start, tok.end, strict=strict):          # '12З', '12․4', '˗20', '12½': unreadable
+            tok = NumToken(start, tok.end, None, tok.mantissa)
+        out.append(tok)
         last_end = out[-1].end
     return out
 

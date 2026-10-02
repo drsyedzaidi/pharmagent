@@ -330,6 +330,9 @@ class EvidenceStore:
                     n_sources: int, exported_by: str) -> Dataset:
         did = "ds_" + long_sha256[:12]
         with self._lock:
+            old = self._conn.execute("SELECT wide_sha256 FROM evidence_dataset WHERE id=?", (did,)).fetchone()
+            if old is not None and old[0] != wide_sha256:      # same records, another template: its own row
+                did = f"ds_{long_sha256[:12]}_{wide_sha256[:8]}"
             self._conn.execute(
                 """INSERT INTO evidence_dataset (id, session_id, template_hash, long_path, wide_path,
                    long_sha256, wide_sha256, record_hashes_json, n_records, n_sources, exported_by, exported_at)

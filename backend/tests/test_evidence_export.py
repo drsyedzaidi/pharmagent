@@ -18,6 +18,7 @@ from app.config import settings
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.pharmstate import PharmState, apply_writes
+from app.core.provenance import file_sha256
 from app.core.store import SessionStore
 from app.evidence import export_tools, extract_tools, llm_access
 from app.evidence import store as evstore
@@ -319,7 +320,9 @@ def test_re_export_restores_the_ledger_files_when_they_were_removed(env, papers,
 
 
 def test_re_export_never_restores_a_wide_file_whose_bytes_differ_from_the_ledger(env, papers, monkeypatch):
-    """Same approved set under a changed template: long sha matches the ledger, the wide sha does not."""
+    """Same approved set under a changed template: long sha matches the ledger, the wide sha does not.
+    The old ledger row and its (missing) file are never refilled with other bytes; the new wide file
+    gets its own ledger row (round-3 fix: the result used to name the old template's wide file)."""
     _approve_all(env, papers)
     r1, _ = _export(env)
     Path(r1.result["wide_path"]).unlink()
@@ -327,6 +330,9 @@ def test_re_export_never_restores_a_wide_file_whose_bytes_differ_from_the_ledger
     env.store.save_config(env.sid, "template", {"fields": list(reversed(tmpl["fields"]))}, "alice")
     monkeypatch.setattr(export_tools, "_stamp", lambda: "20990101T000000Z")
     r2, _ = _export(env)
-    assert r2.result["wide_sha256"] == r1.result["wide_sha256"]          # the ledger row is unchanged
+    rows = {d.id: d for d in env.store.list_datasets(env.sid)}
+    assert rows[r1.result["dataset"]["id"]].wide_sha256 == r1.result["wide_sha256"]   # old row unchanged
     assert not Path(r1.result["wide_path"]).exists()                      # never filled with other bytes
-    assert not any("20990101" in p.name for p in (env.dir / "evidence" / "exports").iterdir())
+    assert r2.result["dataset"]["id"] != r1.result["dataset"]["id"]
+    assert r2.result["wide_sha256"] != r1.result["wide_sha256"]
+    assert file_sha256(r2.result["wide_path"]) == r2.result["wide_sha256"] == rows[r2.result["dataset"]["id"]].wide_sha256

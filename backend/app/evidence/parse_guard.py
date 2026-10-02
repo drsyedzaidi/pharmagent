@@ -189,6 +189,27 @@ def protect_thin_spaces(page: Any) -> None:
             c["text"] = _PLACEHOLDER
 
 
+ZERO_GAP_EM = 0.1                  # a space char between digits this narrow (x font size) is no gap
+
+
+def close_zero_gaps(page: Any) -> None:
+    """Drop an explicit space char that leaves no visible gap between two digits ('(n = 12' + ' 0)'
+    drawn with a word spacing that cancels the space's advance reads '120', not '12 0'). Edits
+    pdfplumber's own char list for this page only, like protect_thin_spaces."""
+    chars = page.chars
+    drop = set()
+    for i in range(1, len(chars) - 1):
+        c, a, b = chars[i], chars[i - 1], chars[i + 1]
+        if c.get("text") != " " or not (str(a.get("text")).isdigit() and str(b.get("text")).isdigit()):
+            continue
+        size = float(c.get("size") or a.get("size") or 0)
+        same_line = abs(float(a["bottom"]) - float(b["bottom"])) <= 0.2 * size
+        if same_line and float(b["x0"]) - float(a["x1"]) < ZERO_GAP_EM * size:
+            drop.add(id(c))
+    if drop:
+        chars[:] = [c for c in chars if id(c) not in drop]
+
+
 def restore(value: Any) -> Any:
     """The parse output with every placeholder back as U+2009 (str, list or nested rows)."""
     if isinstance(value, str):

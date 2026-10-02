@@ -328,6 +328,10 @@ def decide_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
     if status == "approved" and rec.verify_status == "fail":
         raise ValueError("cannot approve a record that failed literal verification "
                          f"({rec.verify_reason or 'unknown'}); re-verify or reject it")
+    src = store.get_source(rec.source_id) if status == "approved" else None
+    if status == "approved" and (src is None or not ingest.source_file_intact(src)):
+        raise ValueError("cannot approve: the source file changed or is missing since it was verified "
+                         "(source_changed); re-verify the record, or reject it")
     why = exclusion_reason(current_screens(store, sid), rec.source_id) if status == "approved" else None
     if why is not None:
         raise ValueError(f"cannot approve a record of a publication that is not included under the current "

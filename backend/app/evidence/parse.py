@@ -27,6 +27,7 @@ from app.evidence.parse_guard import (
     _is_white,
     check_page_box,
     check_streams,
+    close_zero_gaps,
     lay_out_visible,
     protect_thin_spaces,
     restore,
@@ -37,8 +38,9 @@ from app.evidence.parse_ink import InkChecker, duplicate_ids
 from app.evidence.parse_marks import orientation_outliers, overlapping_chars
 
 # The suffix versions this module's output: a parse cache written by an earlier version (no
-# visibility filter, thin spaces turned into word gaps, no rendered-ink check) is re-parsed.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 5"
+# visibility filter, thin spaces turned into word gaps, no rendered-ink check, no round-3 glyph / space
+# checks) is re-parsed.
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 6"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
@@ -309,6 +311,7 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker) -> dict[str, Any]:
     hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
     visible, dropped, ink_status = _visible_chars(page, ink)
     protect_thin_spaces(page)
+    close_zero_gaps(page)
     chars = [c for c in page.chars if visible(c)]
     raised = _raised_ids(chars)
     modal = _modal_size(chars)

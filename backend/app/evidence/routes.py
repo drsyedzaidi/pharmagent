@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from app.core.provenance import file_sha256
@@ -222,15 +221,18 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
     @router.post("/upload")
     async def upload_evidence(sid: str, file: UploadFile = File(...), licence_note: str | None = Form(None),
                               sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
-        """Admit (caps, rate) -> stage -> magic/size -> [threadpool] sha256 -> dedupe -> move -> ingest tool."""
+        """Admit (caps, rate, server-wide slot) -> stage -> magic/size -> [upload worker] sha256 -> dedupe
+        -> move -> ingest tool."""
         name = file.filename or "upload.pdf"
         if Path(name).suffix.lower() != ".pdf":
             raise HTTPException(400, f"unsupported file type: {Path(name).suffix or '(none)'}; PDF only")
         upload_limits.admit(sid)
-        tmp = await _stage_upload(file, sess.ctx.data_dir)
-        # hashing, validation and the parse are CPU-bound: run them off the event loop
-        return await run_in_threadpool(_finish_upload, get_orch, sid, sess.ctx.data_dir, tmp, name,
-                                       licence_note, actor)
+        async with upload_limits.upload_slot():           # server-wide cap: 503 when the queue is full
+            tmp = await _stage_upload(file, sess.ctx.data_dir)
+            # hashing, validation and the parse are blocking: off the event loop AND off the shared
+            # threadpool, so queued uploads never starve the synchronous endpoints
+            return await upload_limits.run_blocking(_finish_upload, get_orch, sid, sess.ctx.data_dir, tmp,
+                                                    name, licence_note, actor)
 
     @router.post("/criteria")
     def save_criteria(sid: str, body: Any = Body(...), sess=Depends(owned_session),

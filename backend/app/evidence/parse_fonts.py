@@ -8,7 +8,11 @@ verifier trusts, so every font a page draws with is checked for the characters n
 (CRITICAL: digits, sign, decimal / grouping marks, exponent marks):
 
 - Type3 font: its glyphs are drawing procedures, so the identity of any CRITICAL character it can
-  produce is unknown -> ``glyph_text_mismatch`` (error).
+  produce is unknown -> ``glyph_text_mismatch`` (error). A procedure can paint a digit under ANY
+  code (a glyph decoded as a space), so a page that draws with a Type3 font has every digit in doubt.
+- A drawn number glyph whose text is no number character (a ToUnicode mapping the glyph 'one' to a
+  space, a CID glyph '1' reported as a letter) hides a digit NEXT TO the cited literal: every digit
+  of the page is in doubt (``glyph_text_mismatch``).
 - Simple font (Type1 / TrueType) with /ToUnicode: each code's ToUnicode text is compared with the
   character its encoding names (base encoding + /Differences, Adobe Glyph List). A disagreement on a
   CRITICAL character -> ``glyph_text_mismatch``; no usable glyph name (symbolic embedded font
@@ -35,6 +39,8 @@ from pdfminer.pdftypes import PDFObjRef, PDFStream, resolve1
 
 MISMATCH, UNVERIFIED = "glyph_text_mismatch", "glyph_unverified"
 CRITICAL = frozenset("0123456789.,+-eE×^·'")
+DIGITS = frozenset("0123456789")
+_BENIGN = frozenset("\u00ad")          # a hyphen glyph reported as a soft hyphen (the tokenizer treats it as a sign)
 _DASHES = str.maketrans({c: "-" for c in "‐‑‒–—―−﹘﹣－"})
 MAX_FORM_DEPTH = 4
 MAX_FONTS = 400
@@ -123,6 +129,15 @@ def _encoding(font: Any, spec: dict) -> dict[int, str] | None:
     return font.cid2unicode                                  # a standard-14 font: StandardEncoding
 
 
+def _hides(text: str | None, drawn: set[str]) -> bool:
+    """True when the glyph drawn is a number character the text does not report: a digit reported as
+    anything without a digit, or any number character reported as whitespace / nothing."""
+    folded = _fold(text or "")
+    if folded in _BENIGN:
+        return False
+    return bool(drawn & DIGITS and not set(folded) & DIGITS) or bool(drawn and not folded.strip())
+
+
 def _simple(font: Any, spec: dict) -> tuple[set[str], set[str]]:
     """(mismatch, unverified) CRITICAL characters of a Type1 / TrueType font with a ToUnicode map."""
     encoding = _encoding(font, spec)
@@ -135,7 +150,7 @@ def _simple(font: Any, spec: dict) -> tuple[set[str], set[str]]:
         if enc is None:
             unknown |= crit
         elif _fold(text) != _fold(enc):
-            bad |= crit
+            bad |= crit | (DIGITS if _hides(text, _critical(enc)) else set())
     return bad, unknown
 
 
@@ -186,22 +201,24 @@ def _cid(font: Any, spec: dict) -> tuple[set[str], set[str]]:
     bad, unknown = set(), set()
     for cid, text in _tounicode(font).items():
         crit = _critical(text)
-        if not crit:
-            continue
         glyph = _glyph_chars(*program, gid_of(cid)) if program else set()
+        drawn = set().union(set(), *map(_critical, glyph))
+        if not crit and not drawn:
+            continue
         if not glyph:
             unknown |= crit
         elif _fold(text) not in {_fold(g) for g in glyph}:
-            bad |= crit
+            bad |= crit | (DIGITS if _hides(text, drawn) else set())
     return bad, unknown
 
 
 def _type3(font: Any, spec: dict) -> set[str]:
-    """Every CRITICAL character a Type3 font can produce (its codes FirstChar..LastChar, or ToUnicode)."""
+    """Every CRITICAL character a Type3 font can produce (its codes FirstChar..LastChar, or ToUnicode),
+    and every digit: a procedure decoded as a space or a letter may paint one beside a number."""
     first, last = int(resolve1(spec.get("FirstChar")) or 0), int(resolve1(spec.get("LastChar")) or 255)
     codes = range(max(0, first), min(255, last) + 1)
-    return set().union(set(), *(_critical(font.cid2unicode.get(c)) for c in codes),
-                       *map(_critical, _tounicode(font).values()))
+    return set(DIGITS).union(*(_critical(font.cid2unicode.get(c)) for c in codes),
+                             *map(_critical, _tounicode(font).values()))
 
 
 class GlyphChecker:

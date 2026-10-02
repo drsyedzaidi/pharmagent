@@ -49,11 +49,13 @@ not from the plan.
 | `evidence/<sha256>.pdf` | POST /upload | Content-addressed, shared across sessions |
 | `evidence/<sha256>.pages.json` | `ingest.parse_and_cache` | Parse cache, re-checked against the PDF hash on every load |
 | `evidence/exports/evidence_<sid>_<YYYYmmddTHHMMSSZ>_<sha12>.csv` | `export_evidence_dataset` | Long CSV: page literal `value`, canonical point-decimal `value_num`, page `decimal_style`. Named by its own sha256 and created without replacing, so two exports in one second keep both files |
-| `evidence/exports/<long stem>_wide.csv` | `export_evidence_dataset` | Wide CSV: `<field>` = canonical number, `<field>_literal`, `<field>_unit` (`<long stem>_<sha12>_wide.csv` if that name holds other bytes) |
+| `evidence/exports/<long stem>_wide.csv` | `export_evidence_dataset` | Wide CSV: `<field>` = canonical number, `<field>_literal`, `<field>_unit` (one unit when all agree, else one per value in `<field>` order; `<long stem>_<sha12>_wide.csv` if that name holds other bytes) |
 
 `ingest.load_pages(source)` re-hashes the PDF and raises `ValueError('source file changed')` if the hash
 no longer matches. Screening and extraction then skip that source; verification fails with reason
-`source_changed`, and such a record cannot be approved.
+`source_changed`. Approval re-hashes the source file too (`ingest.source_file_intact`), so a record
+whose PDF changed after it passed cannot be approved, and the export leaves such approved rows out
+(`left_out` reason `source file changed or missing since it was verified`).
 
 ## Data model (SQLite, `app/evidence/store.py`)
 
@@ -65,7 +67,7 @@ Ids are derived from hashes, so re-running a step is idempotent. Timestamps are 
 | `evidence_config` | (session_id, kind) | Current `criteria` or `template` body plus `body_hash`. Re-saving replaces the row; older screens and records keep their hash |
 | `evidence_screen` | `scr_` + sha256(source:criteria_hash)[:12], UNIQUE(source_id, criteria_hash) | Verdict `include`/`exclude`/`unsure`, score, reasoning, per-criterion evidence, method `llm`/`keyword`, status `proposed`/`approved`/`rejected`, `decided_verdict` `include`/`exclude` (the reviewer's inclusion; status is `approved` when it agrees with the proposed verdict, `rejected` when it overrides it) |
 | `evidence_record` | `rec_` + sha256(session:record_hash)[:16], UNIQUE(session_id, record_hash) | One extracted value: field, group_label, literal value, value_num, unit, locator, extractor `llm`/`table`/`manual`, verify_status `pass`/`fail`, verify_reason, flags, status |
-| `evidence_dataset` | `ds_` + long_sha256[:12] | One export: both paths, both sha256 values, sorted record hashes, counts |
+| `evidence_dataset` | `ds_` + long_sha256[:12] (+ `_` + wide_sha256[:8] when that id already names another wide file: same records, another template) | One export: both paths, both sha256 values, sorted record hashes, counts, template hash |
 
 Immutability:
 
@@ -81,7 +83,8 @@ Immutability:
 unit, locator without span/literal/token, extractor}. It leaves out status, flags and verification, so the
 identity of a claim stays stable: re-extracting the same claim inserts nothing. A different value for a
 (source, canonical field under the current template, normalised group: NFKC, invisible format characters
-such as U+200B removed, casefolded) that already has an approved record, or that any live
+such as U+200B removed, casefolded) that already has an approved record (a different value means a
+different number OR a different unit: 2.31 L/h and 2.31 mL/min conflict), or that any live
 proposal holds (the same batch or an earlier extraction run), gets the flag `duplicate` on both sides;
 approving it over an approved value needs `allow_conflict: true` on the decision. After a run, a live
 proposal of a slot the run proposed again under a different claim gets the warning `superseded` (the
@@ -117,7 +120,7 @@ claim again clears it (`supersede.py`).
 
 ### Parse JSON (`<sha256>.pages.json`)
 
-- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 5", decimal_style, text_chars, metadata, pages:[...]}`.
+- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 6", decimal_style, text_chars, metadata, pages:[...]}`.
 - Each page: `{n, text, small_text, columns, tables, hidden_chars, ink_check, glyph_check}`. Only glyphs a reader can
   see reach the text; the rest are dropped before extraction and counted in `hidden_chars`, and a record
   citing such a page gets the warning `hidden_text`.
@@ -137,14 +140,22 @@ claim again clears it (`supersede.py`).
     rulings ignore paths that put no ink on the page (white or unpainted strokes / fills).
   - `glyph_check` is `{flag code: characters}` ({} when nothing is in doubt): number characters whose
     font's ToUnicode disagrees with its glyph names, or that a Type3 program draws
-    (`glyph_text_mismatch`, error), whose glyph cannot be identified (embedded CFF CID font, no cmap
+    (`glyph_text_mismatch`, error; a page drawing with any Type3 font, or a font whose ToUnicode
+    reports a drawn digit as a space or other non-digit, puts every digit of the page in doubt), whose
+    glyph cannot be identified (embedded CFF CID font, no cmap
     entry: `glyph_unverified`, warn), or that another glyph over-strikes by > 30 % of its advance
     (`overlapping_glyphs`, error). Also `glyph_text_mismatch` for a number glyph that pdfium decodes
     as other text at the same origin (`/ActualText`) or that is drawn rotated / mirrored against its
     content-order neighbours, and `glyph_ink_mismatch` (error, `parse_marks.py`) for a number glyph
     whose ink stops ≥ 3 px and ≥ 15 % short of a side of its outline box (clipped or covered), whose
     box lies partly off the render, or whose box or gap to the next glyph holds non-text ink in the
-    text-free render (a path-drawn decimal point, a struck-through digit). A record whose literal holds one of them carries that flag
+    text-free render (a path-drawn decimal point, a struck-through digit), whose number has non-text
+    ink within one digit advance before its first / after its last glyph (a digit drawn as a path; a
+    vertical rule running a line height past the glyph is a table ruling), or that stroked text of
+    another ink group paints over (a wide stroke as a black bar; a stroked object's group box includes
+    its stroke). An explicit space char that leaves no visible gap between two digits is dropped
+    (`12` + zero-advance ` 0` reads `120`), and a space char at whose origin pdfium draws a visible
+    number glyph is respelled with it (a WinAnsi 0xAD minus that pdfminer decodes as a space). A record whose literal holds one of them carries that flag
     (`parse_fonts.py`, `value_checks.py`). An embedded outline that draws another shape under a correct
     glyph name is not detected (that needs OCR).
   - `ink_check` is `ok`, or `unverified` when the page could not be judged (render error, 60 s render
@@ -162,7 +173,9 @@ claim again clears it (`supersede.py`).
   150 s or above 1 GB RSS (polled by the parent; the child also watches its own peak), and at most 2
   parses run at once per server process across all sessions. A kill is recorded as `parse_status`
   `failed`; an upload that waits 30 s for a parse slot gets 503 and nothing is recorded.
-- Uploads run off the event loop and are capped per session (200 sources, 1 GB, 30 per minute).
+- Uploads run off the event loop and are capped per session (200 sources, 1 GB, 30 per minute) and
+  server-wide (32 in flight, then 503). Their blocking part runs on its own 4-worker limiter, never on
+  the shared threadpool of the synchronous endpoints, so an upload flood cannot starve the API.
 - `text` keeps only characters at least 0.75 × the modal body size. Superscripts, subscripts and footnote
   markers go to `small_text` before any normalisation, so `10³` can never become `103`; so do digits set
   smaller than, right after and ≥ 0.15 × its size above the glyph before them (an 80 % exponent).
@@ -180,8 +193,8 @@ claim again clears it (`supersede.py`).
 | Screening | keyword verdict (keyless), or a check that every model quote is literally on the cited page, with a downgrade to `unsure` when a required criterion's quote is missing | proposes verdict, reasoning, quotes | decides include or exclude for every publication, with a reason (agreeing with or overriding the proposal, including `unsure`) |
 | Extraction input | only sources decided `include` under the CURRENT criteria hash (`inclusion.py`; no fallback to an older screen) | none | (decided above) |
 | Extraction | table header/alias matching and text rules (keyless); `verify()` on every proposal; scripted QC flags | proposes values with snippets; may add flags (add-only) | none yet |
-| Record decision | approval refused when `verify_status == 'fail'` or the source is not currently included, and refused without `allow_conflict` when an approved record holds a different value for the slot; approved rows frozen by trigger | none | approves or rejects every record with a reason |
-| Export | only approved rows with `verify_status == 'pass'` of currently included sources (others listed in `left_out`), CSV formula guard, sha256, ledger row naming `ToolContext.actor` | none | starts the export |
+| Record decision | approval refused when `verify_status == 'fail'`, the source PDF no longer hashes to the ledger, or the source is not currently included, and refused without `allow_conflict` when an approved record holds a different value for the slot; approved rows frozen by trigger | none | approves or rejects every record with a reason |
+| Export | only approved rows with `verify_status == 'pass'` of currently included sources whose PDF still hashes to the ledger (others listed in `left_out`), CSV formula guard on the cell and on every piece after `;` `,` tab or line break, sha256, ledger row naming `ToolContext.actor` | none | starts the export |
 
 A model never decides anything. Its output is always stored as `status='proposed'`, and every number
 must pass the literal-match verifier before it can be approved.
@@ -197,7 +210,9 @@ column) must EQUAL the proposed unit after normalisation and a small equivalence
 mL = ml, hr = h), else the error flag `unit_source_mismatch`; a printed `mg` never vouches for `mg/kg`.
 The unit is read on the page right after the verified `token` (never re-found in the snippet: `5` is not
 the `5` of `15 mg/kg`). No printed unit, or one the next token may continue (`100 mg kg-1`), gives the
-warning `unit_unverified`. Slashes and product dots are folded first (`mg⁄kg`, `mg∕kg` = mg/kg; `⋅ ∙ •`
+warning `unit_unverified`. The mega / milli prefix is compared case-sensitively (`MIU` vs `mIU`, `Mg` vs
+`mg`: `unit_source_mismatch`), except that an all-capitals printed unit (`MG/ML`) only gives the warning;
+`‰` and `‱` are units of their own (never `%`). Slashes and product dots are folded first (`mg⁄kg`, `mg∕kg` = mg/kg; `⋅ ∙ •`
 = `·`), and a next token made of them, or `(per`, continues the unit. Value checks (`value_checks.py`,
 errors): `censored_value` (`<0.5`, `≤1.0`, `~2`, `below 0.5` before the token, or one end of a range
 `12–15` / `12 to 15` unless the field names an interval or range), `scaled_header` (a multiplier in any
@@ -219,10 +234,18 @@ How numbers are matched:
   reading `281`) fails `partial_number`.
 - Non-ASCII digits (Arabic-Indic, fullwidth, superscript) are refused outright; one glued to an ASCII
   number on the page (`１2.5`) makes that token unreadable.
+- A character a reader may take as part of the number makes the token unreadable (`number_glue.py`):
+  a letter glued to the digits (`12З`, `1O5`, `23l`; a unit such as `150mg`, `24h`, `1.73m2` is
+  allowed), a non-ASCII character or backtick between digits (`12․4`, `24‘560`; `±` separates), a
+  minus / plus / hyphen look-alike or invisible format character in sign position (`˗20`, a soft
+  hyphen), a vulgar fraction glued after it (`12½`), and in page text a thin-space group that is not
+  three digits (`0.123 4`). `˗ ➖ ⁃ ⸺ ⸻` fold to `-` and `﹢ ＋` to `+`.
 - A mid dot between digits is a decimal point (`12·4` = 12.4, never `12` or `4`) unless it multiplies a
   power of ten (`2.5·10^4`); `’` / `ʼ` / `′` group digits like `'` (`24’560`). Citation lists (`[1,2]`)
   are not decimal-comma evidence.
-- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `3.4 E-03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`. Citing
+- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `3.4 E-03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`;
+  any non-ASCII symbol or letter between the number and `10` other than a comparison or `±` sign is a
+  multiplier (`⋅ ∙ • ⨯ ✕ ✖ х`). Citing
   only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
   the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
   `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the
@@ -238,7 +261,7 @@ How numbers are matched:
 (`cl_lower`, `Lower 95% CI`); dispersion names include `%CV`, `SD(CL)`; a text field has no `value_num`.
 
 Each flag carries a severity (`warn` or `error`) and an origin (`script` or `llm`). A model can add flags
-through `merge_llm_flags` (add-only, deduped on code/field/group) but cannot remove scripted ones.
+through `merge_llm_flags` (add-only, deduped on code/field/group; a code must match `[a-z0-9_]{1,40}`) but cannot remove scripted ones.
 
 ## Prompt-injection defence
 

@@ -1,13 +1,25 @@
-"""Per-session upload admission: a source-count cap, a stored-bytes cap and a sliding-window rate
+"""Upload admission. Per session: a source-count cap, a stored-bytes cap and a sliding-window rate
 limit, checked before anything is staged (and the byte cap again once the size is known), so one
-session cannot queue unbounded parse work or disk use. Refusals are HTTP 429 (rate) / 413 (caps)."""
+session cannot queue unbounded parse work or disk use. Refusals are HTTP 429 (rate) / 413 (caps).
+
+Server-wide: at most MAX_UPLOADS_IN_FLIGHT uploads at once (503 at once beyond that, whatever the
+session), and their blocking part (hash, validation, the wait for a parse slot, the parse) runs on
+its own UPLOAD_WORKERS-token limiter, never on the shared threadpool every synchronous endpoint uses:
+a flood of uploads from many sessions waits without holding a thread and cannot starve the API."""
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
+import weakref
 from collections import deque
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
+import anyio
+import anyio.to_thread
 from fastapi import HTTPException
 
 from app.evidence.store import get_store
@@ -15,9 +27,38 @@ from app.evidence.store import get_store
 MAX_SOURCES_PER_SESSION = 200
 MAX_SESSION_BYTES = 1024 * 1024 * 1024
 UPLOADS_PER_WINDOW, WINDOW_S = 30, 60.0
+UPLOAD_WORKERS = 4                 # threads finishing uploads (2 parse slots + hashing / validation)
+MAX_UPLOADS_IN_FLIGHT = 32         # all sessions together; the rest are refused with 503 at once
 
 _lock = threading.Lock()
 _recent: dict[str, deque[float]] = {}
+_in_flight = [0]
+_limiters: weakref.WeakKeyDictionary[Any, anyio.CapacityLimiter] = weakref.WeakKeyDictionary()
+
+
+@asynccontextmanager
+async def upload_slot() -> AsyncIterator[None]:
+    """Hold one of the server-wide upload slots for the body of the block; 503 when none is free."""
+    with _lock:
+        if _in_flight[0] >= MAX_UPLOADS_IN_FLIGHT:
+            raise HTTPException(503, f"the server is processing {MAX_UPLOADS_IN_FLIGHT} uploads; "
+                                     "try again shortly")
+        _in_flight[0] += 1
+    try:
+        yield
+    finally:
+        with _lock:
+            _in_flight[0] -= 1
+
+
+async def run_blocking(fn: Callable[..., Any], *args: Any) -> Any:
+    """fn(*args) in a worker thread under the upload limiter (one per event loop), not the shared pool."""
+    loop = asyncio.get_running_loop()
+    with _lock:
+        limiter = _limiters.get(loop)
+        if limiter is None:
+            limiter = _limiters[loop] = anyio.CapacityLimiter(UPLOAD_WORKERS)
+    return await anyio.to_thread.run_sync(fn, *args, limiter=limiter)
 
 
 def _stored_bytes(sid: str) -> int:

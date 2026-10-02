@@ -170,6 +170,15 @@ def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None) ->
     return doc, parse_path
 
 
+def source_file_intact(source: Source) -> bool:
+    """True when the stored PDF still hashes to the ledger's sha256 (fail closed on any error)."""
+    try:
+        pdf_path = Path(source.pdf_path)
+        return pdf_path.is_file() and file_sha256(pdf_path) == source.sha256
+    except OSError:
+        return False
+
+
 def load_pages(source: Source) -> dict[str, Any]:
     """Parse JSON for a source; fails closed if the PDF or the cache no longer match the ledger."""
     pdf_path = Path(source.pdf_path)

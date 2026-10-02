@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import math
 import os
+import re
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -42,14 +43,19 @@ LONG_COLUMNS = ("record_id", "source_id", "source_sha256", "filename", "title", 
                 "verify_status", "flags", "record_hash", "decided_by", "decided_at")
 WIDE_FIXED = ("source_id", "source_sha256", "filename", "group")
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")   # OWASP CSV-injection leaders
+# a leader right after a list separator: a ';'-locale spreadsheet splits the cell there
+_INNER_LEADER = re.compile(r"([;,\t\r\n])(?=[=+\-@])")
 MULTI_SEP = " | "          # several approved values for one (source, group, field) in the wide file
 
 
 def csv_cell(value: Any) -> str:
-    """Stringify a cell; a leading formula character gets an apostrophe so no spreadsheet runs it."""
+    """Stringify a cell; a formula character that starts the cell, or that follows a ';' / ',' / tab /
+    line break inside it (a ';'-locale spreadsheet splits the cell there), gets an apostrophe so no
+    spreadsheet runs it."""
     if value is None:
         return ""
     text = value if isinstance(value, str) else str(value)
+    text = text[:1] + _INNER_LEADER.sub(r"\1'", text[1:])
     return f"'{text}" if text.startswith(FORMULA_LEADERS) else text
 
 
@@ -135,8 +141,10 @@ def build_wide(records: list[Record], sources: dict[str, Source],
         row = {"source_id": src_id, "source_sha256": src.sha256 if src else "",
                "filename": src.filename if src else "", "group": group}
         for f in fields:
+            units = cells.get(f"{f}_unit", [])
             row[f"{f}_literal"] = MULTI_SEP.join(cells.get(f"{f}_literal", []))
-            row[f"{f}_unit"] = MULTI_SEP.join(dict.fromkeys(cells.get(f"{f}_unit", [])))
+            # one unit when all agree, else one per value in the same order as <f> and <f>_literal
+            row[f"{f}_unit"] = units[0] if len(set(units)) == 1 else MULTI_SEP.join(units)
         out = {k: csv_cell(row[k]) for k in columns if k in row}
         out.update({f: _wide_value(cells[f]) if cells.get(f) else "" for f in fields})
         rows.append({k: out[k] for k in columns})
@@ -216,9 +224,11 @@ def _split_included(store: EvidenceStore, sid: str, approved: list[Record]
     reason}] for the approved records of sources that are not, or that did not pass verification:
     a hand-edited ledger never ships a number the verifier did not find)."""
     screens = current_screens(store, sid)
+    changed = {s.id for s in store.list_sources(sid) if not ingest.source_file_intact(s)}
     keep, left_out = [], []
     for r in approved:
         why = (f"verify_status is {r.verify_status!r}, not 'pass'" if r.verify_status != "pass"
+               else "source file changed or missing since it was verified" if r.source_id in changed
                else exclusion_reason(screens, r.source_id))
         if why is None:
             keep.append(r)
@@ -236,7 +246,8 @@ def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str,
     approved, left_out = _split_included(store, sid, approved)
     if not approved:
         raise ValueError(f"every approved record ({len(left_out)}) comes from a publication that is not currently "
-                         "included under the current criteria; screen and include it first")
+                         "included under the current criteria, failed verification, or whose source file changed: "
+                         + "; ".join(sorted({x['reason'] for x in left_out})))
     actor = ctx.actor or "anonymous"               # the authenticated caller; args['actor'] is ignored
     sources = {s.id: s for s in store.list_sources(sid)}
     tmpl = store.get_config(sid, "template")
@@ -261,7 +272,7 @@ def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str,
         writes={"evidence_dataset_path": ds.long_path, "evidence_summary": summarise(store, sid)},
         result={"dataset": asdict(ds), "long_path": ds.long_path, "wide_path": ds.wide_path,
                 "long_sha256": ds.long_sha256, "wide_sha256": ds.wide_sha256, "record_hashes": hashes,
-                "n_records": len(approved), "n_sources": n_sources, "template_hash": thash,
+                "n_records": len(approved), "n_sources": n_sources, "template_hash": ds.template_hash,
                 "long_columns": list(LONG_COLUMNS), "wide_columns": wide_cols, "left_out": left_out},
         action=(f"exported evidence dataset {ds.id}: {len(approved)} approved records from {n_sources} sources "
                 f"(long sha256 {ds.long_sha256[:12]}, wide sha256 {ds.wide_sha256[:12]})"

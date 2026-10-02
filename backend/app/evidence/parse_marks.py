@@ -11,8 +11,11 @@ lists them in the page's glyph_check so records whose literal holds one carry an
   a side of its own outline box (clipped, or covered by a later fill: an '8' cut to its right half
   reads as 3), whose box lies partly off the rendered page, or whose box -- or the gap to the next
   glyph of its line -- holds non-text ink in the text-free render (a decimal point drawn as a path
-  between '12' and '4', a rule struck through a digit). Uniform backgrounds (cell shading) and marks
-  in the colour of the background are not ink.
+  between '12' and '4', a rule struck through a digit), or whose number has non-text ink within one
+  digit advance before its first / after its last glyph at the glyph's height (a digit drawn as a
+  path: '23' + path '1' reads as 231). A vertical rule running a line height past the glyph above
+  or below (a table ruling) is not a mark. Uniform backgrounds (cell shading) and marks in the colour of the
+  background are not ink.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ LOSS_PX = 3                         # ink missing from a side of the outline box
 LOSS_FRACTION = 0.15                # ... and at least this share of the box's width / height
 INSET_FRACTION = 0.15               # vertical inset of the box band read in the text-free render
 NEXT_GAP_EM = 0.6                   # a following glyph this close (x box height) is the same word
+EDGE_BAND = 0.8                     # band read before / after a number (x box height: ~one digit advance)
 MAX_INK_CHARS = 25_000              # a denser page is not judged (unverified): bounded cost per page
 
 
@@ -60,6 +64,32 @@ def _next_left(i: int, boxes: np.ndarray, px: np.ndarray) -> int | None:
     if overlap < 0.5 * height or not 0 <= b[0] - a[2] < NEXT_GAP_EM * height or b[0] < a[0]:
         return None
     return int(px[i + 1, 0])
+
+
+def _prev_continues(i: int, boxes: np.ndarray, px: np.ndarray) -> bool:
+    return i > 0 and _next_left(i - 1, boxes, px) is not None
+
+
+def _edge_marked(blank: np.ndarray, x0: int, x1: int, y0: int, y1: int, ink_delta: int) -> bool:
+    """True when the text-free render holds a mark in the band [x0, x1) at the glyph's height that is
+    not a vertical rule continuing a full line height above or below it (a table / column ruling)."""
+    h, w = blank.shape[:2]
+    x0, x1 = max(0, x0), min(w, x1)
+    top, bot = y0 + int(np.ceil(INSET_FRACTION * (y1 - y0))), y1 - 1
+    band = blank[top:bot, x0:x1].astype(np.int16)
+    if band.size == 0:
+        return False
+    ref = np.median(band.reshape(-1, band.shape[-1]), axis=0)
+    cols = (np.abs(band - ref).max(axis=2) >= ink_delta).any(axis=0)
+    span = y1 - y0
+    for c in np.flatnonzero(cols):
+        x = x0 + int(c)
+        above = blank[max(0, y0 - span):max(0, y0 - 1), x].astype(np.int16)
+        below = blank[min(h, y1 + 1):min(h, y1 + span), x].astype(np.int16)
+        ruled = any(seg.size and (np.abs(seg - ref).max(axis=1) >= ink_delta).all() for seg in (above, below))
+        if not ruled:
+            return True
+    return False
 
 
 def _short_side(sub: np.ndarray) -> bool:
@@ -101,7 +131,10 @@ def ink_odd(texts: list[str], boxes: np.ndarray, px: np.ndarray, area: np.ndarra
             continue
         nxt = _next_left(i, boxes, px)
         right = max(x1 - 1, x0 + 1) if nxt is None else max(nxt, x0 + 1)
-        odd[i] = _short_side(ink[y0:y1, x0:x1]) or _marked(blank, x0 + 1, right, y0, y1, ink_delta)
+        band = int(np.ceil(EDGE_BAND * (y1 - y0)))
+        edge = ((nxt is None and _edge_marked(blank, x1, x1 + band, y0, y1, ink_delta))
+                or (not _prev_continues(i, boxes, px) and _edge_marked(blank, x0 - band, x0, y0, y1, ink_delta)))
+        odd[i] = edge or _short_side(ink[y0:y1, x0:x1]) or _marked(blank, x0 + 1, right, y0, y1, ink_delta)
     return odd
 
 
