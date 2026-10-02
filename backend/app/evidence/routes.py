@@ -9,6 +9,9 @@ ValueError -> 400, EvidenceStateError -> 409, IngestError -> 422.
 POST /screen and POST /extract run as JobManager jobs when a real LLM is configured (model
 calls per source/page), synchronously on the keyless path; POST /screen/decide and
 POST /records/decide loop over the reviewer's decisions, one audited tool call each.
+POST /export writes the approved records as CSV; GET /dataset/{filename} serves only a file
+this session exported (basename match against the state mirror or the session's ledger rows,
+resolved under data_dir), like the /report download.
 """
 from __future__ import annotations
 
@@ -159,6 +162,22 @@ async def _stage_upload(file: UploadFile, data_dir: str) -> Path:
     return tmp
 
 
+def dataset_file(sid: str, state: Any, filename: str, data_dir: str) -> Path:
+    """The exported CSV *filename* names, or 404: must equal the basename of the session's last export
+    (state mirror) or of a dataset row in this session's ledger, resolve under data_dir and be a file."""
+    summary = state.evidence_summary or {}
+    known = {state.evidence_dataset_path, summary.get("wide_path")}
+    for ds in get_store().list_datasets(sid):
+        known.update((ds.long_path, ds.wide_path))
+    root = Path(data_dir).resolve()
+    for candidate in known:
+        if candidate and Path(candidate).name == filename:
+            path = Path(candidate).resolve()
+            if path.is_relative_to(root) and path.is_file():
+                return path
+    raise HTTPException(404, "evidence dataset not found")
+
+
 def _config_response(sid: str, kind: str, out: dict[str, Any]) -> dict[str, Any]:
     cfg = get_store().get_config(sid, kind) or {}
     return {**cfg, "kind": kind, "summary": out["summary"]}
@@ -263,6 +282,17 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
         out = _decide_loop(get_orch(), sid, actor, body, tool="decide_records", id_key="record_id",
                            owned=owned_record_id, result_key="record")
         return {**out, "extraction_results": out["state"]["extraction_results"]}
+
+    @router.post("/export")
+    def export_dataset(sid: str, body: Any = Body(None), sess=Depends(owned_session),
+                       actor: str = Depends(actor_id)) -> dict:
+        """Write the approved records as long + wide CSV (deterministic; >= 1 approved record)."""
+        return run_tool(get_orch(), sid, "export_evidence_dataset", {"actor": actor}, actor)
+
+    @router.get("/dataset/{filename}")
+    def download_dataset(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+        path = dataset_file(sid, sess.state, filename, sess.ctx.data_dir)
+        return FileResponse(str(path), media_type="text/csv", filename=path.name)
 
     @router.get("/sources/{src_id}/pages/{n}")
     def source_page(sid: str, src_id: str, n: int, sess=Depends(owned_session)) -> dict:

@@ -30,7 +30,7 @@ SNAPSHOT_KEYS = {"session_id", "sources", "criteria", "template", "screens", "re
                  "counts", "summary"}
 COUNTS_KEYS = {"sources", "screens", "records", "datasets"}
 SUMMARY_KEYS = {"sources", "parsed", "no_text", "failed", "screens", "records", "datasets",
-                "criteria_hash", "template_hash", "updated_at"}
+                "criteria_hash", "template_hash", "wide_path", "updated_at"}
 PAGE_KEYS = {"source_id", "page", "pages", "text", "small_text", "columns", "tables", "decimal_style"}
 TABLE_KEYS = {"index", "strategy", "bbox", "caption", "rows"}
 STATE_FIELDS = {"evidence_summary", "screening_results", "extraction_results", "evidence_dataset_path"}

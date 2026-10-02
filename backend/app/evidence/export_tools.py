@@ -1,0 +1,185 @@
+"""Evidence agent tool: export_evidence_dataset — the APPROVED records as two CSV files.
+
+Long: one row per approved record with its locator and provenance (record_hash, source sha256).
+Wide: one row per source x group with one column per template field plus <field>_unit.
+Only status='approved' rows leave the ledger, so every exported number was found literally on
+its cited page by the verifier and then accepted by a human. Row and column order are
+deterministic, so an identical approved set yields byte-identical files (same sha256, same
+dataset id). Cells that start with = + - @ (or tab / CR) get a leading apostrophe (spreadsheet formula guard).
+"""
+from __future__ import annotations
+
+import csv
+import os
+from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from app.core.pharmstate import PharmState
+from app.core.provenance import file_sha256
+from app.evidence import ingest
+from app.evidence.config_tools import summarise
+from app.evidence.models import Dataset, Record, Source
+from app.evidence.store import EvidenceStore, get_store
+from app.tools.base import Tool, ToolContext, ToolResult
+
+__all__ = ["LONG_COLUMNS", "WIDE_FIXED", "csv_cell", "build_long", "build_wide", "write_csv",
+           "export_evidence_dataset", "TOOLS"]
+
+AGENT = "evidence"
+LONG_COLUMNS = ("record_id", "source_id", "source_sha256", "filename", "title", "field", "group", "value",
+                "unit", "page", "kind", "snippet", "literal", "extractor", "verify_status", "flags",
+                "record_hash", "decided_by", "decided_at")
+WIDE_FIXED = ("source_id", "source_sha256", "filename", "group")
+FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")   # OWASP CSV-injection leaders
+MULTI_SEP = " | "          # several approved values for one (source, group, field) in the wide file
+
+
+def csv_cell(value: Any) -> str:
+    """Stringify a cell; a leading formula character gets an apostrophe so no spreadsheet runs it."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    return f"'{text}" if text.startswith(FORMULA_LEADERS) else text
+
+
+def exports_dir(data_dir: str | Path | None) -> Path:
+    d = ingest.evidence_dir(data_dir) / "exports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ---------------------------------------------------------------- builders ---
+
+def _approved(records: list[Record]) -> list[Record]:
+    return sorted((r for r in records if r.status == "approved"),
+                  key=lambda r: (r.source_id, r.group_label, r.field, r.record_hash))
+
+
+def _source_key(sources: dict[str, Source]):
+    return lambda r: ((sources[r.source_id].filename if r.source_id in sources else ""), r.source_id,
+                      r.group_label, r.field, r.record_hash)
+
+
+def build_long(records: list[Record], sources: dict[str, Source]) -> list[dict[str, str]]:
+    """Approved records only, ordered by (filename, source, group, field, record_hash)."""
+    rows = []
+    for r in sorted(_approved(records), key=_source_key(sources)):
+        src, loc = sources.get(r.source_id), r.locator or {}
+        row = {"record_id": r.id, "source_id": r.source_id,
+               "source_sha256": src.sha256 if src else "", "filename": src.filename if src else "",
+               "title": (src.title if src else None) or "", "field": r.field, "group": r.group_label,
+               "value": r.value, "unit": r.unit, "page": loc.get("page"), "kind": loc.get("kind"),
+               "snippet": loc.get("snippet"), "literal": loc.get("literal"), "extractor": r.extractor,
+               "verify_status": r.verify_status, "flags": ";".join(f.get("code", "") for f in r.flags),
+               "record_hash": r.record_hash, "decided_by": r.decided_by, "decided_at": r.decided_at}
+        rows.append({k: csv_cell(row[k]) for k in LONG_COLUMNS})
+    return rows
+
+
+def wide_columns(records: list[Record], template: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    """Template field order first, then (sorted) fields present in approved records but not in the template."""
+    names = [str(f.get("name")) for f in (template or {}).get("fields") or [] if f.get("name")]
+    extra = sorted({r.field for r in records} - set(names))
+    fields = list(dict.fromkeys(names + extra))
+    return fields, list(WIDE_FIXED) + [c for n in fields for c in (n, f"{n}_unit")]
+
+
+def build_wide(records: list[Record], sources: dict[str, Source],
+               template: dict[str, Any] | None) -> tuple[list[dict[str, str]], list[str]]:
+    """One row per (source, group); several approved values for one field are joined with ' | '."""
+    approved = sorted(_approved(records), key=_source_key(sources))
+    fields, columns = wide_columns(approved, template)
+    groups: dict[tuple[str, str], dict[str, list[str]]] = {}
+    for r in approved:
+        cell = groups.setdefault((r.source_id, r.group_label), {})
+        cell.setdefault(r.field, []).append(r.value)
+        cell.setdefault(f"{r.field}_unit", []).append(r.unit or "")
+    rows = []
+    for (src_id, group), cells in groups.items():
+        src = sources.get(src_id)
+        row = {"source_id": src_id, "source_sha256": src.sha256 if src else "",
+               "filename": src.filename if src else "", "group": group}
+        for f in fields:
+            row[f] = MULTI_SEP.join(cells.get(f, []))
+            row[f"{f}_unit"] = MULTI_SEP.join(dict.fromkeys(cells.get(f"{f}_unit", [])))
+        rows.append({k: csv_cell(row[k]) for k in columns})
+    return rows, columns
+
+
+def write_csv(path: Path, columns: list[str] | tuple[str, ...], rows: list[dict[str, str]]) -> str:
+    """Write atomically (tmp + rename) and return the file's sha256."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(columns), lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(tmp, path)
+    return file_sha256(path)
+
+
+# -------------------------------------------------------------------- tool ---
+
+def _stamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _dedupe_files(ds: Dataset, long_path: Path, wide_path: Path) -> None:
+    """An identical approved set was exported before (same long sha256 -> same ledger row): the
+    ledger's paths win. A new file replaces a missing ledger file in the same exports dir only when
+    its sha256 equals the ledger's (the wide file also depends on the template), else it is dropped."""
+    pairs = ((long_path, Path(ds.long_path), ds.long_sha256), (wide_path, Path(ds.wide_path), ds.wide_sha256))
+    for new, old, sha in pairs:
+        if new == old:
+            continue
+        if (not old.is_file() and old.parent.resolve() == new.parent.resolve()
+                and file_sha256(new) == sha):
+            os.replace(new, old)
+        else:
+            new.unlink(missing_ok=True)
+
+
+def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    store: EvidenceStore = get_store()
+    sid = state.session_id
+    approved = _approved(store.list_records(sid, status="approved"))
+    if not approved:
+        raise ValueError("no approved records to export — approve extracted records in the Evidence workspace first")
+    actor = args.get("actor") if isinstance(args.get("actor"), str) and args.get("actor") else "anonymous"
+    sources = {s.id: s for s in store.list_sources(sid)}
+    tmpl = store.get_config(sid, "template")
+    template, thash = (tmpl["body"], tmpl["body_hash"]) if tmpl else (None, "")
+    long_rows = build_long(approved, sources)
+    wide_rows, wide_cols = build_wide(approved, sources, template)
+    out_dir = exports_dir(ctx.data_dir)
+    stem = f"evidence_{sid}_{_stamp()}"
+    long_path, wide_path = out_dir / f"{stem}.csv", out_dir / f"{stem}_wide.csv"
+    long_sha = write_csv(long_path, LONG_COLUMNS, long_rows)
+    wide_sha = write_csv(wide_path, wide_cols, wide_rows)
+    hashes = sorted(r.record_hash for r in approved)
+    n_sources = len({r.source_id for r in approved})
+    ds = store.add_dataset(sid, thash, str(long_path), str(wide_path), long_sha, wide_sha, hashes,
+                           n_records=len(approved), n_sources=n_sources, exported_by=actor)
+    _dedupe_files(ds, long_path, wide_path)
+    return ToolResult(
+        summary=(f"Exported {len(approved)} approved record(s) from {n_sources} publication(s): "
+                 f"{Path(ds.long_path).name} (long) and {Path(ds.wide_path).name} (wide), dataset {ds.id}."),
+        writes={"evidence_dataset_path": ds.long_path, "evidence_summary": summarise(store, sid)},
+        result={"dataset": asdict(ds), "long_path": ds.long_path, "wide_path": ds.wide_path,
+                "long_sha256": ds.long_sha256, "wide_sha256": ds.wide_sha256, "record_hashes": hashes,
+                "n_records": len(approved), "n_sources": n_sources, "template_hash": thash,
+                "long_columns": list(LONG_COLUMNS), "wide_columns": wide_cols},
+        action=(f"exported evidence dataset {ds.id}: {len(approved)} approved records from {n_sources} sources "
+                f"(long sha256 {ds.long_sha256[:12]}, wide sha256 {ds.wide_sha256[:12]})"))
+
+
+TOOLS = [
+    Tool(name="export_evidence_dataset", agent=AGENT,
+         description=("Export the APPROVED evidence records as CSV: a long file (one row per record with its "
+                      "page locator, literal match and record hash) and a wide file (one row per source and "
+                      "group, one column per template field plus unit). Proposed or rejected records are never "
+                      "exported. Requires at least one approved record."),
+         input_schema={"type": "object", "properties": {"actor": {"type": "string"}}},
+         run=export_evidence_dataset),
+]

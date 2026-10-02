@@ -40,11 +40,13 @@ def summarise(store: EvidenceStore, session_id: str) -> dict[str, Any]:
     counts = store.counts(session_id)
     statuses = [s.parse_status for s in store.list_sources(session_id)]
     crit, tmpl = store.get_config(session_id, "criteria"), store.get_config(session_id, "template")
+    datasets = store.list_datasets(session_id)
     return {"sources": counts["sources"], "parsed": statuses.count("parsed"),
             "no_text": statuses.count("no_text"), "failed": statuses.count("failed"),
             "screens": counts["screens"], "records": counts["records"], "datasets": counts["datasets"],
             "criteria_hash": crit["body_hash"] if crit else None,
-            "template_hash": tmpl["body_hash"] if tmpl else None, "updated_at": now_iso()}
+            "template_hash": tmpl["body_hash"] if tmpl else None,
+            "wide_path": datasets[-1].wide_path if datasets else None, "updated_at": now_iso()}
 
 
 # ------------------------------------------------------------------ ingest ---
