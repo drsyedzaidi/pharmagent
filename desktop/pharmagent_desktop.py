@@ -175,4 +175,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    # The bundled app parses evidence PDFs in a 'spawn' child (app/evidence/parse_sandbox.py); in a frozen
+    # build that child re-enters this script, and freeze_support() turns it into the worker.
+    multiprocessing.freeze_support()
     sys.exit(main())

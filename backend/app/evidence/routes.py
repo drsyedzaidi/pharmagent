@@ -5,7 +5,7 @@ extraction, record verification and record decisions.
 Orchestrator (tests reassign ``main.orch``), so main.py only imports and includes it.
 Every mutation goes through ``Orchestrator.run_tool`` (audit + write-access); the
 routes themselves only validate, stage files and map errors:
-ValueError -> 400, EvidenceStateError -> 409, IngestError -> 422.
+ValueError -> 400, EvidenceStateError -> 409, IngestError -> 422, ParseBusyError -> 503.
 POST /screen and POST /extract run as JobManager jobs when a real LLM is configured (model
 calls per source/page), synchronously on the keyless path; POST /screen/decide and
 POST /records/decide loop over the reviewer's decisions, one audited tool call each.
@@ -31,6 +31,7 @@ from app.core.provenance import file_sha256
 from app.evidence import ingest, llm_access, upload_limits
 from app.evidence.config_tools import source_row
 from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
+from app.evidence.parse_sandbox import ParseBusyError
 from app.evidence.store import get_store, source_id
 
 log = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ def _unwrap(body: Any, key: str) -> Any:
 
 def http_error(exc: Exception) -> HTTPException:
     """The one error map for evidence routes (IngestError before its ValueError base)."""
+    if isinstance(exc, ParseBusyError):
+        return HTTPException(503, str(exc))
     if isinstance(exc, IngestError):
         return HTTPException(422, str(exc))
     if isinstance(exc, EvidenceStateError):

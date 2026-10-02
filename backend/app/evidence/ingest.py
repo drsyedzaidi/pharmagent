@@ -17,8 +17,10 @@ from typing import Any
 import pdfplumber
 from pdfminer.pdfdocument import PDFPasswordIncorrect
 
+from app.evidence import parse_sandbox
 from app.evidence.models import IngestError, Source
-from app.evidence.parse import PARSER_NAME, file_sha256, parse_pdf
+from app.evidence.parse import PARSER_NAME, file_sha256
+from app.evidence.parse_sandbox import ParseBusyError
 from app.evidence.store import EvidenceStore, get_store
 
 log = logging.getLogger(__name__)
@@ -108,7 +110,8 @@ def write_by_sha256(data: bytes, data_dir: str | Path | None = None) -> tuple[st
 
 
 def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None) -> tuple[dict[str, Any], Path]:
-    """Parse once per (sha256, parser) and cache as <sha256>.pages.json."""
+    """Parse once per (sha256, parser) and cache as <sha256>.pages.json. The parse runs in a killable
+    child process under a process-wide concurrency cap (parse_sandbox)."""
     pdf_path = Path(pdf_path)
     sha = file_sha256(pdf_path)
     parse_path = evidence_dir(data_dir) / f"{sha}.pages.json"
@@ -119,7 +122,7 @@ def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None) ->
                 return cached, parse_path
         except (OSError, ValueError):
             log.warning("evidence: unreadable parse cache %s; re-parsing", parse_path)
-    doc = parse_pdf(pdf_path)
+    doc = parse_sandbox.parse_isolated(pdf_path)
     _atomic_write(parse_path, json.dumps(doc, ensure_ascii=False).encode("utf-8"))
     return doc, parse_path
 
@@ -155,7 +158,9 @@ def ingest_pdf(data: bytes, filename: str, session_id: str, uploaded_by: str, *,
     try:
         doc, parse_path = parse_and_cache(pdf_path, data_dir)
         status = "parsed" if doc["text_chars"] > 0 else "no_text"
-    except Exception as exc:   # parser failure is recorded, never raised past the upload
+    except ParseBusyError:     # no slot: nothing parsed, nothing recorded; the upload can be retried
+        raise
+    except Exception as exc:   # parser failure (limits, kill, crash) is recorded, never raised past the upload
         log.warning("evidence: parse failed for %s: %s", sha, exc)
         doc = {"sha256": sha, "parser": PARSER_NAME, "decimal_style": ".", "text_chars": 0,
                "metadata": {}, "pages": [], "error": f"{type(exc).__name__}: {str(exc)[:300]}"}

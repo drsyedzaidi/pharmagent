@@ -1,23 +1,45 @@
 """Hand-built minimal PDFs for parser-guard tests (hidden text, huge page boxes, inflate bombs, ruled
-grids). Each page is (mediabox, content stream bytes); Helvetica is the only font."""
+grids, glyph floods). Each page is (mediabox, content stream bytes) or (mediabox, content, extras) where
+extras may hold 'CropBox' (list), 'Rotate' (int) and 'XObject' ({name: form content bytes}, each a
+Form XObject over the mediabox that shares the page font). Helvetica is the only font."""
 from __future__ import annotations
 
 import zlib
 
 
-def build(pages: list[tuple[list[float], bytes]], *, compress: bool = False) -> bytes:
+def _stream(content: bytes, compress: bool, extra: str = "") -> bytes:
+    body = zlib.compress(content, 9) if compress else content
+    filt = " /Filter /FlateDecode" if compress else ""
+    return f"<< /Length {len(body)}{filt}{extra} >>\nstream\n".encode() + body + b"\nendstream"
+
+
+def _nums(box: list[float]) -> str:
+    return " ".join(str(x) for x in box)
+
+
+def build(pages: list[tuple], *, compress: bool = False) -> bytes:
     objs: dict[int, bytes] = {}
     kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
     objs[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
     objs[2] = f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode()
     objs[3] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
-    for i, (box, content) in enumerate(pages):
+    nxt = 4 + 2 * len(pages)
+    for i, page in enumerate(pages):
+        box, content = page[0], page[1]
+        extras = page[2] if len(page) > 2 else {}
         p, c = 4 + 2 * i, 5 + 2 * i
-        objs[p] = (f"<< /Type /Page /Parent 2 0 R /MediaBox [{' '.join(str(x) for x in box)}] /Contents {c} 0 R "
-                   "/Resources << /Font << /F1 3 0 R >> >> >>").encode()
-        body = zlib.compress(content, 9) if compress else content
-        filt = " /Filter /FlateDecode" if compress else ""
-        objs[c] = f"<< /Length {len(body)}{filt} >>\nstream\n".encode() + body + b"\nendstream"
+        xrefs = []
+        for name, form in (extras.get("XObject") or {}).items():
+            objs[nxt] = _stream(form, compress, f" /Type /XObject /Subtype /Form /BBox [{_nums(box)}] "
+                                "/Resources << /Font << /F1 3 0 R >> >>")
+            xrefs.append(f"/{name} {nxt} 0 R")
+            nxt += 1
+        xobj = f" /XObject << {' '.join(xrefs)} >>" if xrefs else ""
+        crop = f" /CropBox [{_nums(extras['CropBox'])}]" if "CropBox" in extras else ""
+        rot = f" /Rotate {extras['Rotate']}" if "Rotate" in extras else ""
+        objs[p] = (f"<< /Type /Page /Parent 2 0 R /MediaBox [{_nums(box)}]{crop}{rot} /Contents {c} 0 R "
+                   f"/Resources << /Font << /F1 3 0 R >>{xobj} >> >>").encode()
+        objs[c] = _stream(content, compress)
     out = bytearray(b"%PDF-1.4\n")
     offsets = {}
     for k in sorted(objs):

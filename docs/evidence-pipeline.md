@@ -20,7 +20,8 @@ not from the plan.
     vocabularies, reason and flag codes, `EvidenceStateError`, `IngestError`.
   - `store.py`: `EvidenceStore`, a SQLite ledger in the same file as `SessionStore` (`settings.db_path`).
     It is a lazy singleton; tests call `configure(':memory:')`.
-  - `ingest.py` + `parse.py`: PDF validation, storage by sha256, and the pdfplumber parse cached as
+  - `ingest.py` + `parse.py` (+ `parse_guard.py`, `parse_budget.py`, `parse_ink.py`, `parse_sandbox.py`):
+    PDF validation, storage by sha256, and the pdfplumber parse (in a killable child process) cached as
     `<sha256>.pages.json`.
   - `normalize.py` + `verify.py`: the literal-match verifier, deterministic with no model involved.
   - `qc_flags.py`: scripted QC flags. A model may add flags but never remove them.
@@ -109,13 +110,33 @@ same batch holds, gets the flag `duplicate`; approving it needs `allow_conflict:
 
 ### Parse JSON (`<sha256>.pages.json`)
 
-- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 2", decimal_style, text_chars, metadata, pages:[...]}`.
-- Each page: `{n, text, small_text, columns, tables, hidden_chars}`. Glyphs drawn invisibly (text render
-  mode 3 / 7), white glyphs not on a dark filled box and glyphs outside the page box are dropped before
-  extraction and counted in `hidden_chars`; a record citing such a page gets the warning `hidden_text`.
-- Parser caps (`parse_guard.py`): page box ≤ 20 000 pt, inflated streams ≤ 64 MB each / 256 MB total,
-  table detection skipped on dense ruling grids, 120 s per document; a breach makes `parse_status`
-  `failed`. Uploads run off the event loop and are capped per session (200 sources, 1 GB, 30 per minute).
+- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 3", decimal_style, text_chars, metadata, pages:[...]}`.
+- Each page: `{n, text, small_text, columns, tables, hidden_chars, ink_check}`. Only glyphs a reader can
+  see reach the text; the rest are dropped before extraction and counted in `hidden_chars`, and a record
+  citing such a page gets the warning `hidden_text`.
+  - First pass (`parse_guard.py`, colour and geometry): text render mode 3 / 7, white glyphs not on a
+    dark filled box, glyphs squashed below 0.04 em wide or 1 pt tall (`1 Tz`), glyphs outside the page
+    box or the CropBox.
+  - Second pass (`parse_ink.py`, rendered ink): pdfium renders the CropBox at ≤ 144 dpi (≤ 6 MP) once
+    with all text invisible and once per group of non-overlapping text objects. A glyph is visible only
+    when its group's render differs from the text-free render by ≥ 40/255 (max RGB channel) on at least
+    5 % of its tight box (plus a 1 px unclaimed ring). Text under a later fill, near-background grey,
+    clipped away, the colour of the box beneath it, or a hidden layer overlapping visible text is
+    dropped. pdfplumber chars take the verdict of the pdfium glyph at the same origin (the two agree to
+    ~1e-4 pt). A copy of a glyph within 1 pt of the same text is dropped silently (one glyph to a reader).
+  - `ink_check` is `ok`, or `unverified` when the page could not be judged (render error, 60 s render
+    budget per document spent, > 300 pages, > 8 overlap groups, > 20 % of chars without a pdfium glyph).
+    An unverified page keeps the first-pass text and every record citing it gets `hidden_text` as an
+    **error**.
+- Parser caps (`parse_guard.py`, `parse_budget.py`): page box ≤ 20 000 pt, inflated streams ≤ 64 MB
+  each / 256 MB total, ≤ 200 000 glyphs per page and ≤ 2 000 000 per document (an upper bound counted from
+  the decompressed content streams before layout, Form XObject draws multiplied in), table detection
+  skipped on dense ruling grids, 120 s per document; a breach makes `parse_status` `failed`.
+- Parse process (`parse_sandbox.py`): every ingest parse runs in a fresh child interpreter, killed after
+  150 s or above 1 GB RSS (polled by the parent; the child also watches its own peak), and at most 2
+  parses run at once per server process across all sessions. A kill is recorded as `parse_status`
+  `failed`; an upload that waits 30 s for a parse slot gets 503 and nothing is recorded.
+- Uploads run off the event loop and are capped per session (200 sources, 1 GB, 30 per minute).
 - `text` keeps only characters at least 0.75 × the modal body size. Superscripts, subscripts and footnote
   markers go to `small_text` before any normalisation, so `10³` can never become `103`.
 - `columns` is `[left, right]` when word x-centres split into two bands with a gap of at least 8% of the
@@ -200,7 +221,7 @@ reaches the CSV.
 ## Endpoints (`routes.py`, prefix `/api/sessions/{sid}/evidence`)
 
 All endpoints require session ownership (bearer token when `PHARMAGENT_API_TOKEN` is set). Error map:
-`ValueError` -> 400, `EvidenceStateError` -> 409, `IngestError` -> 422, upload over 25 MB -> 413. The body
+`ValueError` -> 400, `EvidenceStateError` -> 409, `IngestError` -> 422, parser busy -> 503, upload over 25 MB -> 413. The body
 is main.py's `{success:false, error:{code, message, request_id}}` envelope.
 
 | Method | Path | Tool / behaviour |
@@ -324,6 +345,10 @@ curl -s http://127.0.0.1:8010/api/health      # {"status":"ok", ..., "llm":"mock
 ## Limits of phase 1
 
 - **No OCR.** A scanned PDF parses to `no_text` and is skipped by screening and extraction.
+- **The ink check is a threshold, not a proof.** A glyph that is mostly covered but still shows ink on
+  ≥ 5 % of its box counts as visible, and glyphs overlapping inside one text object (kerning) are not
+  separated. Rendering roughly doubles parse time (a 20-page paper: ~8 s, ~0.45 GB peak in the child);
+  pages past the 60 s render budget are `unverified` and flagged, not trusted.
 - **No figure digitising.** Values that only appear in plots cannot be extracted.
 - **Two-column detection is a heuristic** (an x-gap band crossed by few lines). Unusual layouts can merge
   columns. Lines that span the gap stay in `text` but in neither column.

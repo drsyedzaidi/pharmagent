@@ -6,15 +6,18 @@ a ruling-line budget per page before table detection (cell finding grows ~n^4 in
 Every breach raises ParseLimitError, which ingest records as parse_status 'failed'.
 
 Visibility: the verifier proves 'this literal is in the page text', so the page text must be what
-a reader SEES. Characters drawn with text render mode 3 / 7 (invisible / clip only), white glyphs
-not on a filled non-white box, and glyphs outside the page box are dropped before extraction and
-counted per page (hidden_chars), so hidden text can drive neither a verdict nor a value.
+a reader SEES. These cheap colour / geometry rules are the first pass: characters drawn with text
+render mode 3 / 7 (invisible / clip only), white glyphs not on a filled non-white box, glyphs
+squashed to (near) zero width or height, and glyphs outside the page box or the CropBox are dropped
+before extraction and counted per page (hidden_chars). The second pass (parse_ink.py) judges what is
+left from rendered ink, so hidden text can drive neither a verdict nor a value.
 Thin / no-break spaces inside numbers ('18 900') survive extraction as U+2009 (pdfplumber would
 turn them into ASCII spaces, which the verifier treats as a word gap).
 """
 from __future__ import annotations
 
 import time
+import unicodedata
 import zlib
 from typing import Any
 
@@ -28,6 +31,8 @@ MAX_TOTAL_INFLATED = 256 * 1024 * 1024
 PARSE_BUDGET_S = 120.0                 # whole document, checked between pages
 MAX_RULING_PRODUCT = 10_000            # horizontal x vertical ruling edges before find_tables
 INVISIBLE_RENDER_MODES = (3, 7)
+MIN_WIDTH_EM = 0.04                    # narrowest real glyph ('i' at 50 % Tz) is ~0.1 em wide
+MIN_GLYPH_PT = 1.0                     # a glyph box under 1 pt tall cannot be read
 THIN_SPACES = frozenset("\u2009\u202f\u00a0\u2007\u2008\u200a")
 THIN = "\u2009"
 _PLACEHOLDER = "\ue000"                # private use, not whitespace: survives word grouping
@@ -150,13 +155,25 @@ def _on_dark_box(c: dict[str, Any], boxes: list[dict[str, Any]]) -> bool:
                for b in boxes)
 
 
+def _squashed(c: dict[str, Any]) -> bool:
+    """Drawn with (near) zero width or height: '1 Tz', a squashing Tm, or a sub-point font."""
+    text = str(c.get("text", ""))
+    if not text.strip() or unicodedata.category(text[:1]) in ("Mn", "Me"):   # spaces, combining marks
+        return False
+    width, height = float(c["x1"]) - float(c["x0"]), float(c["bottom"]) - float(c["top"])
+    return height < MIN_GLYPH_PT or width < MIN_WIDTH_EM * max(height, float(c.get("size") or 0.0))
+
+
 def visibility_filter(page: Any):
-    """(predicate for page.filter keeping visible chars, count of chars it drops)."""
+    """(predicate for page.filter keeping visible chars, count of chars it drops). The visible area is
+    the page box cut to the CropBox (what a viewer shows)."""
     x0, top, x1, bottom = page.bbox
+    cx0, ctop, cx1, cbottom = page.cropbox
+    x0, top, x1, bottom = max(x0, cx0), max(top, ctop), min(x1, cx1), min(bottom, cbottom)
     boxes = [r for r in page.rects if r.get("fill") and not _is_white(r.get("non_stroking_color"))]
 
     def visible(c: dict[str, Any]) -> bool:
-        if c["x1"] < x0 or c["x0"] > x1 or c["bottom"] < top or c["top"] > bottom:
+        if c["x1"] <= x0 or c["x0"] >= x1 or c["bottom"] <= top or c["top"] >= bottom or _squashed(c):
             return False
         return not (_is_white(c.get("non_stroking_color")) and not _on_dark_box(c, boxes))
 

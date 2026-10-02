@@ -98,10 +98,16 @@ def unit_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def hidden_text_flags(p: dict[str, Any], page: dict[str, Any] | None) -> list[dict[str, Any]]:
-    n = int((page or {}).get("hidden_chars") or 0)
+    """Warn when hidden glyphs were removed from the cited page; error when its visibility could not be
+    checked from rendered ink at all (the page text may still hold hidden glyphs)."""
+    page = page or {}
+    if page.get("ink_check") == "unverified":
+        return [_flag(M.FLAG_HIDDEN_TEXT, "error", f"page {page.get('n')} could not be rendered to check which "
+                      "characters are visible, so hidden text may remain; confirm the value on the PDF", p)]
+    n = int(page.get("hidden_chars") or 0)
     if n <= 0:
         return []
-    return [_flag(M.FLAG_HIDDEN_TEXT, "warn", f"page {(page or {}).get('n')} holds {n} invisible or off-page "
+    return [_flag(M.FLAG_HIDDEN_TEXT, "warn", f"page {page.get('n')} holds {n} invisible or off-page "
                   "characters that were removed before verification; compare with the PDF", p)]
 
 

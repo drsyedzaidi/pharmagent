@@ -17,6 +17,7 @@ from typing import Any
 import pdfplumber
 
 from app.evidence.normalize import infer_decimal_style
+from app.evidence.parse_budget import check_glyph_budget
 from app.evidence.parse_guard import (
     Deadline,
     check_page_box,
@@ -27,10 +28,11 @@ from app.evidence.parse_guard import (
     tables_affordable,
     visibility_filter,
 )
+from app.evidence.parse_ink import InkChecker, duplicate_ids
 
 # The suffix versions this module's output: a parse cache written by an earlier version (no
-# visibility filter, thin spaces turned into word gaps) is re-parsed rather than reused.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 2"
+# visibility filter, thin spaces turned into word gaps, no rendered-ink check) is re-parsed.
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 3"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
@@ -238,10 +240,24 @@ def _tables(body, lines: list[dict[str, Any]], modal: float) -> list[dict[str, A
     return tables
 
 
-def _parse_page(page) -> dict[str, Any]:
+def _visible_chars(page, ink: InkChecker) -> tuple[Any, int, str]:
+    """(predicate, chars dropped, ink status): colour / geometry rules, duplicate strikes, then ink."""
+    cheap, dropped = visibility_filter(page)     # white-on-white, squashed, off-page / off-crop glyphs
+    candidates = [c for c in page.chars if cheap(c)]
+    drop = duplicate_ids(candidates)             # one glyph to a reader; not counted as hidden
+    inkless = ink.hidden(page, [c for c in candidates if id(c) not in drop])
+    drop |= inkless or set()
+
+    def visible(c: dict[str, Any]) -> bool:
+        return cheap(c) and id(c) not in drop
+
+    return visible, dropped + len(inkless or ()), "unverified" if inkless is None else "ok"
+
+
+def _parse_page(page, ink: InkChecker) -> dict[str, Any]:
     check_page_box(page)
     hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
-    visible, dropped = visibility_filter(page)   # white-on-white and off-page glyphs
+    visible, dropped, ink_status = _visible_chars(page, ink)
     protect_thin_spaces(page)
     chars = [c for c in page.chars if visible(c)]
     modal = _modal_size(chars)
@@ -264,6 +280,7 @@ def _parse_page(page) -> dict[str, Any]:
         "columns": _columns(words, lines, float(page.width)),
         "tables": _tables(body, lines, modal),
         "hidden_chars": hidden + dropped,
+        "ink_check": ink_status,
     })
 
 
@@ -276,12 +293,17 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
     deadline = Deadline()
     with pdfplumber.open(str(path)) as pdf:
         check_streams(pdf.doc)
+        check_glyph_budget(pdf.pages)            # glyph floods are refused before any layout
         metadata = _metadata(pdf.metadata)
         pages = []
-        for pg in pdf.pages:
-            deadline.check(pg.page_number)
-            pages.append(_parse_page(pg))
-            pg.close()                           # drop the page's cached layout before the next one
+        ink = InkChecker(str(path), len(pdf.pages))
+        try:
+            for pg in pdf.pages:
+                deadline.check(pg.page_number)
+                pages.append(_parse_page(pg, ink))
+                pg.close()                       # drop the page's cached layout before the next one
+        finally:
+            ink.close()
     full_text = "\n".join(p["text"] for p in pages)
     return {
         "sha256": sha,
