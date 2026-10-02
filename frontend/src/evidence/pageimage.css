@@ -7,11 +7,19 @@
   background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .ev-bigvalue {
-  margin: 0; font-family: var(--sans); font-size: 28px; font-weight: 600; line-height: 1.15; color: var(--text-h);
+  margin: 0; font-family: var(--sans); font-size: 22px; font-weight: 600; line-height: 1.2; color: var(--text-h);
   font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
 }
 .ev-valuemeta { margin: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
 .ev-imagecol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ev-imagecol:focus { outline: none; }
+.ev-imagecol:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ev-keyhint { margin: 0; }
+/* Holds the viewer's place while the image renders, so Approve / Reject do not move under the pointer. */
+.ev-skeleton {
+  min-height: 240px; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
 .ev-imgtools { display: flex; flex-wrap: wrap; gap: 6px; }
 .ev-zoombtn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); }
 .ev-viewer {
@@ -19,14 +27,15 @@
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px;
 }
 .ev-viewer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ev-imgwrap { position: relative; line-height: 0; background: #fff; }
+/* The rendered page is white paper: --bg-card is white and models it behind the raster while it decodes. */
+.ev-imgwrap { position: relative; line-height: 0; background: var(--bg-card); }
 .ev-pageimg { display: block; width: 100%; height: auto; }
 .ev-outline {
   position: absolute; box-sizing: border-box; pointer-events: none;
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 .ev-outline.dashed { outline-style: dashed; }
-.ev-outline::after { content: ""; position: absolute; inset: -5px; border: 1px solid #fff; pointer-events: none; }
+.ev-outline::after { content: ""; position: absolute; inset: -5px; border: 1px solid var(--bg-card); pointer-events: none; }
 .ev-caption { overflow-wrap: anywhere; }
 .ev-notices { display: flex; flex-direction: column; gap: 6px; }
 .ev-notice { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 6px 8px; font-size: 12px; border-radius: var(--radius-sm); }
@@ -41,4 +50,7 @@
 /* Stack when the panel itself is narrow (the records panel shares the page with rails), not only the viewport. */
 @container (max-width: 700px) {
   .ev-compare { grid-template-columns: minmax(0, 1fr); }
+  /* Stacked, the value card is one compact row so the picture starts near the heading, not below a tall card. */
+  .ev-valuecard { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 8px 12px; }
+  .ev-valuecard .ev-bigvalue { font-size: 18px; }
 }

@@ -89,3 +89,30 @@ def test_dose_products_stay_plain_numbers(page, value, snippet):
 
 def test_parse_number_of_raised_shape_is_none():
     assert parse_number("1.2 × 103") is None
+
+
+SIGNED_GAP_PAGES = ["Peak 1.2 x 10 -3 cells per mL", "Peak 1.2 x 10 −3 cells per mL", "Peak 1.2 x 10 +3 cells per mL",
+                    "Peak 1.2 × 10 -3 cells per mL"]
+
+
+@pytest.mark.parametrize("page", SIGNED_GAP_PAGES)
+def test_signed_exponent_after_a_word_gap_is_unresolved_even_without_small_glyphs(page):
+    toks = number_tokens(page, strict=True, bare_ten=False)
+    assert toks[0].value is None and toks[0].mantissa == 1.2, toks
+    res = verify(_prop("1.2", "Peak 1.2"), _doc(page, small=""))
+    assert (res.status, res.reason) == ("fail", M.REASON_PARTIAL_NUMBER), res
+
+
+def test_signed_exponent_whole_literal_never_passes():
+    page = "Peak 1.2 x 10 -3 cells per mL"
+    res = verify(_prop("1.2 x 10 -3", "Peak 1.2 x 10 -3"), _doc(page))
+    assert res.status == "fail", res
+
+
+@pytest.mark.parametrize("page, value, snippet", [
+    ("Patients took 2 x 10 mg tablets daily.", "10", "2 x 10 mg"),
+    ("Patients took 2 x 100 mg tablets daily.", "100", "2 x 100 mg"),
+    ("Patients took 2 x 10 mg tablets daily.", "2", "took 2 x"),
+])
+def test_dose_products_still_pass_beside_signed_gap_rule(page, value, snippet):
+    assert verify(_prop(value, snippet), _doc(page)).status == "pass"

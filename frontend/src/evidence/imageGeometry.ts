@@ -1,7 +1,7 @@
 /** Pure helpers for the page image (no React, no DOM): outline geometry, zoom modes, alt text, captions,
  *  announcements and error wording. Kept free of imports beyond types so node can run them directly. */
 import { errorMessage } from './format.ts';
-import type { ImageRect, PageImageMeta, ZoomMode } from './types';
+import type { ImageNotice, ImageRect, PageImageMeta, QcFlag, ZoomMode } from './types';
 
 /** The most outline rectangles one image carries (the server caps the same number). */
 export const MAX_RECTS = 12;
@@ -92,4 +92,53 @@ export function imageErrorText(raw: string, status: number | null, retryAfter: n
   }
   if (status === 409 && msg.includes('changed on disk')) return `${msg}. The source file changed or is missing; re-check the upload.`;
   return msg;
+}
+
+/** The flag codes that mean the text layer may disagree with the page (the server's URGENT_FLAGS). Known from
+ *  the record alone, so the reviewer is told even when the image or its meta never arrives. */
+export const URGENT_FLAG_CODES: readonly string[] = [
+  'glyph_text_mismatch', 'glyph_ink_mismatch', 'glyph_unverified', 'overlapping_glyphs', 'hidden_text',
+];
+
+export function urgentFlagCodes(flags: readonly QcFlag[]): string[] {
+  return [...new Set(flags.map(f => f.code).filter(c => URGENT_FLAG_CODES.includes(c)))];
+}
+
+const DISAGREE_NOTICE: ImageNotice = {
+  code: 'text_layer_may_disagree', severity: 'error',
+  text: 'Text layer and page may disagree: compare the image with the extracted value before approving.',
+};
+
+/** The notices to show: an urgent record always carries the disagree notice (from its own flags), the
+ *  server's notices follow, and a code is never shown twice. */
+export function mergeNotices(urgent: boolean, server: readonly ImageNotice[]): ImageNotice[] {
+  const all = urgent ? [DISAGREE_NOTICE, ...server] : [...server];
+  return all.filter((n, i) => all.findIndex(o => o.code === n.code) === i);
+}
+
+/** What the reviewer is told when no page image can be shown. */
+export function imageUnavailableText(urgent: boolean): string {
+  return urgent
+    ? 'Image unavailable: compare with the PDF itself before approving. The text layer may disagree with the page.'
+    : 'Image unavailable: compare with the PDF itself before approving.';
+}
+
+export interface Box { x: number; y: number; w: number; h: number }
+
+/** The smallest rectangle holding every rectangle, null for none. */
+export function unionRect(rects: readonly ImageRect[]): Box | null {
+  if (rects.length === 0) return null;
+  const x0 = Math.min(...rects.map(r => r.x)), y0 = Math.min(...rects.map(r => r.y));
+  const x1 = Math.max(...rects.map(r => r.x + r.w)), y1 = Math.max(...rects.map(r => r.y + r.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** The scroll offset that centres *box* (content pixels) in a *view* over *content*, clamped to what can
+ *  scroll. Zeros for anything not finite, so a bad rectangle never throws the viewer somewhere odd. */
+export function scrollToCenter(box: Box, view: { w: number; h: number }, content: { w: number; h: number }):
+  { left: number; top: number } {
+  if (![box.x, box.y, box.w, box.h, view.w, view.h, content.w, content.h].every(Number.isFinite)) return { left: 0, top: 0 };
+  const axis = (at: number, size: number, port: number, total: number) =>
+    Math.round(Math.max(0, Math.min(total - port, at + size / 2 - port / 2)));
+  return { left: axis(box.x, box.w, view.w, content.w), top: axis(box.y, box.h, view.h, content.h) };
 }

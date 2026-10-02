@@ -55,8 +55,9 @@ _MULTIPLIER = r"(?:[xX*]|[^\x00-\x7f±∓≤≥≦≧≈≃≅≠∼<>=])"
 # 'N x 10' followed by digits and no caret / superscript ('1.2 × 103', '1.2 x 10 3') is a power of ten
 # whose exponent was set at full size but raised: the text layer cannot say 10^3 from 103, so the token
 # is unresolved (group 'raw'). A tail starting with 0 ('2 x 100 mg', '3 x 1000 mg') is a plain
-# multiplication and stays plain numbers.
-_RAW_EXP = r"10(?P<raw>[1-9]\d{0,2}|[ \x00][1-9]\d?)(?!\d|[.,]\d)"
+# multiplication and stays plain numbers. A SIGNED tail after a word gap ('10 -3', '10 +3', U+2212 folded)
+# is the same raised exponent with its sign: unresolved whether or not the page has small glyphs.
+_RAW_EXP = r"10(?P<raw>[1-9]\d{0,2}|[ \x00][1-9]\d?|[ \x00]{1,2}[+-]\d{1,3})(?!\d|[.,]\d)"
 _SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|[ \x00]{1,2}[eE](?P<eg>[+-]?\d{1,4})(?![\w.,]\d|\w)|"
                      + _GAP + _MULTIPLIER + _GAP + "(?:" + _RAW_EXP + r"|10(?!\d|[.,]\d)" + _EXP + "?)")
 _POW_RE = re.compile(_EXP)

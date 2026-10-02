@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { evidencePageImageBlob, evidencePageImageMeta } from './api';
 import { imageErrorText, serverZoom, stepMode } from './imageGeometry';
 import { loadPageImage, type LoadedImage } from './pageImageLoad';
+import { assertPageImage } from './pngCheck';
 import type { PageImageMeta, ZoomMode } from './types';
 
 export type ImagePhase = 'loading' | 'ready' | 'error';
-export interface ImageFailure { message: string; status: number | null }
+/** *broken*: the image arrived but the browser could not draw it (so it must not be shown at all). */
+export interface ImageFailure { message: string; status: number | null; broken?: boolean }
 interface Store { ready: (LoadedImage & { recordId: string }) | null; failure: (ImageFailure & { key: string }) | null }
 
 export interface PageImageView {
@@ -14,9 +16,17 @@ export interface PageImageView {
   ready: LoadedImage | null;
   failure: ImageFailure | null;
   mode: ZoomMode;
+  /** The mode the picture on screen is really in: after a failed zoom change it is still the old raster. */
+  shownMode: ZoomMode;
+  /** True when a failure left no picture the reviewer can use (none loaded, or the browser could not draw it). */
+  unavailable: boolean;
+  /** True when a failure left an image of another zoom than the one asked for on screen. */
+  stale: boolean;
   setMode: (m: ZoomMode) => void;
   step: (dir: 1 | -1) => void;
   retry: () => void;
+  /** The <img> could not draw the image: show the failure, not a blank box. */
+  markBroken: () => void;
 }
 
 /** State machine of one record's page image: aborts and ignores stale responses when the record, zoom or
@@ -34,7 +44,11 @@ export function usePageImage(sessionId: string, recordId: string): PageImageView
       try {
         const loaded = await loadPageImage({
           meta: signal => evidencePageImageMeta(sessionId, recordId, zoom, signal),
-          blob: (m: PageImageMeta, signal) => evidencePageImageBlob(sessionId, recordId, zoom, m.image_sha256, signal),
+          blob: async (m: PageImageMeta, signal) => {
+            const body = await evidencePageImageBlob(sessionId, recordId, zoom, m.image_sha256, signal);
+            await assertPageImage(body);
+            return body;
+          },
         }, ac.signal);
         if (loaded && !ac.signal.aborted) setStore({ ready: { ...loaded, recordId }, failure: null });
       } catch (e) {
@@ -58,5 +72,11 @@ export function usePageImage(sessionId: string, recordId: string): PageImageView
   const phase: ImagePhase = failure ? 'error' : fresh ? 'ready' : 'loading';
   const step = useCallback((dir: 1 | -1) => setMode(m => stepMode(m, dir)), []);
   const retry = useCallback(() => setAttempt(a => a + 1), []);
-  return { phase, ready: own, failure, mode, setMode, step, retry };
+  const markBroken = useCallback(() => setStore(s => ({
+    ...s, failure: { key, status: null, broken: true, message: imageErrorText('the page image could not be displayed', null, null) },
+  })), [key]);
+  const stale = own !== null && failure !== null && own.meta.zoom !== zoom;
+  const shownMode: ZoomMode = stale ? (own.meta.zoom === 2 ? 'larger' : 'actual') : mode;
+  const unavailable = failure !== null && (own === null || failure.broken === true);
+  return { phase, ready: own, failure, mode, shownMode, stale, unavailable, setMode, step, retry, markBroken };
 }

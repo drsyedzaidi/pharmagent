@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { evidencePage } from './api';
 import { errorMessage } from './format';
 import { contextText, highlight, markScrollTop } from './highlight';
-import { imageAnnouncement } from './imageGeometry';
+import { imageAnnouncement, imageUnavailableText, urgentFlagCodes } from './imageGeometry';
 import { PageImage } from './PageImage';
 import { usePageImage } from './usePageImage';
 import type { PageText, ParsedTable, RecordRow, TableCell } from './types';
@@ -62,6 +62,8 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
   const markRef = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLHeadingElement>(null);
   const view = usePageImage(sessionId, record.id);
+  // Urgency is known from the record's own flags, so it survives an image that never loads.
+  const urgent = urgentFlagCodes(record.flags).length > 0;
 
   useEffect(() => {
     let alive = true;
@@ -113,7 +115,7 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
       <div className="ev-context-head">
         <h3 ref={headRef} tabIndex={-1}>
           Cited page for {title} = <span className="mono">{record.value}</span>{record.unit ? ` ${record.unit}` : ''}
-          {view.ready?.meta.compare_urgent && (
+          {(urgent || view.ready?.meta.compare_urgent) && (
             <span className="ev-compare-label"><OctagonAlert size={12} aria-hidden="true" /> Compare before approving</span>
           )}
         </h3>
@@ -126,7 +128,8 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
       <p className="ev-prov">{filename} · {parts.join(' · ')}</p>
       <p className="sr-only" role="status">
         {current ? `Page ${loc.page} loaded for ${title}. ${where}` : error ? '' : `Loading page ${loc.page}`}
-        {view.ready ? ` ${imageAnnouncement(view.ready.meta)}` : ''}
+        {view.ready && !view.failure?.broken ? ` ${imageAnnouncement(view.ready.meta)}` : ''}
+        {view.unavailable ? ` ${imageUnavailableText(urgent)}` : ''}
       </p>
       <PageImage view={view} record={record} filename={filename} />
       <p className="ev-snippet"><span className="ev-label">Cited snippet</span> <span className="mono">{loc.snippet}</span></p>
