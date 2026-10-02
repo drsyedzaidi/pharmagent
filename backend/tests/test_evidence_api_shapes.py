@@ -22,7 +22,8 @@ from tests import evidence_fixtures as fx
 EV = "/api/sessions/{sid}/evidence"
 
 SOURCE_KEYS = {"id", "session_id", "sha256", "filename", "pages", "title", "metadata", "text_chars",
-               "parse_status", "decimal_style", "licence_note", "uploaded_by", "uploaded_at"}
+               "parse_status", "decimal_style", "licence_note", "uploaded_by", "uploaded_at",
+               "layout_status", "layout_reason"}
 METADATA_KEYS = {"title", "author", "subject", "creator", "producer", "creation_date"}
 UPLOAD_KEYS = {"source", "duplicate", "summary"}
 CONFIG_KEYS = {"kind", "body", "body_hash", "saved_by", "saved_at", "summary"}

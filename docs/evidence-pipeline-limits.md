@@ -26,9 +26,18 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
 - **Layout boxes are only as good as the ink check.** A page whose ink check is `unverified` has no
   boxes (the whole page is shown, urgent); boxes come from pdfium glyph boxes, never pdfplumber geometry.
   Sources parsed before evidence-parse 7 have no layout sidecar and are not re-parsed on read: their
-  records get the whole-page image (`layout_unavailable`) until the PDF is parsed again (a cache miss
-  after a parser bump re-parses it on the next ingest of a NEW session; a re-upload to the same session
-  dedupes and does not). A maintenance rebuild that writes the sidecar only when every page text hash equals the stored one is not built.
+  records get the whole-page image (`layout_unavailable`, `layout_status` `missing`) until the sidecar is
+  rebuilt (`rebuild_source_layout`, the Relayout endpoints) or the PDF is parsed again in a new session (a
+  re-upload to the same session dedupes and does not).
+- **A rebuild is all or nothing, and can refuse.** It writes the sidecar only when every stored page field
+  equals a fresh parse and every page text hash matches. If the page text parses differently now (a changed
+  parser dependency, a doctored cache) the source is `text_changed`: nothing is written, its records keep the
+  whole-page image and `compare_urgent`, and the reviewer extracts again on a new parse (a new session) and
+  compares each value with the PDF. A PDF that cannot be parsed again (encrypted, corrupt, killed at a limit) is
+  `unreadable`. Every rebuild costs a full parse in the sandbox (up to 150 s, one slot) and bulk calls stop at
+  10 sources; a busy parser is a 503 that records nothing. The rebuild proves the page text is unchanged, not
+  that the boxes are right: they carry the same word-level and ink-check limits as a fresh parse. The status
+  marker of a refused rebuild is per PDF and parser version, so it applies to every session holding the PDF.
 - **Pre-existing, not fixed here:** pdfplumber's cropbox is wrong for `/Rotate 180` and `270` combined with
   a CropBox (a probe page reports `hidden_chars` 20 and drops visible lines as off-crop, text read
   mirrored). It fails closed (`hidden_text`) but loses text; the layout does not inherit it (pdfium

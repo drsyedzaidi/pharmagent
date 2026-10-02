@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
-from app.evidence import ingest, regions, render, render_cache, render_limits
+from app.evidence import ingest, regions, relayout, render, render_cache, render_limits
 from app.evidence.models import (
     FLAG_GLYPH_INK,
     FLAG_GLYPH_MISMATCH,
@@ -102,9 +102,7 @@ def _layout_doc(src: Source, parser: Any) -> dict[str, Any] | None:
             _layouts[key] = doc
             while len(_layouts) > LAYOUT_LRU:
                 _layouts.popitem(last=False)
-    if doc is None or doc.get("sha256") != src.sha256 or doc.get("parser") != parser:
-        return None
-    return doc
+    return doc if relayout.layout_binds(doc, src.sha256, parser) else None
 
 
 def _layout_page(layout: dict[str, Any] | None, n: int) -> dict[str, Any] | None:
@@ -180,6 +178,7 @@ def _meta(ctx: _Context, entry: dict[str, Any]) -> dict[str, Any]:
                    "glyph_check": sorted((ctx.page_doc.get("glyph_check") or {}).keys())}
     unverified = ctx.page_doc.get("ink_check") == "unverified"
     located = reg.resolved
+    layout = relayout.layout_info(ctx.src)
     return {
         "record_id": rec.id, "source_id": ctx.src.id, "page": ctx.n, "pages": len(ctx.doc.get("pages") or []),
         "zoom": ctx.zoom, "dpi": entry["dpi"], "resolved": located, "precision": reg.precision,
@@ -188,6 +187,8 @@ def _meta(ctx: _Context, entry: dict[str, Any]) -> dict[str, Any]:
         "snippet_box": _rect(entry.get("snippet_px")) if located else None,
         "crop_pt": entry["crop_pt"], "image_sha256": entry["png_sha256"], "png_bytes": entry["png_bytes"],
         "pdf_sha256": ctx.src.sha256,
+        "layout_status": layout["layout_status"],
+        "layout_rebuild_available": reg.reason == "layout_unavailable" and layout["layout_status"] == "missing",
         "layout_version": (ctx.layout or {}).get("layout_version") if located else None,
         "extracted": {"value": rec.value, "unit": rec.unit, "literal": rec.locator.get("literal"),
                       "kind": rec.locator.get("kind") or "text"},

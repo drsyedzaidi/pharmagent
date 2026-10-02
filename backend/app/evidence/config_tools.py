@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.pharmstate import PharmState
-from app.evidence import ingest
+from app.evidence import ingest, relayout
 from app.evidence.models import CONFIG_KINDS, Source, now_iso
 from app.evidence.store import EvidenceStore, get_store
 from app.tools.base import Tool, ToolContext, ToolResult
@@ -30,11 +30,13 @@ FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 #: Keys of a source row exposed to clients (server paths stay server-side).
 SOURCE_PUBLIC_KEYS = ("id", "session_id", "sha256", "filename", "pages", "title", "metadata", "text_chars",
                       "parse_status", "decimal_style", "licence_note", "uploaded_by", "uploaded_at")
+#: Added by ``source_row`` from the files on disk (relayout.layout_info), not stored in the ledger.
+LAYOUT_KEYS = ("layout_status", "layout_reason")
 
 
 def source_row(src: Source) -> dict[str, Any]:
     d = asdict(src)
-    return {k: d[k] for k in SOURCE_PUBLIC_KEYS}
+    return {**{k: d[k] for k in SOURCE_PUBLIC_KEYS}, **relayout.layout_info(src)}
 
 
 def summarise(store: EvidenceStore, session_id: str) -> dict[str, Any]:

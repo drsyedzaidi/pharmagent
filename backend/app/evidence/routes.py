@@ -337,4 +337,6 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
 
     from app.evidence.image_routes import add_image_routes  # late: image_routes imports this module
     add_image_routes(router, owned_session)
+    from app.evidence.layout_routes import add_layout_routes  # late: layout_routes imports this module
+    add_layout_routes(router, owned_session, actor_id, get_orch, get_jobs)
     return router

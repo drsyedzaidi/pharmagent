@@ -25,6 +25,8 @@ not from the plan.
   - `parse_tables.py`: text lines, ruled and layout tables (with each cell's words).
   - `parse_layout.py` (+ `parse_ink_match.py` glyph boxes): the layout sidecar, where each word of the
     page text sits on the PDF page (see "Layout sidecar").
+  - `relayout.py` / `layout_tools.py` / `layout_routes.py`: rebuild of the layout sidecar of sources parsed
+    before version 7 (see "Layout rebuild").
   - `regions.py` / `render_child.py` / `render.py` / `render_cache.py` / `render_limits.py` /
     `image_routes.py`: the page image of a record's cited value (see "Page image").
   - `normalize.py` + `verify.py`: the literal-match verifier, deterministic with no model involved.
@@ -39,7 +41,7 @@ not from the plan.
   - `prompts.py` / `llm_access.py`: the untrusted-document wrapper, JSON schemas, a hand validator, and
     the current LLM accessor.
   - `routes.py`: `build_evidence_router`, included by `main.py` with two added lines.
-- **Agent.** A new `evidence` agent (`app/agents/definitions.py`) owns the 8 tools. The supervisor
+- **Agent.** A new `evidence` agent (`app/agents/definitions.py`) owns the 9 tools. The supervisor
   routes to it through a single anchor regex; its keyword list was not changed.
 - **Frontend.** The rail's **Evidence** button opens `EvidenceWorkspace` (tabs Library, Criteria,
   Screening, Template, Records, Dataset). Tool turns push the chat cards `__EVIDENCE_SCREEN__`,
@@ -54,6 +56,7 @@ not from the plan.
 | `evidence/<sha256>.pdf` | POST /upload | Content-addressed, shared across sessions |
 | `evidence/<sha256>.pages.json` | `ingest.parse_and_cache` | Parse cache, re-checked against the PDF hash on every load |
 | `evidence/<sha256>.layout.json` | `ingest.parse_and_cache` | Layout sidecar (word boxes), written BEFORE the pages file; a cache hit needs both, sha- and parser-bound |
+| `evidence/<sha256>.layout.status.json` | `relayout.rebuild_layout` | Only when a rebuild was refused: `{status: text_changed\|unreadable, reason, parser}`; removed when a rebuild succeeds; ignored once the parser version changes |
 | `evidence/render/<key>.png` + `<key>.json` | page-image route | Rendered crops of licensed pages and their geometry; LRU, capped at 256 MiB / 4000 entries (see "Page image"); include this directory in any data-dir cleanup |
 | `evidence/exports/evidence_<sid>_<YYYYmmddTHHMMSSZ>_<sha12>.csv` | `export_evidence_dataset` | Long CSV: page literal `value`, canonical point-decimal `value_num`, page `decimal_style`. Named by its own sha256 and created without replacing, so two exports in one second keep both files |
 | `evidence/exports/<long stem>_wide.csv` | `export_evidence_dataset` | Wide CSV: `<field>` = canonical number, `<field>_literal`, `<field>_unit` (one unit when all agree, else one per value in `<field>` order; `<long stem>_<sha12>_wide.csv` if that name holds other bytes) |
@@ -231,7 +234,44 @@ Where each word of a page's text sits on the PDF page, so a reviewer can be show
   layout whose hash does not match the page it is used with (`layout_stale`).
 - A source parsed before version 7 has no sidecar and is NOT re-parsed on read (re-upload dedupes):
   its records get the whole-page image with reason `layout_unavailable`. A new ingest of a PDF whose
-  cache is version 6 parses it again (the sidecar is part of the cache hit).
+  cache is version 6 parses it again (the sidecar is part of the cache hit). `rebuild_source_layout`
+  (next section) writes the sidecar for such a source without a new session.
+
+### Layout rebuild (`relayout.py`, `layout_tools.py`, `layout_routes.py`)
+
+`ledger source.layout_status` is `ready` (a sidecar that parses, belongs to this PDF and the current parser,
+and whose `text_sha256` / `col_sha256` equal the hash of every stored page text), `missing`, `text_changed`
+or `unreadable`; `layout_reason` says why (null when ready). Both come from the files on disk (cached by file
+stat), appear on every source row (snapshot, upload, tool results), and the image meta adds `layout_status`
+and `layout_rebuild_available` (`layout_unavailable` on a `missing` source: a rebuild would help).
+
+`rebuild_source_layout(source_id)` re-parses the stored PDF in the sandboxed child (same limits, through the
+fair parse queue under the session id) and writes ONLY the sidecar:
+
+- The re-parse must equal the stored `pages.json` in every page field (`text, small_text, columns, tables,
+  hidden_chars, ink_check, glyph_check`) plus sha256, decimal style, text length and page count, and every
+  new `text_sha256` / `col_sha256` must hash the stored text. Then the sidecar is written atomically (temp
+  file in the same directory, fsync, rename: a SIGKILL leaves the old state, never a truncated file) with
+  `rebuilt_for` = the stored cache's parser (the image route accepts a version-7 sidecar beside an older
+  cache only through it). `pages.json`, the ledger, every record and the immutability triggers are untouched.
+- If anything differs, or the PDF cannot be parsed again (encrypted, corrupt, over a limit, killed), NOTHING
+  is written to the cache: a marker `<sha256>.layout.status.json` records `text_changed` (the reason names the
+  first differing field, e.g. `page 1 text`, and tells the reviewer to extract again on a new parse) or
+  `unreadable`. The records of such a source keep the whole-page image and stay `compare_urgent`.
+- Idempotent: a `ready` source is not parsed (outcome `unchanged`). Outcomes: `rebuilt, unchanged,
+  text_changed, unreadable`. A parse slot that stays busy is a 503 and records nothing.
+- The tool is on the `evidence` agent, not human-only (it only derives data). Each call is one audit entry:
+  `rebuild_source_layout(<src_id>, outcome=<o>, sidecar_sha256=<64>, pages=<n>, page_text_sha256=<sha of the
+  per-page hashes>)`, and `outputs_hash` binds the whole result including `page_text_sha256[]`.
+
+Endpoints (session-owned; a source of another session is 404): `POST .../sources/{source_id}/relayout`
+rebuilds one source now (blocking part on the upload worker limiter) and returns
+`{source, outcome, reason, layout_status, sidecar_sha256, n_pages, page_text_sha256, pages_sha256, summary}`;
+`POST .../relayout` rebuilds the session's `missing` sources one at a time as a JobManager job
+(`evidence_relayout`, poll `/jobs/{id}`), at most `relayout.MAX_BULK` (10) per call, and answers
+`{selected, remaining, cap, source_ids, job_id, status}`; the job result is `{results[], counts}` and one
+failed source is its own entry, never the job's failure. `text_changed` and `unreadable` sources are not
+picked again by the bulk call (the single-source call retries).
 
 ## Page image (`image_routes.py`, `regions.py`, `render*.py`)
 
@@ -250,7 +290,7 @@ substitution, optional-content layers or form scripts).
 
 - Meta fields: `record_id, source_id, page, pages, zoom, dpi, resolved, precision, reason, width, height,
   highlight[{x,y,w,h}] (image pixels, <= 12), snippet_box, crop_pt, image_sha256, png_bytes, pdf_sha256,
-  layout_version, extracted{value, unit, literal, kind}, page_checks{ink_check, hidden_chars,
+  layout_status, layout_rebuild_available, layout_version, extracted{value, unit, literal, kind}, page_checks{ink_check, hidden_chars,
   glyph_check[codes]}, flags[urgent codes on the record], compare_urgent, notices[{code, severity, text}]`.
 - `precision`: `value` (the words holding the cited number; word-level, so punctuation or a neighbouring
   character in the same word is inside the outline), `cell` (a table cell, with the column header and
@@ -452,6 +492,8 @@ is main.py's `{success:false, error:{code, message, request_id}}` envelope.
 | GET | `/api/sessions/{sid}/evidence/dataset/{filename}` | serves only a file this session exported (state mirror or ledger row, resolved under data_dir), else 404 |
 | GET | `/api/sessions/{sid}/evidence/sources/{src_id}/pages/{n}` | parsed page `{text, small_text, columns, tables, decimal_style}`; 400 when the PDF changed |
 | GET | `/api/sessions/{sid}/evidence/sources/{src_id}/pdf` | the stored PDF inline; 409 when it is missing or changed |
+| POST | `/api/sessions/{sid}/evidence/sources/{source_id}/relayout` | `rebuild_source_layout` for one source (sync); see "Layout rebuild" |
+| POST | `/api/sessions/{sid}/evidence/relayout` | one `rebuild_source_layout` per `missing` source, a job (`evidence_relayout`), at most 10 per call |
 | GET | `/api/sessions/{sid}/evidence/records/{record_id}/image/meta` | page-image description (precision, outline rects in image pixels, flags, notices); see "Page image" |
 | GET | `/api/sessions/{sid}/evidence/records/{record_id}/image` | the PNG of the cited page region; `?zoom=1\|2&sha=` |
 
@@ -470,6 +512,7 @@ failed: ...`, and the earlier decisions stand.
 | `extract_evidence` | `extracted N candidate records from K sources (template <12>, <llm\|table\|mixed>): p verified, f failed, g flagged; n new` |
 | `verify_records` | `verify_records(N checked: p pass, f fail, c changed)` |
 | `decide_records` | `decide_records(<rec_id>, <approved\|rejected>)` |
+| `rebuild_source_layout` | `rebuild_source_layout(<src_id>, outcome=<rebuilt\|unchanged\|text_changed\|unreadable>, sidecar_sha256=<64>, pages=<n>, page_text_sha256=<64>)` |
 | `export_evidence_dataset` | `exported evidence dataset <ds_id>: N approved records from K sources (long sha256 <12>, wide sha256 <12>)` |
 
 The audit entry stores `outputs_hash = hash_payload(result)`; for `decide_records` and `decide_screening`
