@@ -4,3 +4,4 @@ pytest==9.1.0
 httpx==0.28.1
 ruff==0.15.21
 pip-audit
+fpdf2==2.8.9
