@@ -30,6 +30,12 @@ function looseFind(cps: string[], snippet: string): Span | null {
   return [keep[k], keep[k + needle.length - 1] + 1];
 }
 
+/** New scrollTop for `box` that puts the top of `mark` a third of the way down the box. Uses the
+ *  two elements' viewport rectangles, so it is right whatever the mark's offsetParent is. */
+export function markScrollTop(scrollTop: number, boxTop: number, markTop: number, clientHeight: number): number {
+  return Math.max(0, scrollTop + (markTop - boxTop) - clientHeight / 3);
+}
+
 /** Split `text` around the cited snippet. The server's span is in Python code points, while
  *  JS strings index UTF-16 units, so slicing goes through Array.from (code points). A null
  *  or out-of-range span falls back to a client-side whitespace-insensitive match, marked

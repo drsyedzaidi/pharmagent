@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     model: str = "claude-opus-4-8"
     max_tokens: int = 2048
     use_mock_llm: bool = False  # legacy switch; same as llm_provider="mock"
+    # Per-call HTTP timeout for OpenAI-compatible servers (None = the client default, 120 s);
+    # a large local model on CPU may need several minutes per evidence page.
+    llm_timeout_s: float | None = None
 
     DEFAULT_OLLAMA_URL: str = "http://127.0.0.1:11434/v1"
 

@@ -448,6 +448,9 @@ class Orchestrator:
                 # This is the admission-controlled entry: the NLME/SCM/engine
                 # endpoints reach it via JobManager.submit, which bounds them.
                 allow_expensive=True,
+                # UI-driven entry (authenticated route): the only path a human_only
+                # reviewer-decision tool may run on; ``actor`` is what it records.
+                allow_human_only=True,
             )
             self._log_command(sess, agent, tool, args or {})
             self._persist(sess)

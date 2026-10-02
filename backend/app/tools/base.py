@@ -27,6 +27,9 @@ class ToolContext:
     # BEFORE the running tool's own result is appended. Empty unless the registry fills
     # it for a Tool declared ``uses_audit_trail`` -- never a handle on the live chain.
     audit_trail: tuple[dict[str, Any], ...] = ()
+    # The authenticated caller, filled by the registry for a ``human_only`` tool -- a
+    # reviewer's decision records THIS identity, never an actor named in the args.
+    actor: str = ""
 
 
 @dataclass
@@ -60,6 +63,12 @@ class ExpensiveToolError(RuntimeError):
     behind a human gate) opt in with ``allow_expensive=True``."""
 
 
+class HumanOnlyToolError(PermissionError):
+    """Raised when a reviewer-decision tool is invoked from any path other than an
+    authenticated UI request (``Orchestrator.run_tool``): never from a chat turn, a
+    skill replay or a workflow step, whatever ``confirm`` the args carry."""
+
+
 @dataclass
 class Tool:
     name: str
@@ -75,6 +84,9 @@ class Tool:
     #                                   reject; it is never executed on the turn
     uses_audit_trail: bool = False    # tool cites audit entries (briefing memo): the
     #                                   registry hands it ``ctx.audit_trail``, a copy
+    human_only: bool = False          # a reviewer's decision: never offered to an LLM
+    #                                   (for_agent skips it) and run only with
+    #                                   allow_human_only; ctx.actor is the caller
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
@@ -115,7 +127,7 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def for_agent(self, agent: str) -> list[Tool]:
-        return [t for t in self._tools.values() if t.agent == agent]
+        return [t for t in self._tools.values() if t.agent == agent and not t.human_only]
 
     def execute(
         self,
@@ -128,6 +140,7 @@ class ToolRegistry:
         timestamp: str,
         actor: str = "",
         allow_expensive: bool = False,
+        allow_human_only: bool = False,
     ) -> tuple[PharmState, ToolResult]:
         """Run a tool: compute → audit → apply writes. The only execution path.
 
@@ -146,8 +159,14 @@ class ToolRegistry:
                 f"'{name}' is a long-running fit — launch it from its dedicated "
                 "control (Population NLME / Covariate SCM / Compare engines), which "
                 "runs it as a bounded background job. It cannot run on this path.")
+        if tool.human_only and not allow_human_only:
+            raise HumanOnlyToolError(
+                f"'{name}' records a reviewer's decision and runs only from the reviewer's own "
+                "control in the workspace; it cannot run on this path.")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
+        if tool.human_only:
+            run_ctx = replace(run_ctx, actor=actor)
         res = tool.run(state, run_ctx, args)
         audit.append(
             agent=tool.agent,

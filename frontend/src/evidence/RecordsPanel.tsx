@@ -10,6 +10,7 @@ import type {
 } from './types';
 
 const MAX_REASON = 500;
+const COLS = 5;
 type Filter = 'all' | 'flagged' | 'fail' | 'proposed';
 const FILTERS: { key: Filter; label: string; test: (r: RecordRow) => boolean }[] = [
   { key: 'all', label: 'All', test: () => true },
@@ -17,15 +18,16 @@ const FILTERS: { key: Filter; label: string; test: (r: RecordRow) => boolean }[]
   { key: 'fail', label: 'Verify failed', test: r => r.verify_status === 'fail' },
   { key: 'proposed', label: 'Proposed', test: r => r.status === 'proposed' },
 ];
-const STATUS_ORDER = { proposed: 0, approved: 1, rejected: 2 } as const;
 
 /** Bulk approval only ever covers verified, unflagged proposals; the rest need a look each. */
 const bulkEligible = (r: RecordRow) => r.status === 'proposed' && r.verify_status === 'pass' && r.flags.length === 0;
+const hasConflict = (r: RecordRow) => r.flags.some(f => f.code === 'duplicate');
 
-/** Records tab: proposed records with their literal-match verification and QC flags,
- *  filters, per-record decisions with a required reason, bulk approval of verified unflagged
- *  rows, and the page context of the selected record. A record that failed verification
- *  cannot be approved (the server refuses it too). */
+/** Records tab: proposed records with their literal-match verification and QC flags, filters,
+ *  per-record decisions with a required reason, bulk approval of verified unflagged rows. The
+ *  cited page opens directly under its record, above that record's decision, so the evidence and
+ *  the decision are read together. A record that failed verification cannot be approved (the
+ *  server refuses it too); one that conflicts with an approved value needs an explicit keep-both. */
 export function RecordsPanel({ sessionId, records, sources, template, disabled, run, onState, onTool }: {
   sessionId: string;
   records: RecordRow[];
@@ -39,22 +41,35 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   const [filter, setFilter] = useState<Filter>('all');
   const [ctxId, setCtxId] = useState<string | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [keepBoth, setKeepBoth] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkReason, setBulkReason] = useState('');
-  const asideRef = useRef<HTMLElement>(null);
-  // Stacked layout puts the context below the table: bring it into view (no animation).
-  useEffect(() => { if (ctxId) asideRef.current?.scrollIntoView({ block: 'nearest' }); }, [ctxId]);
+  const [status, setStatus] = useState('');
+  const focusKey = useRef<string | null>(null);              // where focus goes once controls re-enable
+  const focusables = useRef(new Map<string, HTMLElement>());
+  const captionRef = useRef<HTMLTableCaptionElement>(null);
+  const keep = (key: string) => (el: HTMLElement | null) => {
+    if (el) focusables.current.set(key, el); else focusables.current.delete(key);
+  };
+
+  // Move focus once the target exists and is enabled (decisions disable every control meanwhile).
+  useEffect(() => {
+    const key = focusKey.current;
+    if (!key || disabled) return;
+    (key === 'caption' ? captionRef.current : focusables.current.get(key))?.focus();
+    focusKey.current = null;
+  });
 
   const names = new Map(sources.map(s => [s.id, s.filename]));
   const rowName = (r: RecordRow): string => recordLabel(r, names.get(r.source_id) ?? r.source_id);
   const test = (FILTERS.find(f => f.key === filter) ?? FILTERS[0]).test;
+  // Stable order (no status key): a decided record stays where it was.
   const rows = records.filter(test).sort((a, b) =>
-    STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
-    || (names.get(a.source_id) ?? '').localeCompare(names.get(b.source_id) ?? '')
-    || a.field.localeCompare(b.field) || a.group_label.localeCompare(b.group_label));
+    (names.get(a.source_id) ?? '').localeCompare(names.get(b.source_id) ?? '')
+    || a.field.localeCompare(b.field) || a.group_label.localeCompare(b.group_label) || a.id.localeCompare(b.id));
   const eligible = rows.filter(bulkEligible);
   const picked = eligible.filter(r => selected.has(r.id));
-  const ctx = records.find(r => r.id === ctxId) ?? null;
+  const proposed = rows.filter(r => r.status === 'proposed');
 
   const decide = async (decisions: RecordDecision[]) => {
     const ok = await run(`Recording ${decisions.length} decision${decisions.length === 1 ? '' : 's'}…`, async () => {
@@ -63,22 +78,33 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
     });
     if (!ok) return false;
     const done = new Set(decisions.map(d => d.record_id));
+    const left = proposed.filter(r => !done.has(r.id));
+    const after = proposed.findIndex(r => done.has(r.id));
+    const next = left.find((_, i) => i >= after) ?? left[0];
+    const first = rows.find(r => r.id === decisions[0].record_id);
+    setStatus(`${decisions.length === 1 && first ? `${decisions[0].decision === 'approve' ? 'Approved' : 'Rejected'} ${rowName(first)}`
+      : `${decisions.length} decisions recorded`}; ${left.length} proposed record${left.length === 1 ? '' : 's'} left.`);
+    focusKey.current = next ? `reason:${next.id}` : 'caption';
     setReasons(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => !done.has(k))));
     setSelected(prev => new Set([...prev].filter(id => !done.has(id))));
     return true;
   };
-  const one = (id: string, decision: Decision) =>
-    void decide([{ record_id: id, decision, reason: (reasons[id] ?? '').trim() }]);
+  const one = (r: RecordRow, decision: Decision) => void decide([{
+    record_id: r.id, decision, reason: (reasons[r.id] ?? '').trim(),
+    ...(decision === 'approve' && keepBoth.has(r.id) ? { allow_conflict: true } : {}),
+  }]);
   const reverify = () => run('Re-verifying proposed records…', async () => onTool(await evidenceVerify(sessionId)));
-  const toggle = (id: string) => setSelected(prev => {
+  const toggleIn = (set: (f: (prev: Set<string>) => Set<string>) => void, id: string) => set(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  const open = (id: string) => setCtxId(id);
+  const close = () => { if (ctxId) focusKey.current = `link:${ctxId}`; setCtxId(null); };
   /** Row click opens the context, except on the row's own controls. */
   const onRow = (e: MouseEvent, id: string) => {
     if ((e.target as HTMLElement).closest('button, input, label, a, summary')) return;
-    setCtxId(id);
+    open(id);
   };
 
   if (records.length === 0) {
@@ -89,7 +115,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
     <div className="ev-panel">
       <p className="ev-intro">
         Every value was checked against the literal text of its cited page. Approve only what you have looked at;
-        select a row to see its page with the cited snippet marked.
+        open a record to see its page, with the cited snippet marked, right under it.
       </p>
       <div className="ev-actions">
         <div className="seg" role="group" aria-label="Filter records">
@@ -119,87 +145,106 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
           Approve selected ({picked.length})
         </button>
       </div>
+      <p className="sr-only" role="status">{status}</p>
 
-      <div className="ev-records">
-        <div className="ev-records-grid">
-          <div className="ev-table-wrap">
-            <table className="ev-table ev-records-table">
-              <caption className="sr-only">Extracted records</caption>
-              <thead>
-                <tr>
-                  <th scope="col"><span className="sr-only">Select</span></th>
-                  <th scope="col">Field · value</th><th scope="col">Source</th><th scope="col">Checks</th>
-                  <th scope="col">Status</th><th scope="col">Decision</th>
+      <div className="ev-table-wrap">
+        <table className="ev-table ev-records-table">
+          <caption className="sr-only" ref={captionRef} tabIndex={-1}>Extracted records</caption>
+          <thead>
+            <tr>
+              <th scope="col"><span className="sr-only">Select</span></th>
+              <th scope="col">Field · value</th><th scope="col">Source</th><th scope="col">Checks</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          {rows.length === 0 && (
+            <tbody><tr><td colSpan={COLS} className="ev-empty">No records match this filter.</td></tr></tbody>
+          )}
+          {rows.map(r => {
+            const reason = reasons[r.id] ?? '';
+            const failed = r.verify_status === 'fail';
+            const name = rowName(r);
+            const isOpen = r.id === ctxId;
+            return (
+              <tbody key={r.id} className={`ev-rowgroup${isOpen ? ' ev-row-current' : ''}`}>
+                <tr onClick={e => onRow(e, r.id)}>
+                  <td>
+                    {bulkEligible(r) && (
+                      <input type="checkbox" aria-label={`Select ${name}`} checked={selected.has(r.id)}
+                        disabled={disabled} onChange={() => toggleIn(setSelected, r.id)} />
+                    )}
+                  </td>
+                  <th scope="row" className="ev-row-head">
+                    <button type="button" className="link-btn" ref={keep(`link:${r.id}`)} aria-expanded={isOpen}
+                      aria-label={`${name}, show cited page`} title="Show the cited page under this record"
+                      onClick={() => (isOpen ? close() : open(r.id))}>
+                      {r.field}{r.group_label ? ` · ${r.group_label}` : ''}
+                    </button>
+                    <div><span className="mono ev-value">{r.value}</span>{r.unit && <span className="ev-dim"> {r.unit}</span>}</div>
+                  </th>
+                  <td>
+                    <div className="ev-src-name">{names.get(r.source_id) ?? r.source_id}</div>
+                    <div className="ev-prov">
+                      p. {r.locator.page} · {r.locator.kind} · {r.extractor === 'llm' ? 'model' : r.extractor === 'table' ? 'rules' : 'manual'}
+                      {' · '}<code>{shaPrefix(r.record_hash, 10)}</code>
+                      {template && r.template_hash !== template.body_hash && ' · earlier template'}
+                    </div>
+                  </td>
+                  <td>
+                    <VerifyBadge rec={r} />
+                    {r.flags.length > 0 && (
+                      <div className="ev-flags">{r.flags.map((f, i) => <FlagChip key={`${f.code}-${i}`} flag={f} />)}</div>
+                    )}
+                  </td>
+                  <td>
+                    <StatusPill status={r.status} />
+                    {r.status !== 'proposed' && (
+                      <div className="ev-prov">
+                        {r.decided_by} · {hhmm(r.decided_at)}
+                        <div className="ev-reason">“{r.decision_reason}”</div>
+                      </div>
+                    )}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 && <tr><td colSpan={6} className="ev-empty">No records match this filter.</td></tr>}
-                {rows.map(r => {
-                  const reason = reasons[r.id] ?? '';
-                  const failed = r.verify_status === 'fail';
-                  return (
-                    <tr key={r.id} className={r.id === ctxId ? 'ev-row-current' : undefined} onClick={e => onRow(e, r.id)}>
-                      <td>
-                        {bulkEligible(r) && (
-                          <input type="checkbox" aria-label={`Select ${rowName(r)}`} checked={selected.has(r.id)}
-                            disabled={disabled} onChange={() => toggle(r.id)} />
+                {isOpen && (
+                  <tr className="ev-context-row">
+                    <td colSpan={COLS}>
+                      <RecordContext sessionId={sessionId} record={r} filename={names.get(r.source_id) ?? r.source_id}
+                        autoFocus onClose={close} />
+                    </td>
+                  </tr>
+                )}
+                {r.status === 'proposed' && (
+                  <tr className="ev-decide-row">
+                    <td />
+                    <td colSpan={COLS - 1}>
+                      <div className="ev-decide">
+                        <input className="ev-input" ref={keep(`reason:${r.id}`)} aria-label={`Reason for ${name}`}
+                          value={reason} maxLength={MAX_REASON} placeholder="Reason (required)" disabled={disabled}
+                          onChange={e => setReasons(prev => ({ ...prev, [r.id]: e.target.value }))} />
+                        {hasConflict(r) && (
+                          <label className="ev-check" title="An approved record already holds a different value for this field and group">
+                            <input type="checkbox" checked={keepBoth.has(r.id)} disabled={disabled}
+                              onChange={() => toggleIn(setKeepBoth, r.id)} /> Keep both values
+                          </label>
                         )}
-                      </td>
-                      <td>
-                        <button type="button" className="link-btn" aria-pressed={r.id === ctxId} onClick={() => setCtxId(r.id)}
-                          title="Show the cited page">
-                          {r.field}{r.group_label ? ` · ${r.group_label}` : ''}
-                        </button>
-                        <div><span className="mono ev-value">{r.value}</span>{r.unit && <span className="ev-dim"> {r.unit}</span>}</div>
-                      </td>
-                      <td>
-                        <div className="ev-src-name">{names.get(r.source_id) ?? r.source_id}</div>
-                        <div className="ev-prov">
-                          p. {r.locator.page} · {r.locator.kind} · {r.extractor === 'llm' ? 'model' : r.extractor === 'table' ? 'rules' : 'manual'}
-                          {' · '}<code>{shaPrefix(r.record_hash, 10)}</code>
-                          {template && r.template_hash !== template.body_hash && ' · earlier template'}
-                        </div>
-                      </td>
-                      <td>
-                        <VerifyBadge rec={r} />
-                        {r.flags.length > 0 && (
-                          <div className="ev-flags">{r.flags.map((f, i) => <FlagChip key={`${f.code}-${i}`} flag={f} />)}</div>
-                        )}
-                      </td>
-                      <td><StatusPill status={r.status} /></td>
-                      <td className="ev-decide-cell">
-                        {r.status === 'proposed' ? (
-                          <div className="ev-decide">
-                            <input className="ev-input" aria-label={`Reason for ${rowName(r)}`} value={reason}
-                              maxLength={MAX_REASON} placeholder="Reason (required)" disabled={disabled}
-                              onChange={e => setReasons(prev => ({ ...prev, [r.id]: e.target.value }))} />
-                            <button type="button" className="btn btn-primary" disabled={disabled || failed || !reason.trim()}
-                              title={failed ? `Cannot approve: ${failWords(r)}. The value was not found on the cited page.`
-                                : reason.trim() ? 'Approve this record' : 'A reason is required'}
-                              onClick={() => one(r.id, 'approve')}>Approve</button>
-                            <button type="button" className="btn btn-red" disabled={disabled || !reason.trim()}
-                              title={reason.trim() ? 'Reject this record' : 'A reason is required'}
-                              onClick={() => one(r.id, 'reject')}>Reject</button>
-                          </div>
-                        ) : (
-                          <div className="ev-prov">
-                            {r.status} by {r.decided_by} · {hhmm(r.decided_at)}
-                            <div className="ev-reason">“{r.decision_reason}”</div>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                        <button type="button" className="btn btn-primary" disabled={disabled || failed || !reason.trim()}
+                          aria-label={`Approve ${name}`}
+                          title={failed ? `Cannot approve: ${failWords(r)}. The value was not found on the cited page.`
+                            : reason.trim() ? 'Approve this record' : 'A reason is required'}
+                          onClick={() => one(r, 'approve')}>Approve</button>
+                        <button type="button" className="btn btn-red" disabled={disabled || !reason.trim()}
+                          aria-label={`Reject ${name}`}
+                          title={reason.trim() ? 'Reject this record' : 'A reason is required'}
+                          onClick={() => one(r, 'reject')}>Reject</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
               </tbody>
-            </table>
-          </div>
-          <aside ref={asideRef} className="ev-context-col" aria-label="Record context">
-            {ctx
-              ? <RecordContext key={ctx.id} sessionId={sessionId} record={ctx} filename={names.get(ctx.source_id) ?? ctx.source_id} />
-              : <p className="ev-empty">Select a record to see its page with the cited snippet marked.</p>}
-          </aside>
-        </div>
+            );
+          })}
+        </table>
       </div>
     </div>
   );

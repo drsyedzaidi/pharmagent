@@ -2,7 +2,9 @@
 invalid). Terms come ONLY from the saved criteria (their keywords, else their text minus
 stopwords), never from the document, so text inside a PDF cannot add a matching term.
 Matches are whole-token (suffix-stripped) against the normalised page text and reported as
-raw-offset locators, exactly like verified quotes.
+raw-offset locators, exactly like verified quotes. Keywords are alternatives (any one meets the
+criterion); text-derived words must mostly co-occur within each 'or'-separated part. Each page is
+normalised and tokenised once per screen, not once per term.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ exclude excludes excluded paper papers article articles publication publications
 """.split())
 _TOKEN_RE = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
 _TERM_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*", re.UNICODE)
+_OR_RE = re.compile(r"\bor\b|;", re.IGNORECASE)
 MAX_SNIPPET, MAX_EVIDENCE_PER_CRITERION, MIN_TERM_LEN = 300, 6, 2
 
 
@@ -70,12 +73,7 @@ def _snippet(text: str, start: int, end: int) -> str:
     return text[max(ls, start - half):min(le, end + half)]
 
 
-def find_term(term: str, text: str) -> list[int] | None:
-    """Raw [start, end) of the first whole-token match of *term* (phrases allowed) in *text*."""
-    want = stem_phrase(term)
-    if not want:
-        return None
-    stems, spans = _tokens(text)
+def _find(want: tuple[str, ...], stems: list[str], spans: list[tuple[int, int]]) -> list[int] | None:
     n = len(want)
     for i in range(len(stems) - n + 1):
         if tuple(stems[i:i + n]) == want:
@@ -83,38 +81,77 @@ def find_term(term: str, text: str) -> list[int] | None:
     return None
 
 
-def _page_hits(term: str, page: dict[str, Any]) -> dict[str, Any] | None:
-    """Locator for *term* on a page: page text first, then each column text (column set)."""
-    text = page.get("text") or ""
-    span = find_term(term, text)
-    if span is not None:
-        return {"page": page["n"], "term": term, "snippet": _snippet(text, *span), "span": span, "column": None}
-    for ci, col in enumerate(page.get("columns") or []):
-        span = find_term(term, col or "")
+def find_term(term: str, text: str) -> list[int] | None:
+    """Raw [start, end) of the first whole-token match of *term* (phrases allowed) in *text*."""
+    want = stem_phrase(term)
+    return _find(want, *_tokens(text)) if want else None
+
+
+Indexed = list[tuple[int, int | None, str, list[str], list[tuple[int, int]]]]   # page, column, text, stems, spans
+
+
+def index_pages(pages: list[dict[str, Any]]) -> Indexed:
+    """Every page text (then each column text) normalised and tokenised ONCE, reused for every term."""
+    out: Indexed = []
+    for page in pages:
+        texts = [(None, page.get("text") or "")] + list(enumerate(page.get("columns") or []))
+        for column, text in texts:
+            out.append((page["n"], column, text or "", *_tokens(text or "")))
+    return out
+
+
+def _term_hit(term: str, indexed: Indexed) -> dict[str, Any] | None:
+    """Locator for the first page (page text before its columns) holding *term*."""
+    want = stem_phrase(term)
+    if not want:
+        return None
+    for page_n, column, text, stems, spans in indexed:
+        span = _find(want, stems, spans)
         if span is not None:
-            return {"page": page["n"], "term": term, "snippet": _snippet(col, *span), "span": span, "column": ci}
+            return {"page": page_n, "term": term, "snippet": _snippet(text, *span), "span": span, "column": column}
     return None
 
 
-def _criterion_evidence(criterion: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for term in criterion_terms(criterion):
-        for page in pages:
-            hit = _page_hits(term, page)
-            if hit is not None:
-                out.append(hit)
-                break                                   # first page per term is enough
-        if len(out) >= MAX_EVIDENCE_PER_CRITERION:
-            break
-    return out
+def criterion_alternatives(criterion: dict[str, Any]) -> tuple[list[list[str]], bool]:
+    """(alternatives, from_keywords). Keywords are alternatives (any one matches). Without keywords the
+    criterion TEXT is split on 'or'; each part's content words must MOSTLY co-occur (a majority), so
+    'human adult PK study' is not met by 'adult' alone, while 'in-vitro or animal' is met by either."""
+    if [k for k in (criterion.get("keywords") or []) if k and k.strip()]:
+        return [[t] for t in criterion_terms(criterion)], True
+    parts = _OR_RE.split(criterion.get("text") or "")
+    alts = [criterion_terms({"text": part}) for part in parts]
+    return [a for a in alts if a], False
+
+
+def needed(n_terms: int) -> int:
+    return n_terms // 2 + 1
+
+
+def _criterion_entry(criterion: dict[str, Any], indexed: Indexed) -> tuple[dict[str, Any], float]:
+    """(entry, credit): credit is the best alternative's share of matched words (1.0 for a keyword)."""
+    alts, from_keywords = criterion_alternatives(criterion)
+    base = {"criterion_id": criterion["id"], "kind": criterion["kind"], "required": bool(criterion.get("required"))}
+    if from_keywords:                                # any keyword meets it; every keyword found is evidence
+        hits = [h for h in (_term_hit(alt[0], indexed) for alt in alts) if h is not None]
+        return {**base, "met": bool(hits), "evidence": hits[:MAX_EVIDENCE_PER_CRITERION], "note": ""}, float(bool(hits))
+    best: tuple[bool, float, list[dict[str, Any]], int, int] = (False, 0.0, [], 0, 0)
+    for alt in alts:
+        hits = [h for h in (_term_hit(t, indexed) for t in alt) if h is not None]
+        cand = (len(hits) >= needed(len(alt)), len(hits) / len(alt), hits, len(hits), len(alt))
+        if cand[:2] > best[:2]:
+            best = cand
+    met, share, hits, k, n = best
+    note = f"{k} of {n} criterion words found (needs {needed(n)})" if n > 1 else ""
+    return {**base, "met": met, "evidence": hits[:MAX_EVIDENCE_PER_CRITERION], "note": note}, share
 
 
 def _describe(entry: dict[str, Any]) -> str:
     cid, met = entry["criterion_id"], entry["met"]
-    if not met:
-        return f"{cid} not met"
     where = ", ".join(f"{ev['term']} (page {ev['page']})" for ev in entry["evidence"])
-    return f"{cid} met — {where}"
+    note = f" [{entry['note']}]" if entry["note"] else ""
+    if not met:
+        return f"{cid} not met" + (f" — only {where}" if where else "") + note
+    return f"{cid} met — {where}{note}"
 
 
 def _verdict(entries: list[dict[str, Any]]) -> tuple[str, float, str]:
@@ -137,12 +174,14 @@ def _verdict(entries: list[dict[str, Any]]) -> tuple[str, float, str]:
 
 def keyword_screen(criteria: list[dict[str, Any]], pages: list[dict[str, Any]]) -> dict[str, Any]:
     """{verdict, score, reasoning, criteria:[{criterion_id, kind, required, met, evidence, note}]}."""
-    entries = []
-    for c in criteria:
-        evidence = _criterion_evidence(c, pages)
-        entries.append({"criterion_id": c["id"], "kind": c["kind"], "required": bool(c.get("required")),
-                        "met": bool(evidence), "evidence": evidence, "note": ""})
+    indexed = index_pages(pages)
+    scored = [_criterion_entry(c, indexed) for c in criteria]
+    entries = [e for e, _ in scored]
     verdict, score, why = _verdict(entries)
-    reasoning = ("Keyword screen (deterministic): " + "; ".join(_describe(e) for e in entries)
+    incl = [credit for e, credit in scored if e["kind"] == "inclusion"]
+    if verdict != "exclude" and incl:                # partial word matches lower the score
+        score = round(min(score, sum(incl) / len(incl)), 4)
+    reasoning = ("Keyword screen (deterministic; keywords are alternatives, a criterion without keywords "
+                 "needs most of its words): " + "; ".join(_describe(e) for e in entries)
                  + f". Verdict {verdict}: {why}.")
     return {"verdict": verdict, "score": score, "reasoning": reasoning, "criteria": entries}

@@ -68,10 +68,12 @@ def test_pass_ascii_hyphen_snippet_against_unicode_minus_page(papers):
     _assert_pass(res, doc, "change from baseline was -20 min", "−20")
 
 
-def test_pass_number_wrapped_over_line_break():
+def test_number_split_by_a_line_break_is_two_numbers():
+    """A line break (or any ASCII space) on the page is a gap, not a thousands separator: '1\\n850'
+    is the numbers 1 and 850, so '1850' is not on the page."""
     doc = _doc("Cmax was 1\n850 ng/mL in all subjects.")
     res = verify(_rec("1850", 1, "Cmax was 1 850 ng/mL"), doc)
-    _assert_pass(res, doc, "Cmax was 1 850 ng/mL", "1\n850")
+    assert res.status == "fail" and res.reason == M.REASON_PARTIAL_NUMBER
 
 
 def test_pass_hyphenated_line_break():

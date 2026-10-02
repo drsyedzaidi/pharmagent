@@ -136,7 +136,8 @@ def test_unicode_minus_and_thin_space_map_onto_the_page(docs):
     doc = docs["paper_b"]
     out = _check(doc, _prop("cmax", "1234", 1, "1 234 ± 312"), _prop("cmax_se", "-20", 1, "−20 ± 8"))
     assert [p["verify_status"] for p in out] == ["pass", "pass"]
-    assert out[0]["locator"]["literal"] == "1 234" and out[1]["locator"]["literal"] == "−20"
+    # the page keeps the PDF's thin space (U+2009) inside the number; the snippet's plain space matches it
+    assert out[0]["locator"]["literal"] == "1\u2009234" and out[1]["locator"]["literal"] == "−20"
     assert _reason(doc, _prop("cmax", "1,234", 1, "1 234 ± 312")) == M.REASON_OK
     assert _reason(doc, _prop("cmax", "1.234", 1, "1 234 ± 312")) == M.REASON_NUMBER_MISMATCH
 

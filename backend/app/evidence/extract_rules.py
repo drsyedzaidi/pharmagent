@@ -247,8 +247,18 @@ def _first_text_hit(doc: dict[str, Any], regex: re.Pattern[str], context: re.Pat
     return None
 
 
+def _merge_text(table_props: list[dict[str, Any]], text_props: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Text-rule proposals that add something: one whose field and number a table cell already holds
+    is dropped (the same study arm must not count twice); when the tables name exactly one group,
+    the text value belongs to it."""
+    held = {(p["field"], p["value_num"]) for p in table_props}
+    groups = {p["group_label"] for p in table_props if p["group_label"]}
+    only = next(iter(groups)) if len(groups) == 1 else ""
+    return [{**p, "group_label": only} for p in text_props if (p["field"], p["value_num"]) not in held]
+
+
 def rule_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str) -> dict[str, Any]:
     """Tables first, then the text rules; the deterministic fallback every keyless run uses."""
     tables = table_extract(doc, template, source_id)
-    return {"proposals": tables["proposals"] + text_extract(doc, template, source_id),
+    return {"proposals": tables["proposals"] + _merge_text(tables["proposals"], text_extract(doc, template, source_id)),
             "unmatched_headers": tables["unmatched_headers"]}

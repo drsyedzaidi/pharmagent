@@ -24,10 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from app.core.provenance import file_sha256
-from app.evidence import ingest, llm_access
+from app.evidence import ingest, llm_access, upload_limits
 from app.evidence.config_tools import source_row
 from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
 from app.evidence.store import get_store, source_id
@@ -90,7 +91,8 @@ def _decisions(body: Any, id_key: str) -> list[dict[str, Any]]:
     items = body.get("decisions") if isinstance(body, dict) and "decisions" in body else [body]
     if not isinstance(items, list) or not items or not all(isinstance(d, dict) for d in items):
         raise HTTPException(400, "body must be a decision object or {decisions: [..]} (non-empty)")
-    return [{k: d.get(k) for k in (id_key, "decision", "reason")} for d in items]
+    keys = (id_key, "decision", "reason") + (("allow_conflict",) if id_key == "record_id" else ())
+    return [{k: d.get(k) for k in keys if k in d or k != "allow_conflict"} for d in items]
 
 
 def _decide_loop(orch: Any, sid: str, actor: str, body: Any, *, tool: str, id_key: str,
@@ -178,6 +180,31 @@ def dataset_file(sid: str, state: Any, filename: str, data_dir: str) -> Path:
     raise HTTPException(404, "evidence dataset not found")
 
 
+def _finish_upload(get_orch: Callable[[], Any], sid: str, data_dir: str, tmp: Path, name: str,
+                   licence_note: str | None, actor: str) -> dict[str, Any]:
+    """sha256 -> dedupe -> validate -> move to evidence/<sha>.pdf -> ingest tool (parse). Blocking."""
+    try:
+        upload_limits.admit_size(sid, tmp.stat().st_size)
+        sha = file_sha256(tmp)
+        existing = get_store().get_source(source_id(sid, sha))
+        if existing is not None:
+            return {"source": source_row(existing), "duplicate": True,
+                    "summary": f"{existing.filename} was already uploaded to this session ({existing.id})."}
+        try:
+            ingest.validate_pdf_file(tmp)
+        except IngestError as exc:
+            raise http_error(exc) from exc
+        dest = ingest.evidence_dir(data_dir) / f"{sha}.pdf"
+        if not dest.exists():
+            os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    args = {"path": str(dest), "sha256": sha, "filename": ingest.sanitise_filename(name),
+            "licence_note": (licence_note or "").strip() or None, "actor": actor}
+    out = run_tool(get_orch(), sid, "ingest_evidence_source", args, actor)
+    return {"source": out["result"]["source"], "duplicate": False, "summary": out["summary"]}
+
+
 def _config_response(sid: str, kind: str, out: dict[str, Any]) -> dict[str, Any]:
     cfg = get_store().get_config(sid, kind) or {}
     return {**cfg, "kind": kind, "summary": out["summary"]}
@@ -192,30 +219,15 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
     @router.post("/upload")
     async def upload_evidence(sid: str, file: UploadFile = File(...), licence_note: str | None = Form(None),
                               sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
-        """Stage -> magic/size -> sha256 -> dedupe -> move to evidence/<sha>.pdf -> ingest tool."""
+        """Admit (caps, rate) -> stage -> magic/size -> [threadpool] sha256 -> dedupe -> move -> ingest tool."""
         name = file.filename or "upload.pdf"
         if Path(name).suffix.lower() != ".pdf":
             raise HTTPException(400, f"unsupported file type: {Path(name).suffix or '(none)'}; PDF only")
+        upload_limits.admit(sid)
         tmp = await _stage_upload(file, sess.ctx.data_dir)
-        try:
-            sha = file_sha256(tmp)
-            existing = get_store().get_source(source_id(sid, sha))
-            if existing is not None:
-                return {"source": source_row(existing), "duplicate": True,
-                        "summary": f"{existing.filename} was already uploaded to this session ({existing.id})."}
-            try:
-                ingest.validate_pdf_file(tmp)
-            except IngestError as exc:
-                raise http_error(exc) from exc
-            dest = ingest.evidence_dir(sess.ctx.data_dir) / f"{sha}.pdf"
-            if not dest.exists():
-                os.replace(tmp, dest)
-        finally:
-            tmp.unlink(missing_ok=True)
-        args = {"path": str(dest), "sha256": sha, "filename": ingest.sanitise_filename(name),
-                "licence_note": (licence_note or "").strip() or None, "actor": actor}
-        out = run_tool(get_orch(), sid, "ingest_evidence_source", args, actor)
-        return {"source": out["result"]["source"], "duplicate": False, "summary": out["summary"]}
+        # hashing, validation and the parse are CPU-bound: run them off the event loop
+        return await run_in_threadpool(_finish_upload, get_orch, sid, sess.ctx.data_dir, tmp, name,
+                                       licence_note, actor)
 
     @router.post("/criteria")
     def save_criteria(sid: str, body: Any = Body(...), sess=Depends(owned_session),

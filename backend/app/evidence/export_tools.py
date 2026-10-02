@@ -1,7 +1,10 @@
 """Evidence agent tool: export_evidence_dataset — the APPROVED records as two CSV files.
 
-Long: one row per approved record with its locator and provenance (record_hash, source sha256).
-Wide: one row per source x group with one column per template field plus <field>_unit.
+Long: one row per approved record with its locator and provenance (record_hash, source sha256);
+'value' is the page's literal, 'value_num' the same number in canonical point-decimal form and
+'decimal_style' the page's convention, so '3,412' (3412) and '18,2' (18.2) cannot be confused.
+Wide: one row per source x group; <field> is the canonical number (text for a text field),
+<field>_literal the page literal and <field>_unit the unit.
 Only status='approved' rows leave the ledger, so every exported number was found literally on
 its cited page by the verifier and then accepted by a human. Row and column order are
 deterministic, so an identical approved set yields byte-identical files (same sha256, same
@@ -10,6 +13,7 @@ dataset id). Cells that start with = + - @ (or tab / CR) get a leading apostroph
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -24,13 +28,13 @@ from app.evidence.models import Dataset, Record, Source
 from app.evidence.store import EvidenceStore, get_store
 from app.tools.base import Tool, ToolContext, ToolResult
 
-__all__ = ["LONG_COLUMNS", "WIDE_FIXED", "csv_cell", "build_long", "build_wide", "write_csv",
+__all__ = ["LONG_COLUMNS", "WIDE_FIXED", "csv_cell", "num_text", "build_long", "build_wide", "write_csv",
            "export_evidence_dataset", "TOOLS"]
 
 AGENT = "evidence"
 LONG_COLUMNS = ("record_id", "source_id", "source_sha256", "filename", "title", "field", "group", "value",
-                "unit", "page", "kind", "snippet", "literal", "extractor", "verify_status", "flags",
-                "record_hash", "decided_by", "decided_at")
+                "value_num", "decimal_style", "unit", "page", "kind", "snippet", "literal", "extractor",
+                "verify_status", "flags", "record_hash", "decided_by", "decided_at")
 WIDE_FIXED = ("source_id", "source_sha256", "filename", "group")
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")   # OWASP CSV-injection leaders
 MULTI_SEP = " | "          # several approved values for one (source, group, field) in the wide file
@@ -42,6 +46,15 @@ def csv_cell(value: Any) -> str:
         return ""
     text = value if isinstance(value, str) else str(value)
     return f"'{text}" if text.startswith(FORMULA_LEADERS) else text
+
+
+def num_text(value: float | None) -> str:
+    """Canonical point-decimal text of a verified number ('3412', '18.2', '-20'); '' when absent.
+    Written without the formula guard: a bare number cannot be a spreadsheet formula."""
+    if value is None or not math.isfinite(float(value)):
+        return ""
+    v = float(value)
+    return str(int(v)) if v.is_integer() and abs(v) < 1e15 else repr(v)
 
 
 def exports_dir(data_dir: str | Path | None) -> Path:
@@ -70,11 +83,12 @@ def build_long(records: list[Record], sources: dict[str, Source]) -> list[dict[s
         row = {"record_id": r.id, "source_id": r.source_id,
                "source_sha256": src.sha256 if src else "", "filename": src.filename if src else "",
                "title": (src.title if src else None) or "", "field": r.field, "group": r.group_label,
-               "value": r.value, "unit": r.unit, "page": loc.get("page"), "kind": loc.get("kind"),
+               "value": r.value, "decimal_style": loc.get("decimal_style") or (src.decimal_style if src else "."),
+               "unit": r.unit, "page": loc.get("page"), "kind": loc.get("kind"),
                "snippet": loc.get("snippet"), "literal": loc.get("literal"), "extractor": r.extractor,
                "verify_status": r.verify_status, "flags": ";".join(f.get("code", "") for f in r.flags),
                "record_hash": r.record_hash, "decided_by": r.decided_by, "decided_at": r.decided_at}
-        rows.append({k: csv_cell(row[k]) for k in LONG_COLUMNS})
+        rows.append({k: num_text(r.value_num) if k == "value_num" else csv_cell(row[k]) for k in LONG_COLUMNS})
     return rows
 
 
@@ -83,7 +97,20 @@ def wide_columns(records: list[Record], template: dict[str, Any] | None) -> tupl
     names = [str(f.get("name")) for f in (template or {}).get("fields") or [] if f.get("name")]
     extra = sorted({r.field for r in records} - set(names))
     fields = list(dict.fromkeys(names + extra))
-    return fields, list(WIDE_FIXED) + [c for n in fields for c in (n, f"{n}_unit")]
+    return fields, list(WIDE_FIXED) + [c for n in fields for c in (n, f"{n}_literal", f"{n}_unit")]
+
+
+def _wide_value(values: list[str]) -> str:
+    """One number stays bare (it cannot be a formula); several are joined and guarded like any text."""
+    return values[0] if len(values) == 1 and values[0] == num_text(_as_float(values[0])) else \
+        csv_cell(MULTI_SEP.join(values))
+
+
+def _as_float(text: str) -> float | None:
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def build_wide(records: list[Record], sources: dict[str, Source],
@@ -94,7 +121,8 @@ def build_wide(records: list[Record], sources: dict[str, Source],
     groups: dict[tuple[str, str], dict[str, list[str]]] = {}
     for r in approved:
         cell = groups.setdefault((r.source_id, r.group_label), {})
-        cell.setdefault(r.field, []).append(r.value)
+        cell.setdefault(r.field, []).append(num_text(r.value_num) if r.value_num is not None else r.value)
+        cell.setdefault(f"{r.field}_literal", []).append(r.value)
         cell.setdefault(f"{r.field}_unit", []).append(r.unit or "")
     rows = []
     for (src_id, group), cells in groups.items():
@@ -102,9 +130,11 @@ def build_wide(records: list[Record], sources: dict[str, Source],
         row = {"source_id": src_id, "source_sha256": src.sha256 if src else "",
                "filename": src.filename if src else "", "group": group}
         for f in fields:
-            row[f] = MULTI_SEP.join(cells.get(f, []))
+            row[f"{f}_literal"] = MULTI_SEP.join(cells.get(f"{f}_literal", []))
             row[f"{f}_unit"] = MULTI_SEP.join(dict.fromkeys(cells.get(f"{f}_unit", [])))
-        rows.append({k: csv_cell(row[k]) for k in columns})
+        out = {k: csv_cell(row[k]) for k in columns if k in row}
+        out.update({f: _wide_value(cells[f]) if cells.get(f) else "" for f in fields})
+        rows.append({k: out[k] for k in columns})
     return rows, columns
 
 
@@ -177,9 +207,10 @@ def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str,
 TOOLS = [
     Tool(name="export_evidence_dataset", agent=AGENT,
          description=("Export the APPROVED evidence records as CSV: a long file (one row per record with its "
-                      "page locator, literal match and record hash) and a wide file (one row per source and "
-                      "group, one column per template field plus unit). Proposed or rejected records are never "
-                      "exported. Requires at least one approved record."),
+                      "page locator, literal, canonical number, decimal style and record hash) and a wide file "
+                      "(one row per source and group: per template field the number, its page literal and its "
+                      "unit). Proposed or rejected records are never exported. Requires at least one approved "
+                      "record."),
          input_schema={"type": "object", "properties": {"actor": {"type": "string"}}},
          run=export_evidence_dataset),
 ]

@@ -103,13 +103,13 @@ def test_wide_one_row_per_source_group_with_every_field_and_unit(env, papers):
     template = env.store.get_config(env.sid, "template")["body"]
     rows, columns = build_wide(approved, sources, template)
     names = [f["name"] for f in template["fields"]]
-    assert columns == list(WIDE_FIXED) + [c for n in names for c in (n, f"{n}_unit")]
+    assert columns == list(WIDE_FIXED) + [c for n in names for c in (n, f"{n}_literal", f"{n}_unit")]
     pairs = {(r.source_id, r.group_label) for r in approved}
     assert len(rows) == len(pairs)
     keys = [(r["filename"], r["source_id"], r["group"]) for r in rows]
     assert keys == sorted(keys)
     a = next(r for r in rows if r["filename"] == "paper_a.pdf" and r["group"] == "150 mg")
-    assert a["cmax"] == "3,412" and a["cmax_unit"] == "ng/mL" and a["n"] == "12"
+    assert a["cmax"] == "3412" and a["cmax_literal"] == "3,412" and a["cmax_unit"] == "ng/mL" and a["n"] == "12"
     assert all(set(r) == set(columns) for r in rows)
     # a field with no approved record is an empty cell, never missing
     assert all(r["species"] == "" for r in rows)
@@ -120,7 +120,8 @@ def test_wide_keeps_fields_outside_the_current_template(env, papers):
     sources = {s.id: s for s in env.store.list_sources(env.sid)}
     rows, columns = build_wide(approved, sources, {"fields": [{"name": "cmax", "type": "number"}]})
     extra = sorted({r.field for r in approved} - {"cmax"})
-    assert columns == list(WIDE_FIXED) + ["cmax", "cmax_unit"] + [c for n in extra for c in (n, f"{n}_unit")]
+    assert columns == list(WIDE_FIXED) + ["cmax", "cmax_literal", "cmax_unit"] + [
+        c for n in extra for c in (n, f"{n}_literal", f"{n}_unit")]
     assert any(r["cmax"] for r in rows)
 
 

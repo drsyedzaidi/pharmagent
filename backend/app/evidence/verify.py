@@ -4,11 +4,16 @@ table cell). Offsets in the returned locator are RAW page-text offsets (raw[star
 
 Check order: empty_snippet, snippet_too_long, page_out_of_range, non_ascii_digits, number
 (no_number / number_mismatch / integer_expected), location (snippet_not_on_page for text,
-table_cell_mismatch for table). A pass sets span, literal and (when used) column.
+table_cell_mismatch for table; partial_number when the snippet is there but its number is only
+part of a longer page number: '2.4' in '12.4', '20' in '-20', '234' in '1,234'). A pass sets span,
+literal (the WHOLE page / cell token) and number (that token's value in the page's decimal style,
+which is what value_num must be), and (when used) column. A table record's span is the cited
+cell's row in the page text, or None when the row cannot be found there.
 """
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from typing import Any
 
 from app.evidence import models as M
@@ -27,6 +32,13 @@ _REL_TOL = 1e-9
 
 def _close(a: float, b: float) -> bool:
     return math.isclose(a, b, rel_tol=_REL_TOL, abs_tol=1e-12)
+
+
+def _occurrences(needle: str, hay: str) -> Iterator[int]:
+    i = hay.find(needle) if needle else -1
+    while i >= 0:
+        yield i
+        i = hay.find(needle, i + 1)
 
 
 def _locate(snippet: str, text: str) -> tuple[int, int, IdxMap] | None:
@@ -51,23 +63,25 @@ def find_snippet_in_page(snippet: str, page_text: str) -> list[int] | None:
 
 def find_number_in_snippet(value: str, snippet: str, decimal_style: str, integer: bool) -> str | None:
     """The literal token in *snippet* equal to *value* (parsed with *decimal_style*), else None."""
-    literal, reason = _number_check(value, snippet, decimal_style, integer)
-    return literal if reason == M.REASON_OK else None
+    span, reason = _number_check(value, snippet, decimal_style, integer)
+    return snippet[span[0]:span[1]] if span is not None and reason == M.REASON_OK else None
 
 
-def _number_check(value: str, snippet: str, decimal_style: str, integer: bool) -> tuple[str | None, str]:
+def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
+                  ) -> tuple[tuple[int, int] | None, str]:
+    """(raw [start, end) of the snippet token equal to *value*, reason)."""
     target = parse_number(value, decimal_style)
     if target is None:
         return None, M.REASON_NO_NUMBER
     # Proposed values usually arrive in canonical point-decimal form ('18.2' for a page that
-    # prints '18,2'); both readings are tried, the page literal is what gets verified.
+    # prints '18,2'); both readings are tried, but the stored number is the PAGE token's value.
     targets = [target] + [t for t in [parse_number(value, ".")] if t is not None and not _close(t, target)]
     if integer and not all(float(t).is_integer() for t in targets[:1]):
         return None, M.REASON_INTEGER_EXPECTED
     spans = number_spans(snippet, decimal_style)
     for start, end, found in spans:
         if any(_close(found, t) for t in targets):
-            return snippet[start:end], M.REASON_OK
+            return (start, end), M.REASON_OK
     vdig = digits_only(value)
     # A fragment is a STRICT sub-run of a token's digits ('24' in '245.6'); equal digits with a
     # different reading ('3.412' vs '3,412') are a separator mismatch, i.e. number_mismatch.
@@ -76,24 +90,54 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool) -
     return None, (M.REASON_NO_NUMBER if not spans or fragment else M.REASON_NUMBER_MISMATCH)
 
 
-def _page_literal(snippet: str, literal: str | None, text: str, start: int, m: IdxMap) -> str | None:
-    """Map the snippet's matched token onto the raw page text (e.g. '-20' in the snippet -> '−20' on the page)."""
-    if literal is None:
-        return None
+def _norm_range(snippet: str, lit: tuple[int, int]) -> tuple[int, int] | None:
+    """Normalised [j, k) of the snippet's raw literal range *lit*."""
+    _, ms = normalise(snippet)
+    idx = [i for i, r in enumerate(ms) if lit[0] <= r < lit[1]]
+    return (idx[0], idx[-1] + 1) if idx else None
+
+
+def _whole_token(text: str, a: int, b: int, style: str) -> tuple[str, float] | None:
+    """(raw literal, value) when text[a:b] is exactly one complete number token (strict spaces)."""
+    for s, e, v in number_spans(text, style, strict=True):
+        if (s, e) == (a, b):
+            return text[s:e], v
+        if s >= b:
+            break
+    return None
+
+
+Hit = tuple[list[int], str | None, float | None]       # raw span, page literal, page value
+
+
+def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str) -> tuple[list[Hit], bool]:
+    """Every occurrence of *snippet* in *text* whose cited number (raw snippet range *lit*) is a WHOLE
+    number token of *text* -- never a run inside '12.4', '-20' or '1,234' -- and whether the snippet
+    occurred at all. Without *lit* (text fields) every occurrence is a hit."""
     ns, _ = normalise(snippet)
-    nl, _ = normalise(literal)
-    j = ns.find(nl)
-    if j < 0 or not nl:
-        return literal
-    return text[m[start + j]:m[start + j + len(nl) - 1] + 1]
+    nt, m = normalise(text)
+    rng = _norm_range(snippet, lit) if lit is not None else None
+    hits: list[Hit] = []
+    seen = False
+    for i in _occurrences(ns, nt):
+        seen = True
+        span = _raw_span(i, len(ns), m)
+        if lit is None:
+            hits.append((span, None, None))
+            continue
+        tok = None if rng is None else _whole_token(text, m[i + rng[0]], m[i + rng[1] - 1] + 1, style)
+        if tok is not None:
+            hits.append((span, tok[0], tok[1]))
+    return hits, seen
 
 
 def _fail(loc: dict[str, Any], reason: str) -> M.VerifyResult:
     return M.VerifyResult("fail", reason, {**loc, "span": None, "literal": None})
 
 
-def _pass(loc: dict[str, Any], span: list[int] | None, literal: str | None) -> M.VerifyResult:
-    return M.VerifyResult("pass", M.REASON_OK, {**loc, "span": span, "literal": literal}, literal, span)
+def _pass(loc: dict[str, Any], span: list[int] | None, literal: str | None,
+          number: float | None = None) -> M.VerifyResult:
+    return M.VerifyResult("pass", M.REASON_OK, {**loc, "span": span, "literal": literal}, literal, span, number)
 
 
 def _candidates(loc: dict[str, Any], page: dict[str, Any]) -> list[tuple[int | None, str]]:
@@ -104,15 +148,16 @@ def _candidates(loc: dict[str, Any], page: dict[str, Any]) -> list[tuple[int | N
     return [(None, page.get("text") or "")] + list(enumerate(columns))
 
 
-def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, literal: str | None) -> M.VerifyResult:
+def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
+                 style: str) -> M.VerifyResult:
+    seen_any = False
     for column, text in _candidates(loc, page):
-        hit = _locate(snippet, text)
-        if hit is None:
-            continue
-        start, length, m = hit
-        return _pass({**loc, "column": column}, _raw_span(start, length, m),
-                     _page_literal(snippet, literal, text, start, m))
-    return _fail(loc, M.REASON_SNIPPET_NOT_ON_PAGE)
+        hits, seen = _hits(snippet, lit, text, style)
+        seen_any = seen_any or seen
+        if hits:
+            span, literal, number = hits[0]
+            return _pass({**loc, "column": column}, span, literal, number)
+    return _fail(loc, M.REASON_PARTIAL_NUMBER if seen_any else M.REASON_SNIPPET_NOT_ON_PAGE)
 
 
 def _cell_text(cell: Any, page: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -132,22 +177,41 @@ def _cell_text(cell: Any, page: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
     return str(rows[r][c] or ""), tables[t]
 
 
-def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, literal: str | None) -> M.VerifyResult:
+def _row_span(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
+              anchors: list[str], row_head: str) -> list[int] | None:
+    """Page-text span of the cited cell: the occurrence whose text line holds the most OTHER cells of
+    the same table row (at least one), a line starting with the row's first cell winning a tie
+    (prose can repeat a row's label and unit); first wins any remaining tie. None (highlight the
+    rendered cell only) when no line holds one -- never the first match elsewhere on the page."""
+    keys = [k for k in (normalise(a)[0] for a in anchors) if k]
+    lead = normalise(row_head)[0]
+    best: tuple[tuple[int, bool], list[int] | None] = ((0, False), None)
+    for span, _, _ in (_hits(snippet, lit, text, style)[0] if keys else []):
+        ls = text.rfind("\n", 0, span[0]) + 1
+        le = text.find("\n", span[1])
+        line = normalise(text[ls:len(text) if le < 0 else le])[0]
+        score = (sum(1 for k in keys if k in line), bool(lead) and line.startswith(lead))
+        if score[0] and score > best[0]:
+            best = (score, span)
+    return best[1]
+
+
+def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
+                  style: str) -> M.VerifyResult:
     found = _cell_text(loc.get("cell"), page)
     if found is None:
         return _fail(loc, M.REASON_TABLE_CELL_MISMATCH)
     cell_text, table = found
-    ns, _ = normalise(snippet)
-    nc, _ = normalise(cell_text)
-    if not ns or ns not in nc or (literal is not None and normalise(literal)[0] not in nc):
-        return _fail(loc, M.REASON_TABLE_CELL_MISMATCH)
+    hits, seen = _hits(snippet, lit, cell_text, style)
+    if not hits:
+        return _fail(loc, M.REASON_PARTIAL_NUMBER if seen and lit is not None else M.REASON_TABLE_CELL_MISMATCH)
+    _, literal, number = hits[0]
     cell = {**loc["cell"], "strategy": table.get("strategy")}
-    text = page.get("text") or ""
-    hit = _locate(snippet, text)
-    if hit is None:                       # cell verified but not locatable in the page text stream
-        return _pass({**loc, "cell": cell}, None, literal)
-    start, length, m = hit
-    return _pass({**loc, "cell": cell}, _raw_span(start, length, m), _page_literal(snippet, literal, text, start, m))
+    r, c = loc["cell"]["row"], loc["cell"]["col"]
+    row = (table.get("rows") or [])[r]
+    anchors = [str(x or "") for i, x in enumerate(row) if i != c]
+    span = _row_span(snippet, lit, page.get("text") or "", style, anchors, str(row[0] or "") if row else "")
+    return _pass({**loc, "cell": cell}, span, literal, number)
 
 
 def verify(record_like: Any, pages_doc: dict[str, Any], *, field_type: str = "number") -> M.VerifyResult:
@@ -168,14 +232,14 @@ def verify(record_like: Any, pages_doc: dict[str, Any], *, field_type: str = "nu
     page = pages[page_n - 1]
     if has_non_ascii_digits(snippet) or has_non_ascii_digits(value):
         return _fail(loc, M.REASON_NON_ASCII_DIGITS)
-    literal: str | None = None
+    lit: tuple[int, int] | None = None
     if field_type != "text":
-        literal, reason = _number_check(value, snippet, style, field_type == "integer")
+        lit, reason = _number_check(value, snippet, style, field_type == "integer")
         if reason != M.REASON_OK:
             return _fail(loc, reason)
     kind = loc.get("kind") or "text"
     if kind == "table":
-        return _verify_table(loc, page, snippet, literal)
+        return _verify_table(loc, page, snippet, lit, style)
     if kind != "text":
         return _fail(loc, M.REASON_SNIPPET_NOT_ON_PAGE)
-    return _verify_text(loc, page, snippet, literal)
+    return _verify_text(loc, page, snippet, lit, style)

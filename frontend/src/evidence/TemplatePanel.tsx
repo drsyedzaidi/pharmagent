@@ -4,7 +4,7 @@ import { hhmm } from '../shell/format';
 import { evidenceExtract, evidenceTemplate } from './api';
 import { blankField, fromFieldDraft, sameBody, shaPrefix, templateProblem, toFieldDraft } from './format';
 import type { FieldDraft } from './format';
-import type { DecimalSetting, FieldType, OnTool, Run, StatusCounts, TemplateConfig } from './types';
+import type { DecimalSetting, ExtractResult, ExtractSourceRow, FieldType, OnTool, Run, StatusCounts, TemplateConfig } from './types';
 
 const TYPES: FieldType[] = ['number', 'integer', 'text'];
 const DECIMALS: { v: DecimalSetting; label: string }[] = [
@@ -26,6 +26,8 @@ export function TemplatePanel({ sessionId, config, included, records, disabled, 
 }) {
   const saved = config ? config.body.fields.map(toFieldDraft) : [];
   const [rows, setRows] = useState<FieldDraft[]>(() => (saved.length ? saved : [blankField()]));
+  /** Per-source outcome of the last extraction run from this tab (unmatched labels, model fallback). */
+  const [lastRun, setLastRun] = useState<ExtractSourceRow[] | null>(null);
   const problem = templateProblem(rows);
   const dirty = !config || !sameBody(rows.map(fromFieldDraft), saved.map(fromFieldDraft));
 
@@ -38,18 +40,22 @@ export function TemplatePanel({ sessionId, config, included, records, disabled, 
   });
   const extract = () => run('Extracting records…', async tick => {
     const env = await evidenceExtract(sessionId, undefined, tick);
+    setLastRun((env.result as ExtractResult).sources ?? []);
     onTool(env, '__EVIDENCE_RECORDS__');
   });
+  const unmatched = [...new Set((lastRun ?? []).flatMap(s => s.unmatched_headers))];
+  const fellBack = (lastRun ?? []).filter(s => s.llm_error);
 
   const why = !config ? 'Save the template first.'
     : dirty ? 'Save or discard your edits first.'
-    : included === 0 ? 'Approve at least one include screening verdict first.' : '';
+    : included === 0 ? 'Include at least one publication on the Screening tab first.' : '';
 
   return (
     <div className="ev-panel">
       <p className="ev-intro">
-        Fields to extract from the included publications. Aliases are the header or row labels a table may use
-        (e.g. Cmax, C<sub>max</sub> as printed). Every proposed value must be found literally on its cited page.
+        Fields to extract from the included publications. Aliases are the header or row labels a table may use,
+        exactly as printed and separated by semicolons (a label may contain a comma, e.g. Cmax,ss). Every proposed
+        value must be found literally on its cited page.
       </p>
       <ol className="ev-rows" aria-label="Extraction template fields">
         {rows.map((r, i) => (
@@ -79,7 +85,7 @@ export function TemplatePanel({ sessionId, config, included, records, disabled, 
               {DECIMALS.map(d => <option key={d.v} value={d.v}>{d.label}</option>)}
             </select>
             <input className="ev-input ev-span-wide" aria-label={`Field ${i + 1} aliases`} value={r.aliases}
-              placeholder="Aliases, comma separated (e.g. Cmax, Peak concentration)" disabled={disabled}
+              placeholder="Aliases, separated by ; (e.g. Cmax; Cmax,ss; Peak concentration)" disabled={disabled}
               onChange={e => edit(i, { aliases: e.target.value })} />
             <input className="ev-input ev-span-all" aria-label={`Field ${i + 1} description`} value={r.description}
               placeholder="Description (optional)" maxLength={500} disabled={disabled}
@@ -118,6 +124,23 @@ export function TemplatePanel({ sessionId, config, included, records, disabled, 
           {' '}Records so far: {records.proposed} proposed · {records.approved} approved · {records.rejected} rejected.
         </span>
       </div>
+      {fellBack.length > 0 && (
+        <p className="ev-problem" role="status">
+          <AlertTriangle size={13} aria-hidden="true" />
+          The model failed on {fellBack.length} publication{fellBack.length === 1 ? '' : 's'}; the keyless table rules
+          were used instead ({fellBack[0].llm_error}).
+        </p>
+      )}
+      {unmatched.length > 0 && (
+        <div className="ev-unmatched">
+          <p className="ev-hint">
+            Table labels the last run did not match to any field. Add the ones you want as aliases, exactly as printed:
+          </p>
+          <ul className="ev-chip-list" aria-label="Unmatched table labels">
+            {unmatched.map(h => <li key={h}><code>{h}</code></li>)}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

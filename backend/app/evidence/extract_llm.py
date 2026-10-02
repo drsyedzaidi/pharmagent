@@ -98,9 +98,17 @@ def _to_proposal(rec: dict[str, Any], index: dict[str, dict[str, Any]], doc: dic
             "extractor": "llm"}
 
 
-def llm_extract(llm: Any, template: dict[str, Any], source: Source,
-                doc: dict[str, Any]) -> tuple[list[dict[str, Any]], int] | None:
-    """(proposals, n_dropped) — or None when any page answer is invalid or the client fails."""
+def _failure(llm: Any, page_n: Any, invalid: bool) -> str:
+    if invalid:
+        return f"page {page_n}: the model's answer did not match the extraction schema"
+    why = getattr(llm, "last_error", None) or "no usable answer"
+    return f"page {page_n}: model call failed ({why})"
+
+
+def llm_extract(llm: Any, template: dict[str, Any], source: Source, doc: dict[str, Any]) -> dict[str, Any]:
+    """{proposals, dropped, error}: error is '' on success, else why the model's pass was abandoned
+    (the first failing page: timeout / transport failure / invalid answer); the caller then falls
+    back to the deterministic rules for the whole source and reports this text."""
     index = field_index(template)
     fields = _field_block(template)
     pages = doc.get("pages") or []
@@ -117,17 +125,17 @@ def llm_extract(llm: Any, template: dict[str, Any], source: Source,
             raw = llm.extract_json(EVIDENCE_SYSTEM, user, EXTRACT_SCHEMA)
         except Exception as exc:                    # a transport failure is a fallback, not a 500
             log.warning("evidence: llm extraction failed for %s page %s: %s", source.id, page.get("n"), exc)
-            return None
+            return {"proposals": [], "dropped": 0, "error": f"page {page.get('n')}: model call failed ({exc})"[:300]}
         answer = validate(EXTRACT_SCHEMA, raw) if isinstance(raw, dict) else None
         if answer is None:
-            return None
+            return {"proposals": [], "dropped": 0, "error": _failure(llm, page.get("n"), raw is not None)[:300]}
         for rec in answer["records"]:
             p = _to_proposal(rec, index, doc, source.id)
             if p is None:
                 dropped += 1
             else:
                 out.append(p)
-    return out, dropped
+    return {"proposals": out, "dropped": dropped, "error": ""}
 
 
 def _flag_rows(proposals: list[dict[str, Any]]) -> str:

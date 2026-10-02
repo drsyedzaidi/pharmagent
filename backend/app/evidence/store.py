@@ -22,6 +22,7 @@ from app.evidence.models import (
     Screen,
     Source,
     body_hash,
+    derived_verdict,
     now_iso,
     sha256_text,
 )
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS evidence_screen (
     method TEXT NOT NULL CHECK(method IN ('llm','keyword')),
     status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','approved','rejected')),
     decided_by TEXT, decided_at TEXT, decision_reason TEXT, created_at TEXT NOT NULL,
+    decided_verdict TEXT CHECK(decided_verdict IN ('include','exclude')),
     UNIQUE(source_id, criteria_hash));
 CREATE INDEX IF NOT EXISTS ix_evscr_session ON evidence_screen(session_id, status);
 CREATE TABLE IF NOT EXISTS evidence_record (
@@ -116,6 +118,10 @@ class EvidenceStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(evidence_screen)")}
+            if "decided_verdict" not in cols:          # ledgers created before the reviewer's inclusion
+                self._conn.execute("ALTER TABLE evidence_screen ADD COLUMN decided_verdict TEXT "
+                                   "CHECK(decided_verdict IN ('include','exclude'))")
             self._conn.commit()
 
     # ------------------------------------------------------------ sources --
@@ -204,12 +210,17 @@ class EvidenceStore:
             rows = self._conn.execute(sql + " ORDER BY created_at, id", args).fetchall()
         return [_load(Screen, r) for r in rows]
 
-    def decide_screen(self, sid: str, decision: str, decided_by: str, reason: str) -> Screen:
+    def decide_screen(self, sid: str, decision: str, decided_by: str, reason: str,
+                      decided_verdict: str | None = None) -> Screen:
+        """*decided_verdict* is the reviewer's inclusion; omitted, approve / reject of the proposal implies it."""
         _check_decision(decision)
+        if decided_verdict is None:
+            decided_verdict = derived_verdict(self._screen(sid).verdict, decision)
         with self._lock:
             cur = self._conn.execute(
-                "UPDATE evidence_screen SET status=?, decided_by=?, decided_at=?, decision_reason=? "
-                "WHERE id=? AND status='proposed'", (decision, decided_by, now_iso(), reason, sid))
+                "UPDATE evidence_screen SET status=?, decided_by=?, decided_at=?, decision_reason=?, "
+                "decided_verdict=? WHERE id=? AND status='proposed'",
+                (decision, decided_by, now_iso(), reason, decided_verdict, sid))
             self._conn.commit()
         if cur.rowcount == 0:
             raise EvidenceStateError(f"screen {sid} already decided or unknown")

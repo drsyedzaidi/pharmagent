@@ -29,6 +29,7 @@ _POINT_DECIMAL = re.compile(r"\d\.\d+")
 _POINT_THOUSANDS = re.compile(r"\b\d{1,3}(?:\.\d{3})+,\d+")
 _DIGITS_ONLY = re.compile(r"[^0-9]")
 _WORD_RE = re.compile(r"\w", re.ASCII)
+_ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v"})   # 1:1, matches no NUM_RE separator
 
 
 def fold_chars(text: str) -> str:
@@ -71,9 +72,14 @@ def _to_float(token: str, decimal_style: str) -> float | None:
         return None
 
 
-def number_spans(text: str, decimal_style: str = ".") -> list[tuple[int, int, float]]:
-    """(start, end, value) for every ASCII number token in *text* (offsets into *text*)."""
-    folded = fold_chars(text)
+def number_spans(text: str, decimal_style: str = ".", *, strict: bool = False) -> list[tuple[int, int, float]]:
+    """(start, end, value) for every ASCII number token in *text* (offsets into *text*).
+
+    *strict* is for raw page / cell text: an ASCII space, tab or line break is a word or column
+    gap and never a thousands separator ('12 145' is two numbers); only a thin / no-break space
+    (U+2009, U+202F, U+00A0, ...) groups digits. Lenient mode (snippets, proposed values, which a
+    model writes with plain spaces) accepts a single ASCII space too."""
+    folded = fold_chars(text.translate(_ASCII_GAPS) if strict else text)
     out: list[tuple[int, int, float]] = []
     last_end = -1
     for m in NUM_RE.finditer(folded):

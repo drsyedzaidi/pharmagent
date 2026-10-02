@@ -4,6 +4,7 @@ proof, decide_screening. Tools are called directly with a ToolContext on a tmp d
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -387,8 +388,8 @@ def test_llm_document_is_title_plus_first_two_pages_capped(env, papers):
 # ----------------------------------------------------------------- decide ---
 
 def _decide(env, state, screen_id, decision="approve", reason="looks right", actor="alice", confirm=True):
-    args = {"screen_id": screen_id, "decision": decision, "reason": reason, "actor": actor, "confirm": confirm}
-    res = screen_tools.decide_screening(state, env.ctx, args)
+    args = {"screen_id": screen_id, "decision": decision, "reason": reason, "confirm": confirm}
+    res = screen_tools.decide_screening(state, replace(env.ctx, actor=actor), args)   # as the registry does
     return res, apply_writes(state, "evidence", res.writes)
 
 
@@ -400,7 +401,8 @@ def test_decide_approve_and_reject_update_mirrors(env, papers):
     out, state = _decide(env, state, rows["paper_a"]["id"])
     assert out.result["screen"]["status"] == "approved" and out.result["screen"]["decided_by"] == "alice"
     assert out.result["screen"]["decision_reason"] == "looks right"
-    assert out.action == f"decide_screening({rows['paper_a']['id']}, approved)"
+    assert out.action == f"decide_screening({rows['paper_a']['id']}, include, approved)"
+    assert out.result["screen"]["decided_verdict"] == "include"
     out, state = _decide(env, state, rows["paper_c"]["id"], decision="reject", reason="in vitro")
     assert out.result["screen"]["status"] == "rejected"
     sr = state.screening_results
@@ -451,5 +453,6 @@ def test_tools_are_registered_for_the_evidence_agent():
     from app.tools.builtins import default_registry
     reg = default_registry()
     names = {t.name for t in reg.for_agent("evidence")}
-    assert {"screen_publications", "decide_screening"} <= names
+    assert "screen_publications" in names and "decide_screening" not in names     # human-only
+    assert reg.get("decide_screening").human_only and reg.get("decide_screening").agent == "evidence"
     assert reg.get("screen_publications").expensive is False

@@ -21,7 +21,7 @@ export function DatasetPanel({ sessionId, summary, counts, datasets, disabled, r
   const stats: { label: string; value: number }[] = [
     { label: 'publications', value: summary?.sources ?? counts.sources },
     { label: 'parsed', value: summary?.parsed ?? 0 },
-    { label: 'verdicts approved', value: counts.screens.approved },
+    { label: 'screening decisions', value: counts.screens.approved + counts.screens.rejected },
     { label: 'records approved', value: approved },
     { label: 'records awaiting you', value: counts.records.proposed },
     { label: 'exports', value: counts.datasets },

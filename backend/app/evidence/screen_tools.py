@@ -19,7 +19,7 @@ from app.core.pharmstate import PharmState
 from app.evidence import ingest
 from app.evidence.config_tools import summarise
 from app.evidence.llm_access import current_llm, llm_available
-from app.evidence.models import DECISIONS, Screen, Source, now_iso
+from app.evidence.models import Screen, Source, derived_verdict, effective_verdict, now_iso
 from app.evidence.prompts import EVIDENCE_SYSTEM, SCREEN_SCHEMA, validate, wrap_document
 from app.evidence.screen_rules import keyword_screen
 from app.evidence.store import EvidenceStore, get_store
@@ -33,6 +33,8 @@ MAX_DOC_CHARS, PAGES_FOR_LLM, MAX_REASON = 6000, 2, 500
 NOTE_LLM_INVALID, NOTE_QUOTE_NOT_FOUND, NOTE_NO_QUOTE, NOTE_NOT_ASSESSED = (
     "llm_invalid", "quote not found", "no quote", "not assessed")
 _DECISION_STATUS = {"approve": "approved", "reject": "rejected"}
+VERDICT_DECISIONS = ("include", "exclude")       # the reviewer's inclusion, stored as decided_verdict
+_DECISIONS_IN = (*VERDICT_DECISIONS, *_DECISION_STATUS)
 _TASK = (
     "Screen the document above against each criterion below. For every criterion return "
     "criterion_id, met (true / false / null when the document does not say), and when met is "
@@ -129,11 +131,14 @@ def screening_results(store: EvidenceStore, sid: str, criteria_hash: str, method
     """PharmState mirror for the screens of one criteria version (counts only)."""
     rows = [s for s in store.list_screens(sid) if s.criteria_hash == criteria_hash]
     status, verdicts = Counter(s.status for s in rows), Counter(s.verdict for s in rows)
+    inclusion = Counter(effective_verdict(s) for s in rows)
     methods = {s.method for s in rows}
     return {"criteria_hash": criteria_hash, "n_screened": len(rows),
             "verdicts": {v: verdicts.get(v, 0) for v in ("include", "exclude", "unsure")},
             "proposed": status.get("proposed", 0), "approved": status.get("approved", 0),
             "rejected": status.get("rejected", 0),
+            "included": inclusion.get("include", 0), "excluded": inclusion.get("exclude", 0),
+            "undecided": inclusion.get(None, 0),
             "method": method or (methods.pop() if len(methods) == 1 else "mixed" if methods else "keyword"),
             "updated_at": now_iso()}
 
@@ -200,22 +205,28 @@ def decide_screening(state: PharmState, ctx: ToolContext, args: dict[str, Any]) 
     store, sid = get_store(), state.session_id
     if args.get("confirm") is not True:
         raise ValueError("'confirm' must be true: a screening decision is the reviewer's, never the model's")
-    status = _DECISION_STATUS.get(args.get("decision"))
-    if status not in DECISIONS:
-        raise ValueError("'decision' must be 'approve' or 'reject'")
+    decision = args.get("decision")
+    if decision not in _DECISIONS_IN:
+        raise ValueError("'decision' must be 'include' or 'exclude' (or 'approve' / 'reject' of the proposed verdict)")
     reason = args.get("reason")
     if not isinstance(reason, str) or not (1 <= len(reason.strip()) <= MAX_REASON):
         raise ValueError(f"'reason' is required (1..{MAX_REASON} characters)")
-    actor = args.get("actor") if isinstance(args.get("actor"), str) and args.get("actor") else "anonymous"
+    actor = ctx.actor or "anonymous"               # the authenticated caller; args['actor'] is ignored
     scr = _owned_screen(store, sid, args.get("screen_id"))
-    decided = store.decide_screen(scr.id, status, actor, reason.strip())   # EvidenceStateError if decided
+    inclusion = decision if decision in VERDICT_DECISIONS else derived_verdict(scr.verdict, _DECISION_STATUS[decision])
+    if inclusion is None:
+        raise ValueError(f"an {scr.verdict!r} verdict cannot be approved or rejected; decide include or exclude")
+    status = "approved" if inclusion == scr.verdict else "rejected"
+    decided = store.decide_screen(scr.id, status, actor, reason.strip(), inclusion)   # EvidenceStateError if decided
     cfg = store.get_config(sid, "criteria")
     results = screening_results(store, sid, cfg["body_hash"] if cfg else decided.criteria_hash)
+    how = "agrees with" if status == "approved" else "overrides"
     return ToolResult(
-        summary=f"Screening verdict {decided.id} ({decided.verdict}) {status} by {actor}: {reason.strip()}",
+        summary=(f"Screening {decided.id}: {inclusion} by {actor} ({how} the proposed {decided.verdict} verdict): "
+                 f"{reason.strip()}"),
         writes={"screening_results": results, "evidence_summary": summarise(store, sid)},
         result={"screen": asdict(decided)},
-        action=f"decide_screening({decided.id}, {status})")
+        action=f"decide_screening({decided.id}, {inclusion}, {status})")
 
 
 TOOLS = [
@@ -228,14 +239,16 @@ TOOLS = [
                        "properties": {"source_ids": {"type": "array", "items": {"type": "string"}},
                                       "actor": {"type": "string"}}},
          run=screen_publications),
-    Tool(name="decide_screening", agent=AGENT,
-         description=("Record the reviewer's decision on one proposed screening verdict (approve or "
-                      "reject, with a reason). Human-only: requires confirm=true from the workspace."),
+    Tool(name="decide_screening", agent=AGENT, human_only=True,
+         description=("Record the reviewer's inclusion decision for one screened publication (include or "
+                      "exclude, with a reason; approve / reject of the proposed verdict is accepted too). "
+                      "Human-only: never offered to a model; runs only from the workspace's authenticated "
+                      "route, which records the signed-in reviewer."),
          input_schema={"type": "object",
                        "properties": {"screen_id": {"type": "string"},
-                                      "decision": {"type": "string", "enum": ["approve", "reject"]},
-                                      "reason": {"type": "string"}, "actor": {"type": "string"},
-                                      "confirm": {"type": "boolean"}},
+                                      "decision": {"type": "string",
+                                                   "enum": ["include", "exclude", "approve", "reject"]},
+                                      "reason": {"type": "string"}, "confirm": {"type": "boolean"}},
                        "required": ["screen_id", "decision", "reason", "confirm"]},
          run=decide_screening),
 ]

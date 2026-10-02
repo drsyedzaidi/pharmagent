@@ -1,6 +1,7 @@
 /** Transcript result cards for the evidence tools. They render counts from the PharmState
  *  mirrors only (screening_results, extraction_results, evidence_summary,
  *  evidence_dataset_path); the rows themselves live in the Evidence workspace. */
+import { AlertTriangle } from 'lucide-react';
 import { hhmm } from '../shell/format';
 import { shaPrefix } from './format';
 import type { EvidenceSummary, ExtractionResults, ScreeningResults } from './types';
@@ -30,12 +31,12 @@ export function EvidenceScreenCard({ r, onOpen }: { r: ScreeningResults; onOpen?
         { label: 'exclude', value: r.verdicts.exclude },
         { label: 'unsure', value: r.verdicts.unsure },
         { label: 'awaiting you', value: r.proposed },
-        { label: 'approved', value: r.approved },
-        { label: 'rejected', value: r.rejected },
+        { label: 'included', value: r.included ?? 0 },
+        { label: 'excluded', value: r.excluded ?? 0 },
       ]} />
       <p className="ev-prov">
         Proposed verdicts · {methodWord(r.method)} · criteria <code>{shaPrefix(r.criteria_hash)}</code> · {hhmm(r.updated_at)}
-        {r.proposed > 0 && ' · each verdict needs your decision before extraction reads the paper'}
+        {r.proposed > 0 && ' · you decide inclusion for each paper before extraction reads it'}
       </p>
       <Open onOpen={onOpen} label="Review verdicts in the Evidence workspace" />
     </div>
@@ -57,6 +58,13 @@ export function EvidenceRecordsCard({ r, onOpen }: { r: ExtractionResults; onOpe
         Proposed records · {methodWord(r.method)} · template <code>{shaPrefix(r.template_hash)}</code> · {hhmm(r.updated_at)}
         {r.verify_fail > 0 && ' · records that failed literal verification cannot be approved'}
       </p>
+      {(r.llm_fallback ?? []).length > 0 && (
+        <p className="ev-problem">
+          <AlertTriangle size={13} aria-hidden="true" />
+          The model failed on {r.llm_fallback.length} publication{r.llm_fallback.length === 1 ? '' : 's'}; keyless table
+          rules were used instead ({r.llm_fallback[0].error}).
+        </p>
+      )}
       <Open onOpen={onOpen} label="Review records in the Evidence workspace" />
     </div>
   );

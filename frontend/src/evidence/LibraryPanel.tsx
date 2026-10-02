@@ -134,7 +134,7 @@ export function LibraryPanel({ sessionId, sources, disabled, onUploaded }: {
           <tbody>
             {sources.map(s => (
               <tr key={s.id}>
-                <td>
+                <th scope="row" className="ev-row-head">
                   <div className="ev-src-name">{s.filename}</div>
                   {s.title && <div className="ev-src-title">{s.title}</div>}
                   <div className="ev-prov">
@@ -142,7 +142,7 @@ export function LibraryPanel({ sessionId, sources, disabled, onUploaded }: {
                     {s.decimal_style === ',' && ' · decimal comma'}
                     {s.licence_note && <> · licence: {s.licence_note}</>}
                   </div>
-                </td>
+                </th>
                 <td className="num">{s.pages}</td>
                 <td><span className="id-chip" title={s.sha256}>{shaPrefix(s.sha256)}</span></td>
                 <td><ParsePill status={s.parse_status} /></td>

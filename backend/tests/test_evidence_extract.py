@@ -5,6 +5,7 @@ directly with a ToolContext on a tmp data_dir and a ':memory:' ledger; no HTTP.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -193,8 +194,8 @@ def test_paper_b_unicode_cells_and_unit_column(env, papers):
     _extract(env)
     src = sources["paper_b"]
     cmax = _one(env, src, "cmax")
-    assert cmax.value == "1 234" and cmax.value_num == 1234 and cmax.unit == "ng/mL"
-    assert cmax.locator["snippet"] == "1 234 ± 312" and cmax.locator["literal"] == "1 234"
+    assert cmax.value == "1\u2009234" and cmax.value_num == 1234 and cmax.unit == "ng/mL"   # thin space kept
+    assert cmax.locator["snippet"] == "1\u2009234 ± 312" and cmax.locator["literal"] == "1\u2009234"
     assert cmax.group_label == "" and M.FLAG_COMPOSITE_CELL in _codes(cmax)
     auc = _one(env, src, "auc")
     assert auc.value_num == 18900 and auc.unit == "ng h/mL"
@@ -229,13 +230,14 @@ def test_text_rules_find_n_and_dose(env, papers):
     _template(env)
     _extract(env)
     a, d = sources["paper_a"], sources["paper_d"]
-    n_txt = _one(env, a, "n", "")
-    assert n_txt.value_num == 12 and n_txt.locator["kind"] == "text" and "n = 12" in n_txt.locator["snippet"]
-    dose = _one(env, a, "dose", "")
-    assert dose.value == "150" and dose.value_num == 150 and dose.unit == "mg"
-    assert "150 mg" in dose.locator["snippet"] and dose.locator["literal"] == "150"
+    # paper_a's 'n = 12' and '150 mg ... dose' are already table cells: the text rules add no second row
+    n_a = _one(env, a, "n")
+    assert n_a.value_num == 12 and n_a.locator["kind"] == "table" and n_a.group_label == "150 mg"
+    dose = _one(env, a, "dose")
+    assert dose.value_num == 150 and dose.locator["kind"] == "table"
     n_d = _one(env, d, "n")
-    assert n_d.value_num == 10 and _records(env, d, "dose") == []
+    assert n_d.value_num == 10 and n_d.locator["kind"] == "text" and "n = 10" in n_d.locator["snippet"]
+    assert _records(env, d, "dose") == []
 
 
 def test_every_rule_record_verifies_with_raw_span_round_trip(env, papers):
@@ -515,8 +517,8 @@ def test_verify_records_keeps_llm_flags_and_skips_decided_rows(env, papers):
 def _decide(env, record_id, decision="approve", reason="matches the table", actor="alice", confirm=True,
             state=None):
     state = state or PharmState(session_id=env.sid)
-    args = {"record_id": record_id, "decision": decision, "reason": reason, "actor": actor, "confirm": confirm}
-    res = extract_tools.decide_records(state, env.ctx, args)
+    args = {"record_id": record_id, "decision": decision, "reason": reason, "confirm": confirm}
+    res = extract_tools.decide_records(state, replace(env.ctx, actor=actor), args)   # as the registry does
     return res, apply_writes(state, "evidence", res.writes)
 
 
@@ -581,5 +583,6 @@ def test_tools_are_registered_for_the_evidence_agent():
     from app.tools.builtins import default_registry
     reg = default_registry()
     names = {t.name: t.agent for t in reg.for_agent("evidence")}
-    assert {"extract_evidence", "verify_records", "decide_records"} <= set(names)
+    assert {"extract_evidence", "verify_records"} <= set(names) and "decide_records" not in names
+    assert reg.get("decide_records").human_only and reg.get("decide_records").agent == "evidence"
     assert set(names.values()) == {"evidence"}

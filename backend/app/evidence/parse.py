@@ -17,6 +17,16 @@ from typing import Any
 import pdfplumber
 
 from app.evidence.normalize import infer_decimal_style
+from app.evidence.parse_guard import (
+    Deadline,
+    check_page_box,
+    check_streams,
+    lay_out_visible,
+    protect_thin_spaces,
+    restore,
+    tables_affordable,
+    visibility_filter,
+)
 
 PARSER_NAME = f"pdfplumber {pdfplumber.__version__}"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
@@ -77,30 +87,53 @@ def _lines(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return lines
 
 
+def _line_cover(lines: list[dict[str, Any]], n: int) -> list[tuple[int, int]]:
+    """Coverage change points: +1 / -1 at the integer x where each line's merged word cover starts / ends."""
+    events: Counter[int] = Counter()
+    for ln in lines:
+        spans = sorted((max(0, int(w["x0"])), min(n, int(w["x1"]) + 2)) for w in ln["words"])
+        cur: list[int] | None = None
+        for a, b in spans + [(n + 1, n + 1)]:
+            if cur is not None and a <= cur[1]:
+                cur[1] = max(cur[1], b)
+                continue
+            if cur is not None and cur[0] < cur[1]:
+                events[cur[0]] += 1
+                events[cur[1]] -= 1
+            cur = [a, b]
+    return sorted(events.items())
+
+
+def _widest_gap(lines: list[dict[str, Any]], width: float, allowed: int) -> tuple[int, int, int]:
+    """(length, first x, last x) of the first longest run of integer x in [25%, 75%] of the width
+    covered by <= *allowed* lines (interval sweep: no per-x allocation, whatever the page width)."""
+    n = int(width) + 1
+    lo, hi = int(0.25 * width), int(0.75 * width)
+    best, run_start, cov, x = (0, 0, 0), None, 0, lo
+    points = _line_cover(lines, n)
+    cov = sum(d for p, d in points if p <= lo)
+    for p, d in [(p, d) for p, d in points if p > lo] + [(hi + 1, 0)]:
+        seg_end = min(p, hi + 1) - 1                 # coverage is `cov` on [x, seg_end]
+        if seg_end >= x:
+            if cov <= allowed:
+                run_start = x if run_start is None else run_start
+                if seg_end - run_start > best[0]:
+                    best = (seg_end - run_start, run_start, seg_end)
+            else:
+                run_start = None
+            x = seg_end + 1
+        if p > hi:
+            break
+        cov += d
+    return best
+
+
 def _columns(words: list[dict[str, Any]], lines: list[dict[str, Any]], width: float) -> list[str] | None:
     """Two columns when a vertical band >= 8% of the page width is empty on nearly every line."""
     if len(words) < COLUMN_MIN_WORDS or not lines:
         return None
-    n = int(width) + 1
-    coverage = [0] * n                       # how many text lines cover each x position
-    for ln in lines:
-        hit = [False] * n
-        for w in ln["words"]:
-            for x in range(max(0, int(w["x0"])), min(n, int(w["x1"]) + 2)):
-                hit[x] = True
-        for x, h in enumerate(hit):
-            coverage[x] += h
     allowed = max(2, int(COLUMN_LINE_CROSSING * len(lines)))
-    lo, hi = int(0.25 * width), int(0.75 * width)
-    best, run_start = (0, 0, 0), None
-    for x in range(lo, hi + 1):
-        if coverage[x] <= allowed:
-            run_start = x if run_start is None else run_start
-            if x - run_start > best[0]:
-                best = (x - run_start, run_start, x)
-        else:
-            run_start = None
-    length, gap0, gap1 = best
+    length, gap0, gap1 = _widest_gap(lines, width, allowed)
     if length < COLUMN_GAP_FRACTION * width:
         return None
     left_lines, right_lines, split, n_left, n_right = [], [], 0, 0, 0
@@ -133,7 +166,9 @@ def _caption_above(lines: list[dict[str, Any]], top: float) -> str | None:
 
 
 def _lines_tables(body, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out = []
+    out: list[dict[str, Any]] = []
+    if not tables_affordable(body):          # dense ruling grid: cell finding would explode
+        return out
     for i, t in enumerate(body.find_tables()):
         rows = [[_clean_cell(c) for c in row] for row in t.extract()]
         rows = [r for r in rows if any(r)]
@@ -202,22 +237,32 @@ def _tables(body, lines: list[dict[str, Any]], modal: float) -> list[dict[str, A
 
 
 def _parse_page(page) -> dict[str, Any]:
-    chars = page.chars
+    check_page_box(page)
+    hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
+    visible, dropped = visibility_filter(page)   # white-on-white and off-page glyphs
+    protect_thin_spaces(page)
+    chars = [c for c in page.chars if visible(c)]
     modal = _modal_size(chars)
     threshold = BODY_SIZE_RATIO * modal
-    body = page.filter(lambda o: o.get("object_type") != "char" or float(o.get("size") or 0) >= threshold)
-    small = page.filter(lambda o: o.get("object_type") == "char" and float(o.get("size") or 0) < threshold)
+
+    def is_body(o: dict[str, Any]) -> bool:
+        return o.get("object_type") != "char" or (visible(o) and float(o.get("size") or 0) >= threshold)
+
+    body = page.filter(is_body)
+    small = page.filter(lambda o: o.get("object_type") == "char" and visible(o)
+                        and float(o.get("size") or 0) < threshold)
     text = body.extract_text() or ""
     small_text = (small.extract_text() or "") if len(small.chars) else ""
     words = body.extract_words()
     lines = _lines(words)
-    return {
+    return restore({
         "n": page.page_number,
         "text": text,
         "small_text": small_text,
         "columns": _columns(words, lines, float(page.width)),
         "tables": _tables(body, lines, modal),
-    }
+        "hidden_chars": hidden + dropped,
+    })
 
 
 def parse_pdf(path: str | Path) -> dict[str, Any]:
@@ -226,9 +271,15 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(str(path))
     sha = file_sha256(path)
+    deadline = Deadline()
     with pdfplumber.open(str(path)) as pdf:
+        check_streams(pdf.doc)
         metadata = _metadata(pdf.metadata)
-        pages = [_parse_page(pg) for pg in pdf.pages]
+        pages = []
+        for pg in pdf.pages:
+            deadline.check(pg.page_number)
+            pages.append(_parse_page(pg))
+            pg.close()                           # drop the page's cached layout before the next one
     full_text = "\n".join(p["text"] for p in pages)
     return {
         "sha256": sha,

@@ -106,10 +106,12 @@ def test_keyless_pipeline_end_to_end(client, papers):
         "paper_a": "include", "paper_b": "include", "paper_c": "exclude", "paper_d": "include"}
     assert all(v["status"] == "proposed" and v["method"] == "keyword" for v in verdicts.values())
     decided = _decide_screens(client, sid, [
-        {"screen_id": verdicts[n]["id"], "decision": "approve" if n != "paper_c" else "reject",
+        {"screen_id": verdicts[n]["id"], "decision": "include" if n != "paper_c" else "exclude",
          "reason": f"reviewed {n}"} for n in PAPERS])
-    assert [d["status"] for d in decided["decided"]] == ["approved", "approved", "rejected", "approved"]
-    assert decided["screening_results"]["proposed"] == 0 and decided["screening_results"]["approved"] == 3
+    assert [d["status"] for d in decided["decided"]] == ["approved"] * 4      # every decision agrees
+    assert [d["decided_verdict"] for d in decided["decided"]] == ["include", "include", "exclude", "include"]
+    sr = decided["screening_results"]
+    assert sr["proposed"] == 0 and (sr["included"], sr["excluded"], sr["undecided"]) == (3, 1, 0)
 
     tmpl = _ok(client.post(EV.format(sid=sid) + "/template", json=TEMPLATE))
     assert [f["name"] for f in tmpl["body"]["fields"]] == [f["name"] for f in TEMPLATE["fields"]]
@@ -119,7 +121,7 @@ def test_keyless_pipeline_end_to_end(client, papers):
     assert out["method"] == "table" and out["n_new"] == out["n_candidates"] >= 8
     assert {r["source_id"] for r in out["sources"]} == {sources[n]["id"] for n in ("paper_a", "paper_b", "paper_d")}
     assert [s["source_id"] for s in out["skipped"]] == [sources["paper_c"]["id"]]
-    assert "rejected" in out["skipped"][0]["reason"]
+    assert "exclude" in out["skipped"][0]["reason"]
     records = _snapshot(client, sid)["records"]
     assert len(records) == out["n_new"] and all(r["status"] == "proposed" for r in records)
     assert not any(r["source_id"] == sources["paper_c"]["id"] for r in records)
@@ -165,7 +167,7 @@ def test_keyless_pipeline_end_to_end(client, papers):
     assert Path(state["evidence_dataset_path"]).name == Path(ds["long_path"]).name
     assert state["evidence_summary"]["datasets"] == 1 and state["evidence_summary"]["records"]["approved"] == n_pass
     snap = _snapshot(client, sid)
-    assert snap["counts"] == {"sources": 4, "screens": {"proposed": 0, "approved": 3, "rejected": 1},
+    assert snap["counts"] == {"sources": 4, "screens": {"proposed": 0, "approved": 4, "rejected": 0},
                               "records": {"proposed": 0, "approved": n_pass, "rejected": n_fail}, "datasets": 1}
     assert snap["datasets"][0]["long_sha256"] == ds["long_sha256"]
 

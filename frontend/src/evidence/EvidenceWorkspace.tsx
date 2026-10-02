@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { api } from '../api';
 import { latestEntryFor } from '../shell/format';
@@ -77,8 +77,13 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
     return () => { alive = false; };
   }, [sessionId, version, stamp]);
 
-  // Bring the section into view when the rail button opens it (no animation).
-  useEffect(() => { document.getElementById(SECTION_ID)?.scrollIntoView({ block: 'start' }); }, [focus]);
+  // Mounting and a new focus request are both user actions (the rail button, a chat card's link):
+  // bring the section into view (no animation) and move keyboard focus to the current step.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    document.getElementById(SECTION_ID)?.scrollIntoView({ block: 'start' });
+    tabsRef.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus({ preventScroll: true });
+  }, [focus]);
 
   const refresh = useCallback(() => setVersion(v => v + 1), []);
 
@@ -115,7 +120,7 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
   const seal = tab === 'criteria' || tab === 'template' ? latestConfigEntry(audit, tab) : latestEntryFor(audit, meta.tool);
 
   const tabs = (
-    <div className="seg" role="group" aria-label="Evidence step">
+    <div className="seg" role="group" aria-label="Evidence step" ref={tabsRef}>
       {TABS.map(t => (
         <button key={t.key} type="button" aria-pressed={tab === t.key} onClick={() => setTab(t.key)}>
           {t.label}{live ? badge(live, t.key) : ''}
@@ -131,7 +136,7 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
         {live && (
           <p className="ev-counts">
             {live.counts.sources} publication{live.counts.sources === 1 ? '' : 's'} ({parsedCount(live)} parsed)
-            {' · '}screening {live.counts.screens.proposed} proposed, {live.counts.screens.approved} approved
+            {' · '}screening {live.counts.screens.proposed} undecided, {includedCount(live)} included
             {' · '}records {live.counts.records.proposed} proposed, {live.counts.records.approved} approved
             {' · '}{live.counts.datasets} export{live.counts.datasets === 1 ? '' : 's'}
           </p>

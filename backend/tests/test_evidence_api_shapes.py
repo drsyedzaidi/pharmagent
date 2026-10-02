@@ -129,9 +129,11 @@ def test_evidence_routes_are_registered():
 
 TOOL_ENVELOPE_KEYS = {"agent", "tool", "summary", "state", "result", "audit_ok"}
 SCREEN_ROW_KEYS = {"id", "session_id", "source_id", "criteria_hash", "verdict", "score", "reasoning", "criteria",
-                   "method", "status", "decided_by", "decided_at", "decision_reason", "created_at"}
+                   "method", "status", "decided_by", "decided_at", "decision_reason", "created_at",
+                   "decided_verdict"}
 SCREEN_RESULT_KEYS = {"screens", "skipped", "criteria_hash", "n_new", "n_screened", "method"}
 SCREENING_RESULTS_KEYS = {"criteria_hash", "n_screened", "verdicts", "proposed", "approved", "rejected", "method",
+                          "included", "excluded", "undecided",
                           "updated_at"}
 SCREEN_DECIDE_KEYS = {"decided", "summary", "state", "screening_results"}
 RECORD_ROW_KEYS = {"id", "session_id", "source_id", "template_hash", "field", "group_label", "value", "value_num",
@@ -141,9 +143,9 @@ LOCATOR_KEYS = {"page", "kind", "snippet", "span", "literal", "cell", "column", 
 EXTRACT_RESULT_KEYS = {"records", "sources", "skipped", "template_hash", "method", "n_candidates", "pass", "fail",
                        "flagged", "n_new"}
 EXTRACT_SOURCE_KEYS = {"source_id", "method", "note", "n_candidates", "pass", "fail", "flagged", "n_new",
-                       "unmatched_headers", "dropped"}
+                       "unmatched_headers", "dropped", "llm_error"}
 EXTRACTION_RESULTS_KEYS = {"template_hash", "n_records", "proposed", "approved", "rejected", "verify_fail",
-                           "flagged", "method", "updated_at"}
+                           "flagged", "method", "llm_fallback", "updated_at"}
 VERIFY_RESULT_KEYS = {"n_checked", "pass", "fail", "changed", "records"}
 RECORD_DECIDE_KEYS = {"decided", "summary", "state", "extraction_results"}
 RECORD_DECIDED_KEYS = {"record", "record_hash", "source_sha256", "locator", "value", "unit", "verify_status",

@@ -1,8 +1,8 @@
 /** Pure display + draft helpers for the Evidence workspace (no React). */
 import type { AuditEntry, PharmState } from '../types';
 import type {
-  Criterion, CriterionKind, DecimalSetting, EvidenceMarker, EvidenceSnapshot, FailReason, FieldType, ParseStatus,
-  TemplateField, VerifyFields,
+  Criterion, CriterionKind, DecimalSetting, EvidenceMarker, EvidenceSnapshot, FailReason, FieldType, Inclusion,
+  ParseStatus, ScreenRow, TemplateField, VerifyFields,
 } from './types';
 
 /** Client-side mirror of the backend upload cap (ingest.MAX_BYTES). */
@@ -45,18 +45,35 @@ export function latestConfigEntry(audit: AuditEntry[], kind: 'criteria' | 'templ
   return null;
 }
 
-/** Comma/semicolon separated list -> trimmed, de-duplicated items. */
+/** Comma/semicolon separated list -> trimmed, de-duplicated items (criterion keywords). */
 export function splitList(s: string): string[] {
   return [...new Set(s.split(/[,;]/).map(x => x.trim()).filter(Boolean))];
 }
+
+/** Template aliases are printed labels, which may contain commas ('Cmax,ss', 'AUC0-24,ss'):
+ *  only a semicolon or a line break separates them. */
+export function splitAliases(s: string): string[] {
+  return [...new Set(s.split(/[;\n]/).map(x => x.trim()).filter(Boolean))];
+}
+export const ALIAS_SEP = '; ';
 
 // ── pipeline prerequisites ──────────────────────────────────────────────────
 export const parsedCount = (snap: EvidenceSnapshot): number =>
   snap.sources.filter(s => s.parse_status === 'parsed').length;
 
-/** Sources with an approved 'include' verdict: extraction reads only these. */
+/** The reviewer's inclusion for a screening row (mirrors backend models.effective_verdict):
+ *  decided_verdict, else what approving / rejecting an include or exclude implied; null while undecided. */
+export function inclusionOf(s: ScreenRow): Inclusion | null {
+  if (s.status === 'proposed') return null;
+  if (s.decided_verdict) return s.decided_verdict;
+  if (s.verdict === 'unsure') return null;
+  const agrees = s.status === 'approved';
+  return s.verdict === 'include' ? (agrees ? 'include' : 'exclude') : (agrees ? 'exclude' : 'include');
+}
+
+/** Sources the reviewer included: extraction reads only these. */
 export const includedCount = (snap: EvidenceSnapshot): number =>
-  new Set(snap.screens.filter(s => s.status === 'approved' && s.verdict === 'include').map(s => s.source_id)).size;
+  new Set(snap.screens.filter(s => inclusionOf(s) === 'include').map(s => s.source_id)).size;
 
 // ── criteria draft ──────────────────────────────────────────────────────────
 export interface CriterionDraft { id: string; text: string; kind: CriterionKind; required: boolean; keywords: string }
@@ -99,7 +116,7 @@ export interface FieldDraft {
 
 export const toFieldDraft = (f: TemplateField): FieldDraft => ({
   ...f, unit: f.unit ?? '', min: f.min === null ? '' : String(f.min), max: f.max === null ? '' : String(f.max),
-  aliases: f.aliases.join(', '),
+  aliases: f.aliases.join(ALIAS_SEP),
 });
 
 export const blankField = (): FieldDraft => ({
@@ -110,7 +127,7 @@ const num = (s: string): number | null => (s.trim() === '' ? null : Number(s.tri
 
 export const fromFieldDraft = (d: FieldDraft): TemplateField => ({
   name: d.name.trim(), type: d.type, unit: d.unit.trim() || null, description: d.description.trim(),
-  required: d.required, min: num(d.min), max: num(d.max), aliases: splitList(d.aliases), decimal: d.decimal,
+  required: d.required, min: num(d.min), max: num(d.max), aliases: splitAliases(d.aliases), decimal: d.decimal,
 });
 
 export function templateProblem(rows: FieldDraft[]): string {
@@ -159,6 +176,7 @@ export const REASON_WORDS: Record<FailReason, string> = {
   table_cell_mismatch: 'table cell does not hold the value',
   source_changed: 'source file changed',
   text_not_in_snippet: 'text not in snippet',
+  partial_number: 'only part of a longer number on the page',
 };
 
 export const failWords = (r: VerifyFields): string =>

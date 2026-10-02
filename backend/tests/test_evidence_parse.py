@@ -30,7 +30,8 @@ def test_parse_json_contract_top_level(papers):
     assert set(doc["metadata"]) == {"title", "author", "subject", "creator", "producer", "creation_date"}
     assert doc["metadata"]["title"].startswith("Pharmacokinetics of drug X") and doc["metadata"]["author"]
     page = doc["pages"][0]
-    assert set(page) == {"n", "text", "small_text", "columns", "tables"} and page["n"] == 1
+    assert set(page) == {"n", "text", "small_text", "columns", "tables", "hidden_chars"} and page["n"] == 1
+    assert page["hidden_chars"] == 0
     assert doc["text_chars"] == sum(len(p["text"]) for p in doc["pages"]) > 0
     json.dumps(doc)   # must be plain JSON
 
@@ -56,7 +57,7 @@ def test_paper_a_text_keeps_sentence_values(papers):
 def test_paper_b_keeps_unicode_minus_and_plus_minus_in_cells(papers):
     t = _page_tables(papers["paper_b"], 1)[0]
     cells = [c for row in t["rows"] for c in row]
-    assert "1 234 ± 312" in cells
+    assert "1\u2009234 ± 312" in cells                  # the PDF's thin space survives extraction
     assert any("−" in c for c in cells)
 
 

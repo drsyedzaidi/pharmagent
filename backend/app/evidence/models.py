@@ -26,19 +26,24 @@ REASON_NO_NUMBER, REASON_NUMBER_MISMATCH = "no_number", "number_mismatch"
 REASON_INTEGER_EXPECTED, REASON_SNIPPET_NOT_ON_PAGE = "integer_expected", "snippet_not_on_page"
 REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "source_changed"
 REASON_TEXT_NOT_IN_SNIPPET = "text_not_in_snippet"        # text field: value absent from its own snippet
+REASON_PARTIAL_NUMBER = "partial_number"                  # cited number is part of a longer page number
 REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
                 REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
                 REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED,
-                REASON_TEXT_NOT_IN_SNIPPET)
+                REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER)
 # QC flag codes (flags_json entries: {code, severity warn|error, message, field, group, origin script|llm}).
 FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N = "required_missing", "out_of_range", "non_integer_n"
 FLAG_DUPLICATE, FLAG_UNIT_MISMATCH, FLAG_UNIT_MISSING = "duplicate", "unit_mismatch", "unit_missing"
 FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL = "se_nonpositive", "ci_inverted", "composite_cell"
 FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC = "table_low_confidence", "verify_fail", "non_numeric"
 FLAG_SUSPICIOUS_INSTRUCTION = "suspicious_instruction_text"   # value/snippet reads like an instruction
+FLAG_UNIT_SOURCE_MISMATCH = "unit_source_mismatch"   # source prints a different unit for the number (error)
+FLAG_UNIT_UNVERIFIED = "unit_unverified"             # no unit printed next to the number / in the header
+FLAG_HIDDEN_TEXT = "hidden_text"                     # cited page had invisible / off-page text removed
 FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
               FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
-              FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION)
+              FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION,
+              FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 
@@ -107,6 +112,7 @@ class VerifyResult:
     locator: dict[str, Any] | None = None
     literal: str | None = None
     span: list[int] | None = None
+    number: float | None = None     # value of the matched WHOLE page/cell token (page decimal style)
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,25 @@ class Screen:
     decided_at: str | None
     decision_reason: str | None
     created_at: str
+    decided_verdict: str | None = None     # the reviewer's inclusion: 'include' | 'exclude'
+
+
+_OPPOSITE = {"include": "exclude", "exclude": "include"}
+
+
+def derived_verdict(verdict: str, status: str) -> str | None:
+    """Inclusion implied by approving / rejecting a proposed verdict ('unsure' implies nothing)."""
+    if verdict not in _OPPOSITE:
+        return None
+    return verdict if status == "approved" else _OPPOSITE[verdict] if status == "rejected" else None
+
+
+def effective_verdict(screen: Any) -> str | None:
+    """The reviewer's inclusion for a screening row: decided_verdict, else (rows decided before it was
+    stored) what approve / reject of the proposal implies; None while undecided or undetermined."""
+    if screen.status == "proposed":
+        return None
+    return getattr(screen, "decided_verdict", None) or derived_verdict(screen.verdict, screen.status)
 
 
 @dataclass(frozen=True)

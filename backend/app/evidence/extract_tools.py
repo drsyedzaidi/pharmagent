@@ -10,6 +10,7 @@ on the cited page; the reviewer still decides each row.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from dataclasses import asdict
@@ -20,11 +21,12 @@ from app.evidence import ingest
 from app.evidence import models as M
 from app.evidence.config_tools import summarise
 from app.evidence.extract_llm import MAX_PAGE_CHARS, llm_extract, llm_flags
-from app.evidence.extract_rules import field_index, norm_key, rule_extract
+from app.evidence.extract_rules import field_index, norm_key, rule_extract, value_number
 from app.evidence.llm_access import current_llm, llm_available
-from app.evidence.models import DECISIONS, Record, Source, now_iso
+from app.evidence.models import DECISIONS, Record, Source, effective_verdict, now_iso
 from app.evidence.normalize import normalise, numbers_in
-from app.evidence.qc_flags import merge_llm_flags, scripted_flags
+from app.evidence.qc_flags import group_key, merge_llm_flags, same_value, scripted_flags
+from app.evidence.record_checks import page_checks
 from app.evidence.screen_tools import _select_sources
 from app.evidence.store import EvidenceStore, get_store
 from app.evidence.verify import verify
@@ -75,13 +77,27 @@ def _field_type(p: dict[str, Any], index: dict[str, dict[str, Any]]) -> str:
     return "text" if p.get("value_num") is None else "number"
 
 
+def _page_reading(p: dict[str, Any], number: float | None, literal: str | None) -> dict[str, Any]:
+    """value_num := the matched page token's value (never an independent re-parse of the proposal);
+    a proposal whose own reading disagrees ('1,234' on a decimal-comma page that prints 1234) takes
+    the page literal as its value, so value and value_num always describe the same printed number."""
+    if number is None:
+        return p
+    style = (p.get("locator") or {}).get("decimal_style") or "."
+    own = value_number(str(p.get("value") or ""), style)
+    if own is None or not math.isclose(own, number, rel_tol=1e-9, abs_tol=1e-12):
+        return {**p, "value": literal or p.get("value"), "value_num": number}
+    return {**p, "value_num": number}
+
+
 def _verify_one(p: dict[str, Any], doc: dict[str, Any], ftype: str) -> dict[str, Any]:
     res = verify(p, doc, field_type=ftype)
     status, reason, loc = res.status, res.reason, dict(res.locator or p["locator"])
     if status == "pass" and ftype == "text" and normalise(str(p.get("value") or ""))[0] not in normalise(
             str(loc.get("snippet") or ""))[0]:
         status, reason, loc = "fail", M.REASON_TEXT_NOT_IN_SNIPPET, {**loc, "span": None, "literal": None}
-    return {**p, "locator": loc, "verify_status": status, "verify_reason": reason}
+    base = _page_reading(p, res.number, res.literal) if status == "pass" else p
+    return {**base, "locator": loc, "verify_status": status, "verify_reason": reason}
 
 
 def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None, template: dict[str, Any],
@@ -95,7 +111,7 @@ def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None,
     else:
         checked = [_verify_one(p, doc, _field_type(p, index)) for p in proposals]
     flags = scripted_flags(checked, template, list(approved or []))
-    out = [{**p, "flags": fl + _suspicious(p)} for p, fl in zip(checked, flags)]
+    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, doc)} for p, fl in zip(checked, flags)]
     return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index))} for p in out]
 
 
@@ -103,7 +119,7 @@ def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None,
 
 def _included_sources(store: EvidenceStore, sid: str, ids: Any, criteria_hash: str | None
                       ) -> tuple[list[Source], list[dict[str, Any]]]:
-    """Sources whose screening verdict (current criteria, else the latest) is an approved 'include'."""
+    """Sources the reviewer decided to include (current criteria's screen, else the latest)."""
     screens: dict[str, Any] = {}
     for s in store.list_screens(sid):                      # ordered by created_at: later rows win
         if s.source_id not in screens or screens[s.source_id].criteria_hash != criteria_hash:
@@ -111,9 +127,10 @@ def _included_sources(store: EvidenceStore, sid: str, ids: Any, criteria_hash: s
     included, skipped = [], []
     for src in _select_sources(store, sid, ids):
         scr = screens.get(src.id)
-        if scr is None or scr.status != "approved" or scr.verdict != "include":
-            how = "not screened" if scr is None else f"screen {scr.id} is {scr.status} {scr.verdict}"
-            skipped.append({"source_id": src.id, "reason": f"not an approved include verdict ({how})"})
+        if scr is None or effective_verdict(scr) != "include":
+            how = ("not screened" if scr is None else
+                   f"screen {scr.id}: {effective_verdict(scr) or 'no reviewer decision'}")
+            skipped.append({"source_id": src.id, "reason": f"not included by the reviewer ({how})"})
         elif src.parse_status != "parsed":
             skipped.append({"source_id": src.id, "reason": f"parse_status {src.parse_status}"})
         else:
@@ -122,16 +139,25 @@ def _included_sources(store: EvidenceStore, sid: str, ids: Any, criteria_hash: s
 
 
 def _propose(llm: Any, template: dict[str, Any], src: Source, doc: dict[str, Any]) -> dict[str, Any]:
+    error = ""
     if llm is not None:
         out = llm_extract(llm, template, src, doc)
-        if out is not None:
-            return {"proposals": out[0], "method": "llm", "unmatched_headers": [], "dropped": out[1], "note": ""}
+        if not out["error"]:
+            return {"proposals": out["proposals"], "method": "llm", "unmatched_headers": [],
+                    "dropped": out["dropped"], "note": "", "llm_error": ""}
+        error = out["error"]
     rules = rule_extract(doc, template, src.id)
-    return {**rules, "method": "table", "dropped": 0, "note": NOTE_LLM_INVALID if llm is not None else ""}
+    return {**rules, "method": "table", "dropped": 0, "note": NOTE_LLM_INVALID if llm is not None else "",
+            "llm_error": error}
 
 
-def extraction_results(store: EvidenceStore, sid: str, template_hash: str, method: str | None = None) -> dict:
-    """PharmState mirror for the records of one template version (counts only)."""
+def extraction_results(store: EvidenceStore, sid: str, template_hash: str, method: str | None = None,
+                       llm_fallback: list[dict[str, str]] | None = None, prior: dict | None = None) -> dict:
+    """PharmState mirror for the records of one template version (counts only). llm_fallback lists the
+    sources whose model pass failed in the last extraction (kept from *prior* until the next run)."""
+    if llm_fallback is None:
+        same = (prior or {}).get("template_hash") == template_hash
+        llm_fallback = list((prior or {}).get("llm_fallback") or []) if same else []
     rows = [r for r in store.list_records(sid) if r.template_hash == template_hash]
     status, extractors = Counter(r.status for r in rows), {r.extractor for r in rows}
     return {"template_hash": template_hash, "n_records": len(rows),
@@ -140,7 +166,7 @@ def extraction_results(store: EvidenceStore, sid: str, template_hash: str, metho
             "verify_fail": sum(1 for r in rows if r.status == "proposed" and r.verify_status == "fail"),
             "flagged": sum(1 for r in rows if r.flags),
             "method": method or (extractors.pop() if len(extractors) == 1 else "mixed" if extractors else "table"),
-            "updated_at": now_iso()}
+            "llm_fallback": llm_fallback, "updated_at": now_iso()}
 
 
 def _extract_source(store: EvidenceStore, sid: str, src: Source, template: dict[str, Any], thash: str,
@@ -155,7 +181,7 @@ def _extract_source(store: EvidenceStore, sid: str, src: Source, template: dict[
     row = {"source_id": src.id, "method": out["method"], "note": out["note"], "n_candidates": len(checked),
            "pass": statuses.get("pass", 0), "fail": statuses.get("fail", 0),
            "flagged": sum(1 for p in checked if p["flags"]), "n_new": len(inserted),
-           "unmatched_headers": out["unmatched_headers"], "dropped": out["dropped"]}
+           "unmatched_headers": out["unmatched_headers"], "dropped": out["dropped"], "llm_error": out["llm_error"]}
     return row, inserted
 
 
@@ -186,11 +212,15 @@ def extract_evidence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) 
     methods = {r["method"] for r in rows}
     method = methods.pop() if len(methods) == 1 else "mixed"
     tot = {k: sum(r[k] for r in rows) for k in ("n_candidates", "pass", "fail", "flagged", "n_new")}
-    results = extraction_results(store, sid, thash, method)
+    fallback = [{"source_id": r["source_id"], "error": r["llm_error"]} for r in rows if r["llm_error"]]
+    results = extraction_results(store, sid, thash, method, llm_fallback=fallback)
+    fell_back = (f" The model failed on {len(fallback)} publication(s) and the keyless table rules were used "
+                 f"instead (fell back): {fallback[0]['error']}." if fallback else "")
     return ToolResult(
         summary=(f"Extracted {tot['n_candidates']} candidate record(s) from {len(rows)} publication(s) ({method}): "
                  f"{tot['pass']} verified literally, {tot['fail']} failed verification, {tot['flagged']} flagged; "
-                 f"{tot['n_new']} new — {results['proposed']} await your decision in the Evidence workspace."),
+                 f"{tot['n_new']} new — {results['proposed']} await your decision in the Evidence workspace."
+                 + fell_back),
         writes={"extraction_results": results, "evidence_summary": summarise(store, sid)},
         result={"records": [asdict(r) for r in inserted], "sources": rows, "skipped": skipped,
                 "template_hash": thash, "method": method, **tot},
@@ -245,7 +275,7 @@ def verify_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
             if store.reverify(rec.id, c["verify_status"], c["verify_reason"], c["locator"], flags):
                 refreshed.append(store.get_record(rec.id))
     counts = Counter(r.verify_status for r in refreshed)
-    results = extraction_results(store, sid, thash)
+    results = extraction_results(store, sid, thash, prior=state.extraction_results)
     return ToolResult(
         summary=(f"Re-verified {len(refreshed)} proposed record(s): {counts.get('pass', 0)} pass, "
                  f"{counts.get('fail', 0)} fail, {changed} changed."),
@@ -267,6 +297,16 @@ def _owned_record(store: EvidenceStore, sid: str, record_id: Any) -> Record:
     return rec
 
 
+def _approved_rival(store: EvidenceStore, rec: Record) -> Record | None:
+    """An approved record with a DIFFERENT value for the same source, field and (normalised) group."""
+    for other in store.list_records(rec.session_id, status="approved", source_id=rec.source_id):
+        same_slot = (other.field.casefold() == rec.field.casefold()
+                     and group_key(other.group_label) == group_key(rec.group_label))
+        if same_slot and not same_value(asdict(other), asdict(rec)):
+            return other
+    return None
+
+
 def decide_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     store, sid = get_store(), state.session_id
     if args.get("confirm") is not True:
@@ -277,15 +317,20 @@ def decide_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
     reason = args.get("reason")
     if not isinstance(reason, str) or not (1 <= len(reason.strip()) <= MAX_REASON):
         raise ValueError(f"'reason' is required (1..{MAX_REASON} characters)")
-    actor = args.get("actor") if isinstance(args.get("actor"), str) and args.get("actor") else "anonymous"
+    actor = ctx.actor or "anonymous"               # the authenticated caller; args['actor'] is ignored
     rec = _owned_record(store, sid, args.get("record_id"))
     if status == "approved" and rec.verify_status == "fail":
         raise ValueError("cannot approve a record that failed literal verification "
                          f"({rec.verify_reason or 'unknown'}); re-verify or reject it")
+    rival = _approved_rival(store, rec) if status == "approved" else None
+    if rival is not None and args.get("allow_conflict") is not True:
+        raise ValueError(f"{rec.field} for this publication/group already holds an approved value {rival.value!r} "
+                         f"({rival.id}); reject this record, or approve it with allow_conflict to keep both")
     decided = store.decide_record(rec.id, status, actor, reason.strip())   # EvidenceStateError if decided
     src = store.get_source(decided.source_id)
     tmpl = store.get_config(sid, "template")
-    results = extraction_results(store, sid, tmpl["body_hash"] if tmpl else decided.template_hash)
+    results = extraction_results(store, sid, tmpl["body_hash"] if tmpl else decided.template_hash,
+                                 prior=state.extraction_results)
     return ToolResult(
         summary=f"Record {decided.id} ({decided.field} = {decided.value}) {status} by {actor}: {reason.strip()}",
         writes={"extraction_results": results, "evidence_summary": summarise(store, sid)},
@@ -313,15 +358,16 @@ TOOLS = [
                        "properties": {"record_ids": {"type": "array", "items": {"type": "string"}},
                                       "actor": {"type": "string"}}},
          run=verify_records),
-    Tool(name="decide_records", agent=AGENT,
+    Tool(name="decide_records", agent=AGENT, human_only=True,
          description=("Record the reviewer's decision on one proposed record (approve or reject, with a reason). "
-                      "Human-only: requires confirm=true from the workspace; a record that failed literal "
+                      "Human-only: never offered to a model; runs only from the workspace's authenticated "
+                      "route, which records the signed-in reviewer. A record that failed literal "
                       "verification cannot be approved."),
          input_schema={"type": "object",
                        "properties": {"record_id": {"type": "string"},
                                       "decision": {"type": "string", "enum": ["approve", "reject"]},
-                                      "reason": {"type": "string"}, "actor": {"type": "string"},
-                                      "confirm": {"type": "boolean"}},
+                                      "reason": {"type": "string"}, "confirm": {"type": "boolean"},
+                                      "allow_conflict": {"type": "boolean"}},
                        "required": ["record_id", "decision", "reason", "confirm"]},
          run=decide_records),
 ]

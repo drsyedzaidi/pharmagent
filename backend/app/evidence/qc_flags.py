@@ -54,8 +54,13 @@ def _canon(rec: dict[str, Any], index: dict[str, dict[str, Any]]) -> str:
     return str(spec["name"]) if spec else str(rec.get("field") or "")
 
 
+def group_key(group: Any) -> str:
+    """Comparison form of a group label: NFKC, casefold, whitespace collapsed and trimmed."""
+    return " ".join(unicodedata.normalize("NFKC", str(group or "")).casefold().split())
+
+
 def _key(rec: dict[str, Any]) -> Key:
-    return str(rec.get("source_id") or ""), str(rec.get("group_label") or "")
+    return str(rec.get("source_id") or ""), group_key(rec.get("group_label"))
 
 
 def _is_int(x: float | None) -> bool:
@@ -118,7 +123,8 @@ def _canon_name(rec: dict[str, Any]) -> str:
 
 def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, dict[str, Any]],
                   present: set[str], approved: dict[tuple[str, str, str], dict[str, Any]],
-                  peers: dict[str, dict[str, Any]], required: list[str]) -> list[dict[str, Any]]:
+                  peers: dict[str, dict[str, Any]], required: list[str],
+                  batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flags: list[dict[str, Any]] = []
     if rec.get("verify_status") == "fail":
         flags.append(_flag(M.FLAG_VERIFY_FAIL, "error",
@@ -126,11 +132,16 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
     spec = index.get(str(rec.get("field") or "").casefold())
     if spec:
         flags.extend(_field_flags(rec, spec, field, group))
-    prior = approved.get((rec.get("source_id") or "", field, group))
-    if prior is not None and not _same_value(prior, rec):
+    prior = approved.get((rec.get("source_id") or "", field, group_key(group)))
+    if prior is not None and not same_value(prior, rec):
         flags.append(_flag(M.FLAG_DUPLICATE, "warn",
                            f"{field}: an approved record already holds {prior.get('value')!r}"
                            f" {prior.get('unit') or ''}".rstrip() + f" (proposed {rec.get('value')!r})", field, group))
+    rivals = [o for o in batch if o is not rec and not same_value(o, rec)]
+    if rivals:
+        flags.append(_flag(M.FLAG_DUPLICATE, "warn",
+                           f"{field}: conflicting values proposed for this source/group: "
+                           + ", ".join(repr(str(o.get("value"))) for o in [rec, *rivals][:4]), field, group))
     flags.extend(_ci_flag(rec, field, group, peers))
     cell = (rec.get("locator") or {}).get("cell") or {}
     if (rec.get("locator") or {}).get("kind") == "table" and cell.get("strategy") == "layout":
@@ -143,7 +154,7 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
     return flags
 
 
-def _same_value(a: dict[str, Any], b: dict[str, Any]) -> bool:
+def same_value(a: dict[str, Any], b: dict[str, Any]) -> bool:
     if a.get("value_num") is not None and b.get("value_num") is not None:
         return float(a["value_num"]) == float(b["value_num"])
     return str(a.get("value") or "").strip() == str(b.get("value") or "").strip()
@@ -158,12 +169,20 @@ def scripted_flags(records: list[Any], template: dict[str, Any], approved_record
     for r in recs + approved_list:
         r["_canon"] = _canon(r, index)
     present: dict[Key, set[str]] = defaultdict(set)
+    by_source: dict[str, set[str]] = defaultdict(set)
     peers: dict[Key, dict[str, dict[str, Any]]] = defaultdict(dict)
+    batch: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for r in recs + approved_list:
         present[_key(r)].add(r["_canon"])
+        by_source[_key(r)[0]].add(r["_canon"])
         peers[_key(r)].setdefault(r["_canon"], r)
+    for r in recs:
+        batch[(*_key(r), r["_canon"])].append(r)
     approved = {(str(r.get("source_id") or ""), r["_canon"], _key(r)[1]): r for r in approved_list}
-    return [_record_flags(r, r["_canon"], _key(r)[1], index, present[_key(r)], approved, peers[_key(r)], required)
+    # an ungrouped record ('' group: a text-rule n or dose) is checked against its whole source
+    return [_record_flags(r, r["_canon"], str(r.get("group_label") or ""), index,
+                          by_source[_key(r)[0]] if not _key(r)[1] else present[_key(r)], approved,
+                          peers[_key(r)], required, batch[(*_key(r), r["_canon"])])
             for r in recs]
 
 

@@ -2,7 +2,7 @@
  *  Colour is never the only signal: every badge pairs a lucide icon with a word. */
 import { AlertTriangle, CheckCircle, CircleQuestionMark, Clock, OctagonAlert, XCircle } from 'lucide-react';
 import { failWords } from './format';
-import type { DecisionStatus, QcFlag, Verdict, VerifyFields } from './types';
+import type { DecisionStatus, Inclusion, QcFlag, Verdict, VerifyFields } from './types';
 
 const VERDICT: Record<Verdict, { cls: string; Icon: typeof CheckCircle }> = {
   include: { cls: 'approved', Icon: CheckCircle },
@@ -13,6 +13,16 @@ const VERDICT: Record<Verdict, { cls: string; Icon: typeof CheckCircle }> = {
 export function VerdictPill({ verdict }: { verdict: Verdict }) {
   const { cls, Icon } = VERDICT[verdict];
   return <span className={`pill ${cls}`}><Icon size={12} aria-hidden="true" /> {verdict}</span>;
+}
+
+/** The reviewer's inclusion decision for a publication (what extraction acts on). */
+export function InclusionPill({ inclusion }: { inclusion: Inclusion }) {
+  const Icon = inclusion === 'include' ? CheckCircle : XCircle;
+  return (
+    <span className={`pill ${inclusion === 'include' ? 'approved' : 'rejected'}`}>
+      <Icon size={12} aria-hidden="true" /> {inclusion === 'include' ? 'included' : 'excluded'}
+    </span>
+  );
 }
 
 const STATUS: Record<DecisionStatus, { cls: string; Icon: typeof CheckCircle }> = {

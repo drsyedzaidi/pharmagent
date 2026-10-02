@@ -9,8 +9,11 @@ import type { PharmState } from '../types';
 export type ParseStatus = 'parsed' | 'no_text' | 'failed';
 export type Verdict = 'include' | 'exclude' | 'unsure';
 export type DecisionStatus = 'proposed' | 'approved' | 'rejected';
-/** What a reviewer sends; the stored status becomes 'approved' | 'rejected'. */
+/** What a reviewer sends for a record; the stored status becomes 'approved' | 'rejected'. */
 export type Decision = 'approve' | 'reject';
+/** What a reviewer decides for a screened publication (stored as decided_verdict; the status is
+ *  'approved' when it agrees with the proposed verdict, 'rejected' when it overrides it). */
+export type Inclusion = 'include' | 'exclude';
 export type VerifyStatus = 'pass' | 'fail';
 export type ScreenMethod = 'llm' | 'keyword';
 export type Extractor = 'llm' | 'table' | 'manual';
@@ -21,11 +24,11 @@ export type DecimalSetting = 'auto' | '.' | ',';
 export type FailReason =
   | 'empty_snippet' | 'snippet_too_long' | 'page_out_of_range' | 'non_ascii_digits' | 'no_number'
   | 'number_mismatch' | 'integer_expected' | 'snippet_not_on_page' | 'table_cell_mismatch'
-  | 'source_changed' | 'text_not_in_snippet';
+  | 'source_changed' | 'text_not_in_snippet' | 'partial_number';
 export type FlagCode =
   | 'required_missing' | 'out_of_range' | 'non_integer_n' | 'duplicate' | 'unit_mismatch' | 'unit_missing'
   | 'se_nonpositive' | 'ci_inverted' | 'composite_cell' | 'table_low_confidence' | 'verify_fail'
-  | 'non_numeric' | 'suspicious_instruction_text';
+  | 'non_numeric' | 'suspicious_instruction_text' | 'unit_source_mismatch' | 'unit_unverified' | 'hidden_text';
 
 /** Result-card markers the evidence tools push into the transcript (S9 renders them). */
 export type EvidenceMarker = '__EVIDENCE_SCREEN__' | '__EVIDENCE_RECORDS__' | '__EVIDENCE_DATASET__';
@@ -113,6 +116,8 @@ export type ScreenRow = {
   criteria: ScreenCriterionResult[];
   method: ScreenMethod;
   created_at: string;
+  /** The reviewer's inclusion; null while proposed (and on rows decided before it was stored). */
+  decided_verdict: Inclusion | null;
 } & DecisionFields;
 
 export interface ScreeningResults {
@@ -120,6 +125,8 @@ export interface ScreeningResults {
   n_screened: number;
   verdicts: Record<Verdict, number>;
   proposed: number; approved: number; rejected: number;
+  /** Effective inclusion after the reviewer's decisions. */
+  included: number; excluded: number; undecided: number;
   method: ScreenMethod | 'mixed';
   updated_at: string;
 }
@@ -179,6 +186,8 @@ export interface ExtractionResults {
   proposed: number; approved: number; rejected: number;
   verify_fail: number; flagged: number;
   method: Extractor | 'mixed';
+  /** Sources whose model pass failed in the last extraction (keyless rules were used instead). */
+  llm_fallback: { source_id: string; error: string }[];
   updated_at: string;
 }
 
@@ -258,6 +267,8 @@ export interface ExtractSourceRow {
   source_id: string; method: Extractor; note: string;
   n_candidates: number; pass: number; fail: number; flagged: number; n_new: number;
   unmatched_headers: string[]; dropped: number;
+  /** Why the model pass was abandoned for this source ('' when it was not). */
+  llm_error: string;
 }
 
 export interface ExtractResult {
@@ -274,8 +285,9 @@ export interface ExportResult {
   long_columns: string[]; wide_columns: string[];
 }
 
-export interface ScreenDecision { screen_id: string; decision: Decision; reason: string }
-export interface RecordDecision { record_id: string; decision: Decision; reason: string }
+export interface ScreenDecision { screen_id: string; decision: Inclusion; reason: string }
+/** allow_conflict: approve although an approved record holds a different value for the same slot. */
+export interface RecordDecision { record_id: string; decision: Decision; reason: string; allow_conflict?: boolean }
 
 export interface ScreenDecideResponse {
   decided: ScreenRow[]; summary: string; state: PharmState; screening_results: ScreeningResults;

@@ -47,6 +47,8 @@ __all__ = ["LLM", "MockLLM", "RealLLM", "OpenAICompatLLM", "get_llm", "is_loopba
 class RealLLM:
     """Anthropic Claude client."""
 
+    last_error: str | None = None   # message of the last failed extract_json call
+
     def __init__(self, *, api_key: str | None = None, model: str | None = None) -> None:
         import anthropic
         self.model = model or settings.model
@@ -86,7 +88,9 @@ class RealLLM:
     def extract_json(self, system: str, user: str, schema: dict[str, Any], *,
                      max_tokens: int = 2048) -> dict[str, Any] | None:
         """Forced ``emit`` tool call; its input is the schema-shaped answer. Any failure
-        (API error, text-only reply, another tool) is None, never an exception."""
+        (API error, text-only reply, another tool) is None, never an exception; a transport
+        failure's message is kept in ``last_error`` so a caller can say why it fell back."""
+        self.last_error = None
         try:
             resp = self._client.messages.create(
                 model=self.model, max_tokens=max_tokens, system=system,
@@ -95,6 +99,7 @@ class RealLLM:
                 messages=[{"role": "user", "content": user}],
             )
         except Exception as exc:  # noqa: BLE001 - the tool falls back deterministically
+            self.last_error = str(exc)[:200]
             log.warning("llm_extract_failed", extra={"model": self.model, "error": str(exc)[:200]})
             return None
         for block in resp.content:
@@ -123,7 +128,8 @@ class OpenAICompatLLM:
     Only ``requests.post`` is used, so tests fake it without a server.
     """
 
-    TIMEOUT_S = 120.0   # local 7B models on CPU can take a while per call
+    TIMEOUT_S = 120.0   # default; settings.llm_timeout_s overrides (large local models)
+    last_error: str | None = None   # message of the last failed extract_json call
 
     def __init__(self, *, base_url: str, model: str, api_key: str | None,
                  reasoning_effort: str | None = None) -> None:
@@ -155,7 +161,7 @@ class OpenAICompatLLM:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         resp = requests.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
-                             timeout=self.TIMEOUT_S)
+                             timeout=settings.llm_timeout_s or self.TIMEOUT_S)
         if resp.status_code >= 400:
             raise RuntimeError(self._http_error(resp.status_code))
         data = resp.json()
@@ -228,7 +234,9 @@ class OpenAICompatLLM:
                      max_tokens: int = 2048) -> dict[str, Any] | None:
         """Forced ``emit`` function call (``tool_choice``); its arguments are the answer.
         Transport errors, a prose-only reply, another function or unparsable / non-object
-        arguments all yield None so the calling tool falls back deterministically."""
+        arguments all yield None so the calling tool falls back deterministically (a transport
+        failure's message is kept in ``last_error``)."""
+        self.last_error = None
         tool = {"type": "function", "function": {"name": EMIT_TOOL, "description": EMIT_DESCRIPTION,
                                                  "parameters": schema}}
         try:
@@ -237,6 +245,7 @@ class OpenAICompatLLM:
                              tools=[tool], max_tokens=max_tokens,
                              tool_choice={"type": "function", "function": {"name": EMIT_TOOL}})
         except (RuntimeError, ValueError, requests.RequestException) as exc:
+            self.last_error = str(exc)[:200]
             log.warning("llm_extract_failed", extra={"model": self.model, "error": str(exc)[:200]})
             return None
         for call in msg.get("tool_calls") or []:

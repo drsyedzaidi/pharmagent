@@ -203,7 +203,7 @@ def test_decision_tools_are_human_only(client, papers):
         with pytest.raises(ValueError, match="confirm"):
             main.orch.run_tool(sid, tool, "evidence", {**args, "decision": "approve", "reason": "x"}, actor="llm")
     reg = default_registry()
-    assert {t.name for t in reg.for_agent("evidence")} >= {"decide_screening", "decide_records"}
+    assert not {t.name for t in reg.for_agent("evidence")} & {"decide_screening", "decide_records"}
     assert client.get(EV.format(sid=sid)).json()["records"][0]["status"] == "proposed"
 
 

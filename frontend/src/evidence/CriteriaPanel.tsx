@@ -47,7 +47,9 @@ export function CriteriaPanel({ sessionId, config, parsed, screens, disabled, ru
     <div className="ev-panel">
       <p className="ev-intro">
         Each criterion is checked against the first pages of every parsed publication. Without a model the check
-        is keyword matching on the listed keywords (or the criterion text); verdicts are proposals you decide.
+        is keyword matching: any one listed keyword meets a criterion; without keywords, most of the criterion’s
+        own words must appear (write “or” between alternatives, e.g. “in vitro or animal”). Verdicts are
+        proposals you decide.
       </p>
       <ol className="ev-rows" aria-label="Screening criteria">
         {rows.map((r, i) => (
@@ -71,7 +73,7 @@ export function CriteriaPanel({ sessionId, config, parsed, screens, disabled, ru
                 onChange={e => edit(i, { required: e.target.checked })} /> Required
             </label>
             <input className="ev-input ev-span" aria-label={`Criterion ${i + 1} keywords`} value={r.keywords}
-              placeholder="Keywords, comma separated (optional)" disabled={disabled}
+              placeholder="Keywords, comma separated; any one matches (optional)" disabled={disabled}
               onChange={e => edit(i, { keywords: e.target.value })} />
           </li>
         ))}
@@ -103,7 +105,7 @@ export function CriteriaPanel({ sessionId, config, parsed, screens, disabled, ru
         </button>
         <span className="ev-hint">
           {why || `${parsed} parsed publication${parsed === 1 ? '' : 's'} will be screened.`}
-          {' '}Verdicts so far: {screens.proposed} proposed · {screens.approved} approved · {screens.rejected} rejected.
+          {' '}Verdicts so far: {screens.proposed} awaiting your decision · {screens.approved + screens.rejected} decided.
         </span>
       </div>
     </div>
