@@ -2,9 +2,9 @@
  *  authenticated `req` / `download` and `api.pollJob`; kept here so api.ts stays small.
  *  POST /screen and /extract answer with a job handle when a real LLM is configured,
  *  so those two helpers poll it and always resolve to the tool envelope. */
-import { api, download, req } from '../api';
+import { api, download, fetchBlob, req } from '../api';
 import type {
-  ConfigResponse, CriteriaConfig, Criterion, EvidenceSnapshot, ExportResult, ExtractResult, PageText,
+  ConfigResponse, CriteriaConfig, Criterion, EvidenceSnapshot, ExportResult, ExtractResult, PageImageMeta, PageText,
   ProposeResponse, RecordDecideResponse, RecordDecision, RecordFilter, ScreenDecideResponse, ScreenDecision,
   ScreenResult, TemplateBody, TemplateConfig, ToolEnvelope, UploadResponse, VerifyRecordsResult,
 } from './types';
@@ -69,3 +69,13 @@ export function evidenceDownload(sid: string, path: string): Promise<void> {
 
 export const evidencePage = (sid: string, sourceId: string, page: number): Promise<PageText> =>
   req(`${ev(sid)}/sources/${encodeURIComponent(sourceId)}/pages/${page}`);
+
+const image = (sid: string, recordId: string) => `${ev(sid)}/records/${encodeURIComponent(recordId)}/image`;
+
+/** Where the cited value sits in the rendered page image, plus the notices for the reviewer. */
+export const evidencePageImageMeta = (sid: string, recordId: string, zoom: 1 | 2, signal?: AbortSignal):
+  Promise<PageImageMeta> => req(`${image(sid, recordId)}/meta?zoom=${zoom}`, { signal });
+
+/** The PNG the meta described; `sha` binds it to that exact raster (409 when it changed). */
+export const evidencePageImageBlob = (sid: string, recordId: string, zoom: 1 | 2, sha: string, signal?: AbortSignal):
+  Promise<Blob> => fetchBlob(`${image(sid, recordId)}?zoom=${zoom}&sha=${encodeURIComponent(sha)}`, signal);

@@ -1,7 +1,11 @@
+import { OctagonAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { evidencePage } from './api';
 import { errorMessage } from './format';
 import { contextText, highlight, markScrollTop } from './highlight';
+import { imageAnnouncement } from './imageGeometry';
+import { PageImage } from './PageImage';
+import { usePageImage } from './usePageImage';
 import type { PageText, ParsedTable, RecordRow, TableCell } from './types';
 
 /** The marked snippet, with the verified literal (when present in it) in bold. */
@@ -57,6 +61,7 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
   const boxRef = useRef<HTMLPreElement>(null);
   const markRef = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLHeadingElement>(null);
+  const view = usePageImage(sessionId, record.id);
 
   useEffect(() => {
     let alive = true;
@@ -108,6 +113,9 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
       <div className="ev-context-head">
         <h3 ref={headRef} tabIndex={-1}>
           Cited page for {title} = <span className="mono">{record.value}</span>{record.unit ? ` ${record.unit}` : ''}
+          {view.ready?.meta.compare_urgent && (
+            <span className="ev-compare-label"><OctagonAlert size={12} aria-hidden="true" /> Compare before approving</span>
+          )}
         </h3>
         {onClose && (
           <button type="button" className="btn btn-ghost" onClick={onClose} aria-label={`Close cited page for ${title}`}>
@@ -118,7 +126,9 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
       <p className="ev-prov">{filename} · {parts.join(' · ')}</p>
       <p className="sr-only" role="status">
         {current ? `Page ${loc.page} loaded for ${title}. ${where}` : error ? '' : `Loading page ${loc.page}`}
+        {view.ready ? ` ${imageAnnouncement(view.ready.meta)}` : ''}
       </p>
+      <PageImage view={view} record={record} filename={filename} />
       <p className="ev-snippet"><span className="ev-label">Cited snippet</span> <span className="mono">{loc.snippet}</span></p>
       {error && <p className="ev-problem" role="alert">Could not load page {loc.page}: {error}</p>}
       {!current && !error && <p className="ev-empty">Loading page {loc.page}…</p>}

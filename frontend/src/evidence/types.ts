@@ -321,3 +321,22 @@ export type OnState = (state: PharmState, summary: string, marker?: EvidenceMark
 export type EvidenceTab = 'library' | 'criteria' | 'screening' | 'template' | 'records' | 'dataset';
 /** A request to show one tab (from a chat card); `n` makes repeated requests distinct. */
 export interface EvidenceFocus { tab: EvidenceTab; n: number }
+
+// ── page image (GET .../records/{id}/image/meta) ───────────────────────────
+/** A rectangle in PNG pixels (origin top-left). */
+export interface ImageRect { x: number; y: number; w: number; h: number }
+/** value: the cited word(s); cell: the table cell; line: only the row; page: not located. */
+export type ImagePrecision = 'value' | 'cell' | 'line' | 'page';
+/** Server-written notice; `text` is shown as-is next to an icon and the word for its severity. */
+export interface ImageNotice { code: string; severity: 'warn' | 'error'; text: string }
+export interface PageImageMeta {
+  record_id: string; source_id: string; page: number; pages: number; zoom: 1 | 2; dpi: number;
+  resolved: boolean; precision: ImagePrecision; reason: string | null;
+  width: number; height: number; highlight: ImageRect[]; snippet_box: ImageRect | null;
+  crop_pt: number[]; image_sha256: string; png_bytes: number; pdf_sha256: string; layout_version: number | null;
+  extracted: { value: string; unit: string | null; literal: string | null; kind: string };
+  page_checks: { ink_check: string | null; hidden_chars: number | null; glyph_check: string[] };
+  flags: string[]; compare_urgent: boolean; notices: ImageNotice[];
+}
+/** Fit: zoom 1 scaled to the width; actual: zoom 1 at natural pixels; larger: zoom 2 at natural pixels. */
+export type ZoomMode = 'fit' | 'actual' | 'larger';

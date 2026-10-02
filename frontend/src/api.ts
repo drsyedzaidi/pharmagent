@@ -4,7 +4,9 @@ import type {
   AuditIntegrityStatus,
 } from './types';
 
-const BASE = '/api';
+import { BASE, download, req } from './http';
+
+export { download, fetchBlob, getToken, HttpError, req, setToken } from './http';
 
 const POLL_INTERVAL_MS = 1500;
 /** Consecutive failed job-status reads a poll tolerates before giving up. */
@@ -12,46 +14,6 @@ const POLL_MAX_CONSECUTIVE_FAILURES = 5;
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 type JobStatus = { status: string; kind: string; result: JobResult | null; error: string | null };
-
-const TOKEN_KEY = 'pharmagent_token';
-let _token = (typeof localStorage !== 'undefined' && localStorage.getItem(TOKEN_KEY)) || '';
-
-export function setToken(t: string): void {
-  _token = t.trim();
-  if (typeof localStorage !== 'undefined') {
-    if (_token) localStorage.setItem(TOKEN_KEY, _token);
-    else localStorage.removeItem(TOKEN_KEY);
-  }
-}
-export function getToken(): string {
-  return _token;
-}
-
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const h: Record<string, string> = { ...extra };
-  if (_token) h.Authorization = `Bearer ${_token}`;
-  return h;
-}
-
-export async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + path, { ...init, headers: authHeaders(init?.headers as Record<string, string>) });
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-export async function download(path: string, filename: string): Promise<void> {
-  const res = await fetch(BASE + path, { headers: authHeaders() });
-  if (!res.ok) throw new Error((await res.text().catch(() => res.statusText)) || `HTTP ${res.status}`);
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-}
 
 export const api = {
   /** `auth`: 'required' when the backend has an api_token (bearer enforced,
