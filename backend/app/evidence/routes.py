@@ -1,13 +1,14 @@
-"""Evidence endpoints: upload, criteria, template, snapshot, page text, PDF download, screening.
+"""Evidence endpoints: upload, criteria, template, snapshot, page text, PDF download, screening,
+extraction, record verification and record decisions.
 
 ``build_evidence_router`` is given main.py's auth dependencies and a getter for the live
 Orchestrator (tests reassign ``main.orch``), so main.py only imports and includes it.
 Every mutation goes through ``Orchestrator.run_tool`` (audit + write-access); the
 routes themselves only validate, stage files and map errors:
 ValueError -> 400, EvidenceStateError -> 409, IngestError -> 422.
-POST /screen runs as a JobManager job when a real LLM is configured (model calls per
-source), synchronously on the keyless keyword path; POST /screen/decide loops over the
-reviewer's decisions, one audited tool call each.
+POST /screen and POST /extract run as JobManager jobs when a real LLM is configured (model
+calls per source/page), synchronously on the keyless path; POST /screen/decide and
+POST /records/decide loop over the reviewer's decisions, one audited tool call each.
 """
 from __future__ import annotations
 
@@ -19,20 +20,20 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.provenance import file_sha256
 from app.evidence import ingest, llm_access
 from app.evidence.config_tools import source_row
-from app.evidence.models import EvidenceStateError, IngestError, Source
+from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
 from app.evidence.store import get_store, source_id
 
 log = logging.getLogger(__name__)
 
 AGENT = "evidence"
 CHUNK = 1 << 20
-DECISION_KEYS = ("screen_id", "decision", "reason")
+JOB_KINDS = {"screen_publications": "evidence_screen", "extract_evidence": "evidence_extract"}
 
 
 def _unwrap(body: Any, key: str) -> Any:
@@ -74,12 +75,65 @@ def owned_screen_id(sid: str, screen_id: Any) -> str:
     return screen_id
 
 
-def _decisions(body: Any) -> list[dict[str, Any]]:
-    """{decisions:[{screen_id, decision, reason}]} or one bare decision object; never empty."""
+def owned_record_id(sid: str, record_id: Any) -> str:
+    rec = get_store().get_record(record_id) if isinstance(record_id, str) and record_id else None
+    if rec is None or rec.session_id != sid:
+        raise HTTPException(404, f"unknown record: {record_id}")
+    return record_id
+
+
+def _decisions(body: Any, id_key: str) -> list[dict[str, Any]]:
+    """{decisions:[{<id_key>, decision, reason}]} or one bare decision object; never empty."""
     items = body.get("decisions") if isinstance(body, dict) and "decisions" in body else [body]
     if not isinstance(items, list) or not items or not all(isinstance(d, dict) for d in items):
         raise HTTPException(400, "body must be a decision object or {decisions: [..]} (non-empty)")
-    return [{k: d.get(k) for k in DECISION_KEYS} for d in items]
+    return [{k: d.get(k) for k in (id_key, "decision", "reason")} for d in items]
+
+
+def _decide_loop(orch: Any, sid: str, actor: str, body: Any, *, tool: str, id_key: str,
+                 owned: Callable[[str, Any], str], result_key: str) -> dict[str, Any]:
+    """One audited decide_* tool call per decision (confirm=True is the HTTP call itself); a failure
+    mid-list stops the loop, earlier decisions stand, and the 400 names what was applied."""
+    decisions = _decisions(body, id_key)
+    decided: list[dict[str, Any]] = []
+    last: dict[str, Any] = {}
+    for d in decisions:
+        try:
+            owned(sid, d[id_key])
+            last = orch.run_tool(sid, tool, AGENT, {**d, "actor": actor, "confirm": True}, actor=actor)
+        except Exception as exc:
+            err = http_error(exc)
+            if not decided:
+                raise err from exc
+            applied = ", ".join(x[result_key]["id"] for x in decided)
+            raise HTTPException(400, f"{len(decided)} of {len(decisions)} decisions applied ({applied}) "
+                                     f"before {d[id_key]} failed: {err.detail}") from exc
+        decided.append(last["result"])
+    return {"decided": decided, "summary": last["summary"], "state": last["state"]}
+
+
+def _run_or_job(get_orch: Callable[[], Any], get_jobs: Callable[[], Any] | None, sid: str, tool: str,
+                body: Any, actor: str) -> dict[str, Any]:
+    """Propose via *tool*: a job when a real LLM is configured and a JobManager exists, else inline."""
+    body = body or {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be an object ({source_ids?: [..]})")
+    args = {"actor": actor, **({"source_ids": body["source_ids"]} if "source_ids" in body else {})}
+    if llm_access.llm_available() and get_jobs is not None:
+        orch = get_orch()
+        job_id = get_jobs().submit(session_id=sid, kind=JOB_KINDS[tool],
+                                   fn=lambda: orch.run_tool(sid, tool, AGENT, args, actor=actor))
+        return {"job_id": job_id, "status": "running", "kind": JOB_KINDS[tool], "tool": tool}
+    return run_tool(get_orch(), sid, tool, args, actor)
+
+
+def _record_filter(status: str | None, verify: str | None, flagged: bool | None) -> Callable[[Any], bool]:
+    if status is not None and status not in DECISION_STATUSES:
+        raise HTTPException(400, f"status must be one of {list(DECISION_STATUSES)}")
+    if verify is not None and verify not in VERIFY_STATUSES:
+        raise HTTPException(400, f"verify must be one of {list(VERIFY_STATUSES)}")
+    return lambda r: ((status is None or r.status == status) and (verify is None or r.verify_status == verify)
+                      and (flagged is None or bool(r.flags) == flagged))
 
 
 async def _stage_upload(file: UploadFile, data_dir: str) -> Path:
@@ -159,14 +213,17 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
         return _config_response(sid, "template", out)
 
     @router.get("")
-    def snapshot(sid: str, sess=Depends(owned_session)) -> dict:
+    def snapshot(sid: str, status: str | None = Query(None), verify: str | None = Query(None),
+                 flagged: bool | None = Query(None), sess=Depends(owned_session)) -> dict:
+        """Ledger snapshot; status / verify / flagged filter the records list only (counts never)."""
+        keep = _record_filter(status, verify, flagged)
         store = get_store()
         return {"session_id": sid,
                 "sources": [source_row(s) for s in store.list_sources(sid)],
                 "criteria": store.get_config(sid, "criteria"),
                 "template": store.get_config(sid, "template"),
                 "screens": [asdict(s) for s in store.list_screens(sid)],
-                "records": [asdict(r) for r in store.list_records(sid)],
+                "records": [asdict(r) for r in store.list_records(sid) if keep(r)],
                 "datasets": [asdict(d) for d in store.list_datasets(sid)],
                 "counts": store.counts(sid),
                 "summary": sess.state.evidence_summary}
@@ -175,42 +232,37 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
     def screen(sid: str, body: Any = Body(None), sess=Depends(owned_session),
                actor: str = Depends(actor_id)) -> dict:
         """Propose screening verdicts: a job when a real LLM is configured, else synchronous."""
-        body = body or {}
-        if not isinstance(body, dict):
-            raise HTTPException(400, "body must be an object ({source_ids?: [..]})")
-        args = {"actor": actor, **({"source_ids": body["source_ids"]} if "source_ids" in body else {})}
-        if llm_access.llm_available() and get_jobs is not None:
-            orch = get_orch()
-            job_id = get_jobs().submit(
-                session_id=sid, kind="evidence_screen",
-                fn=lambda: orch.run_tool(sid, "screen_publications", AGENT, args, actor=actor))
-            return {"job_id": job_id, "status": "running", "kind": "evidence_screen",
-                    "tool": "screen_publications"}
-        return run_tool(get_orch(), sid, "screen_publications", args, actor)
+        return _run_or_job(get_orch, get_jobs, sid, "screen_publications", body, actor)
 
     @router.post("/screen/decide")
     def decide_screen(sid: str, body: Any = Body(...), sess=Depends(owned_session),
                       actor: str = Depends(actor_id)) -> dict:
-        """One audited decide_screening call per decision; a failure mid-list stops the loop,
-        earlier decisions stand, and the 400 names what was applied."""
-        decisions = _decisions(body)
-        decided: list[dict[str, Any]] = []
-        last: dict[str, Any] = {}
-        for d in decisions:
-            try:
-                owned_screen_id(sid, d["screen_id"])
-                last = get_orch().run_tool(sid, "decide_screening", AGENT,
-                                           {**d, "actor": actor, "confirm": True}, actor=actor)
-            except Exception as exc:
-                err = http_error(exc)
-                if not decided:
-                    raise err from exc
-                applied = ", ".join(x["id"] for x in decided)
-                raise HTTPException(400, f"{len(decided)} of {len(decisions)} decisions applied ({applied}) "
-                                         f"before {d['screen_id']} failed: {err.detail}") from exc
-            decided.append(last["result"]["screen"])
-        return {"decided": decided, "summary": last["summary"],
-                "screening_results": last["state"]["screening_results"], "state": last["state"]}
+        out = _decide_loop(get_orch(), sid, actor, body, tool="decide_screening", id_key="screen_id",
+                           owned=owned_screen_id, result_key="screen")
+        return {**out, "decided": [d["screen"] for d in out["decided"]],
+                "screening_results": out["state"]["screening_results"]}
+
+    @router.post("/extract")
+    def extract(sid: str, body: Any = Body(None), sess=Depends(owned_session),
+                actor: str = Depends(actor_id)) -> dict:
+        """Propose extracted records from the included publications: a job with a real LLM, else synchronous."""
+        return _run_or_job(get_orch, get_jobs, sid, "extract_evidence", body, actor)
+
+    @router.post("/records/verify")
+    def verify_records(sid: str, body: Any = Body(None), sess=Depends(owned_session),
+                       actor: str = Depends(actor_id)) -> dict:
+        body = body or {}
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object ({record_ids?: [..]})")
+        args = {"actor": actor, **({"record_ids": body["record_ids"]} if "record_ids" in body else {})}
+        return run_tool(get_orch(), sid, "verify_records", args, actor)
+
+    @router.post("/records/decide")
+    def decide_records(sid: str, body: Any = Body(...), sess=Depends(owned_session),
+                       actor: str = Depends(actor_id)) -> dict:
+        out = _decide_loop(get_orch(), sid, actor, body, tool="decide_records", id_key="record_id",
+                           owned=owned_record_id, result_key="record")
+        return {**out, "extraction_results": out["state"]["extraction_results"]}
 
     @router.get("/sources/{src_id}/pages/{n}")
     def source_page(sid: str, src_id: str, n: int, sess=Depends(owned_session)) -> dict:

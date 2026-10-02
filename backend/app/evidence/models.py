@@ -25,17 +25,20 @@ REASON_PAGE_OUT_OF_RANGE, REASON_NON_ASCII_DIGITS = "page_out_of_range", "non_as
 REASON_NO_NUMBER, REASON_NUMBER_MISMATCH = "no_number", "number_mismatch"
 REASON_INTEGER_EXPECTED, REASON_SNIPPET_NOT_ON_PAGE = "integer_expected", "snippet_not_on_page"
 REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "source_changed"
+REASON_TEXT_NOT_IN_SNIPPET = "text_not_in_snippet"        # text field: value absent from its own snippet
 REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
                 REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
-                REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED)
+                REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED,
+                REASON_TEXT_NOT_IN_SNIPPET)
 # QC flag codes (flags_json entries: {code, severity warn|error, message, field, group, origin script|llm}).
 FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N = "required_missing", "out_of_range", "non_integer_n"
 FLAG_DUPLICATE, FLAG_UNIT_MISMATCH, FLAG_UNIT_MISSING = "duplicate", "unit_mismatch", "unit_missing"
 FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL = "se_nonpositive", "ci_inverted", "composite_cell"
 FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC = "table_low_confidence", "verify_fail", "non_numeric"
+FLAG_SUSPICIOUS_INSTRUCTION = "suspicious_instruction_text"   # value/snippet reads like an instruction
 FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
               FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
-              FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC)
+              FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 

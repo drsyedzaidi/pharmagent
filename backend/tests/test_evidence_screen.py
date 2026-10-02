@@ -176,8 +176,10 @@ def test_scores_are_deterministic_across_runs(env, papers, tmp_path):
     _ingest_all(env, papers)
     second, _ = _screen(env)
     keys = ("id", "source_id", "verdict", "score", "reasoning", "criteria", "method")
-    assert [{k: s[k] for k in keys} for s in first.result["screens"]] == \
-           [{k: s[k] for k in keys} for s in second.result["screens"]]
+    # ids are hash-derived (session + sha256), so rows are compared by id: the ledger lists
+    # sources by second-resolution uploaded_at, which can straddle a second between the runs
+    assert sorted(({k: s[k] for k in keys} for s in first.result["screens"]), key=lambda r: r["id"]) == \
+           sorted(({k: s[k] for k in keys} for s in second.result["screens"]), key=lambda r: r["id"])
 
 
 def test_rescreen_same_criteria_keeps_rows_and_new_criteria_adds_rows(env, papers):

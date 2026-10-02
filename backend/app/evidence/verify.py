@@ -69,7 +69,10 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool) -
         if any(_close(found, t) for t in targets):
             return snippet[start:end], M.REASON_OK
     vdig = digits_only(value)
-    fragment = any(vdig and vdig in digits_only(snippet[s:e]) for s, e, _ in spans)
+    # A fragment is a STRICT sub-run of a token's digits ('24' in '245.6'); equal digits with a
+    # different reading ('3.412' vs '3,412') are a separator mismatch, i.e. number_mismatch.
+    fragment = any(vdig and vdig != digits_only(snippet[s:e]) and vdig in digits_only(snippet[s:e])
+                   for s, e, _ in spans)
     return None, (M.REASON_NO_NUMBER if not spans or fragment else M.REASON_NUMBER_MISMATCH)
 
 
