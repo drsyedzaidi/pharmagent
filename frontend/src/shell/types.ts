@@ -10,6 +10,7 @@ export const MARKERS = [
   '__FORECAST__', '__DIAG__', '__FOREST__', '__SIMEST__', '__BOOTSTRAP__', '__SIR__',
   '__PROFILE__', '__SWEEP__', '__CLINSIM__', '__EXPFOREST__', '__SPECIALPOP__',
   '__INDIVEXP__', '__PEDIATRIC__', '__SIM__', '__REVIEW__', '__REPORT__',
+  '__EVIDENCE_SCREEN__', '__EVIDENCE_RECORDS__', '__EVIDENCE_DATASET__',
 ] as const;
 export type Marker = typeof MARKERS[number];
 

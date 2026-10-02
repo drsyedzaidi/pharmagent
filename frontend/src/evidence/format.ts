@@ -1,7 +1,8 @@
 /** Pure display + draft helpers for the Evidence workspace (no React). */
-import type { AuditEntry } from '../types';
+import type { AuditEntry, PharmState } from '../types';
 import type {
-  Criterion, CriterionKind, DecimalSetting, EvidenceSnapshot, FieldType, ParseStatus, TemplateField,
+  Criterion, CriterionKind, DecimalSetting, EvidenceMarker, EvidenceSnapshot, FailReason, FieldType, ParseStatus,
+  TemplateField, VerifyFields,
 } from './types';
 
 /** Client-side mirror of the backend upload cap (ingest.MAX_BYTES). */
@@ -125,3 +126,35 @@ export function templateProblem(rows: FieldDraft[]): string {
 
 /** Canonical string of a draft list for dirty checks (same shape the server stores). */
 export const sameBody = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** Which result card a keyless chat turn routed to the evidence agent produced, judged by
+ *  the PharmState mirror it changed (chat responses do not name the tool). An idle-hint
+ *  turn changes none, so it pushes no card. */
+export function evidenceMarkerFor(prev: PharmState | null, next: PharmState): EvidenceMarker | null {
+  if (next.evidence_dataset_path && next.evidence_dataset_path !== prev?.evidence_dataset_path) return '__EVIDENCE_DATASET__';
+  if (next.extraction_results && next.extraction_results.updated_at !== prev?.extraction_results?.updated_at) {
+    return '__EVIDENCE_RECORDS__';
+  }
+  if (next.screening_results && next.screening_results.updated_at !== prev?.screening_results?.updated_at) {
+    return '__EVIDENCE_SCREEN__';
+  }
+  return null;
+}
+
+/** Plain words for the verifier's reason codes (backend models.REASON_CODES). */
+export const REASON_WORDS: Record<FailReason, string> = {
+  empty_snippet: 'no snippet cited',
+  snippet_too_long: 'snippet over 300 characters',
+  page_out_of_range: 'page out of range',
+  non_ascii_digits: 'non-ASCII digits',
+  no_number: 'value not in snippet',
+  number_mismatch: 'number differs from the page',
+  integer_expected: 'integer expected',
+  snippet_not_on_page: 'snippet not on the cited page',
+  table_cell_mismatch: 'table cell does not hold the value',
+  source_changed: 'source file changed',
+  text_not_in_snippet: 'text not in snippet',
+};
+
+export const failWords = (r: VerifyFields): string =>
+  r.verify_status === 'pass' ? '' : (REASON_WORDS[r.verify_reason] ?? r.verify_reason);

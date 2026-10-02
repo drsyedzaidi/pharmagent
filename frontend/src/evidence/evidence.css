@@ -86,6 +86,96 @@
   padding-top: 12px; border-top: 1px solid var(--border);
 }
 
+/* ── shared: mono values, neutral pill, status words ── */
+.ev-workspace .mono, .ev-card .mono, .ev-workspace code { font-family: var(--mono); }
+.ev-value { font-size: 12px; color: var(--text-h); }
+.pill.ev-neutral { color: var(--text); background: var(--chip-bg); }
+.ev-table-wrap { overflow-x: auto; }
+.ev-table td.num.mono { font-size: 12px; color: var(--text-h); }
+.ev-wide-cell { min-width: 240px; }
+.ev-reason { margin-top: 2px; color: var(--text); overflow-wrap: anywhere; }
+.ev-met, .ev-verify { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+.ev-met.ok, .ev-verify.ok { color: var(--green); }
+.ev-met.bad, .ev-verify.bad { color: var(--red); }
+.ev-met.dim { color: var(--text-dim); }
+.ev-verify.bad { align-items: flex-start; max-width: 220px; }
+.ev-verify svg { flex-shrink: 0; margin-top: 2px; }
+
+/* QC flag chips: icon + code, severity also in the icon shape and sr-only text */
+.ev-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ev-flag {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 1.3; white-space: nowrap;
+  padding: 1px 7px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text);
+}
+.ev-flag.warn { color: var(--yellow); background: var(--yellow-bg); border-color: var(--yellow-bg); }
+.ev-flag.error { color: var(--red); background: var(--red-bg); border-color: var(--red-bg); }
+
+/* ── decisions ── */
+.ev-decide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 200px; }
+.ev-decide .ev-input { flex: 1 1 140px; width: auto; }
+.ev-bulk-reason { flex: 1 1 220px; width: auto; }
+
+/* ── screening reasoning ── */
+.ev-details { margin-top: 4px; font-size: 12px; }
+.ev-details summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.ev-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.ev-reasoning { margin: 6px 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ev-crit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ev-crit-list li { color: var(--text); overflow-wrap: anywhere; }
+.ev-quote { margin: 2px 0 0 16px; color: var(--text-dim); overflow-wrap: anywhere; }
+.ev-quote q { color: var(--text); }
+
+/* ── records + context: side by side when the workspace itself is wide ── */
+.ev-records { container-type: inline-size; container-name: evrec; }
+.ev-records-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.ev-records-table tbody tr { cursor: pointer; }
+.ev-records-table td:nth-child(2) { min-width: 140px; }
+.ev-records-table td:nth-child(3) { min-width: 130px; }
+.ev-records-table .link-btn { text-align: left; overflow-wrap: anywhere; }
+.ev-value { white-space: nowrap; }
+.ev-records-table tbody tr:hover td { background: var(--bg-hover); }
+.ev-records-table tbody tr.ev-row-current td { background: var(--selected); }
+.ev-context-col { min-width: 0; padding: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); }
+@container evrec (min-width: 1000px) {
+  .ev-records-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+  .ev-context-col { position: sticky; top: 12px; }
+}
+
+.ev-context { display: flex; flex-direction: column; gap: 8px; }
+.ev-context-head h3 { font-size: 14px; overflow-wrap: anywhere; }
+.ev-snippet { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.ev-pagetext {
+  margin: 0; max-height: 360px; overflow: auto; padding: 10px 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ev-pagetext:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ev-pagetext mark, .ev-grid mark {
+  color: var(--text-h); background: var(--yellow-bg); border-radius: 2px;
+  outline: 1px solid var(--yellow); outline-offset: 0;
+}
+.ev-pagetext mark.approx { outline-style: dashed; }
+.ev-pagetext mark strong, .ev-grid mark strong { font-weight: 600; }
+.ev-grid-wrap { overflow-x: auto; }
+.ev-grid { border-collapse: collapse; font-size: 12px; font-family: var(--mono); }
+.ev-grid caption { text-align: left; font-family: var(--sans); color: var(--text-dim); padding-bottom: 4px; }
+.ev-grid th, .ev-grid td { padding: 4px 8px; border: 1px solid var(--border-subtle); text-align: left; vertical-align: top; }
+.ev-grid th { font-weight: 600; color: var(--text-h); background: var(--bg-hover); }
+.ev-grid .ev-cell-hit { border-color: var(--yellow); }
+
+/* ── dataset ── */
+.ev-datasets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ev-dataset { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border-subtle); }
+.ev-dataset-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.ev-file { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.ev-filename { font-size: 12px; color: var(--text-h); overflow-wrap: anywhere; }
+.ev-sha code { overflow-wrap: anywhere; }
+.ev-panel .stat dd, .ev-card .stat dd { font-size: 16px; }
+
+/* ── transcript cards ── */
+.ev-card { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+
 /* ── rail entry ── */
 .workflow-btn.ev-rail-btn[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
 

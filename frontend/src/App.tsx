@@ -6,7 +6,8 @@ import {
 } from 'lucide-react';
 import { api, setToken, getToken } from './api';
 import { FlexplotPanel } from './flexplot';
-import { EvidenceWorkspace } from './evidence';
+import { EvidenceDatasetCard, EvidenceRecordsCard, EvidenceScreenCard, EvidenceWorkspace, evidenceMarkerFor } from './evidence';
+import type { EvidenceFocus, EvidenceMarker, EvidenceTab } from './evidence';
 import type { Decision, GateSigner, Marker, Outcome, VerifyNote, WorkflowName } from './shell/types';
 import { MARKERS, REVIEW_DRAWER_MQ } from './shell/types';
 import { hhmm, integrityFailures, latestEntryFor, sealedDecision, stepTimings } from './shell/format';
@@ -70,6 +71,9 @@ const CARD_META: Record<Marker, { title: string; agent: string; tool?: string; a
   __SIM__:           { title: 'Forward simulation',                 agent: 'simulator' },
   __REVIEW__:        { title: 'Adversarial review',                 agent: 'reviewer',     tool: 'adversarial_review' },
   __REPORT__:        { title: 'Report',                             agent: 'report' },
+  __EVIDENCE_SCREEN__:  { title: 'Publication screening', agent: 'evidence', tool: 'screen_publications' },
+  __EVIDENCE_RECORDS__: { title: 'Evidence extraction',   agent: 'evidence', tool: 'extract_evidence' },
+  __EVIDENCE_DATASET__: { title: 'Evidence dataset',      agent: 'evidence', tool: 'export_evidence_dataset' },
 };
 
 const STEPS = [
@@ -3887,6 +3891,11 @@ export default function App() {
   const [showSkills, setShowSkills] = useState(false);
   const [showFlexplot, setShowFlexplot] = useState(false);
   const [showEvidence, setShowEvidence] = useState(false);
+  const [evidenceFocus, setEvidenceFocus] = useState<EvidenceFocus | null>(null);
+  const openEvidence = useCallback((tab: EvidenceTab) => {
+    setEvidenceFocus(f => ({ tab, n: (f?.n ?? 0) + 1 }));
+    setShowEvidence(true);
+  }, []);
   /** Actions popover above the composer (quick-action rows live inside it). */
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLButtonElement>(null);
@@ -3919,10 +3928,12 @@ export default function App() {
     const seq = ++msgSeq.current;
     setMessages(prev => [...prev, { ...m, id: m.id || newMsgId(), seq }]);
   }, []);
-  /** Evidence workspace result: new state (the audit refresh follows it) + the tool summary. */
-  const onEvidenceResult = useCallback((st: PharmState, summary: string) => {
+  /** Evidence workspace result: new state (the audit refresh follows it), the tool summary,
+   *  and the tool's result card bound to this snapshot. */
+  const onEvidenceResult = useCallback((st: PharmState, summary: string, marker?: EvidenceMarker) => {
     setState(st);
     if (summary) pushMsg({ role: 'assistant', content: summary, agent: 'evidence', id: '' });
+    if (marker) pushMsg({ role: 'assistant', content: marker, agent: 'evidence', id: '', snap: st });
   }, [pushMsg]);
 
   function extractMessages(raw: ChatMessage[], agent: string): DisplayMsg[] {
@@ -4288,7 +4299,8 @@ export default function App() {
       if (res.pending_tool) {
         pushMsg({ role: 'assistant', content: '__PENDING_TOOL__', agent: res.agent, id: '', snap: res.state });
       }
-      const marker = AGENT_CARD[res.agent];
+      // Evidence: the card follows the mirror the turn changed (an idle hint pushes none).
+      const marker = res.agent === 'evidence' ? evidenceMarkerFor(state, res.state) : AGENT_CARD[res.agent];
       if (marker) pushMsg({ role: 'assistant', content: marker, agent: res.agent, id: '', snap: res.state });
     } catch (e) {
       pushMsg({ role: 'assistant', content: `Error: ${(e as Error).message}`, agent: 'supervisor', id: '' });
@@ -5329,6 +5341,28 @@ export default function App() {
                 </ResultSection>
               );
             }
+            if (m.content === '__EVIDENCE_SCREEN__' && st?.screening_results) {
+              return (
+                <ResultSection key={m.id} {...sectionProps('__EVIDENCE_SCREEN__', m)}>
+                  <EvidenceScreenCard r={st.screening_results} onOpen={() => openEvidence('screening')} />
+                </ResultSection>
+              );
+            }
+            if (m.content === '__EVIDENCE_RECORDS__' && st?.extraction_results) {
+              return (
+                <ResultSection key={m.id} {...sectionProps('__EVIDENCE_RECORDS__', m)}>
+                  <EvidenceRecordsCard r={st.extraction_results} onOpen={() => openEvidence('records')} />
+                </ResultSection>
+              );
+            }
+            if (m.content === '__EVIDENCE_DATASET__' && st?.evidence_dataset_path) {
+              return (
+                <ResultSection key={m.id} {...sectionProps('__EVIDENCE_DATASET__', m)}>
+                  <EvidenceDatasetCard path={st.evidence_dataset_path} summary={st.evidence_summary ?? null}
+                    onOpen={() => openEvidence('dataset')} />
+                </ResultSection>
+              );
+            }
             if (m.content === '__REPORT__') return null;
             return <MessageBubble key={m.id} msg={m} agent={m.agent} />;
           })}
@@ -5369,7 +5403,8 @@ export default function App() {
             </ResultSection>
           )}
           {showEvidence && session && (
-            <EvidenceWorkspace sessionId={session.id} audit={audit} busy={loading} onResult={onEvidenceResult} />
+            <EvidenceWorkspace sessionId={session.id} audit={audit} busy={loading} focus={evidenceFocus}
+              stamp={state?.evidence_summary?.updated_at ?? null} onResult={onEvidenceResult} />
           )}
           {showSkills && (
             <ResultSection title="Skills">

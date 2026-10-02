@@ -299,3 +299,9 @@ export interface RecordFilter { status?: DecisionStatus; verify?: VerifyStatus; 
 export type Run = (label: string, task: (onTick: (elapsedSec: number) => void) => Promise<void>) => Promise<boolean>;
 /** Hands a tool envelope (state + summary) to the app; marker selects the result card. */
 export type OnTool = (env: ToolEnvelope<unknown>, marker?: EvidenceMarker) => void;
+/** Hands a new PharmState + transcript summary to the app (decide endpoints return no envelope). */
+export type OnState = (state: PharmState, summary: string, marker?: EvidenceMarker) => void;
+/** Workspace tabs, in pipeline order. */
+export type EvidenceTab = 'library' | 'criteria' | 'screening' | 'template' | 'records' | 'dataset';
+/** A request to show one tab (from a chat card); `n` makes repeated requests distinct. */
+export interface EvidenceFocus { tab: EvidenceTab; n: number }

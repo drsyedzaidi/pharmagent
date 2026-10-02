@@ -1,2 +1,4 @@
 export { EvidenceWorkspace } from './EvidenceWorkspace';
-export type { EvidenceMarker, EvidenceSummary, ExtractionResults, ScreeningResults } from './types';
+export { EvidenceDatasetCard, EvidenceRecordsCard, EvidenceScreenCard } from './cards';
+export { evidenceMarkerFor } from './format';
+export type { EvidenceFocus, EvidenceMarker, EvidenceTab, EvidenceSummary, ExtractionResults, ScreeningResults } from './types';

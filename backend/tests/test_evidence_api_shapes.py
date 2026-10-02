@@ -206,3 +206,71 @@ def test_pipeline_response_shapes(client, tmp_path):
     assert set(snap["datasets"][0]) == DATASET_ROW_KEYS and set(snap["screens"][0]) == SCREEN_ROW_KEYS
     assert set(snap["records"][0]) == RECORD_ROW_KEYS
     assert snap["summary"]["wide_path"] == exp["result"]["wide_path"]
+
+
+def _context_text(page: dict, loc: dict) -> str:
+    """The text RecordContext (frontend S9) highlights: a text locator with a column set
+    refers to that column's text, every other locator to the page text."""
+    if loc["kind"] == "text" and loc["column"] is not None:
+        return page["columns"][loc["column"]]
+    return page["text"]
+
+
+def test_record_locators_round_trip_through_the_pages_endpoint(client, tmp_path):
+    """RecordContext marks locator.span on the GET .../pages/{n} text with raw (code point)
+    offsets and marks table cells by {table, row, col}; pin both against the server."""
+    from app.evidence.normalize import normalise
+    from tests.test_evidence_extract import INCLUDE_ALL, TEMPLATE
+
+    paths = fx.build_all(tmp_path / "papers")
+    sid = client.post("/api/sessions").json()["id"]
+    for name in ("paper_a", "paper_b", "paper_c", "paper_d"):
+        r = client.post(EV.format(sid=sid) + "/upload",
+                        files={"file": (f"{name}.pdf", paths[name].read_bytes(), "application/pdf")})
+        assert r.status_code == 200, r.text
+    _post(client, sid, "/criteria", {"criteria": INCLUDE_ALL})
+    screens = _post(client, sid, "/screen", {})["result"]["screens"]
+    _post(client, sid, "/screen/decide", {"decisions": [
+        {"screen_id": s["id"], "decision": "approve", "reason": "ok"} for s in screens]})
+    _post(client, sid, "/template", TEMPLATE)
+    _post(client, sid, "/extract", {})
+
+    records = client.get(EV.format(sid=sid)).json()["records"]
+    assert records, "extraction proposed no records"
+    kinds, spans, cells = set(), 0, 0
+    pages: dict[tuple[str, int], dict] = {}
+    for rec in records:
+        loc = rec["locator"]
+        assert set(rec) == RECORD_ROW_KEYS and set(loc) == LOCATOR_KEYS
+        assert isinstance(loc["page"], int) and loc["page"] >= 1 and loc["kind"] in {"text", "table"}
+        assert loc["decimal_style"] in {".", ","}
+        assert loc["span"] is None or (len(loc["span"]) == 2 and all(isinstance(x, int) for x in loc["span"]))
+        key = (rec["source_id"], loc["page"])
+        if key not in pages:
+            r = client.get(EV.format(sid=sid) + f"/sources/{rec['source_id']}/pages/{loc['page']}")
+            assert r.status_code == 200, r.text
+            pages[key] = r.json()
+        page = pages[key]
+        assert set(page) == PAGE_KEYS and page["page"] == loc["page"]
+        kinds.add(loc["kind"])
+        if rec["verify_status"] == "fail":
+            assert loc["span"] is None and loc["literal"] is None
+            continue
+        if loc["span"] is not None:
+            spans += 1
+            start, end = loc["span"]
+            text = _context_text(page, loc)
+            assert 0 <= start < end <= len(text)
+            assert normalise(text[start:end])[0] == normalise(loc["snippet"])[0], rec["id"]
+            if loc["literal"] is not None:
+                assert loc["literal"] in text[start:end], rec["id"]
+        if loc["kind"] == "table":
+            cells += 1
+            cell = loc["cell"]
+            assert {"table", "row", "col", "header", "row_label"} <= set(cell)
+            table = next(t for t in page["tables"] if t["index"] == cell["table"])
+            raw = table["rows"][cell["row"]][cell["col"]]
+            assert normalise(loc["snippet"])[0] in normalise(raw)[0], rec["id"]
+            if loc["literal"] is not None:
+                assert normalise(loc["literal"])[0] in normalise(raw)[0], rec["id"]
+    assert kinds == {"text", "table"} and spans > 0 and cells > 0
