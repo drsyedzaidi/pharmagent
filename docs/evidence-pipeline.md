@@ -277,6 +277,11 @@ substitution, optional-content layers or form scripts).
   PNG too large) -> 422 `the page could not be rendered`; page too large for 72 dpi -> 422
   `the page is too large to render at a readable resolution`; busy renderer -> 503 + `Retry-After`;
   per-session render rate -> 429 + `Retry-After`. No path or exception text appears in any body.
+- Headers of an error: every `Retry-After` above is set on the `HTTPException` the route raises and sent by the
+  application's one global handler (`main.http_exception_handler`), which keeps the envelope and `X-Request-ID`
+  and forwards `exc.headers` through `app/response_headers.py`. That module drops hop-by-hop, framing
+  (`Content-Length`, `Content-Type`, `Content-Encoding`), `Set-Cookie`, `Access-Control-*` and `X-Request-ID`
+  headers and any header with control characters. The evidence router has no route class of its own.
 - Client input: `zoom` (1 or 2) and `sha` only. Page and boxes come from the ledger record and the layout
   sidecar; a dpi, crop or box in the query is ignored (tested: identical bytes).
 

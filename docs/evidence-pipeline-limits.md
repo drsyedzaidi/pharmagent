@@ -59,6 +59,9 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
   (the UI marks them "earlier template"), but the wide CSV uses the current field list.
 - **Limits.** 25 MB and 300 pages per PDF. Password-protected PDFs are refused; owner-password
   (print-locked) PDFs are accepted.
+- **Error headers come from a deny-list.** The global handler forwards the headers of any raised
+  `HTTPException` except a fixed unsafe set (`app/response_headers.py`); a route that needs a header in that
+  set (a cookie, a CORS header) cannot set it through an exception and must build its own response.
 
 ## Later phases
 

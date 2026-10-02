@@ -31,7 +31,6 @@ from app.evidence import ingest, llm_access, upload_limits
 from app.evidence.config_tools import source_row
 from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
 from app.evidence.parse_sandbox import ParseBusyError
-from app.evidence.route_headers import HeaderKeepingRoute
 from app.evidence.store import get_store, source_id
 
 log = logging.getLogger(__name__)
@@ -217,8 +216,7 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
                           get_orch: Callable[[], Any],
                           get_jobs: Callable[[], Any] | None = None) -> APIRouter:
     """``get_jobs`` returns main.py's JobManager; without it the LLM screening path runs inline."""
-    router = APIRouter(prefix="/api/sessions/{sid}/evidence", tags=["evidence"],
-                       route_class=HeaderKeepingRoute)
+    router = APIRouter(prefix="/api/sessions/{sid}/evidence", tags=["evidence"])
 
     @router.post("/upload")
     async def upload_evidence(sid: str, file: UploadFile = File(...), licence_note: str | None = Form(None),

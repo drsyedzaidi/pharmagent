@@ -226,7 +226,7 @@ def _image_job(sid: str, record_id: str, zoom: int, sha: str | None, data_dir: s
 
 
 def add_image_routes(router: APIRouter, owned_session: Callable[..., Any]) -> None:
-    """Mount the two page-image GET routes on the evidence router (same prefix, auth and route class)."""
+    """Mount the two page-image GET routes on the evidence router (same prefix and auth)."""
 
     @router.get("/records/{record_id}/image/meta")
     async def image_meta(sid: str, record_id: str, zoom: str = Query("1"), sess=Depends(owned_session)) -> Response:

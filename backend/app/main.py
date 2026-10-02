@@ -17,6 +17,7 @@ from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
+from app.response_headers import safe_exception_headers
 from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
@@ -65,7 +66,8 @@ async def request_context(request: Request, call_next):
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     rid = getattr(request.state, "request_id", "")
-    return JSONResponse(status_code=exc.status_code, headers={"X-Request-ID": rid},
+    return JSONResponse(status_code=exc.status_code,
+                        headers={**safe_exception_headers(exc.headers), "X-Request-ID": rid},
                         content=_error_body(f"http_{exc.status_code}", str(exc.detail), rid))
 
 
