@@ -9,6 +9,11 @@ import type {
 export const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const FIELD_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
+/** Accessible name of a record row: field, group (when set) and publication, so rows with the same
+ *  field from different papers are distinguishable to screen readers ("n in paper_b.pdf"). */
+export const recordLabel = (r: { field: string; group_label: string }, source: string): string =>
+  `${r.field}${r.group_label ? ` · ${r.group_label}` : ''} in ${source}`;
+
 /** First `n` hex characters of a sha256 (mono id chips). */
 export const shaPrefix = (h: string | null | undefined, n = 12): string => (h ? h.slice(0, n) : '');
 

@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react';
 import { hhmm } from '../shell/format';
 import { evidenceDecideRecords, evidenceVerify } from './api';
 import { FlagChip, StatusPill, VerifyBadge } from './badges';
-import { failWords, shaPrefix } from './format';
+import { failWords, recordLabel, shaPrefix } from './format';
 import { RecordContext } from './RecordContext';
 import type {
   Decision, EvidenceSource, OnState, OnTool, RecordDecision, RecordRow, Run, TemplateConfig,
@@ -46,6 +46,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   useEffect(() => { if (ctxId) asideRef.current?.scrollIntoView({ block: 'nearest' }); }, [ctxId]);
 
   const names = new Map(sources.map(s => [s.id, s.filename]));
+  const rowName = (r: RecordRow): string => recordLabel(r, names.get(r.source_id) ?? r.source_id);
   const test = (FILTERS.find(f => f.key === filter) ?? FILTERS[0]).test;
   const rows = records.filter(test).sort((a, b) =>
     STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
@@ -140,7 +141,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
                     <tr key={r.id} className={r.id === ctxId ? 'ev-row-current' : undefined} onClick={e => onRow(e, r.id)}>
                       <td>
                         {bulkEligible(r) && (
-                          <input type="checkbox" aria-label={`Select ${r.field} ${r.group_label}`} checked={selected.has(r.id)}
+                          <input type="checkbox" aria-label={`Select ${rowName(r)}`} checked={selected.has(r.id)}
                             disabled={disabled} onChange={() => toggle(r.id)} />
                         )}
                       </td>
@@ -169,7 +170,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
                       <td className="ev-decide-cell">
                         {r.status === 'proposed' ? (
                           <div className="ev-decide">
-                            <input className="ev-input" aria-label={`Reason for ${r.field} ${r.group_label}`} value={reason}
+                            <input className="ev-input" aria-label={`Reason for ${rowName(r)}`} value={reason}
                               maxLength={MAX_REASON} placeholder="Reason (required)" disabled={disabled}
                               onChange={e => setReasons(prev => ({ ...prev, [r.id]: e.target.value }))} />
                             <button type="button" className="btn btn-primary" disabled={disabled || failed || !reason.trim()}

@@ -10,6 +10,7 @@ import csv
 import hashlib
 import io
 import itertools
+import os
 from pathlib import Path
 
 import pytest
@@ -184,3 +185,97 @@ def test_keyless_pipeline_end_to_end(client, papers):
     # the keyless chat now has nothing left to run
     chat = _ok(client.post(f"/api/sessions/{sid}/chat", json={"message": "export the evidence dataset"}))
     assert chat["agent"] == "evidence" and chat["tool_calls"] == [] and "last export" in chat["messages"][0]
+
+
+# ------------------------------------------------------------- chat path --
+
+def _chat(client, sid: str, message: str) -> dict:
+    return _ok(client.post(f"/api/sessions/{sid}/chat", json={"message": message}))
+
+
+def _export_result_from_ledger(ds: dict, long_bytes: bytes, wide_bytes: bytes, template_hash: str) -> dict:
+    """Rebuild export_evidence_dataset's result from the ledger row + the downloaded headers, so its
+    hash can be compared with the audit entry's outputs_hash (the audit stores only the hash)."""
+    return {"dataset": ds, "long_path": ds["long_path"], "wide_path": ds["wide_path"],
+            "long_sha256": ds["long_sha256"], "wide_sha256": ds["wide_sha256"],
+            "record_hashes": ds["record_hashes"], "n_records": ds["n_records"], "n_sources": ds["n_sources"],
+            "template_hash": template_hash,
+            "long_columns": next(csv.reader(io.StringIO(long_bytes.decode("utf-8")))),
+            "wide_columns": next(csv.reader(io.StringIO(wide_bytes.decode("utf-8"))))}
+
+
+def test_keyless_chat_drives_screen_extract_export(client, papers):
+    """The three proposal tools run from keyless chat; the human decisions stay on the API."""
+    from app.core.audit import hash_payload
+
+    sid = _ok(client.post("/api/sessions"))["id"]
+    sources = {n: _upload(client, sid, papers[n], f"{n}.pdf") for n in PAPERS}
+    by_src = {s["id"]: n for n, s in sources.items()}
+    _ok(client.post(EV.format(sid=sid) + "/criteria", json={"criteria": CRITERIA}))
+
+    # 1. chat screen -> proposals only, mirror pushed
+    turn = _chat(client, sid, "screen the publications")
+    assert turn["agent"] == "evidence"
+    assert [c["tool"] for c in turn["tool_calls"]] == ["screen_publications"]
+    sr = turn["state"]["screening_results"]
+    assert sr["n_screened"] == 4 and sr["proposed"] == 4 and sr["approved"] == 0 and sr["method"] == "keyword"
+    assert sr["verdicts"] == {"include": 3, "exclude": 1, "unsure": 0}
+    screens = _snapshot(client, sid)["screens"]
+    assert all(s["status"] == "proposed" for s in screens)        # chat never decides
+    assert _chat(client, sid, "approve the screening verdicts")["tool_calls"] == []
+    assert all(s["status"] == "proposed" for s in _snapshot(client, sid)["screens"])
+    _decide_screens(client, sid, [{"screen_id": s["id"], "reason": "checked",
+                                   "decision": "reject" if by_src[s["source_id"]] == "paper_c" else "approve"}
+                                  for s in screens])
+
+    # 2. chat extract -> proposed records, verified, mirror pushed
+    _ok(client.post(EV.format(sid=sid) + "/template", json=TEMPLATE))
+    turn = _chat(client, sid, "extract the evidence")
+    assert [c["tool"] for c in turn["tool_calls"]] == ["extract_evidence"]
+    er = turn["state"]["extraction_results"]
+    records = _snapshot(client, sid)["records"]
+    assert er["n_records"] == len(records) >= 8 and er["proposed"] == len(records) and er["approved"] == 0
+    assert not any(by_src[r["source_id"]] == "paper_c" or r["value"] == "2.41" for r in records)
+    passing = [r for r in records if r["verify_status"] == "pass"]
+    _decide_records(client, sid, [{"record_id": r["id"], "decision": "approve", "reason": "on page"}
+                                  for r in passing])
+
+    # 3. chat export -> files whose sha256 equal the ledger AND the audit outputs
+    turn = _chat(client, sid, "export the evidence dataset")
+    assert [c["tool"] for c in turn["tool_calls"]] == ["export_evidence_dataset"]
+    snap = _snapshot(client, sid)
+    ds, thash = snap["datasets"][0], snap["template"]["body_hash"]
+    assert turn["state"]["evidence_dataset_path"] == ds["long_path"]
+    long_bytes, wide_bytes = _download(client, sid, ds["long_path"]), _download(client, sid, ds["wide_path"])
+    assert hashlib.sha256(long_bytes).hexdigest() == ds["long_sha256"]
+    assert hashlib.sha256(wide_bytes).hexdigest() == ds["wide_sha256"]
+    assert ds["n_records"] == len(passing) and ds["record_hashes"] == sorted(r["record_hash"] for r in passing)
+    entry = _ok(client.get(f"/api/sessions/{sid}/audit"))["entries"][-1]
+    assert entry["tool"] == "export_evidence_dataset" and ds["long_sha256"][:12] in entry["action"]
+    assert entry["outputs_hash"] == hash_payload(_export_result_from_ledger(ds, long_bytes, wide_bytes, thash))
+    assert "2.41" not in long_bytes.decode("utf-8")
+
+
+# ------------------------------------------------- optional real OA PDF --
+
+OA_PDF = os.environ.get("EVIDENCE_OA_PDF", "")
+
+
+@pytest.mark.skipif(not OA_PDF or not Path(OA_PDF).is_file(),
+                    reason="set EVIDENCE_OA_PDF to an open-access PDF (e.g. a Europe PMC OA article) to run")
+def test_real_open_access_pdf_smoke(client):
+    """Keyless path on a real publication: parses, screens, and proposes at least one record."""
+    sid = _ok(client.post("/api/sessions"))["id"]
+    src = _upload(client, sid, Path(OA_PDF), Path(OA_PDF).name)
+    assert src["parse_status"] == "parsed" and src["pages"] >= 1
+    _ok(client.post(EV.format(sid=sid) + "/criteria", json={"criteria": [
+        {"id": "C1", "text": "Pharmacokinetic study", "kind": "inclusion", "required": False,
+         "keywords": ["pharmacokinetic", "pharmacokinetics", "plasma", "concentration"]}]}))
+    screen = _ok(client.post(EV.format(sid=sid) + "/screen", json={}))["result"]["screens"][0]
+    _decide_screens(client, sid, [{"screen_id": screen["id"], "decision": "approve", "reason": "smoke"}])
+    if screen["verdict"] != "include":
+        pytest.skip(f"keyword screen said {screen['verdict']}; extraction needs an approved include")
+    _ok(client.post(EV.format(sid=sid) + "/template", json=TEMPLATE))
+    out = _ok(client.post(EV.format(sid=sid) + "/extract", json={}))["result"]
+    assert out["n_new"] >= 1, out["sources"]
+    assert all(r["status"] == "proposed" for r in _snapshot(client, sid)["records"])
