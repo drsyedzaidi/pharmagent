@@ -158,3 +158,19 @@ def test_per_session_byte_cap(client, monkeypatch):
     assert _up(client, sid, _pdf(1), "a.pdf").status_code == 200
     monkeypatch.setattr(upload_limits, "MAX_SESSION_BYTES", 600)
     assert _up(client, sid, _pdf(2), "b.pdf").status_code == 413
+
+
+def test_parse_cache_from_before_the_guards_is_reparsed(tmp_path):
+    """A cache written by the earlier parser (no visibility filter, thin spaces lost) is not reused."""
+    import json
+
+    import pdfplumber
+
+    data = raw.build([(BOX, raw.text(raw.BODY) + raw.text([HIDDEN], y0=600, prefix="3 Tr"))])
+    sha, pdf = ingest.write_by_sha256(data, tmp_path)
+    stale = {"sha256": sha, "parser": f"pdfplumber {pdfplumber.__version__}", "decimal_style": ".",
+             "text_chars": 1, "metadata": {}, "pages": [{"n": 1, "text": HIDDEN, "small_text": "",
+                                                          "columns": None, "tables": []}]}
+    (ingest.evidence_dir(tmp_path) / f"{sha}.pages.json").write_text(json.dumps(stale))
+    doc, _ = ingest.parse_and_cache(pdf, tmp_path)
+    assert "9999" not in doc["pages"][0]["text"] and doc["pages"][0]["hidden_chars"] > 0

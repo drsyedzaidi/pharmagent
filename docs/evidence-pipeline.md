@@ -109,7 +109,7 @@ same batch holds, gets the flag `duplicate`; approving it needs `allow_conflict:
 
 ### Parse JSON (`<sha256>.pages.json`)
 
-- Top level: `{sha256, parser: "pdfplumber 0.11.10", decimal_style, text_chars, metadata, pages:[...]}`.
+- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 2", decimal_style, text_chars, metadata, pages:[...]}`.
 - Each page: `{n, text, small_text, columns, tables, hidden_chars}`. Glyphs drawn invisibly (text render
   mode 3 / 7), white glyphs not on a dark filled box and glyphs outside the page box are dropped before
   extraction and counted in `hidden_chars`; a record citing such a page gets the warning `hidden_text`.

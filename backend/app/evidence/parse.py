@@ -28,7 +28,9 @@ from app.evidence.parse_guard import (
     visibility_filter,
 )
 
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__}"
+# The suffix versions this module's output: a parse cache written by an earlier version (no
+# visibility filter, thin spaces turned into word gaps) is re-parsed rather than reused.
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 2"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
