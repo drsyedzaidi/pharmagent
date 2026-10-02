@@ -30,8 +30,8 @@ def test_parse_json_contract_top_level(papers):
     assert set(doc["metadata"]) == {"title", "author", "subject", "creator", "producer", "creation_date"}
     assert doc["metadata"]["title"].startswith("Pharmacokinetics of drug X") and doc["metadata"]["author"]
     page = doc["pages"][0]
-    assert set(page) == {"n", "text", "small_text", "columns", "tables", "hidden_chars", "ink_check"}
-    assert page["n"] == 1 and page["hidden_chars"] == 0 and page["ink_check"] == "ok"
+    assert set(page) == {"n", "text", "small_text", "columns", "tables", "hidden_chars", "ink_check", "glyph_check"}
+    assert page["n"] == 1 and page["hidden_chars"] == 0 and page["ink_check"] == "ok" and page["glyph_check"] == {}
     assert doc["text_chars"] == sum(len(p["text"]) for p in doc["pages"]) > 0
     json.dumps(doc)   # must be plain JSON
 

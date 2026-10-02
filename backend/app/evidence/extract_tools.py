@@ -3,8 +3,9 @@ literal verifier on proposed rows) and decide_records (the human's, approve refu
 
 Pipeline per source: proposals (LLM when configured, else header-matched table cells + text rules)
 -> deterministic literal verification against the parsed page -> scripted QC flags -> instruction-
-text flag -> optional add-only LLM flags -> INSERT OR IGNORE on the claim hash. Only sources whose
-screening verdict is an approved 'include' are read. Every value in the ledger therefore either
+text flag -> optional add-only LLM flags -> INSERT OR IGNORE on the claim hash. Only sources the
+reviewer included under the CURRENT criteria are read (inclusion.py), and only their records can be
+approved. Every value in the ledger therefore either
 came from deterministic code or is a model proposal that a deterministic check found literally
 on the cited page; the reviewer still decides each row.
 """
@@ -22,14 +23,16 @@ from app.evidence import models as M
 from app.evidence.config_tools import summarise
 from app.evidence.extract_llm import MAX_PAGE_CHARS, llm_extract, llm_flags
 from app.evidence.extract_rules import field_index, norm_key, rule_extract, value_number
+from app.evidence.inclusion import current_screens, exclusion_reason, included_sources
 from app.evidence.llm_access import current_llm, llm_available
-from app.evidence.models import DECISIONS, Record, Source, effective_verdict, now_iso
+from app.evidence.models import DECISIONS, Record, Source, now_iso
 from app.evidence.normalize import normalise, numbers_in
 from app.evidence.qc_flags import group_key, merge_llm_flags, same_value, scripted_flags
 from app.evidence.record_checks import page_checks
 from app.evidence.screen_tools import _select_sources
 from app.evidence.store import EvidenceStore, get_store
 from app.evidence.supersede import carried, claim_ids, run_marks
+from app.evidence.value_checks import document_evidence
 from app.evidence.verify import verify
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -98,6 +101,8 @@ def _verify_one(p: dict[str, Any], doc: dict[str, Any], ftype: str) -> dict[str,
             str(loc.get("snippet") or ""))[0]:
         status, reason, loc = "fail", M.REASON_TEXT_NOT_IN_SNIPPET, {**loc, "span": None, "literal": None}
     base = _page_reading(p, res.number, res.literal) if status == "pass" else p
+    if ftype == "text":                          # a text field never carries a number of its own
+        base = {**base, "value_num": None}
     return {**base, "locator": loc, "verify_status": status, "verify_reason": reason}
 
 
@@ -113,32 +118,13 @@ def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None,
     else:
         checked = [_verify_one(p, doc, _field_type(p, index)) for p in proposals]
     flags = scripted_flags(checked, template, list(approved or []), list(live or []))
-    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, doc)} for p, fl in zip(checked, flags)]
+    counted = {**doc, "decimal_evidence": document_evidence(doc)} if doc is not None else None
+    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, counted, index.get(norm_key(p.get("field"))))}
+           for p, fl in zip(checked, flags)]
     return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index))} for p in out]
 
 
 # ----------------------------------------------------------------- extract ---
-
-def _included_sources(store: EvidenceStore, sid: str, ids: Any, criteria_hash: str | None
-                      ) -> tuple[list[Source], list[dict[str, Any]]]:
-    """Sources the reviewer decided to include (current criteria's screen, else the latest)."""
-    screens: dict[str, Any] = {}
-    for s in store.list_screens(sid):                      # ordered by created_at: later rows win
-        if s.source_id not in screens or screens[s.source_id].criteria_hash != criteria_hash:
-            screens[s.source_id] = s
-    included, skipped = [], []
-    for src in _select_sources(store, sid, ids):
-        scr = screens.get(src.id)
-        if scr is None or effective_verdict(scr) != "include":
-            how = ("not screened" if scr is None else
-                   f"screen {scr.id}: {effective_verdict(scr) or 'no reviewer decision'}")
-            skipped.append({"source_id": src.id, "reason": f"not included by the reviewer ({how})"})
-        elif src.parse_status != "parsed":
-            skipped.append({"source_id": src.id, "reason": f"parse_status {src.parse_status}"})
-        else:
-            included.append(src)
-    return included, skipped
-
 
 def _propose(llm: Any, template: dict[str, Any], src: Source, doc: dict[str, Any]) -> dict[str, Any]:
     error = ""
@@ -215,8 +201,7 @@ def extract_evidence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) 
     if not tmpl:
         raise ValueError("no extraction template saved — save the template fields first")
     template, thash = tmpl["body"], tmpl["body_hash"]
-    crit = store.get_config(sid, "criteria")
-    included, skipped = _included_sources(store, sid, args.get("source_ids"), crit["body_hash"] if crit else None)
+    included, skipped = included_sources(store, sid, _select_sources(store, sid, args.get("source_ids")))
     if not included:
         raise ValueError("no included publications to extract from — approve an 'include' screening verdict "
                          f"first ({len(skipped)} skipped)")
@@ -340,6 +325,10 @@ def decide_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
     if status == "approved" and rec.verify_status == "fail":
         raise ValueError("cannot approve a record that failed literal verification "
                          f"({rec.verify_reason or 'unknown'}); re-verify or reject it")
+    why = exclusion_reason(current_screens(store, sid), rec.source_id) if status == "approved" else None
+    if why is not None:
+        raise ValueError(f"cannot approve a record of a publication that is not included under the current "
+                         f"criteria ({why}); include it in screening first, or reject the record")
     rival = _approved_rival(store, rec) if status == "approved" else None
     if rival is not None and args.get("allow_conflict") is not True:
         raise ValueError(f"{rec.field} for this publication/group already holds an approved value {rival.value!r} "

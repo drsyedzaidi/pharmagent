@@ -2,7 +2,10 @@
 
 Deterministic, pdfplumber-only. Body text keeps characters whose size is at least
 0.75 x the modal character size of the page, so superscript/subscript glyphs
-land in `small_text` instead of corrupting numbers. Tables come from ruled lines
+land in `small_text` instead of corrupting numbers; so do number glyphs raised above
+the baseline of a larger glyph right before them (an exponent at 80 % size). Each page's
+`glyph_check` names the number characters whose drawn glyph may not be the text (parse_fonts,
+parse_ink.overlapping_chars). Tables come from ruled lines
 first; unruled tables are recovered below a 'Table N' caption by splitting each
 text line on large horizontal gaps (strategy 'layout', lower confidence).
 """
@@ -18,6 +21,7 @@ import pdfplumber
 
 from app.evidence.normalize import infer_decimal_style
 from app.evidence.parse_budget import check_glyph_budget
+from app.evidence.parse_fonts import UNVERIFIED, GlyphChecker
 from app.evidence.parse_guard import (
     Deadline,
     check_page_box,
@@ -28,11 +32,11 @@ from app.evidence.parse_guard import (
     tables_affordable,
     visibility_filter,
 )
-from app.evidence.parse_ink import InkChecker, duplicate_ids
+from app.evidence.parse_ink import InkChecker, duplicate_ids, overlapping_chars
 
 # The suffix versions this module's output: a parse cache written by an earlier version (no
 # visibility filter, thin spaces turned into word gaps, no rendered-ink check) is re-parsed.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 3"
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 4"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
@@ -44,6 +48,9 @@ LINE_Y_TOLERANCE = 3.0
 CAPTION_RE = re.compile(r"^Table\s+\d+")
 STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+\d+")
 MAX_LAYOUT_ROWS = 80
+RAISABLE = frozenset("0123456789+-−⁻")   # exponent glyphs
+RAISED_SIZE_RATIO = 0.95        # an exponent is set smaller than its base ...
+RAISE_FRACTION = 0.15           # ... with its baseline at least this x the base size higher
 _META_KEYS = ("title", "author", "subject", "creator", "producer", "creation_date")
 
 
@@ -194,6 +201,19 @@ def _cells(line: dict[str, Any], gap: float) -> list[dict[str, Any]]:
     return cells
 
 
+def _aligned(cells: list[dict[str, Any]], col_x: list[float]) -> list[str]:
+    """Cell texts under their header columns: a row with fewer cells than the header (a blank or hidden
+    cell) puts each cell in the nearest column left to right, so no value shifts into its neighbour's."""
+    if len(cells) >= len(col_x):
+        return [c["text"] for c in cells]
+    out, nxt = [""] * len(col_x), 0
+    for k, c in enumerate(cells):
+        last = len(col_x) - (len(cells) - k)                # leave a column for every later cell
+        j = min(range(nxt, last + 1), key=lambda i: abs(col_x[i] - c["x0"]))
+        out[j], nxt = c["text"], j + 1
+    return out
+
+
 def _layout_table(lines: list[dict[str, Any]], start: int, gap: float) -> dict[str, Any] | None:
     """Rows below a 'Table N' caption line, split on large gaps; 1-cell rows merge upward."""
     caption, i = lines[start]["text"], start + 1
@@ -211,7 +231,7 @@ def _layout_table(lines: list[dict[str, Any]], start: int, gap: float) -> dict[s
         if len(cells) >= 2:
             if not rows:
                 col_x = [c["x0"] for c in cells]
-            rows.append([c["text"] for c in cells])
+            rows.append(_aligned(cells, col_x))
         elif rows and col_x and (cells[0]["x1"] - cells[0]["x0"]) < 0.5 * (col_x[-1] - col_x[0] + 1):
             j = min(range(len(col_x)), key=lambda k: abs(col_x[k] - cells[0]["x0"]))
             while len(rows[-1]) <= j:
@@ -254,21 +274,42 @@ def _visible_chars(page, ink: InkChecker) -> tuple[Any, int, str]:
     return visible, dropped + len(inkless or ()), "unverified" if inkless is None else "ok"
 
 
-def _parse_page(page, ink: InkChecker) -> dict[str, Any]:
+def _raised_ids(chars: list[dict[str, Any]]) -> set[int]:
+    """ids of number glyphs set smaller than, right after and above the baseline of the glyph before
+    them: an exponent ('10' + raised '3') that is too large for small_text must still never join the
+    body number ('103') or vanish from it ('1.2 x 10' read as plain numbers)."""
+    out: set[int] = set()
+    base = None
+    for c in chars:                              # content order: the base glyph precedes its exponent
+        if base is not None and str(c.get("text")) in RAISABLE:
+            size, bsize = float(c.get("size") or 0), float(base.get("size") or 0)
+            gap = float(c["x0"]) - float(base["x1"])
+            if (size < RAISED_SIZE_RATIO * bsize and -0.5 <= gap < bsize
+                    and float(c["bottom"]) < float(base["bottom"]) - RAISE_FRACTION * bsize):
+                out.add(id(c))
+                continue                         # '10' + raised '-' '3': both measured from the '0'
+        base = c
+    return out
+
+
+def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker) -> dict[str, Any]:
     check_page_box(page)
     hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
     visible, dropped, ink_status = _visible_chars(page, ink)
     protect_thin_spaces(page)
     chars = [c for c in page.chars if visible(c)]
+    raised = _raised_ids(chars)
     modal = _modal_size(chars)
     threshold = BODY_SIZE_RATIO * modal
 
+    def is_small(o: dict[str, Any]) -> bool:
+        return float(o.get("size") or 0) < threshold or id(o) in raised
+
     def is_body(o: dict[str, Any]) -> bool:
-        return o.get("object_type") != "char" or (visible(o) and float(o.get("size") or 0) >= threshold)
+        return o.get("object_type") != "char" or (visible(o) and not is_small(o))
 
     body = page.filter(is_body)
-    small = page.filter(lambda o: o.get("object_type") == "char" and visible(o)
-                        and float(o.get("size") or 0) < threshold)
+    small = page.filter(lambda o: o.get("object_type") == "char" and visible(o) and is_small(o))
     text = body.extract_text() or ""
     small_text = (small.extract_text() or "") if len(small.chars) else ""
     words = body.extract_words()
@@ -281,7 +322,19 @@ def _parse_page(page, ink: InkChecker) -> dict[str, Any]:
         "tables": _tables(body, lines, modal),
         "hidden_chars": hidden + dropped,
         "ink_check": ink_status,
+        "glyph_check": _glyph_check(page, glyphs, chars),
     })
+
+
+def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]]) -> dict[str, str]:
+    """{flag code: characters} whose text may not be the glyph a reader sees (parse_fonts), plus
+    number characters over-struck by another glyph; {} when nothing is in doubt."""
+    try:
+        out = dict(glyphs.page(page))
+    except Exception:                            # fail closed: the fonts could not be judged
+        out = {UNVERIFIED: "0123456789"}
+    over = "".join(sorted(overlapping_chars(chars)))
+    return {**out, "overlapping_glyphs": over} if over else out
 
 
 def parse_pdf(path: str | Path) -> dict[str, Any]:
@@ -296,11 +349,11 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
         check_glyph_budget(pdf.pages)            # glyph floods are refused before any layout
         metadata = _metadata(pdf.metadata)
         pages = []
-        ink = InkChecker(str(path), len(pdf.pages))
+        ink, glyphs = InkChecker(str(path), len(pdf.pages)), GlyphChecker()
         try:
             for pg in pdf.pages:
                 deadline.check(pg.page_number)
-                pages.append(_parse_page(pg, ink))
+                pages.append(_parse_page(pg, ink, glyphs))
                 pg.close()                       # drop the page's cached layout before the next one
         finally:
             ink.close()

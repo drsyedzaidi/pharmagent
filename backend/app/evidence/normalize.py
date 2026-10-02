@@ -17,15 +17,22 @@ IdxMap = list[int]
 
 _DASHES = "‐‑‒–—―−﹘﹣－"
 _SPACES = "              　"
-_FOLD = str.maketrans({**{c: "-" for c in _DASHES}, **{c: " " for c in _SPACES}, "µ": "μ"})
+_APOSTROPHES = "’ʼ′"          # typographic apostrophe / modifier letter / prime: Swiss digit grouping too
+_FOLD = str.maketrans({**{c: "-" for c in _DASHES}, **{c: " " for c in _SPACES}, **{c: "'" for c in _APOSTROPHES},
+                       "µ": "μ"})
 _DROP = {"­", "​", "‌", "‍", "﻿"}        # soft hyphen, zero-width marks
 _ASCII_DIGITS = set("0123456789")
 
 # ASCII-only number token: optional sign (only when not glued to a word), digits with optional
-# 3-digit groups separated by space/comma/point/apostrophe, optional decimal part. Lookbehinds
-# stop fragments ('24' inside '245.6') and alphanumeric prefixes ('AUC0', 't1/2') from matching.
+# 3-digit groups separated by space/comma/point/apostrophe, optional decimal part. A raised / mid
+# dot between digits is a decimal point (Lancet '12·4') unless it multiplies a power of ten
+# ('2.5·10^4'). Lookbehinds stop fragments ('24' inside '245.6', '4' after '12·') and alphanumeric
+# prefixes ('AUC0', 't1/2') from matching.
+MIDDOTS = "·‧˙٫"
+_POWER_AHEAD = r"10(?:\^|[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻])"
 NUM_RE = re.compile(
-    r"(?:(?<![\w.)\]])[-+])?(?<![\w.])\d+(?:[ ,.']\d{3}(?!\d))*(?:[.,]\d+)?(?!\d)", re.ASCII)
+    r"(?:(?<![\w.)\]])[-+])?(?<![\w." + MIDDOTS + r"])\d+(?:[ ,.']\d{3}(?!\d))*"
+    r"(?:[.,]\d+|[" + MIDDOTS + r"](?!" + _POWER_AHEAD + r")\d+)?(?!\d)", re.ASCII)
 _COMMA_DECIMAL = re.compile(r"\d,\d{1,2}(?!\d)")
 _POINT_DECIMAL = re.compile(r"\d\.\d+")
 _POINT_THOUSANDS = re.compile(r"\b\d{1,3}(?:\.\d{3})+,\d+")
@@ -62,12 +69,23 @@ def has_non_ascii_digits(text: str) -> bool:
     return any(ch not in _ASCII_DIGITS and unicodedata.category(ch) in ("Nd", "No") for ch in text)
 
 
-def infer_decimal_style(text: str) -> str:
-    """',' when decimal-comma evidence outweighs decimal-point evidence, else '.'."""
+_CITATIONS = re.compile(r"\[\s*\d+(?:\s*[,;\-–]\s*\d+)+\s*\]|\(\s*\d+(?:\s*[,;]\s*\d+){2,}\s*\)")
+
+
+def decimal_evidence(text: str) -> tuple[int, int]:
+    """(decimal-comma, decimal-point) evidence counts in *text*. Citation lists ('[1,2]', '[3-5]',
+    '(1,4,7)') are not numbers and are removed first."""
+    text = _CITATIONS.sub(" ", text)
     comma = len(_POINT_THOUSANDS.findall(text))
     text = _POINT_THOUSANDS.sub(" ", text)
     comma += len(_COMMA_DECIMAL.findall(text))
     point = len(_POINT_DECIMAL.findall(text))
+    return comma, point
+
+
+def infer_decimal_style(text: str) -> str:
+    """',' when decimal-comma evidence outweighs decimal-point evidence, else '.'."""
+    comma, point = decimal_evidence(text)
     return "," if comma > point else "."
 
 
@@ -78,6 +96,14 @@ def _to_float(token: str, decimal_style: str) -> float | None:
     separator repeated is always thousands ('1.250.000'); a single 3-digit tail follows the style."""
     sign = -1.0 if token.startswith("-") else 1.0
     body = token.lstrip("+-").replace(" ", "").replace("'", "")
+    dot = next((c for c in body if c in MIDDOTS), None)
+    if dot is not None:                                   # Lancet decimal: '12·4', '1,234·5'
+        whole, frac = body.split(dot, 1)
+        body = whole.replace(",", "").replace(".", "") + "." + frac
+        try:
+            return sign * float(body)
+        except ValueError:
+            return None
     seps = [c for c in body if c in ".,"]
     if seps:
         last = seps[-1]
@@ -114,6 +140,19 @@ def _scientific(folded: str, end: int, mantissa: float, bare_ten: bool) -> tuple
     return None
 
 
+def _glued_digit(text: str, start: int, end: int) -> bool:
+    """True when a non-ASCII digit (fullwidth, Arabic-Indic, ...) touches the token on either side."""
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return (bool(before) and before not in _ASCII_DIGITS and unicodedata.category(before) in ("Nd", "No")) or \
+        (bool(after) and after not in _ASCII_DIGITS and unicodedata.category(after) == "Nd")
+
+
+def _dot_ten(token: str) -> bool:
+    """'2·10': a Lancet 2.10, or 2 x 10 whose exponent went to small_text -- undecidable."""
+    return any(token.endswith(d + "10") for d in MIDDOTS)
+
+
 def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
                   bare_ten: bool = True) -> list[NumToken]:
     """Every ASCII number token in *text*, scientific notation included (offsets into *text*).
@@ -137,6 +176,11 @@ def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
             continue
         value = _to_float(m.group(0), decimal_style)
         if value is None:
+            continue
+        # '１2.5' (a digit we cannot read is part of it) or '2·10' that may have lost its exponent
+        if _glued_digit(folded, start, m.end()) or (bare_ten and _dot_ten(m.group(0))):
+            out.append(NumToken(start, m.end(), None))
+            last_end = m.end()
             continue
         sci = _scientific(folded, m.end(), value, bare_ten)
         out.append(NumToken(start, m.end(), value) if sci is None else NumToken(start, sci[0], sci[1], value))

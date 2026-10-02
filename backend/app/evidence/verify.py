@@ -119,7 +119,7 @@ def _whole_token(text: str, a: int, b: int, style: str, bare_ten: bool) -> tuple
     return None
 
 
-Hit = tuple[list[int], str | None, float | None]       # raw span, page literal, page value
+Hit = tuple[list[int], str | None, float | None, list[int] | None]   # raw span, literal, value, token
 
 
 def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
@@ -136,21 +136,25 @@ def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
         seen = True
         span = _raw_span(i, len(ns), m)
         if lit is None:
-            hits.append((span, None, None))
+            hits.append((span, None, None, None))
             continue
-        tok = None if rng is None else _whole_token(text, m[i + rng[0]], m[i + rng[1] - 1] + 1, style, bare_ten)
+        a, b = (m[i + rng[0]], m[i + rng[1] - 1] + 1) if rng is not None else (0, 0)
+        tok = None if rng is None else _whole_token(text, a, b, style, bare_ten)
         if tok is not None:
-            hits.append((span, tok[0], tok[1]))
+            hits.append((span, tok[0], tok[1], [a, b]))
     return hits, seen
 
 
 def _fail(loc: dict[str, Any], reason: str) -> M.VerifyResult:
-    return M.VerifyResult("fail", reason, {**loc, "span": None, "literal": None})
+    return M.VerifyResult("fail", reason, {**loc, "span": None, "literal": None, "token": None})
 
 
 def _pass(loc: dict[str, Any], span: list[int] | None, literal: str | None,
-          number: float | None = None) -> M.VerifyResult:
-    return M.VerifyResult("pass", M.REASON_OK, {**loc, "span": span, "literal": literal}, literal, span, number)
+          number: float | None = None, token: list[int] | None = None) -> M.VerifyResult:
+    """*token*: raw offsets of the literal in the text it was matched in (the cell for a table
+    locator, else the page text or column *span* indexes); the unit and qualifier checks read there."""
+    return M.VerifyResult("pass", M.REASON_OK, {**loc, "span": span, "literal": literal, "token": token},
+                          literal, span, number)
 
 
 def _candidates(loc: dict[str, Any], page: dict[str, Any]) -> list[tuple[int | None, str]]:
@@ -161,15 +165,52 @@ def _candidates(loc: dict[str, Any], page: dict[str, Any]) -> list[tuple[int | N
     return [(None, page.get("text") or "")] + list(enumerate(columns))
 
 
+def _split_lines(columns: list[str]) -> tuple[set[str], set[str]]:
+    return ({normalise(x)[0] for x in columns[0].split("\n") if x.strip()},
+            {normalise(x)[0] for x in columns[1].split("\n") if x.strip()})
+
+
+def _cut(line: str, left: set[str], right: set[str]) -> tuple[int, int] | None:
+    """(raw end of the left part, raw start of the right part) when *line* is a merged line: one
+    column's line followed by the other column's line on the same baseline; else None."""
+    nl, m = normalise(line)
+    for lp in left:
+        if len(lp) < len(nl) and nl.startswith(lp + " ") and nl[len(lp) + 1:] in right:
+            return m[len(lp) - 1] + 1, m[len(lp) + 1]
+    return None
+
+
+def _crosses(span: list[int], text: str, columns: list[str]) -> bool:
+    """True when a page-text span joins the two columns: it covers the boundary of a merged line, or
+    runs over a line break while touching a merged line (two-column lines interleave the columns)."""
+    left, right = _split_lines(columns)
+    ls, cuts = text.rfind("\n", 0, span[0]) + 1, []
+    while ls < span[1]:
+        le = text.find("\n", ls)
+        le = len(text) if le < 0 else le
+        cut = _cut(text[ls:le], left, right)
+        cuts.append(None if cut is None else (ls + cut[0], ls + cut[1]))
+        ls = le + 1
+    if len(cuts) > 1:
+        return any(c is not None for c in cuts)
+    return cuts[0] is not None and span[0] < cuts[0][0] and span[1] > cuts[0][1]
+
+
 def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
                  style: str) -> M.VerifyResult:
-    seen_any = False
+    seen_any, crossed = False, False
+    columns = [c for c in (page.get("columns") or []) if isinstance(c, str)]
     for column, text in _candidates(loc, page):
         hits, seen = _hits(snippet, lit, text, style, bare_ten_unresolved(page))
         seen_any = seen_any or seen
+        if column is None and len(columns) == 2:
+            kept = [h for h in hits if not _crosses(h[0], text, columns)]
+            crossed, hits = crossed or len(kept) < len(hits), kept
         if hits:
-            span, literal, number = hits[0]
-            return _pass({**loc, "column": column}, span, literal, number)
+            span, literal, number, token = hits[0]
+            return _pass({**loc, "column": column}, span, literal, number, token)
+    if crossed:
+        return _fail(loc, M.REASON_CROSSES_COLUMNS)
     return _fail(loc, M.REASON_PARTIAL_NUMBER if seen_any else M.REASON_SNIPPET_NOT_ON_PAGE)
 
 
@@ -199,7 +240,7 @@ def _row_span(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
     keys = [k for k in (normalise(a)[0] for a in anchors) if k]
     lead = normalise(row_head)[0]
     best: tuple[tuple[int, bool], list[int] | None] = ((0, False), None)
-    for span, _, _ in (_hits(snippet, lit, text, style, bare_ten)[0] if keys else []):
+    for span, *_ in (_hits(snippet, lit, text, style, bare_ten)[0] if keys else []):
         ls = text.rfind("\n", 0, span[0]) + 1
         le = text.find("\n", span[1])
         line = normalise(text[ls:len(text) if le < 0 else le])[0]
@@ -219,14 +260,14 @@ def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: 
     hits, seen = _hits(snippet, lit, cell_text, style, bare_ten)
     if not hits:
         return _fail(loc, M.REASON_PARTIAL_NUMBER if seen and lit is not None else M.REASON_TABLE_CELL_MISMATCH)
-    _, literal, number = hits[0]
+    _, literal, number, token = hits[0]
     cell = {**loc["cell"], "strategy": table.get("strategy")}
     r, c = loc["cell"]["row"], loc["cell"]["col"]
     row = (table.get("rows") or [])[r]
     anchors = [str(x or "") for i, x in enumerate(row) if i != c]
     span = _row_span(snippet, lit, page.get("text") or "", style, anchors, str(row[0] or "") if row else "",
                      bare_ten)
-    return _pass({**loc, "cell": cell}, span, literal, number)
+    return _pass({**loc, "cell": cell}, span, literal, number, token)
 
 
 def verify(record_like: Any, pages_doc: dict[str, Any], *, field_type: str = "number") -> M.VerifyResult:

@@ -203,7 +203,8 @@ def _export_result_from_ledger(ds: dict, long_bytes: bytes, wide_bytes: bytes, t
             "record_hashes": ds["record_hashes"], "n_records": ds["n_records"], "n_sources": ds["n_sources"],
             "template_hash": template_hash,
             "long_columns": next(csv.reader(io.StringIO(long_bytes.decode("utf-8")))),
-            "wide_columns": next(csv.reader(io.StringIO(wide_bytes.decode("utf-8"))))}
+            "wide_columns": next(csv.reader(io.StringIO(wide_bytes.decode("utf-8")))),
+            "left_out": []}                    # approved records of excluded publications: none here
 
 
 def test_keyless_chat_drives_screen_extract_export(client, papers):

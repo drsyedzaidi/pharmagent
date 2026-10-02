@@ -1,13 +1,14 @@
 """Checks on a VERIFIED proposal that need its parsed page: the proposed unit against the unit the
 source prints for that number, and a flag when the cited page had invisible text removed.
 
-Source unit, in order: the unit token right after the number in the snippet / cell ('100 mcg',
-'45%'), else for a table cell the column header's bracketed unit, the row label's bracketed unit or
-the row's 'Unit' column. Units are compared for EQUALITY after normalisation and a small equivalence
-table: a printed 'mg' never vouches for 'mg/kg' (a 1000x dose error otherwise passes). A snippet that
-ends at the unit is read on in the page (or cell); a unit the next token may continue ('mg kg-1') is
-undecidable. Different units are an error flag; no source unit, or an undecidable one, is a warning
-(unit_unverified).
+Source unit, in order: the unit token printed right after the VERIFIED token on the page / in the
+cell ('100 mcg', '45%'; read at locator['token'], never re-found in the snippet), else for a table
+cell the column header's bracketed unit, the row label's bracketed unit or the row's 'Unit' column.
+Units are compared for EQUALITY after normalisation and a small equivalence table: a printed 'mg'
+never vouches for 'mg/kg' (a 1000x dose error otherwise passes). A unit the next token may continue
+('mg kg-1') is undecidable. Different units are an error flag; no source unit, or an undecidable
+one, is a warning (unit_unverified). Value checks (qualifiers, scale, style, glyphs) live in
+value_checks.py.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
 from app.evidence.qc_flags import normalise_unit
+from app.evidence.value_checks import token_context, value_flags
 
 _UNIT_TOKEN_RE = re.compile(r"^\s*(%|[^\W\d_][\w/·*.^\-]*(?:\s+[^\W\d_]{1,3}(?:/[\w.^\-]+)+)?)")
 _NEXT_TOKEN_RE = re.compile(r"^\s*(/|per\b|\S+)")
@@ -52,35 +54,6 @@ def canonical_unit(unit: str | None) -> str:
     return "/".join(_EQUIV.get(piece, piece) for piece in normalise_unit(unit).split("/"))
 
 
-def _after_literal(snippet: str, literal: str | None) -> str | None:
-    """Normalised snippet text right after the cited number, else None."""
-    if not literal:
-        return None
-    ns, nl = normalise(snippet)[0], normalise(literal)[0]
-    j = ns.find(nl)
-    return None if j < 0 or not nl else ns[j + len(nl):]
-
-
-def _continuation(loc: dict[str, Any], page: dict[str, Any]) -> str | None:
-    """Normalised page (or cell) text right after the cited snippet ('' at its end), else None."""
-    snippet = normalise(str(loc.get("snippet") or ""))[0]
-    if loc.get("kind") == "table":
-        cell = loc.get("cell") or {}
-        try:
-            text = str((page.get("tables") or [])[cell["table"]]["rows"][cell["row"]][cell["col"]] or "")
-        except (KeyError, IndexError, TypeError):
-            return None
-        norm = normalise(text)[0]
-        j = norm.find(snippet) if snippet else -1
-        return None if j < 0 else norm[j + len(snippet):]
-    span, column, columns = loc.get("span"), loc.get("column"), page.get("columns") or []
-    if not (isinstance(span, list) and len(span) == 2 and isinstance(span[1], int)):
-        return None
-    text = columns[column] if isinstance(column, int) and 0 <= column < len(columns) else page.get("text") or ""
-    raw = str(text)[span[1]:span[1] + CONTINUATION_CHARS]
-    return (" " if raw[:1].isspace() else "") + normalise(raw)[0]
-
-
 def _continues(tail: str) -> bool:
     """True when the text after a unit token may extend it ('/kg', 'per kg', 'kg-1', 'h')."""
     m = _NEXT_TOKEN_RE.match(tail)
@@ -90,21 +63,23 @@ def _continues(tail: str) -> bool:
     return token in ("/", "per") or (token not in _NOT_CONTINUATIONS and recognised_unit(token) is not None)
 
 
-def _adjacent_unit(rest: str | None, loc: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
-    """(unit printed right after the number, decided). A snippet ending at the unit is read on in the
-    page; undecided when that is impossible or the next token may continue the unit."""
-    m = _UNIT_TOKEN_RE.match(rest or "")
+def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
+    """(unit printed right after the VERIFIED token on the page / in the cell, decided). Read from the
+    page, never re-found in the snippet: '5' is not the '5' inside '15 mg/kg'. Undecided when the next
+    token may continue the unit, or the window ends right after it."""
+    ctx = token_context(loc, page)
+    if ctx is None:
+        return None, True
+    text, _, end = ctx
+    raw = text[end:end + CONTINUATION_CHARS]
+    rest = (" " if raw[:1].isspace() else "") + normalise(raw)[0]
+    m = _UNIT_TOKEN_RE.match(rest)
     unit = recognised_unit(m.group(1)) if m else None
     if m is None or unit is None:
         return None, True
-    tail = (rest or "")[m.end():]
+    tail = rest[m.end():]
     if not tail.strip():
-        more = _continuation(loc, page)
-        if more is None:
-            return unit, False
-        whole = (rest or "") + more
-        m = _UNIT_TOKEN_RE.match(whole)
-        unit, tail = (recognised_unit(m.group(1)) if m else None) or unit, whole[m.end():] if m else ""
+        return unit, end + CONTINUATION_CHARS >= len(text)
     return unit, not _continues(tail)
 
 
@@ -125,7 +100,7 @@ def _table_unit(loc: dict[str, Any], page: dict[str, Any]) -> str | None:
 def source_unit(p: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
     """(unit the source prints for the cited number, decided) -- see the module docstring."""
     loc = p.get("locator") or {}
-    unit, decided = _adjacent_unit(_after_literal(str(loc.get("snippet") or ""), loc.get("literal")), loc, page)
+    unit, decided = _adjacent_unit(loc, page)
     if unit is None and loc.get("kind") == "table":
         unit, decided = _table_unit(loc, page), True
     return unit, decided
@@ -169,11 +144,13 @@ def hidden_text_flags(p: dict[str, Any], page: dict[str, Any] | None) -> list[di
                   "characters that were removed before verification; compare with the PDF", p)]
 
 
-def page_checks(p: dict[str, Any], doc: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Unit and hidden-text flags for one checked proposal (none when the page is unavailable)."""
+def page_checks(p: dict[str, Any], doc: dict[str, Any] | None,
+                spec: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Unit, hidden-text and value (qualifier, scale, decimal style, glyph identity) flags for one
+    checked proposal (none when the page is unavailable). *spec* is the field's template entry."""
     pages = (doc or {}).get("pages") or []
     n = (p.get("locator") or {}).get("page")
     page = pages[n - 1] if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= len(pages) else None
     if page is None:
         return []
-    return unit_flags(p, page) + hidden_text_flags(p, page)
+    return unit_flags(p, page) + hidden_text_flags(p, page) + value_flags(p, page, doc or {}, spec)

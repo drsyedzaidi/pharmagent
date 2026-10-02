@@ -24,12 +24,13 @@ export type DecimalSetting = 'auto' | '.' | ',';
 export type FailReason =
   | 'empty_snippet' | 'snippet_too_long' | 'page_out_of_range' | 'non_ascii_digits' | 'no_number'
   | 'number_mismatch' | 'integer_expected' | 'snippet_not_on_page' | 'table_cell_mismatch'
-  | 'source_changed' | 'text_not_in_snippet' | 'partial_number';
+  | 'source_changed' | 'text_not_in_snippet' | 'partial_number' | 'crosses_columns';
 export type FlagCode =
   | 'required_missing' | 'out_of_range' | 'non_integer_n' | 'duplicate' | 'unit_mismatch' | 'unit_missing'
   | 'se_nonpositive' | 'ci_inverted' | 'composite_cell' | 'table_low_confidence' | 'verify_fail'
   | 'non_numeric' | 'suspicious_instruction_text' | 'unit_source_mismatch' | 'unit_unverified' | 'hidden_text'
-  | 'superseded';
+  | 'superseded' | 'glyph_text_mismatch' | 'glyph_unverified' | 'overlapping_glyphs' | 'censored_value'
+  | 'scaled_header' | 'decimal_style_ambiguous' | 'estimate_outside_ci';
 
 /** Result-card markers the evidence tools push into the transcript (S9 renders them). */
 export type EvidenceMarker = '__EVIDENCE_SCREEN__' | '__EVIDENCE_RECORDS__' | '__EVIDENCE_DATASET__';
@@ -148,6 +149,8 @@ export interface Locator {
   cell: TableCell | null;
   column: number | null;
   decimal_style: DecimalStyle;
+  /** Verifier-set raw offsets of the literal in the text it matched (the cell for a table locator). */
+  token?: Span | null;
 }
 
 export interface QcFlag {

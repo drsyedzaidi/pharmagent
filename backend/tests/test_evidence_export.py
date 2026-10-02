@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import itertools
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,7 +58,8 @@ def _approve_all(env, papers, names=("paper_a", "paper_b", "paper_d")) -> list:
 
 def _export(env, state: PharmState | None = None):
     state = state or PharmState(session_id=env.sid)
-    res = export_tools.export_evidence_dataset(state, env.ctx, {"actor": "alice"})
+    # the ledger names the authenticated caller (ctx.actor); an 'actor' argument is ignored
+    res = export_tools.export_evidence_dataset(state, replace(env.ctx, actor="alice"), {"actor": "mallory"})
     return res, apply_writes(state, "evidence", res.writes)
 
 

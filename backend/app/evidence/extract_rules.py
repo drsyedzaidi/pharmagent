@@ -228,22 +228,30 @@ def text_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str) 
         hit = _first_text_hit(doc, regex, context)
         if hit is None:
             continue
-        page_n, m, snippet = hit
+        page_n, column, m, snippet = hit
         style = decimal_style(spec, doc)
         unit = m.groupdict().get("unit")
-        out.append(_proposal(spec, source_id=source_id, page=page_n, kind="text", snippet=snippet,
-                             value=m.group("num"), value_num=value_number(m.group("num"), style),
-                             unit=unit, group="", style=style))
+        p = _proposal(spec, source_id=source_id, page=page_n, kind="text", snippet=snippet,
+                      value=m.group("num"), value_num=value_number(m.group("num"), style),
+                      unit=unit, group="", style=style)
+        out.append({**p, "locator": {**p["locator"], "column": column}})
     return out
+
+
+def _reading_texts(page: dict[str, Any]) -> list[tuple[int | None, str]]:
+    """(column, text) in reading order: each column of a two-column page first (its merged page-text
+    lines join the columns), then the page text (lines spanning both columns, single-column pages)."""
+    columns = [c for c in (page.get("columns") or []) if isinstance(c, str)]
+    return list(enumerate(columns)) + [(None, page.get("text") or "")]
 
 
 def _first_text_hit(doc: dict[str, Any], regex: re.Pattern[str], context: re.Pattern[str] | None):
     for page in doc.get("pages") or []:
-        text = page.get("text") or ""
-        for m in regex.finditer(text):
-            snippet = _window(text, m.start(), m.end())
-            if context is None or context.search(snippet):
-                return int(page["n"]), m, snippet
+        for column, text in _reading_texts(page):
+            for m in regex.finditer(text):
+                snippet = _window(text, m.start(), m.end())
+                if context is None or context.search(snippet):
+                    return int(page["n"]), column, m, snippet
     return None
 
 

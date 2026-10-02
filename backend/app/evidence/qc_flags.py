@@ -13,9 +13,11 @@ from app.evidence import models as M
 from app.evidence.normalize import numbers_in
 
 MAX_CODE_CHARS, MAX_MESSAGE_CHARS = 40, 300
-_SE_RE = re.compile(r"(^|[_\s])(se|sd|sem|cv|rse)($|[_\s%])")
-_LOWER_RE = re.compile(r"^(?P<stem>.*?)[_\s]?(lower|low|lo|lcl)$")
-_UPPER_RE = re.compile(r"^(?P<stem>.*?)[_\s]?(upper|high|hi|ucl)$")
+_SE_RE = re.compile(r"(^|[^a-z])(se|sd|sem|cv|rse)($|[^a-z])")          # 'cmax_se', '%cv', 'sd(cl)'
+# A bound names its interval by a suffix ('cl_lower', 'cl_ucl') or a separated prefix ('Lower 95% CI').
+_BOUNDS = {"lower": ("lower", "low", "lo", "lcl"), "upper": ("upper", "high", "hi", "ucl")}
+_BOUND_RES = {side: (re.compile(r"^(?P<stem>.*?)[_\s]?(" + "|".join(words) + r")$"),
+                     re.compile(r"^(" + "|".join(words) + r")[_\s](?P<stem>.+)$")) for side, words in _BOUNDS.items()}
 _UNIT_SYNONYMS = ((re.compile(r"\b(hrs?|hours?)\b"), "h"), (re.compile(r"\b(liters?|litres?)\b"), "l"),
                   (re.compile(r"\bmcg\b"), "ug"), (re.compile(r"\b(seconds?|sec)\b"), "s"))
 _UNIT_STRIP = re.compile(r"[\s·*×.]+")
@@ -100,20 +102,44 @@ def _field_flags(rec: dict[str, Any], spec: dict[str, Any], field: str, group: s
     return flags
 
 
+def _bound(name: str) -> tuple[str, str] | None:
+    """('lower' | 'upper', interval stem) for a bound's field name, else None."""
+    key = name.casefold()
+    for side, (suffix, prefix) in _BOUND_RES.items():
+        m = suffix.match(key) or prefix.match(key)
+        if m:
+            return side, m.group("stem").strip(" _")
+    return None
+
+
 def _ci_flag(rec: dict[str, Any], field: str, group: str, peers: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """ci_inverted on both bounds when <stem>_lower > <stem>_upper within the same source x group."""
-    lower, upper = _LOWER_RE.match(field.casefold()), _UPPER_RE.match(field.casefold())
-    if not (lower or upper) or rec.get("value_num") is None:
+    """ci_inverted on both bounds when lower > upper of one interval within the same source x group;
+    estimate_outside_ci on a point estimate named like its interval's stem ('cl' for 'cl_lower')."""
+    if rec.get("value_num") is None:
         return []
-    stem = (lower or upper).group("stem")
-    partner_re = _UPPER_RE if lower else _LOWER_RE
+    mine = _bound(field)
+    bounds = {}
     for name, other in peers.items():
-        m = partner_re.match(name.casefold())
-        if m and m.group("stem") == stem and other.get("value_num") is not None:
-            lo, hi = (rec, other) if lower else (other, rec)
-            if lo["value_num"] > hi["value_num"]:
-                msg = f"{_canon_name(lo)} {lo.get('value')} > {_canon_name(hi)} {hi.get('value')}"
-                return [_flag(M.FLAG_CI_INVERTED, "error", msg, field, group)]
+        b = _bound(name)
+        if b is not None and other.get("value_num") is not None:
+            bounds.setdefault(b[1], {})[b[0]] = other
+    if mine is None:
+        pair = bounds.get(field.casefold().strip(" _"), {})
+        lo, hi = pair.get("lower"), pair.get("upper")
+        if lo is None or hi is None or lo["value_num"] > hi["value_num"]:
+            return []
+        if not lo["value_num"] <= rec["value_num"] <= hi["value_num"]:
+            msg = f"{field} {rec.get('value')} lies outside its interval {lo.get('value')} to {hi.get('value')}"
+            return [_flag(M.FLAG_ESTIMATE_OUTSIDE_CI, "error", msg, field, group)]
+        return []
+    side, stem = mine
+    partner = bounds.get(stem, {}).get("upper" if side == "lower" else "lower")
+    if partner is None:
+        return []
+    lo, hi = (rec, partner) if side == "lower" else (partner, rec)
+    if lo["value_num"] > hi["value_num"]:
+        msg = f"{_canon_name(lo)} {lo.get('value')} > {_canon_name(hi)} {hi.get('value')}"
+        return [_flag(M.FLAG_CI_INVERTED, "error", msg, field, group)]
     return []
 
 

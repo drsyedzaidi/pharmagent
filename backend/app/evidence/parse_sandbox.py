@@ -192,8 +192,13 @@ def _answer(out: Path, exitcode: int | None) -> dict[str, Any]:
 def parse_isolated(path: str | Path, *, wall_s: float | None = None, max_rss: int | None = None,
                    target: str = DEFAULT_TARGET) -> dict[str, Any]:
     """parse_pdf(path) in a killable child process (see module docstring)."""
-    wall_s = PARSE_WALL_S if wall_s is None else wall_s
-    max_rss = MAX_PARSE_RSS if max_rss is None else max_rss
+    return run_isolated(path, target=target, wall_s=PARSE_WALL_S if wall_s is None else wall_s,
+                        max_rss=MAX_PARSE_RSS if max_rss is None else max_rss)
+
+
+def run_isolated(path: str | Path, *, target: str, wall_s: float, max_rss: int) -> Any:
+    """``target(path)`` ('module:function', JSON-serialisable result) in a killable child process,
+    under a parse slot: the parse, and upload validation (ingest.page_count_report)."""
     slots = _slots
     if not slots.acquire(timeout=QUEUE_WAIT_S):
         raise ParseBusyError(f"the PDF parser is busy ({MAX_CONCURRENT_PARSES} parses running); "

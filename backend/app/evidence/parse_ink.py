@@ -2,7 +2,8 @@
 
 Colour rules alone cannot see a glyph covered by a later white fill, drawn in 0.97 grey, clipped
 away, squashed by '1 Tz', drawn in the colour of the box beneath it, or placed outside the CropBox.
-So pdfium renders each page (CropBox region, annotations drawn) and the verdict comes from ink:
+So pdfium renders each page (CropBox region, annotations and form-field Widget appearances drawn: the
+document's forms are initialised before any page loads) and the verdict comes from ink:
 
 1. pdfium's text page lists every glyph with its text object, origin and tight ink box (user space).
 2. Text objects are grouped so that no two objects in a group overlap (greedy colouring of their
@@ -27,7 +28,9 @@ at most RENDER_MAX_PAGES pages and RENDER_BUDGET_S seconds per document. A page 
 MIN_RENDER_SCALE) returns None: the caller marks it 'unverified', keeps only the colour-rule text,
 and records citing it carry an error flag. A glyph repeating an earlier one's text within DUPLICATE_PT
 (fake-bold double strike, or a copy laid over a digit to double it) is one glyph to a reader:
-``duplicate_ids`` drops the copy before judging (not counted as hidden).
+``duplicate_ids`` drops the copy before judging (not counted as hidden). Any other over-strike of a
+number character (``overlapping_chars``) cannot be read twice either; the parse lists it in the page's
+glyph_check so records citing it carry an error flag.
 """
 from __future__ import annotations
 
@@ -56,8 +59,17 @@ _UNOWNED = ("Mn", "Me", "Sk", "Lm")   # combining marks / modifiers sit on anoth
 
 
 def _open_document(path: str) -> Any:
+    """The pdfium document with its form environment set up BEFORE any page loads, so form-field
+    (Widget) appearances are drawn like a viewer draws them: a field laid over page text covers it.
+    A document whose forms cannot be initialised raises, and every page is then unverified."""
     import pypdfium2 as pdfium
-    return pdfium.PdfDocument(path)
+    doc = pdfium.PdfDocument(path)
+    try:
+        doc.init_forms()
+    except Exception:
+        doc.close()
+        raise
+    return doc
 
 
 def _norm(text: str) -> str:
@@ -76,6 +88,35 @@ def duplicate_ids(chars: list[dict[str, Any]]) -> set[int]:
             out.add(id(c))
         else:
             seen.setdefault((text, gx, gy), []).append((x, top))
+    return out
+
+
+OVERLAP_FRACTION = 0.3                # share of the narrower glyph's advance two glyphs may share
+OVERLAP_CRITICAL = frozenset("0123456789.,+-−")
+
+
+def overlapping_chars(chars: list[dict[str, Any]]) -> set[str]:
+    """Number characters drawn over another glyph (a second '1' 1.2 pt right of the first reads as one
+    bold '1', the text says '11'): boxes sharing > OVERLAP_FRACTION of the narrower advance and over
+    half the lower height. Exact copies are duplicate_ids' job; whatever else overlaps cannot both be
+    read, so the characters involved are returned for the records citing them to be flagged."""
+    grid: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    out: set[str] = set()
+    for c in chars:
+        text = str(c.get("text", ""))
+        if not text.strip() or float(c["x1"]) <= float(c["x0"]):
+            continue
+        gx, gy = int(float(c["x0"]) // 10), int(float(c["top"]) // 10)
+        for o in (o for i in range(-3, 4) for j in (-1, 0, 1) for o in grid.get((gx + i, gy + j), [])):
+            if not ({text, str(o["text"])} & OVERLAP_CRITICAL):
+                continue
+            xo = min(float(c["x1"]), float(o["x1"])) - max(float(c["x0"]), float(o["x0"]))
+            yo = min(float(c["bottom"]), float(o["bottom"])) - max(float(c["top"]), float(o["top"]))
+            narrow = min(float(c["x1"]) - float(c["x0"]), float(o["x1"]) - float(o["x0"]))
+            low = min(float(c["bottom"]) - float(c["top"]), float(o["bottom"]) - float(o["top"]))
+            if xo > OVERLAP_FRACTION * narrow and yo > 0.5 * low:
+                out |= {ch for ch in text + str(o["text"]) if ch in OVERLAP_CRITICAL}
+        grid.setdefault((gx, gy), []).append(c)
     return out
 
 

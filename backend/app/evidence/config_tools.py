@@ -4,7 +4,9 @@ Both are deterministic. ``ingest_evidence_source`` only accepts a file the uploa
 already placed under data_dir/evidence (content-addressed) and re-checks its sha256, so a
 model-issued call can never pull an arbitrary server file into the ledger.
 ``save_evidence_config`` validates and normalises the body before hashing it; the hash is
-what screens and records cite, so history stays interpretable after a re-save.
+what screens and records cite, so history stays interpretable after a re-save. It is human-only:
+criteria and template are the reviewer's, never a model's. Both record the authenticated caller
+(``ToolContext.actor``); an 'actor' argument is ignored.
 """
 from __future__ import annotations
 
@@ -75,7 +77,7 @@ def ingest_evidence_source(state: PharmState, ctx: ToolContext, args: dict[str, 
         raise ValueError("sha256 does not match the file on disk")
     store = get_store()
     src = ingest.ingest_pdf(data, _str(args, "filename") or path.name, state.session_id,
-                            _str(args, "actor") or "anonymous", data_dir=ctx.data_dir, store=store,
+                            ctx.actor or "anonymous", data_dir=ctx.data_dir, store=store,
                             licence_note=_str(args, "licence_note", max_len=500))
     row = source_row(src)
     return ToolResult(
@@ -189,7 +191,7 @@ def save_evidence_config(state: PharmState, ctx: ToolContext, args: dict[str, An
         raise ValueError(f"'kind' must be one of {list(CONFIG_KINDS)}")
     body = validate_criteria(args.get("body")) if kind == "criteria" else validate_template(args.get("body"))
     store = get_store()
-    h = store.save_config(state.session_id, kind, body, _str(args, "actor") or "anonymous")
+    h = store.save_config(state.session_id, kind, body, ctx.actor or "anonymous")   # args['actor'] ignored
     n = len(body) if kind == "criteria" else len(body["fields"])
     noun = "criteria" if kind == "criteria" else "template field(s)"
     return ToolResult(summary=f"Saved {n} {noun}; {kind} hash {h[:12]}.",
@@ -204,18 +206,17 @@ TOOLS = [
                       "an evidence source (idempotent per sha256). Used by the upload endpoint."),
          input_schema={"type": "object",
                        "properties": {"path": {"type": "string"}, "sha256": {"type": "string"},
-                                      "filename": {"type": "string"}, "licence_note": {"type": "string"},
-                                      "actor": {"type": "string"}},
+                                      "filename": {"type": "string"}, "licence_note": {"type": "string"}},
                        "required": ["path", "sha256"]},
          run=ingest_evidence_source),
-    Tool(name="save_evidence_config", agent=AGENT,
-         description=("Validate and save the screening criteria (kind 'criteria': list of {id, text, kind "
+    Tool(name="save_evidence_config", agent=AGENT, human_only=True,
+         description=("Human-only (the workspace's authenticated Criteria / Template routes): validate and "
+                      "save the screening criteria (kind 'criteria': list of {id, text, kind "
                       "inclusion|exclusion, required, keywords}) or the extraction template (kind 'template': "
                       "{fields:[{name, type number|integer|text, unit, description, required, min, max, "
                       "aliases, decimal}]}). Returns the body hash that screens and records cite."),
          input_schema={"type": "object",
-                       "properties": {"kind": {"type": "string", "enum": list(CONFIG_KINDS)},
-                                      "body": {}, "actor": {"type": "string"}},
+                       "properties": {"kind": {"type": "string", "enum": list(CONFIG_KINDS)}, "body": {}},
                        "required": ["kind", "body"]},
          run=save_evidence_config),
 ]

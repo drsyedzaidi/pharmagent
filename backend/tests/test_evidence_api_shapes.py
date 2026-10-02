@@ -139,7 +139,7 @@ SCREEN_DECIDE_KEYS = {"decided", "summary", "state", "screening_results"}
 RECORD_ROW_KEYS = {"id", "session_id", "source_id", "template_hash", "field", "group_label", "value", "value_num",
                    "unit", "locator", "extractor", "verify_status", "verify_reason", "flags", "status",
                    "decided_by", "decided_at", "decision_reason", "record_hash", "created_at"}
-LOCATOR_KEYS = {"page", "kind", "snippet", "span", "literal", "cell", "column", "decimal_style"}
+LOCATOR_KEYS = {"page", "kind", "snippet", "span", "literal", "cell", "column", "decimal_style", "token"}
 EXTRACT_RESULT_KEYS = {"records", "sources", "skipped", "template_hash", "method", "n_candidates", "pass", "fail",
                        "flagged", "n_new"}
 EXTRACT_SOURCE_KEYS = {"source_id", "method", "note", "n_candidates", "pass", "fail", "flagged", "n_new",
@@ -151,7 +151,7 @@ RECORD_DECIDE_KEYS = {"decided", "summary", "state", "extraction_results"}
 RECORD_DECIDED_KEYS = {"record", "record_hash", "source_sha256", "locator", "value", "unit", "verify_status",
                        "decision", "reason"}
 EXPORT_RESULT_KEYS = {"dataset", "long_path", "wide_path", "long_sha256", "wide_sha256", "record_hashes",
-                      "n_records", "n_sources", "template_hash", "long_columns", "wide_columns"}
+                      "n_records", "n_sources", "template_hash", "long_columns", "wide_columns", "left_out"}
 DATASET_ROW_KEYS = {"id", "session_id", "template_hash", "long_path", "wide_path", "long_sha256", "wide_sha256",
                     "record_hashes", "n_records", "n_sources", "exported_by", "exported_at"}
 

@@ -1,16 +1,18 @@
 """Upload validation, content-addressed storage, parse cache and fail-closed reload of sources.
 
-Nothing is written before validation passes. Files live under
+Nothing is written before validation passes; validation opens the PDF only inside the parse
+sandbox's killable child (a tiny upload can hide an object stream that inflates to gigabytes). Files
+live under
 data_dir/evidence/<sha256>.pdf and <sha256>.pages.json; load_pages() re-hashes
 the PDF on every read and refuses to serve a parse whose source changed.
 """
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,9 @@ MAX_PAGES = 300
 MAX_FILENAME = 200
 MAX_TITLE = 200
 PDF_MAGIC = b"%PDF-"
+VALIDATE_WALL_S = 30.0                 # counting pages is quick; an object-stream bomb is not
+VALIDATE_MAX_RSS = 512 * 2**20
+VALIDATE_TARGET = "app.evidence.ingest:page_count_report"
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -66,19 +71,35 @@ def _is_password_error(exc: BaseException) -> bool:
     return False
 
 
-def validate_pdf_bytes(data: bytes) -> int:
-    """Raise IngestError unless *data* is an openable, unencrypted PDF within limits. Returns page count."""
-    if not data or not data.startswith(PDF_MAGIC):
-        raise IngestError("not a PDF (missing %PDF- header)")
-    if len(data) > MAX_BYTES:
-        raise IngestError(f"too large ({len(data)} bytes > {MAX_BYTES})")
+def page_count_report(path: str) -> dict[str, Any]:
+    """Child side of validation (parse_sandbox target): {'pages': n}, {'encrypted': True} or
+    {'unreadable': exception type}. Opening a hostile PDF can inflate huge object streams, so this
+    never runs in the server process."""
     try:
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            n = len(pdf.pages)
+        with pdfplumber.open(path) as pdf:
+            return {"pages": len(pdf.pages)}
     except Exception as exc:
         if _is_password_error(exc):
-            raise IngestError("encrypted PDF (password required)") from exc
+            return {"encrypted": True}
+        return {"unreadable": type(exc).__name__}
+
+
+def _isolated_page_count(path: Path) -> int:
+    """Page count from a killable child (wall clock + RSS caps, the parse slots); IngestError otherwise."""
+    try:
+        report = parse_sandbox.run_isolated(path, target=VALIDATE_TARGET, wall_s=VALIDATE_WALL_S,
+                                            max_rss=VALIDATE_MAX_RSS)
+    except ParseBusyError:
+        raise
+    except IngestError as exc:                   # killed at a limit, or the child died
+        raise IngestError(f"unreadable PDF: validation stopped ({exc})") from exc
+    except Exception as exc:
         raise IngestError(f"unreadable PDF: {type(exc).__name__}") from exc
+    if report.get("encrypted"):
+        raise IngestError("encrypted PDF (password required)")
+    if "pages" not in report:
+        raise IngestError(f"unreadable PDF: {report.get('unreadable') or 'unknown error'}")
+    n = int(report["pages"])
     if n == 0:
         raise IngestError("unreadable PDF: no pages")
     if n > MAX_PAGES:
@@ -86,11 +107,33 @@ def validate_pdf_bytes(data: bytes) -> int:
     return n
 
 
+def _check_head(head: bytes, size: int) -> None:
+    if not head.startswith(PDF_MAGIC):
+        raise IngestError("not a PDF (missing %PDF- header)")
+    if size > MAX_BYTES:
+        raise IngestError(f"too large ({size} bytes > {MAX_BYTES})")
+
+
+def validate_pdf_bytes(data: bytes) -> int:
+    """Raise IngestError unless *data* is an openable, unencrypted PDF within limits. Returns page count.
+    The open itself runs in the sandbox child (validate_pdf_file)."""
+    _check_head(data or b"", len(data or b""))
+    fd, name = tempfile.mkstemp(prefix="evvalidate-", suffix=".pdf")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return _isolated_page_count(Path(name))
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def validate_pdf_file(path: str | Path) -> int:
+    """validate_pdf_bytes for a file on disk, without reading it into the server process."""
     path = Path(path)
-    if path.stat().st_size > MAX_BYTES:
-        raise IngestError(f"too large ({path.stat().st_size} bytes > {MAX_BYTES})")
-    return validate_pdf_bytes(path.read_bytes())
+    with path.open("rb") as fh:
+        head = fh.read(len(PDF_MAGIC))
+    _check_head(head, path.stat().st_size)
+    return _isolated_page_count(path)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:

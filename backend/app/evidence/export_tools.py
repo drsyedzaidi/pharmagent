@@ -5,16 +5,20 @@ Long: one row per approved record with its locator and provenance (record_hash, 
 'decimal_style' the page's convention, so '3,412' (3412) and '18,2' (18.2) cannot be confused.
 Wide: one row per source x group; <field> is the canonical number (text for a text field),
 <field>_literal the page literal and <field>_unit the unit.
-Only status='approved' rows leave the ledger, so every exported number was found literally on
-its cited page by the verifier and then accepted by a human. Row and column order are
-deterministic, so an identical approved set yields byte-identical files (same sha256, same
-dataset id). Cells that start with = + - @ (or tab / CR) get a leading apostrophe (spreadsheet formula guard).
+Only status='approved' rows of publications included under the current criteria leave the ledger
+(approved rows of an excluded publication are left out and listed), so every exported number was
+found literally on its cited page by the verifier and then accepted by a human. Row and column order
+are deterministic, so an identical approved set yields byte-identical files (same sha256, same
+dataset id); file names carry a sha256 prefix and are created without replacing, so no export
+overwrites another's file. Cells that start with = + - @ (or tab / CR) get a leading apostrophe
+(spreadsheet formula guard). The ledger row names the authenticated caller (ToolContext.actor).
 """
 from __future__ import annotations
 
 import csv
 import math
 import os
+import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +28,7 @@ from app.core.pharmstate import PharmState
 from app.core.provenance import file_sha256
 from app.evidence import ingest
 from app.evidence.config_tools import summarise
+from app.evidence.inclusion import current_screens, exclusion_reason
 from app.evidence.models import Dataset, Record, Source
 from app.evidence.store import EvidenceStore, get_store
 from app.tools.base import Tool, ToolContext, ToolResult
@@ -140,13 +145,48 @@ def build_wide(records: list[Record], sources: dict[str, Source],
 
 def write_csv(path: Path, columns: list[str] | tuple[str, ...], rows: list[dict[str, str]]) -> str:
     """Write atomically (tmp + rename) and return the file's sha256."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     with tmp.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(columns), lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     os.replace(tmp, path)
     return file_sha256(path)
+
+
+def write_named_csv(out_dir: Path, stem: str, columns: list[str] | tuple[str, ...], rows: list[dict[str, str]],
+                    *, wide: bool = False) -> tuple[Path, str]:
+    """Write to a private temp name, then publish without ever replacing another export's file (two
+    exports in one second, two tabs): the long file as <stem>_<sha256[:12]>.csv, the wide one beside
+    it as <long stem>_wide.csv, or <long stem>_<its sha256[:12]>_wide.csv when that name holds other
+    bytes (same long content, another template). An existing file of the chosen name holds the same
+    content and is kept; the temp file is dropped."""
+    tmp = out_dir / f".{stem}.{uuid.uuid4().hex}.tmp"
+    sha = write_csv(tmp, columns, rows)
+    names = [f"{stem}_wide.csv", f"{stem}_{sha[:12]}_wide.csv"] if wide else [f"{stem}_{sha[:12]}.csv"]
+    names.append(f"{stem}_{sha}{'_wide' if wide else ''}.csv")
+    try:
+        for name in names:
+            path = out_dir / name
+            if _publish(tmp, path) or file_sha256(path) == sha:
+                return path, sha
+        raise ValueError(f"could not name the export file {names[-1]}")
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _publish(tmp: Path, path: Path) -> bool:
+    """Create *path* with *tmp*'s bytes atomically, never replacing a file; False when *path* exists."""
+    try:
+        os.link(tmp, path)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:                              # no hard links on this filesystem
+        if path.exists():
+            return False
+        os.replace(tmp, path)
+        return True
 
 
 # -------------------------------------------------------------------- tool ---
@@ -170,13 +210,32 @@ def _dedupe_files(ds: Dataset, long_path: Path, wide_path: Path) -> None:
             new.unlink(missing_ok=True)
 
 
+def _split_included(store: EvidenceStore, sid: str, approved: list[Record]
+                    ) -> tuple[list[Record], list[dict[str, str]]]:
+    """(approved records of sources included under the current criteria, [{record_id, source_id,
+    reason}] for the approved records of sources that are not)."""
+    screens = current_screens(store, sid)
+    keep, left_out = [], []
+    for r in approved:
+        why = exclusion_reason(screens, r.source_id)
+        if why is None:
+            keep.append(r)
+        else:
+            left_out.append({"record_id": r.id, "source_id": r.source_id, "reason": why})
+    return keep, left_out
+
+
 def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     store: EvidenceStore = get_store()
     sid = state.session_id
     approved = _approved(store.list_records(sid, status="approved"))
     if not approved:
         raise ValueError("no approved records to export — approve extracted records in the Evidence workspace first")
-    actor = args.get("actor") if isinstance(args.get("actor"), str) and args.get("actor") else "anonymous"
+    approved, left_out = _split_included(store, sid, approved)
+    if not approved:
+        raise ValueError(f"every approved record ({len(left_out)}) comes from a publication that is not currently "
+                         "included under the current criteria; screen and include it first")
+    actor = ctx.actor or "anonymous"               # the authenticated caller; args['actor'] is ignored
     sources = {s.id: s for s in store.list_sources(sid)}
     tmpl = store.get_config(sid, "template")
     template, thash = (tmpl["body"], tmpl["body_hash"]) if tmpl else (None, "")
@@ -184,24 +243,27 @@ def export_evidence_dataset(state: PharmState, ctx: ToolContext, args: dict[str,
     wide_rows, wide_cols = build_wide(approved, sources, template)
     out_dir = exports_dir(ctx.data_dir)
     stem = f"evidence_{sid}_{_stamp()}"
-    long_path, wide_path = out_dir / f"{stem}.csv", out_dir / f"{stem}_wide.csv"
-    long_sha = write_csv(long_path, LONG_COLUMNS, long_rows)
-    wide_sha = write_csv(wide_path, wide_cols, wide_rows)
+    long_path, long_sha = write_named_csv(out_dir, stem, LONG_COLUMNS, long_rows)
+    wide_path, wide_sha = write_named_csv(out_dir, long_path.stem, wide_cols, wide_rows, wide=True)
     hashes = sorted(r.record_hash for r in approved)
     n_sources = len({r.source_id for r in approved})
     ds = store.add_dataset(sid, thash, str(long_path), str(wide_path), long_sha, wide_sha, hashes,
                            n_records=len(approved), n_sources=n_sources, exported_by=actor)
     _dedupe_files(ds, long_path, wide_path)
+    dropped = (f" {len(left_out)} approved record(s) of publications not included under the current criteria "
+               "were left out." if left_out else "")
     return ToolResult(
         summary=(f"Exported {len(approved)} approved record(s) from {n_sources} publication(s): "
-                 f"{Path(ds.long_path).name} (long) and {Path(ds.wide_path).name} (wide), dataset {ds.id}."),
+                 f"{Path(ds.long_path).name} (long) and {Path(ds.wide_path).name} (wide), dataset {ds.id}."
+                 + dropped),
         writes={"evidence_dataset_path": ds.long_path, "evidence_summary": summarise(store, sid)},
         result={"dataset": asdict(ds), "long_path": ds.long_path, "wide_path": ds.wide_path,
                 "long_sha256": ds.long_sha256, "wide_sha256": ds.wide_sha256, "record_hashes": hashes,
                 "n_records": len(approved), "n_sources": n_sources, "template_hash": thash,
-                "long_columns": list(LONG_COLUMNS), "wide_columns": wide_cols},
+                "long_columns": list(LONG_COLUMNS), "wide_columns": wide_cols, "left_out": left_out},
         action=(f"exported evidence dataset {ds.id}: {len(approved)} approved records from {n_sources} sources "
-                f"(long sha256 {ds.long_sha256[:12]}, wide sha256 {ds.wide_sha256[:12]})"))
+                f"(long sha256 {ds.long_sha256[:12]}, wide sha256 {ds.wide_sha256[:12]})"
+                + (f"; {len(left_out)} left out (not included)" if left_out else "")))
 
 
 TOOLS = [
@@ -211,6 +273,6 @@ TOOLS = [
                       "(one row per source and group: per template field the number, its page literal and its "
                       "unit). Proposed or rejected records are never exported. Requires at least one approved "
                       "record."),
-         input_schema={"type": "object", "properties": {"actor": {"type": "string"}}},
+         input_schema={"type": "object", "properties": {}},
          run=export_evidence_dataset),
 ]

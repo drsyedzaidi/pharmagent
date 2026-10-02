@@ -27,10 +27,11 @@ REASON_INTEGER_EXPECTED, REASON_SNIPPET_NOT_ON_PAGE = "integer_expected", "snipp
 REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "source_changed"
 REASON_TEXT_NOT_IN_SNIPPET = "text_not_in_snippet"        # text field: value absent from its own snippet
 REASON_PARTIAL_NUMBER = "partial_number"                  # cited number is part of a longer page number
+REASON_CROSSES_COLUMNS = "crosses_columns"                # snippet only exists across a two-column gap
 REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
                 REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
                 REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED,
-                REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER)
+                REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER, REASON_CROSSES_COLUMNS)
 # QC flag codes (flags_json entries: {code, severity warn|error, message, field, group, origin script|llm}).
 FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N = "required_missing", "out_of_range", "non_integer_n"
 FLAG_DUPLICATE, FLAG_UNIT_MISMATCH, FLAG_UNIT_MISSING = "duplicate", "unit_mismatch", "unit_missing"
@@ -41,10 +42,19 @@ FLAG_UNIT_SOURCE_MISMATCH = "unit_source_mismatch"   # source prints a different
 FLAG_UNIT_UNVERIFIED = "unit_unverified"             # no unit printed next to the number / in the header
 FLAG_HIDDEN_TEXT = "hidden_text"                     # cited page had invisible / off-page text removed
 FLAG_SUPERSEDED = "superseded"                       # a later extraction run proposed this slot again
+FLAG_GLYPH_MISMATCH = "glyph_text_mismatch"          # a font names a digit other than the glyph drawn (error)
+FLAG_GLYPH_UNVERIFIED = "glyph_unverified"           # the drawn glyph's identity cannot be established
+FLAG_OVERLAPPING_GLYPHS = "overlapping_glyphs"       # over-struck glyphs: both cannot be read (error)
+FLAG_CENSORED_VALUE = "censored_value"               # '<0.5', '≤1.0', '~2': not an exact number (error)
+FLAG_SCALED_HEADER = "scaled_header"                 # header / unit carries a multiplier ('×10³') (error)
+FLAG_DECIMAL_STYLE_AMBIGUOUS = "decimal_style_ambiguous"   # '3,412' read on weak style evidence (error)
+FLAG_ESTIMATE_OUTSIDE_CI = "estimate_outside_ci"     # point estimate outside its own interval
 FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
               FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
               FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION,
-              FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT, FLAG_SUPERSEDED)
+              FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT, FLAG_SUPERSEDED,
+              FLAG_GLYPH_MISMATCH, FLAG_GLYPH_UNVERIFIED, FLAG_OVERLAPPING_GLYPHS, FLAG_CENSORED_VALUE,
+              FLAG_SCALED_HEADER, FLAG_DECIMAL_STYLE_AMBIGUOUS, FLAG_ESTIMATE_OUTSIDE_CI)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 
@@ -80,8 +90,8 @@ def body_hash(body: Any) -> str:
 
 def record_hash(*, source_sha256: str, template_hash: str, field: str, group: str, value: str,
                 unit: str | None, locator: dict[str, Any], extractor: str) -> str:
-    """Claim identity: excludes status/flags/verify and the verifier-set span/literal."""
-    loc = {k: v for k, v in locator.items() if k not in ("span", "literal")}
+    """Claim identity: excludes status/flags/verify and the verifier-set span/literal/token."""
+    loc = {k: v for k, v in locator.items() if k not in ("span", "literal", "token")}
     return body_hash({"source_sha256": source_sha256, "template_hash": template_hash, "field": field,
                       "group": group, "value": value, "unit": unit, "locator": loc, "extractor": extractor})
 
@@ -96,6 +106,7 @@ class Locator:
     cell: dict[str, Any] | None = None
     column: int | None = None
     decimal_style: str = "."
+    token: list[int] | None = None      # verifier-set: raw offsets of the literal (cell, column or page text)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

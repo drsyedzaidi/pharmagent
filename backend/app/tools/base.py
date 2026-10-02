@@ -27,8 +27,8 @@ class ToolContext:
     # BEFORE the running tool's own result is appended. Empty unless the registry fills
     # it for a Tool declared ``uses_audit_trail`` -- never a handle on the live chain.
     audit_trail: tuple[dict[str, Any], ...] = ()
-    # The authenticated caller, filled by the registry for a ``human_only`` tool -- a
-    # reviewer's decision records THIS identity, never an actor named in the args.
+    # The authenticated caller, filled by the registry for every tool -- a reviewer's
+    # decision or a ledger row records THIS identity, never an actor named in the args.
     actor: str = ""
 
 
@@ -165,8 +165,7 @@ class ToolRegistry:
                 "control in the workspace; it cannot run on this path.")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
-        if tool.human_only:
-            run_ctx = replace(run_ctx, actor=actor)
+        run_ctx = replace(run_ctx, actor=actor)     # who acts is the caller, never an argument
         res = tool.run(state, run_ctx, args)
         audit.append(
             agent=tool.agent,

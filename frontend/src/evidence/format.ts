@@ -203,6 +203,7 @@ export const REASON_WORDS: Record<FailReason, string> = {
   source_changed: 'source file changed',
   text_not_in_snippet: 'text not in snippet',
   partial_number: 'only part of a longer number on the page',
+  crosses_columns: 'joins text from two page columns',
 };
 
 export const failWords = (r: VerifyFields): string =>
