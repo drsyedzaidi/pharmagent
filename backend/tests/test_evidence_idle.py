@@ -155,8 +155,27 @@ def test_mock_only_picks_tools_the_registry_offers():
     assert out is None
 
 
-def test_keyless_turn_before_the_screen_tool_exists_returns_the_hint_not_an_error():
+def test_keyless_turn_without_the_screen_tool_returns_the_hint_not_an_error():
+    """Registry without screen_publications (the pre-S5 shape): the mock picks nothing."""
+    from app.tools.base import ToolRegistry
+    reg = ToolRegistry()
+    for t in TOOLS:
+        if t.name in ("ingest_evidence_source", "save_evidence_config"):
+            reg.register(t)
     st = PharmState(evidence_summary=_summary(2))
+    res = Agent(name="evidence", system_prompt="").run_turn(
+        state=st, message="screen the publications", llm=MockLLM(), registry=reg,
+        ctx=ToolContext(), audit=AuditChain(), clock=lambda: "t0", actor="t")
+    assert len(res.messages) == 1 and res.messages[0].startswith("[evidence]")
+    assert "could not run" not in res.messages[0].lower()
+
+
+def test_keyless_turn_with_the_screen_tool_but_no_saved_criteria_names_the_gap():
+    """S5: the mock now reaches screen_publications; with no criteria in the ledger the tool
+    refuses and the turn surfaces that refusal (never a 500)."""
+    from app.evidence import store as evstore
+    evstore.configure(":memory:")
+    st = PharmState(session_id="sess_idle", evidence_summary=_summary(2))
     msgs = _turn(st, llm=MockLLM(), message="screen the publications")
-    assert len(msgs) == 1 and msgs[0].startswith("[evidence]")
-    assert "could not run" not in msgs[0].lower()
+    assert len(msgs) == 1 and msgs[0].startswith("Could not run screen_publications")
+    assert "criteria" in msgs[0]

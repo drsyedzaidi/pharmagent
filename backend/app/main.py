@@ -1035,7 +1035,7 @@ def download_memo(sid: str, filename: str, sess=Depends(owned_session)) -> FileR
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
-app.include_router(build_evidence_router(owned_session, actor_id, lambda: orch))
+app.include_router(build_evidence_router(owned_session, actor_id, lambda: orch, lambda: jobs))
 # ── static frontend (single-process desktop app) ───────────────────────────────
 # When the React frontend has been built (`npm run build` -> frontend/dist), serve
 # it from the same origin so the whole app runs on one port (no separate Vite dev

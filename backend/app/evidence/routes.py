@@ -1,10 +1,13 @@
-"""Evidence endpoints: upload, criteria, template, snapshot, page text, PDF download.
+"""Evidence endpoints: upload, criteria, template, snapshot, page text, PDF download, screening.
 
 ``build_evidence_router`` is given main.py's auth dependencies and a getter for the live
 Orchestrator (tests reassign ``main.orch``), so main.py only imports and includes it.
 Every mutation goes through ``Orchestrator.run_tool`` (audit + write-access); the
 routes themselves only validate, stage files and map errors:
 ValueError -> 400, EvidenceStateError -> 409, IngestError -> 422.
+POST /screen runs as a JobManager job when a real LLM is configured (model calls per
+source), synchronously on the keyless keyword path; POST /screen/decide loops over the
+reviewer's decisions, one audited tool call each.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse
 
 from app.core.provenance import file_sha256
-from app.evidence import ingest
+from app.evidence import ingest, llm_access
 from app.evidence.config_tools import source_row
 from app.evidence.models import EvidenceStateError, IngestError, Source
 from app.evidence.store import get_store, source_id
@@ -29,6 +32,7 @@ log = logging.getLogger(__name__)
 
 AGENT = "evidence"
 CHUNK = 1 << 20
+DECISION_KEYS = ("screen_id", "decision", "reason")
 
 
 def _unwrap(body: Any, key: str) -> Any:
@@ -64,6 +68,20 @@ def owned_source(sid: str, src_id: str) -> Source:
     return src
 
 
+def owned_screen_id(sid: str, screen_id: Any) -> str:
+    if not isinstance(screen_id, str) or not any(s.id == screen_id for s in get_store().list_screens(sid)):
+        raise HTTPException(404, f"unknown screening verdict: {screen_id}")
+    return screen_id
+
+
+def _decisions(body: Any) -> list[dict[str, Any]]:
+    """{decisions:[{screen_id, decision, reason}]} or one bare decision object; never empty."""
+    items = body.get("decisions") if isinstance(body, dict) and "decisions" in body else [body]
+    if not isinstance(items, list) or not items or not all(isinstance(d, dict) for d in items):
+        raise HTTPException(400, "body must be a decision object or {decisions: [..]} (non-empty)")
+    return [{k: d.get(k) for k in DECISION_KEYS} for d in items]
+
+
 async def _stage_upload(file: UploadFile, data_dir: str) -> Path:
     """Stream the upload to evidence/incoming/<uuid>.pdf under the size cap; nothing else is written."""
     incoming = ingest.evidence_dir(data_dir) / "incoming"
@@ -93,7 +111,9 @@ def _config_response(sid: str, kind: str, out: dict[str, Any]) -> dict[str, Any]
 
 
 def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[..., str],
-                          get_orch: Callable[[], Any]) -> APIRouter:
+                          get_orch: Callable[[], Any],
+                          get_jobs: Callable[[], Any] | None = None) -> APIRouter:
+    """``get_jobs`` returns main.py's JobManager; without it the LLM screening path runs inline."""
     router = APIRouter(prefix="/api/sessions/{sid}/evidence", tags=["evidence"])
 
     @router.post("/upload")
@@ -150,6 +170,47 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
                 "datasets": [asdict(d) for d in store.list_datasets(sid)],
                 "counts": store.counts(sid),
                 "summary": sess.state.evidence_summary}
+
+    @router.post("/screen")
+    def screen(sid: str, body: Any = Body(None), sess=Depends(owned_session),
+               actor: str = Depends(actor_id)) -> dict:
+        """Propose screening verdicts: a job when a real LLM is configured, else synchronous."""
+        body = body or {}
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object ({source_ids?: [..]})")
+        args = {"actor": actor, **({"source_ids": body["source_ids"]} if "source_ids" in body else {})}
+        if llm_access.llm_available() and get_jobs is not None:
+            orch = get_orch()
+            job_id = get_jobs().submit(
+                session_id=sid, kind="evidence_screen",
+                fn=lambda: orch.run_tool(sid, "screen_publications", AGENT, args, actor=actor))
+            return {"job_id": job_id, "status": "running", "kind": "evidence_screen",
+                    "tool": "screen_publications"}
+        return run_tool(get_orch(), sid, "screen_publications", args, actor)
+
+    @router.post("/screen/decide")
+    def decide_screen(sid: str, body: Any = Body(...), sess=Depends(owned_session),
+                      actor: str = Depends(actor_id)) -> dict:
+        """One audited decide_screening call per decision; a failure mid-list stops the loop,
+        earlier decisions stand, and the 400 names what was applied."""
+        decisions = _decisions(body)
+        decided: list[dict[str, Any]] = []
+        last: dict[str, Any] = {}
+        for d in decisions:
+            try:
+                owned_screen_id(sid, d["screen_id"])
+                last = get_orch().run_tool(sid, "decide_screening", AGENT,
+                                           {**d, "actor": actor, "confirm": True}, actor=actor)
+            except Exception as exc:
+                err = http_error(exc)
+                if not decided:
+                    raise err from exc
+                applied = ", ".join(x["id"] for x in decided)
+                raise HTTPException(400, f"{len(decided)} of {len(decisions)} decisions applied ({applied}) "
+                                         f"before {d['screen_id']} failed: {err.detail}") from exc
+            decided.append(last["result"]["screen"])
+        return {"decided": decided, "summary": last["summary"],
+                "screening_results": last["state"]["screening_results"], "state": last["state"]}
 
     @router.get("/sources/{src_id}/pages/{n}")
     def source_page(sid: str, src_id: str, n: int, sess=Depends(owned_session)) -> dict:

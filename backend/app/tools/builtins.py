@@ -1,7 +1,7 @@
 """Assemble the default tool registry from all tool modules."""
 from __future__ import annotations
 
-from app.evidence import config_tools
+from app.evidence import config_tools, screen_tools
 from app.tools import (
     be_tools,
     bootstrap_tools,
@@ -36,7 +36,7 @@ def default_registry() -> ToolRegistry:
                 poppk_tools, pkmodel_tools, engine_tools, qc_tools, report_tools,
                 regulatory_tools, review_tools, viz_tools, simest_tools,
                 stats_tools, clinpharm_tools, er_tools, indirect_tools, memo_tools,
-                config_tools):
+                config_tools, screen_tools):
         for tool in mod.TOOLS:
             reg.register(tool)
     return reg
