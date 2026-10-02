@@ -24,6 +24,8 @@ not from the plan.
     PDF validation, storage by sha256, and the pdfplumber parse (in a killable child process) cached as
     `<sha256>.pages.json`.
   - `normalize.py` + `verify.py`: the literal-match verifier, deterministic with no model involved.
+  - `record_checks.py` / `supersede.py`: unit and hidden-text checks on a verified record; which
+    proposal of a slot is current across extraction runs.
   - `qc_flags.py`: scripted QC flags. A model may add flags but never remove them.
   - `screen_rules.py` / `screen_tools.py`: screening (keyword rules, or a model whose quotes are checked).
   - `extract_rules.py` / `extract_llm.py` / `extract_tools.py`: extraction (table and text rules, or
@@ -81,8 +83,12 @@ Immutability:
 `record_hash` is the sha256 of the canonical JSON of {source_sha256, template_hash, field, group, value,
 unit, locator without span/literal, extractor}. It leaves out status, flags and verification, so the
 identity of a claim stays stable: re-extracting the same claim inserts nothing. A different value for a
-(source, field, normalised group) that already has an approved record, or that another proposal in the
-same batch holds, gets the flag `duplicate`; approving it needs `allow_conflict: true` on the decision.
+(source, canonical field, normalised group) that already has an approved record, or that any live
+proposal holds (the same batch or an earlier extraction run), gets the flag `duplicate` on both sides;
+approving it over an approved value needs `allow_conflict: true` on the decision. After a run, a live
+proposal of a slot the run proposed again under a different claim gets the warning `superseded` (the
+run's own claims are current); `verify_records` keeps that flag, and a later run that proposes the same
+claim again clears it (`supersede.py`).
 
 ### Locator
 
@@ -166,8 +172,10 @@ must pass the literal-match verifier before it can be approved.
 `text_not_in_snippet`, `partial_number`.
 
 Unit check (`record_checks.py`): the unit printed next to the number (or in the table header / Unit
-column) must match the proposed unit, else the error flag `unit_source_mismatch`; no printed unit gives
-the warning `unit_unverified`.
+column) must EQUAL the proposed unit after normalisation and a small equivalence table (mcg = µg = ug,
+mL = ml, hr = h), else the error flag `unit_source_mismatch`; a printed `mg` never vouches for `mg/kg`.
+A snippet that ends at the unit is read on in the page or cell. No printed unit, or one the next token
+may continue (`100 mg kg-1`), gives the warning `unit_unverified`.
 
 How numbers are matched:
 
@@ -176,12 +184,17 @@ How numbers are matched:
 - Tokens are parsed with the page's decimal style: `3,412` is 3412 on a point-decimal page, and `18,2` is
   18.2 on a comma-decimal page.
 - Non-ASCII digits (Arabic-Indic, fullwidth, superscript) are refused outright.
+- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`. Citing
+  only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
+  the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
+  `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the
+  page's `small_text` holds no digits.
 
 ### QC flags (`models.FLAG_CODES`)
 
 `required_missing`, `out_of_range`, `non_integer_n`, `duplicate`, `unit_mismatch`, `unit_missing`,
 `se_nonpositive`, `ci_inverted`, `composite_cell`, `table_low_confidence`, `verify_fail`, `non_numeric`,
-`suspicious_instruction_text`.
+`suspicious_instruction_text`, `unit_source_mismatch`, `unit_unverified`, `hidden_text`, `superseded`.
 
 Each flag carries a severity (`warn` or `error`) and an origin (`script` or `llm`). A model can add flags
 through `merge_llm_flags` (add-only, deduped on code/field/group) but cannot remove scripted ones.

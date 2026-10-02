@@ -40,10 +40,11 @@ FLAG_SUSPICIOUS_INSTRUCTION = "suspicious_instruction_text"   # value/snippet re
 FLAG_UNIT_SOURCE_MISMATCH = "unit_source_mismatch"   # source prints a different unit for the number (error)
 FLAG_UNIT_UNVERIFIED = "unit_unverified"             # no unit printed next to the number / in the header
 FLAG_HIDDEN_TEXT = "hidden_text"                     # cited page had invisible / off-page text removed
+FLAG_SUPERSEDED = "superseded"                       # a later extraction run proposed this slot again
 FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
               FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
               FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION,
-              FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT)
+              FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT, FLAG_SUPERSEDED)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 

@@ -28,7 +28,8 @@ export type FailReason =
 export type FlagCode =
   | 'required_missing' | 'out_of_range' | 'non_integer_n' | 'duplicate' | 'unit_mismatch' | 'unit_missing'
   | 'se_nonpositive' | 'ci_inverted' | 'composite_cell' | 'table_low_confidence' | 'verify_fail'
-  | 'non_numeric' | 'suspicious_instruction_text' | 'unit_source_mismatch' | 'unit_unverified' | 'hidden_text';
+  | 'non_numeric' | 'suspicious_instruction_text' | 'unit_source_mismatch' | 'unit_unverified' | 'hidden_text'
+  | 'superseded';
 
 /** Result-card markers the evidence tools push into the transcript (S9 renders them). */
 export type EvidenceMarker = '__EVIDENCE_SCREEN__' | '__EVIDENCE_RECORDS__' | '__EVIDENCE_DATASET__';

@@ -3,8 +3,11 @@ source prints for that number, and a flag when the cited page had invisible text
 
 Source unit, in order: the unit token right after the number in the snippet / cell ('100 mcg',
 '45%'), else for a table cell the column header's bracketed unit, the row label's bracketed unit or
-the row's 'Unit' column. A recognisable source unit that differs from the proposed one is an error
-flag (a 1000x dose error otherwise passes); no source unit at all is a warning (unit_unverified).
+the row's 'Unit' column. Units are compared for EQUALITY after normalisation and a small equivalence
+table: a printed 'mg' never vouches for 'mg/kg' (a 1000x dose error otherwise passes). A snippet that
+ends at the unit is read on in the page (or cell); a unit the next token may continue ('mg kg-1') is
+undecidable. Different units are an error flag; no source unit, or an undecidable one, is a warning
+(unit_unverified).
 """
 from __future__ import annotations
 
@@ -18,6 +21,10 @@ from app.evidence.normalize import normalise
 from app.evidence.qc_flags import normalise_unit
 
 _UNIT_TOKEN_RE = re.compile(r"^\s*(%|[^\W\d_][\w/·*.^\-]*(?:\s+[^\W\d_]{1,3}(?:/[\w.^\-]+)+)?)")
+_NEXT_TOKEN_RE = re.compile(r"^\s*(/|per\b|\S+)")
+_NOT_CONTINUATIONS = {"x", "fold", "%"}
+_EQUIV = {"mcg": "ug", "cc": "ml", "hr": "h", "hrs": "h", "mins": "min", "sec": "s", "lit": "l"}
+CONTINUATION_CHARS = 60
 _BASES = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
           "h", "min", "s", "d", "wk", "iu", "miu", "u", "%", "kda", "m2", "cells", "cell", "10^6", "10^9",
           "bpm", "mmhg", "x", "fold")
@@ -40,6 +47,11 @@ def recognised_unit(token: str | None) -> str | None:
     return unit if pieces and all(_segmentable(p.replace("-1", "").replace("^-1", "")) for p in pieces) else None
 
 
+def canonical_unit(unit: str | None) -> str:
+    """normalise_unit with each '/'-piece mapped through the equivalence table (mcg = ug = µg, mL = ml)."""
+    return "/".join(_EQUIV.get(piece, piece) for piece in normalise_unit(unit).split("/"))
+
+
 def _after_literal(snippet: str, literal: str | None) -> str | None:
     """Normalised snippet text right after the cited number, else None."""
     if not literal:
@@ -49,9 +61,51 @@ def _after_literal(snippet: str, literal: str | None) -> str | None:
     return None if j < 0 or not nl else ns[j + len(nl):]
 
 
-def _adjacent_unit(rest: str | None) -> str | None:
+def _continuation(loc: dict[str, Any], page: dict[str, Any]) -> str | None:
+    """Normalised page (or cell) text right after the cited snippet ('' at its end), else None."""
+    snippet = normalise(str(loc.get("snippet") or ""))[0]
+    if loc.get("kind") == "table":
+        cell = loc.get("cell") or {}
+        try:
+            text = str((page.get("tables") or [])[cell["table"]]["rows"][cell["row"]][cell["col"]] or "")
+        except (KeyError, IndexError, TypeError):
+            return None
+        norm = normalise(text)[0]
+        j = norm.find(snippet) if snippet else -1
+        return None if j < 0 else norm[j + len(snippet):]
+    span, column, columns = loc.get("span"), loc.get("column"), page.get("columns") or []
+    if not (isinstance(span, list) and len(span) == 2 and isinstance(span[1], int)):
+        return None
+    text = columns[column] if isinstance(column, int) and 0 <= column < len(columns) else page.get("text") or ""
+    raw = str(text)[span[1]:span[1] + CONTINUATION_CHARS]
+    return (" " if raw[:1].isspace() else "") + normalise(raw)[0]
+
+
+def _continues(tail: str) -> bool:
+    """True when the text after a unit token may extend it ('/kg', 'per kg', 'kg-1', 'h')."""
+    m = _NEXT_TOKEN_RE.match(tail)
+    if m is None:
+        return False
+    token = m.group(1).rstrip(".,;:)")
+    return token in ("/", "per") or (token not in _NOT_CONTINUATIONS and recognised_unit(token) is not None)
+
+
+def _adjacent_unit(rest: str | None, loc: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
+    """(unit printed right after the number, decided). A snippet ending at the unit is read on in the
+    page; undecided when that is impossible or the next token may continue the unit."""
     m = _UNIT_TOKEN_RE.match(rest or "")
-    return recognised_unit(m.group(1)) if m else None
+    unit = recognised_unit(m.group(1)) if m else None
+    if m is None or unit is None:
+        return None, True
+    tail = (rest or "")[m.end():]
+    if not tail.strip():
+        more = _continuation(loc, page)
+        if more is None:
+            return unit, False
+        whole = (rest or "") + more
+        m = _UNIT_TOKEN_RE.match(whole)
+        unit, tail = (recognised_unit(m.group(1)) if m else None) or unit, whole[m.end():] if m else ""
+    return unit, not _continues(tail)
 
 
 def _table_unit(loc: dict[str, Any], page: dict[str, Any]) -> str | None:
@@ -68,12 +122,13 @@ def _table_unit(loc: dict[str, Any], page: dict[str, Any]) -> str | None:
     return next((u for u in (recognised_unit(c) for c in candidates) if u), None)
 
 
-def source_unit(p: dict[str, Any], page: dict[str, Any]) -> str | None:
+def source_unit(p: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
+    """(unit the source prints for the cited number, decided) -- see the module docstring."""
     loc = p.get("locator") or {}
-    unit = _adjacent_unit(_after_literal(str(loc.get("snippet") or ""), loc.get("literal")))
+    unit, decided = _adjacent_unit(_after_literal(str(loc.get("snippet") or ""), loc.get("literal")), loc, page)
     if unit is None and loc.get("kind") == "table":
-        unit = _table_unit(loc, page)
-    return unit
+        unit, decided = _table_unit(loc, page), True
+    return unit, decided
 
 
 def _flag(code: str, severity: str, message: str, p: dict[str, Any]) -> dict[str, Any]:
@@ -86,13 +141,16 @@ def unit_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
     proposed = p.get("unit")
     if p.get("verify_status") != "pass" or not proposed or p.get("value_num") is None:
         return []
-    have = source_unit(p, page)
+    have, decided = source_unit(p, page)
     if have is None:
         return [_flag(M.FLAG_UNIT_UNVERIFIED, "warn", f"{p['field']}: unit {proposed!r} is not printed next to "
                       "the cited number or in its table header; check it on the page", p)]
-    want = normalise_unit(proposed)
-    if want == have or want.startswith(have + "/") or (len(have) >= 2 and want.startswith(have)):
+    want, have = canonical_unit(proposed), canonical_unit(have)
+    if decided and want == have:
         return []
+    if not decided and want.startswith(have):
+        return [_flag(M.FLAG_UNIT_UNVERIFIED, "warn", f"{p['field']}: the source prints {have!r} followed by text "
+                      f"that may continue the unit; check {proposed!r} on the page", p)]
     return [_flag(M.FLAG_UNIT_SOURCE_MISMATCH, "error", f"{p['field']}: the source prints {have!r} for this "
                   f"number, the record says {proposed!r}", p)]
 

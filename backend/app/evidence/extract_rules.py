@@ -15,7 +15,7 @@ import re
 import unicodedata
 from typing import Any
 
-from app.evidence.normalize import number_spans, parse_number
+from app.evidence.normalize import number_tokens, parse_number
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
 VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
@@ -80,10 +80,10 @@ def value_number(value: str, style: str) -> float | None:
 
 def leading_number(cell: str, style: str) -> tuple[str, float, str] | None:
     """(literal as printed, value, remainder) for the first number in a cell, else None."""
-    spans = number_spans(cell, style)
-    if not spans:
+    tokens = number_tokens(cell, style)
+    if not tokens or tokens[0].value is None:            # '4.5 x 10' (exponent lost): never a later number
         return None
-    start, end, value = spans[0]
+    start, end, value, _ = tokens[0]
     return cell[start:end], value, cell[end:]
 
 

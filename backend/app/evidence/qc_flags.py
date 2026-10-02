@@ -132,7 +132,7 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
     spec = index.get(str(rec.get("field") or "").casefold())
     if spec:
         flags.extend(_field_flags(rec, spec, field, group))
-    prior = approved.get((rec.get("source_id") or "", field, group_key(group)))
+    prior = approved.get((rec.get("source_id") or "", field.casefold(), group_key(group)))
     if prior is not None and not same_value(prior, rec):
         flags.append(_flag(M.FLAG_DUPLICATE, "warn",
                            f"{field}: an approved record already holds {prior.get('value')!r}"
@@ -140,7 +140,7 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
     rivals = [o for o in batch if o is not rec and not same_value(o, rec)]
     if rivals:
         flags.append(_flag(M.FLAG_DUPLICATE, "warn",
-                           f"{field}: conflicting values proposed for this source/group: "
+                           f"{field}: conflicting values proposed for this source/group (this or an earlier run): "
                            + ", ".join(repr(str(o.get("value"))) for o in [rec, *rivals][:4]), field, group))
     flags.extend(_ci_flag(rec, field, group, peers))
     cell = (rec.get("locator") or {}).get("cell") or {}
@@ -160,13 +160,23 @@ def same_value(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return str(a.get("value") or "").strip() == str(b.get("value") or "").strip()
 
 
-def scripted_flags(records: list[Any], template: dict[str, Any], approved_records: list[Any]) -> list[list[dict]]:
-    """One flag list per input record (same order). Inputs are read only; nothing is mutated."""
+def slot_key(rec: Any, template: dict[str, Any]) -> tuple[str, str, str]:
+    """(source, canonical field casefolded, normalised group): the slot one value belongs to."""
+    r = M.as_mapping(rec)
+    return str(r.get("source_id") or ""), _canon(r, _field_index(template)).casefold(), group_key(r.get("group_label"))
+
+
+def scripted_flags(records: list[Any], template: dict[str, Any], approved_records: list[Any],
+                   live: list[Any] | None = None) -> list[list[dict]]:
+    """One flag list per input record (same order). *live* holds other still-proposed records (an
+    earlier run's) that a record must not contradict; they are compared, never flagged here. Inputs
+    are read only; nothing is mutated."""
     index = _field_index(template)
     required = [str(f["name"]) for f in (template or {}).get("fields") or [] if f.get("name") and f.get("required")]
     recs = [{**M.as_mapping(r)} for r in records]
     approved_list = [{**M.as_mapping(r)} for r in approved_records or []]
-    for r in recs + approved_list:
+    live_list = [{**M.as_mapping(r)} for r in live or []]
+    for r in recs + approved_list + live_list:
         r["_canon"] = _canon(r, index)
     present: dict[Key, set[str]] = defaultdict(set)
     by_source: dict[str, set[str]] = defaultdict(set)
@@ -176,13 +186,13 @@ def scripted_flags(records: list[Any], template: dict[str, Any], approved_record
         present[_key(r)].add(r["_canon"])
         by_source[_key(r)[0]].add(r["_canon"])
         peers[_key(r)].setdefault(r["_canon"], r)
-    for r in recs:
-        batch[(*_key(r), r["_canon"])].append(r)
-    approved = {(str(r.get("source_id") or ""), r["_canon"], _key(r)[1]): r for r in approved_list}
+    for r in recs + live_list:
+        batch[(*_key(r), r["_canon"].casefold())].append(r)
+    approved = {(str(r.get("source_id") or ""), r["_canon"].casefold(), _key(r)[1]): r for r in approved_list}
     # an ungrouped record ('' group: a text-rule n or dose) is checked against its whole source
     return [_record_flags(r, r["_canon"], str(r.get("group_label") or ""), index,
                           by_source[_key(r)[0]] if not _key(r)[1] else present[_key(r)], approved,
-                          peers[_key(r)], required, batch[(*_key(r), r["_canon"])])
+                          peers[_key(r)], required, batch[(*_key(r), r["_canon"].casefold())])
             for r in recs]
 
 

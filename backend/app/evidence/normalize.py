@@ -8,8 +8,10 @@ Unicode digit is reported by has_non_ascii_digits() and must be rejected upstrea
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
+from typing import NamedTuple
 
 IdxMap = list[int]
 
@@ -30,6 +32,24 @@ _POINT_THOUSANDS = re.compile(r"\b\d{1,3}(?:\.\d{3})+,\d+")
 _DIGITS_ONLY = re.compile(r"[^0-9]")
 _WORD_RE = re.compile(r"\w", re.ASCII)
 _ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v"})   # 1:1, matches no NUM_RE separator
+# Scientific notation belongs to the number it follows: '1.2e-3', '1.2E+03', '1.2 x 10^3', '1.2 × 10⁻³'.
+# A '10' after the multiplier with no readable exponent ('4.5 x 10' whose superscript went to small_text,
+# or '10-3') makes the token UNRESOLVED (value None): it can never pass as its mantissa or as 10.
+_SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+_GAP = r"[ \x00]{0,2}"
+_EXP = r"(?:\^[ \x00]?(?P<pow>[+-]?\d{1,4})(?!\d)|(?P<sup>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]{1,4})|(?P<odd>[+-]\d{1,4}(?!\d)))"
+_SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|" + _GAP + r"[xX×·*]" + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
+_POW_RE = re.compile(_EXP)
+MAX_EXPONENT = 300
+
+
+class NumToken(NamedTuple):
+    """One number token: offsets, value (None when an exponent is unreadable) and, for scientific
+    notation, the mantissa's value (so a mantissa-only citation can be named a partial number)."""
+    start: int
+    end: int
+    value: float | None
+    mantissa: float | None = None
 
 
 def fold_chars(text: str) -> str:
@@ -72,27 +92,63 @@ def _to_float(token: str, decimal_style: str) -> float | None:
         return None
 
 
-def number_spans(text: str, decimal_style: str = ".", *, strict: bool = False) -> list[tuple[int, int, float]]:
-    """(start, end, value) for every ASCII number token in *text* (offsets into *text*).
+def _scaled(mantissa: float, exponent: str | None) -> float | None:
+    """mantissa x 10^exponent (exact decimal rounding), None when unreadable or out of float range."""
+    if exponent is None:
+        return None
+    exp = int(exponent.translate(_SUPERSCRIPT))
+    value = float(f"{mantissa!r}e{exp}") if abs(exp) <= MAX_EXPONENT else math.inf
+    return value if math.isfinite(value) else None
+
+
+def _scientific(folded: str, end: int, mantissa: float, bare_ten: bool) -> tuple[int, float | None] | None:
+    """(token end, value) when scientific notation follows the number ending at *end*, else None."""
+    m = _SCI_RE.match(folded, end)
+    if m is not None and m.group("e") is not None:
+        return m.end(), _scaled(mantissa, m.group("e"))
+    if m is not None and (m.group("pow") or m.group("sup") or m.group("odd") or bare_ten):
+        return m.end(), _scaled(mantissa, m.group("pow") or m.group("sup"))
+    p = _POW_RE.match(folded, end) if mantissa == 10 and folded[end - 2:end] == "10" else None
+    if p is not None:                                                      # a bare power: '10^6'
+        return p.end(), _scaled(1.0, p.group("pow") or p.group("sup"))
+    return None
+
+
+def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
+                  bare_ten: bool = True) -> list[NumToken]:
+    """Every ASCII number token in *text*, scientific notation included (offsets into *text*).
 
     *strict* is for raw page / cell text: an ASCII space, tab or line break is a word or column
     gap and never a thousands separator ('12 145' is two numbers); only a thin / no-break space
     (U+2009, U+202F, U+00A0, ...) groups digits. Lenient mode (snippets, proposed values, which a
-    model writes with plain spaces) accepts a single ASCII space too."""
+    model writes with plain spaces) accepts a single ASCII space too. *bare_ten* reads 'N x 10'
+    with no exponent as notation whose exponent was lost (unresolved, fail closed); pass False only
+    when the page has no small glyphs that could have held it."""
     folded = fold_chars(text.translate(_ASCII_GAPS) if strict else text)
-    out: list[tuple[int, int, float]] = []
+    out: list[NumToken] = []
     last_end = -1
     for m in NUM_RE.finditer(folded):
         start = m.start()
+        if start < last_end:                                    # inside a scientific token
+            continue
         # '24' in 'AUC0-24' or '2' in 't1/2' belongs to a label: a range/ratio is only accepted
         # when the number before the separator was itself accepted ('0-24', '1.95-2.74').
         if start >= 2 and folded[start - 1] in "-/" and _WORD_RE.match(folded[start - 2]) and last_end != start - 1:
             continue
         value = _to_float(m.group(0), decimal_style)
-        if value is not None:
-            out.append((start, m.end(), value))
-            last_end = m.end()
+        if value is None:
+            continue
+        sci = _scientific(folded, m.end(), value, bare_ten)
+        out.append(NumToken(start, m.end(), value) if sci is None else NumToken(start, sci[0], sci[1], value))
+        last_end = out[-1].end
     return out
+
+
+def number_spans(text: str, decimal_style: str = ".", *, strict: bool = False,
+                 bare_ten: bool = True) -> list[tuple[int, int, float]]:
+    """(start, end, value) for every number token with a readable value (see number_tokens)."""
+    return [(t.start, t.end, t.value) for t in number_tokens(text, decimal_style, strict=strict, bare_ten=bare_ten)
+            if t.value is not None]
 
 
 def numbers_in(text: str, decimal_style: str = ".") -> list[tuple[str, float]]:
@@ -101,9 +157,10 @@ def numbers_in(text: str, decimal_style: str = ".") -> list[tuple[str, float]]:
 
 
 def parse_number(token: str, decimal_style: str = ".") -> float | None:
-    """Value of the first number token in *token* ('3,412' -> 3412, '18,2' with ',' -> 18.2), else None."""
-    spans = number_spans(token, decimal_style)
-    return spans[0][2] if spans else None
+    """Value of the first number token in *token* ('3,412' -> 3412, '18,2' with ',' -> 18.2, '1.2e-3' ->
+    0.0012), else None (also when that token's exponent is unreadable: '4.5 x 10')."""
+    tokens = number_tokens(token, decimal_style)
+    return tokens[0].value if tokens else None
 
 
 def digits_only(text: str) -> str:
