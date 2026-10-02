@@ -25,6 +25,7 @@ hidden = (
     + collect_submodules("scipy.optimize")
     + collect_submodules("scipy.stats")
     + ["webview", "webview.platforms.cocoa"]
+    + ["PIL.Image", "PIL.PngImagePlugin"]       # evidence page images: the render child encodes PNG (imported lazily)
 )
 
 datas = [

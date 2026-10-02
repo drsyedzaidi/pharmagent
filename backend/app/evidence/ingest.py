@@ -152,21 +152,41 @@ def write_by_sha256(data: bytes, data_dir: str | Path | None = None) -> tuple[st
     return sha, path
 
 
+def layout_path(sha: str, data_dir: str | Path | None = None) -> Path:
+    return evidence_dir(data_dir) / f"{sha}.layout.json"
+
+
+def _layout_current(path: Path, sha: str) -> bool:
+    """True when the layout sidecar at *path* belongs to this PDF and this parser version."""
+    try:
+        side = json.loads(path.read_text("utf-8"))
+        return side.get("sha256") == sha and side.get("parser") == PARSER_NAME
+    except (OSError, ValueError):
+        return False
+
+
 def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None,
                     session_id: str | None = None) -> tuple[dict[str, Any], Path]:
-    """Parse once per (sha256, parser) and cache as <sha256>.pages.json. The parse runs in a killable
-    child process under a process-wide concurrency cap (parse_sandbox)."""
+    """Parse once per (sha256, parser) and cache as <sha256>.pages.json plus its layout sidecar
+    <sha256>.layout.json (word boxes: parse_layout). The parse runs in a killable child process under
+    a process-wide concurrency cap (parse_sandbox). A cache hit needs both files, written sidecar
+    first: a pages file without its sidecar (an interrupted write) is parsed again."""
     pdf_path = Path(pdf_path)
     sha = file_sha256(pdf_path)
     parse_path = evidence_dir(data_dir) / f"{sha}.pages.json"
+    side_path = layout_path(sha, data_dir)
     if parse_path.exists():
         try:
             cached = json.loads(parse_path.read_text("utf-8"))
-            if cached.get("sha256") == sha and cached.get("parser") == PARSER_NAME and "error" not in cached:
+            if (cached.get("sha256") == sha and cached.get("parser") == PARSER_NAME and "error" not in cached
+                    and _layout_current(side_path, sha)):
                 return cached, parse_path
         except (OSError, ValueError):
             log.warning("evidence: unreadable parse cache %s; re-parsing", parse_path)
     doc = parse_sandbox.parse_isolated(pdf_path, session_id=session_id)
+    layout = doc.pop("layout", None)
+    if layout is not None:
+        _atomic_write(side_path, json.dumps(layout, ensure_ascii=False).encode("utf-8"))
     _atomic_write(parse_path, json.dumps(doc, ensure_ascii=False).encode("utf-8"))
     return doc, parse_path
 

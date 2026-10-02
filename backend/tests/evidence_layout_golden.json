@@ -1,0 +1,446 @@
+{
+ "actualtext": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "659e54473cb0e93cb02b",
+    "hidden_chars": "6b86b273ff34fce19d6b",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "8086f0c40c7041df7505",
+    "text": "3ee7cb01e9f2e4dfa6f2"
+   }
+  ],
+  "text_chars": 294
+ },
+ "clipped_eight": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "91337ba34116bf884d2e",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "8086f0c40c7041df7505",
+    "text": "3ee7cb01e9f2e4dfa6f2"
+   }
+  ],
+  "text_chars": 294
+ },
+ "columns_pdf": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "7594d24f29a01e2fabc3",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "7ae1683eb5f618e33c1f"
+   }
+  ],
+  "text_chars": 730
+ },
+ "covered_half": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "91337ba34116bf884d2e",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "8086f0c40c7041df7505",
+    "text": "3ee7cb01e9f2e4dfa6f2"
+   }
+  ],
+  "text_chars": 294
+ },
+ "overstrike": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "b3dd40cbb37aea5e9f87",
+    "text": "66299c2e10873a0accd0"
+   }
+  ],
+  "text_chars": 293
+ },
+ "paper_a": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "765be868c9b3228c2c06",
+    "text": "06624224eb525a8133cf"
+   }
+  ],
+  "text_chars": 695
+ },
+ "paper_b": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "6f368fd79b11f0ee85c5",
+    "tables": "65e92ce9e6dc270dd292",
+    "text": "1ef6336c54c56003cde0"
+   }
+  ],
+  "text_chars": 468
+ },
+ "paper_c": {
+  "decimal_style": ",",
+  "pages": [
+   {
+    "columns": "1ee349f527a69dff265c",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "e68a3eaa0d2334b0bc3b"
+   },
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "6e1f8e1c1b56879985c7",
+    "text": "28f7cca5a3798559ab3f"
+   }
+  ],
+  "text_chars": 1781
+ },
+ "paper_d": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "e3d0641e26d02698138c",
+    "text": "9d71594fe0e0a35abc44"
+   }
+  ],
+  "text_chars": 489
+ },
+ "plain_cell": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "8086f0c40c7041df7505",
+    "text": "3ee7cb01e9f2e4dfa6f2"
+   }
+  ],
+  "text_chars": 294
+ },
+ "poc1_space": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "f0908900336347209492",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "0c9a24b0d65c0afc34ff",
+    "text": "45a62d2623fe57d89401"
+   }
+  ],
+  "text_chars": 293
+ },
+ "raised_exponent": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "a4aab3f1f08004e907d2",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "6fb2917f53b72f7ee341"
+   }
+  ],
+  "text_chars": 172
+ },
+ "raw_crop": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "b6b6199eddf2d01f314a"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_mbo": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "b6b6199eddf2d01f314a"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_mbo_rot270_crop": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "398a5a2c3839a029bf89",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "9012ccc6cedd7cce1a23"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_mbo_rot90_crop": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "17d12adf416cd42d4684",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "09cd3aed144ebb3a37f5"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_plain": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "b6b6199eddf2d01f314a"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_rot180": {
+  "decimal_style": ",",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "7f4d1a83924801e2dde4"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_rot180_crop": {
+  "decimal_style": ",",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "f5ca38f748a1d6eaf726",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "8e3562e07537835b9748"
+   }
+  ],
+  "text_chars": 41
+ },
+ "raw_rot270": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "398a5a2c3839a029bf89",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "9012ccc6cedd7cce1a23"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_rot270_crop": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "f5ca38f748a1d6eaf726",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "52360ab56afbfac75e48",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "aff32afcc4591a73da95"
+   }
+  ],
+  "text_chars": 41
+ },
+ "raw_rot90": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "17d12adf416cd42d4684",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "09cd3aed144ebb3a37f5"
+   }
+  ],
+  "text_chars": 62
+ },
+ "raw_rot90_crop": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "17d12adf416cd42d4684",
+    "tables": "4f53cda18c2baa0c0354",
+    "text": "09cd3aed144ebb3a37f5"
+   }
+  ],
+  "text_chars": 62
+ },
+ "rotated_glyph": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "6413162256b1596db962",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "a585e18ee93911c654b6",
+    "text": "c1aeee3c6e5cdff58560"
+   }
+  ],
+  "text_chars": 294
+ },
+ "tounicode": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "ede95d5a09a650f55ecc",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "69b9c13a46291d23dda6",
+    "text": "54d71c366bf3462c939c"
+   }
+  ],
+  "text_chars": 294
+ },
+ "type3": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "74d825bf9b5b8477d17d",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "4d6b3b91ea223c1136e2",
+    "text": "22390828f791fa862646"
+   }
+  ],
+  "text_chars": 294
+ },
+ "vector_point": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "23b4148f1cd72e2cdd8e",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "c1ddc2d8bafbcd44f9a4",
+    "text": "75f84d41e3b622ff7208"
+   }
+  ],
+  "text_chars": 294
+ },
+ "white_ruling": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "5feceb66ffc86f38d952",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "8086f0c40c7041df7505",
+    "text": "3ee7cb01e9f2e4dfa6f2"
+   }
+  ],
+  "text_chars": 294
+ },
+ "widget": {
+  "decimal_style": ".",
+  "pages": [
+   {
+    "columns": "74234e98afe7498fb5da",
+    "glyph_check": "44136fa355b3678a1146",
+    "hidden_chars": "4e07408562bedb8b60ce",
+    "ink_check": "c48b5b1a9776c84602de",
+    "small_text": "12ae32cb1ec02d01eda3",
+    "tables": "e763863339e745c5d44e",
+    "text": "ed3ac41c653510d45936"
+   }
+  ],
+  "text_chars": 290
+ }
+}

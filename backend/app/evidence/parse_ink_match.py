@@ -61,11 +61,18 @@ def _drifted(prev: int | None, ux: float, uy: float, text: str, origins: np.ndar
     return []
 
 
+def _union(boxes: np.ndarray, ks: list[int]) -> tuple[float, float, float, float]:
+    sel = boxes[ks]
+    return (float(sel[:, 0].min()), float(sel[:, 1].min()), float(sel[:, 2].max()), float(sel[:, 3].max()))
+
+
 def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins: np.ndarray,
-              visible: np.ndarray, odd: np.ndarray) -> tuple[set[int], dict[str, set[str]], dict[int, str]] | None:
+              visible: np.ndarray, odd: np.ndarray, glyph_boxes: np.ndarray | None = None
+              ) -> tuple[set[int], dict[str, set[str]], dict[int, str], dict[int, tuple[float, ...]]] | None:
     """(ids of pdfplumber chars whose matching pdfium glyph is hidden (or that have none),
     {glyph_check code: number characters in doubt}, {char id: pdfium text} for whitespace chars that
-    draw a visible number glyph); None when too many chars have no glyph."""
+    draw a visible number glyph, {char id: [l, b, r, t] union of the visible matched glyphs' tight boxes
+    in user space} (empty without *glyph_boxes*)); None when too many chars have no glyph."""
     grid: dict[tuple[int, int], list[int]] = {}
     for k, (x, y) in enumerate(origins):
         grid.setdefault((int(x // 2), int(y // 2)), []).append(k)
@@ -75,6 +82,7 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
     flags: dict[str, set[str]] = {MISMATCH: set(), INK_MISMATCH: set()}
     spaces: dict[int, list[int]] = {}             # whitespace char -> visible number glyphs at its origin
     claimed: set[int] = set()
+    found: dict[int, tuple[float, ...]] = {}
     for c in chars:
         text = _norm(str(c.get("text", "")))
         ux, uy, _ = inv @ np.array([float(c["matrix"][4]), float(c["matrix"][5]), 1.0])
@@ -97,6 +105,9 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
             flags[MISMATCH] |= _decoded_apart(text, used, texts)
         prev = used[0] if used else None
         claimed.update(used)
+        shown = [k for k in used if visible[k]]
+        if glyph_boxes is not None and ok and shown:
+            found[id(c)] = _union(glyph_boxes, shown)
         if any(odd[k] for k in used):
             flags[INK_MISMATCH] |= set(_fold(text)) & OVERLAP_CRITICAL
         if not ok:
@@ -105,4 +116,6 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
         return None
     free = {cid: [k for k in ks if k not in claimed] for cid, ks in spaces.items()}
     respell = {cid: _fold(texts[ks[0]]) for cid, ks in free.items() if ks}
-    return hidden, {code: chars_ for code, chars_ in flags.items() if chars_}, respell
+    if glyph_boxes is not None:
+        found.update({cid: _union(glyph_boxes, [ks[0]]) for cid, ks in free.items() if ks})
+    return hidden, {code: chars_ for code, chars_ in flags.items() if chars_}, respell, found

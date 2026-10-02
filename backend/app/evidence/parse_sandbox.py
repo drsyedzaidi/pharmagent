@@ -18,6 +18,10 @@ its entry point's freeze_support() serves), killable at any instruction:
   a slot, or finds the queue full, gets ParseBusyError (HTTP 503 + Retry-After, nothing recorded; the
   upload can be retried).
 
+``run_child`` is the same child WITHOUT a parse slot, with optional keyword arguments for the target and an
+optional minimal environment: the page-image renderer (render.py) runs under its own slot pool, so renders and
+parses never wait on each other.
+
 A killed child raises ParseAbortedError and a child exception comes back with its type (ParseLimitError
 stays ParseLimitError); ingest records either as parse_status 'failed' with the message.
 """
@@ -40,7 +44,7 @@ from app.evidence.models import IngestError
 from app.evidence.parse_guard import ParseLimitError
 from app.evidence.parse_queue import FairSlots, ParseBusyError
 
-__all__ = ["ParseAbortedError", "ParseBusyError", "ParseFailedError", "parse_isolated", "run_isolated"]
+__all__ = ["ParseAbortedError", "ParseBusyError", "ParseFailedError", "parse_isolated", "run_child", "run_isolated"]
 
 PARSE_WALL_S = 150.0
 MAX_PARSE_RSS = 1024 * 2**20      # measured legit peak ~0.5 GB (20-page paper with ink check)
@@ -50,8 +54,11 @@ MAX_QUEUED_PARSES = 16            # parses waiting for a slot, all sessions toge
 MAX_QUEUED_PER_SESSION = 2        # ... and per session id
 POLL_S = 0.05
 RSS_POLL_S = 0.25
-DEFAULT_TARGET = "app.evidence.parse:parse_pdf"
+DEFAULT_TARGET = "app.evidence.parse:parse_pdf_with_layout"
 _MEMORY_EXIT = 86
+# What a scrubbed child (the page-image renderer) keeps of the server's environment: enough to start
+# Python and find temp files, nothing that can hold a secret (API keys, tokens).
+_SAFE_ENV = frozenset({"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "HOME"})
 _slots = FairSlots(MAX_CONCURRENT_PARSES, MAX_QUEUED_PARSES, MAX_QUEUED_PER_SESSION)
 
 
@@ -78,11 +85,14 @@ def _self_watchdog(max_rss: int) -> None:
         time.sleep(POLL_S)
 
 
-def _child(target: str, path: str, out_path: str, max_rss: int) -> None:
+def _child(target: str, path: str, out_path: str, max_rss: int, args_json: str | None = None) -> None:
+    """Call ``target(path)`` (``target(path, **args)`` when *args_json* holds a JSON object) and write
+    the JSON result; targets that take only the path never see the extra argument."""
     threading.Thread(target=_self_watchdog, args=(max_rss,), daemon=True).start()
     try:
         module, func = target.split(":")
-        result: dict[str, Any] = {"ok": getattr(importlib.import_module(module), func)(path)}
+        extra = json.loads(args_json) if args_json else {}
+        result: dict[str, Any] = {"ok": getattr(importlib.import_module(module), func)(path, **extra)}
     except BaseException as exc:                     # reported to the parent, never lost
         result = {"error": {"type": type(exc).__name__, "limit": isinstance(exc, ParseLimitError),
                             "missing": isinstance(exc, FileNotFoundError), "message": str(exc)[:500]}}
@@ -90,9 +100,10 @@ def _child(target: str, path: str, out_path: str, max_rss: int) -> None:
 
 
 def _child_main() -> None:
-    """Entry of the ``python -c`` child: argv = target, pdf path, result path, RSS cap in bytes."""
-    target, path, out_path, max_rss = sys.argv[1:5]
-    _child(target, path, out_path, int(max_rss))
+    """Entry of the ``python -c`` child: argv = target, pdf path, result path, RSS cap in bytes
+    [, JSON object of keyword arguments]."""
+    target, path, out_path, max_rss, *rest = sys.argv[1:6]
+    _child(target, path, out_path, int(max_rss), rest[0] if rest else None)
 
 
 # ------------------------------------------------------------------ parent ---
@@ -100,9 +111,10 @@ def _child_main() -> None:
 class _Interpreter:
     """A ``python -c`` child with the multiprocessing.Process methods _watch() uses."""
 
-    def __init__(self, args: tuple[str, str, str, int]) -> None:
+    def __init__(self, args: tuple[Any, ...], scrub_env: bool = False) -> None:
         root = str(Path(__file__).resolve().parents[2])          # the directory that holds 'app'
-        env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (root, os.environ.get("PYTHONPATH"))))}
+        base = {k: v for k, v in os.environ.items() if k in _SAFE_ENV} if scrub_env else dict(os.environ)
+        env = {**base, "PYTHONPATH": os.pathsep.join(filter(None, (root, os.environ.get("PYTHONPATH"))))}
         code = "from app.evidence.parse_sandbox import _child_main; _child_main()"
         self.proc = subprocess.Popen([sys.executable, "-c", code, *map(str, args)], env=env,
                                      stdin=subprocess.DEVNULL)
@@ -125,12 +137,12 @@ class _Interpreter:
         return self.proc.poll()
 
 
-def _start(args: tuple[str, str, str, int]) -> Any:
+def _start(args: tuple[Any, ...], scrub_env: bool = False) -> Any:
     if getattr(sys, "frozen", False):                            # PyInstaller bundle: no python -c
         proc = multiprocessing.get_context("spawn").Process(target=_child, args=args, daemon=True)
         proc.start()
         return proc
-    return _Interpreter(args)
+    return _Interpreter(args, scrub_env)
 
 
 def _rss_bytes(pid: int) -> int | None:
@@ -205,15 +217,25 @@ def run_isolated(path: str | Path, *, target: str, wall_s: float, max_rss: int,
     under a parse slot of *session_id* (the fair scheduler's key): the parse, and upload validation
     (ingest.page_count_report)."""
     with _slots.slot(session_id, QUEUE_WAIT_S):
-        scratch = Path(tempfile.mkdtemp(prefix="evparse-"))
+        return run_child(path, target=target, wall_s=wall_s, max_rss=max_rss)
+
+
+def run_child(path: str | Path, *, target: str, wall_s: float, max_rss: int,
+              args: dict[str, Any] | None = None, scrub_env: bool = False) -> Any:
+    """The child-process half of run_isolated WITHOUT a parse slot (the caller holds whatever slot pool
+    suits it: the page-image renderer has its own). *args* (a JSON object) become keyword arguments
+    of ``target(path, **args)``; *scrub_env* starts the child with a minimal environment."""
+    scratch = Path(tempfile.mkdtemp(prefix="evparse-"))
+    try:
+        out = scratch / "result.json"
+        base: tuple[Any, ...] = (target, str(path), str(out), max_rss)
+        argv = base + ((json.dumps(args),) if args else ())
+        proc = _start(argv, True) if scrub_env else _start(argv)
         try:
-            out = scratch / "result.json"
-            proc = _start((target, str(path), str(out), max_rss))
-            try:
-                _watch(proc, wall_s, max_rss)
-            finally:
-                if proc.is_alive():
-                    _kill(proc)
-            return _answer(out, proc.exitcode)
+            _watch(proc, wall_s, max_rss)
         finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+            if proc.is_alive():
+                _kill(proc)
+        return _answer(out, proc.exitcode)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)

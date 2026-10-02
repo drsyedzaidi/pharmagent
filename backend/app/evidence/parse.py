@@ -12,46 +12,41 @@ text line on large horizontal gaps (strategy 'layout', lower confidence).
 from __future__ import annotations
 
 import hashlib
-import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pdfplumber
 
+from app.evidence import parse_layout
 from app.evidence.normalize import infer_decimal_style
 from app.evidence.parse_budget import check_glyph_budget
 from app.evidence.parse_fonts import MISMATCH, UNVERIFIED, GlyphChecker
 from app.evidence.parse_guard import (
     Deadline,
-    _is_white,
     check_page_box,
     check_streams,
     close_zero_gaps,
     lay_out_visible,
     protect_thin_spaces,
     restore,
-    tables_affordable,
     visibility_filter,
 )
 from app.evidence.parse_ink import InkChecker, duplicate_ids
 from app.evidence.parse_marks import orientation_outliers, overlapping_chars
+from app.evidence.parse_tables import find_tables, text_lines
 
 # The suffix versions this module's output: a parse cache written by an earlier version (no
 # visibility filter, thin spaces turned into word gaps, no rendered-ink check, no round-3 glyph / space
-# checks) is re-parsed.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 6"
+# checks, no layout sidecar) is re-parsed. Version 7 only ADDS the layout sidecar (parse_layout): every
+# text-bearing field is byte-identical to version 6, because stored record spans index them.
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 7"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
 COLUMN_MIN_SPLIT_LINES = 8      # a page needs this many lines with text on both sides
 COLUMN_LINE_FRACTION = 0.5      # share of text lines that must have words on both sides
 COLUMN_LINE_CROSSING = 0.15     # share of text lines allowed to span the gap (title, abstract)
-CELL_GAP_FACTOR = 2.0           # horizontal gap (x modal size) that separates layout-table cells
-LINE_Y_TOLERANCE = 3.0
-CAPTION_RE = re.compile(r"^Table\s+\d+")
-STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+\d+")
-MAX_LAYOUT_ROWS = 80
 RAISABLE = frozenset("0123456789+-−⁻")   # exponent glyphs
 RAISED_SIZE_RATIO = 0.95        # an exponent is set smaller than its base ...
 RAISE_FRACTION = 0.15           # ... with its baseline at least this x the base size higher
@@ -84,22 +79,6 @@ def _modal_size(chars: list[dict[str, Any]]) -> float:
     counts = Counter(round(float(c.get("size") or 0.0), 1) for c in chars)
     top = max(counts.values())
     return max(size for size, n in counts.items() if n == top)
-
-
-def _lines(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group words into text lines by vertical position (like extract_text does)."""
-    lines: list[dict[str, Any]] = []
-    for w in sorted(words, key=lambda w: (round(w["top"]), w["x0"])):
-        if lines and abs(w["top"] - lines[-1]["top"]) <= LINE_Y_TOLERANCE:
-            lines[-1]["words"].append(w)
-        else:
-            lines.append({"top": w["top"], "bottom": w["bottom"], "words": [w]})
-    for ln in lines:
-        ln["words"].sort(key=lambda w: w["x0"])
-        ln["bottom"] = max(w["bottom"] for w in ln["words"])
-        ln["x0"], ln["x1"] = ln["words"][0]["x0"], max(w["x1"] for w in ln["words"])
-        ln["text"] = " ".join(w["text"] for w in ln["words"])
-    return lines
 
 
 def _line_cover(lines: list[dict[str, Any]], n: int) -> list[tuple[int, int]]:
@@ -143,8 +122,10 @@ def _widest_gap(lines: list[dict[str, Any]], width: float, allowed: int) -> tupl
     return best
 
 
-def _columns(words: list[dict[str, Any]], lines: list[dict[str, Any]], width: float) -> list[str] | None:
-    """Two columns when a vertical band >= 8% of the page width is empty on nearly every line."""
+def _columns(words: list[dict[str, Any]], lines: list[dict[str, Any]], width: float
+             ) -> list[list[list[dict[str, Any]]]] | None:
+    """Two columns when a vertical band >= 8% of the page width is empty on nearly every line: per
+    column, its lines, each a list of word dicts (_join_columns builds the column strings)."""
     if len(words) < COLUMN_MIN_WORDS or not lines:
         return None
     allowed = max(2, int(COLUMN_LINE_CROSSING * len(lines)))
@@ -153,124 +134,27 @@ def _columns(words: list[dict[str, Any]], lines: list[dict[str, Any]], width: fl
         return None
     left_lines, right_lines, split, n_left, n_right = [], [], 0, 0, 0
     for ln in lines:                        # lines that span the gap (title, abstract) join neither column
-        lw = [w["text"] for w in ln["words"] if w["x1"] <= gap0 + 1]
-        rw = [w["text"] for w in ln["words"] if w["x0"] >= gap1 - 1]
+        lw = [w for w in ln["words"] if w["x1"] <= gap0 + 1]
+        rw = [w for w in ln["words"] if w["x0"] >= gap1 - 1]
         if len(lw) + len(rw) < len(ln["words"]):
             continue
         n_left, n_right = n_left + len(lw), n_right + len(rw)
         split += bool(lw and rw)
         if lw:
-            left_lines.append(" ".join(lw))
+            left_lines.append(lw)
         if rw:
-            right_lines.append(" ".join(rw))
+            right_lines.append(rw)
     if min(n_left, n_right) < 0.2 * len(words):
         return None
     if split < max(COLUMN_MIN_SPLIT_LINES, COLUMN_LINE_FRACTION * len(lines)):
         return None
-    return ["\n".join(left_lines), "\n".join(right_lines)]
+    return [left_lines, right_lines]
 
 
-def _inked(o: dict[str, Any]) -> bool:
-    """False for a path that puts no ink on a white page (white stroke / fill, nothing painted): it
-    must not become a table ruling that splits a cell a reader sees whole."""
-    if o.get("object_type") not in ("line", "rect", "curve"):
-        return True
-    stroke = bool(o.get("stroke")) and not _is_white(o.get("stroking_color"))
-    return stroke or (bool(o.get("fill")) and not _is_white(o.get("non_stroking_color")))
-
-
-def _clean_cell(cell: Any) -> str:
-    return " ".join(str(cell).split()) if cell is not None else ""
-
-
-def _caption_above(lines: list[dict[str, Any]], top: float) -> str | None:
-    above = [ln for ln in lines if ln["bottom"] <= top + 1 and top - ln["bottom"] < 40
-             and CAPTION_RE.match(ln["text"])]
-    return above[-1]["text"] if above else None
-
-
-def _lines_tables(body, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    if not tables_affordable(body):          # dense ruling grid: cell finding would explode
-        return out
-    for i, t in enumerate(body.filter(_inked).find_tables()):
-        rows = [[_clean_cell(c) for c in row] for row in t.extract()]
-        rows = [r for r in rows if any(r)]
-        if not rows:
-            continue
-        out.append({"index": i, "strategy": "lines", "bbox": [round(float(v), 2) for v in t.bbox],
-                    "caption": _caption_above(lines, t.bbox[1]), "rows": rows})
-    return out
-
-
-def _cells(line: dict[str, Any], gap: float) -> list[dict[str, Any]]:
-    cells: list[dict[str, Any]] = []
-    for w in line["words"]:
-        if cells and w["x0"] - cells[-1]["x1"] <= gap:
-            cells[-1]["text"] += " " + w["text"]
-            cells[-1]["x1"] = w["x1"]
-        else:
-            cells.append({"text": w["text"], "x0": w["x0"], "x1": w["x1"]})
-    return cells
-
-
-def _aligned(cells: list[dict[str, Any]], col_x: list[float]) -> list[str]:
-    """Cell texts under their header columns: a row with fewer cells than the header (a blank or hidden
-    cell) puts each cell in the nearest column left to right, so no value shifts into its neighbour's."""
-    if len(cells) >= len(col_x):
-        return [c["text"] for c in cells]
-    out, nxt = [""] * len(col_x), 0
-    for k, c in enumerate(cells):
-        last = len(col_x) - (len(cells) - k)                # leave a column for every later cell
-        j = min(range(nxt, last + 1), key=lambda i: abs(col_x[i] - c["x0"]))
-        out[j], nxt = c["text"], j + 1
-    return out
-
-
-def _layout_table(lines: list[dict[str, Any]], start: int, gap: float) -> dict[str, Any] | None:
-    """Rows below a 'Table N' caption line, split on large gaps; 1-cell rows merge upward."""
-    caption, i = lines[start]["text"], start + 1
-    while i < len(lines) and i - start <= 2 and len(_cells(lines[i], gap)) < 2:
-        caption += " " + lines[i]["text"]; i += 1
-    rows: list[list[str]] = []
-    col_x: list[float] = []
-    prev_bottom = lines[start]["bottom"]
-    line_h = max(1.0, lines[start]["bottom"] - lines[start]["top"])
-    while i < len(lines) and len(rows) < MAX_LAYOUT_ROWS:
-        ln = lines[i]
-        cells = _cells(ln, gap)
-        if STOP_RE.match(ln["text"]) or ln["top"] - prev_bottom > 2.0 * line_h:
-            break
-        if len(cells) >= 2:
-            if not rows:
-                col_x = [c["x0"] for c in cells]
-            rows.append(_aligned(cells, col_x))
-        elif rows and col_x and (cells[0]["x1"] - cells[0]["x0"]) < 0.5 * (col_x[-1] - col_x[0] + 1):
-            j = min(range(len(col_x)), key=lambda k: abs(col_x[k] - cells[0]["x0"]))
-            while len(rows[-1]) <= j:
-                rows[-1].append("")
-            rows[-1][j] = (rows[-1][j] + " " + cells[0]["text"]).strip()
-        else:
-            break
-        prev_bottom = ln["bottom"]
-        i += 1
-    if len(rows) < 2:
+def _join_columns(col_lines: list[list[list[dict[str, Any]]]] | None) -> list[str] | None:
+    if col_lines is None:
         return None
-    return {"strategy": "layout", "bbox": None, "caption": caption.strip(), "rows": rows}
-
-
-def _tables(body, lines: list[dict[str, Any]], modal: float) -> list[dict[str, Any]]:
-    tables = _lines_tables(body, lines)
-    if tables:
-        return tables
-    gap = CELL_GAP_FACTOR * (modal or 10.0)
-    for idx, ln in enumerate(lines):
-        if CAPTION_RE.match(ln["text"]):
-            table = _layout_table(lines, idx, gap)
-            if table:
-                table["index"] = len(tables)
-                tables.append(table)
-    return tables
+    return ["\n".join(" ".join(w["text"] for w in ln) for ln in lines) for lines in col_lines]
 
 
 def _visible_chars(page, ink: InkChecker) -> tuple[Any, int, str]:
@@ -306,7 +190,9 @@ def _raised_ids(chars: list[dict[str, Any]]) -> set[int]:
     return out
 
 
-def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker) -> dict[str, Any]:
+def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker, doc_words: int = 0
+                ) -> tuple[dict[str, Any], dict[str, Any], int]:
+    """(the page's parse fields, its layout record, its word count)."""
     check_page_box(page)
     hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
     visible, dropped, ink_status = _visible_chars(page, ink)
@@ -327,18 +213,25 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker) -> dict[str, Any]:
     small = page.filter(lambda o: o.get("object_type") == "char" and visible(o) and is_small(o))
     text = body.extract_text() or ""
     small_text = (small.extract_text() or "") if len(small.chars) else ""
-    words = body.extract_words()
-    lines = _lines(words)
-    return restore({
+    words = body.extract_words(return_chars=True)
+    lines = text_lines(words)
+    col_lines = _columns(words, lines, float(page.width))
+    tables, cell_words = find_tables(body, lines, words, modal)
+    parsed = restore({
         "n": page.page_number,
         "text": text,
         "small_text": small_text,
-        "columns": _columns(words, lines, float(page.width)),
-        "tables": _tables(body, lines, modal),
+        "columns": _join_columns(col_lines),
+        "tables": tables,
         "hidden_chars": hidden + dropped,
         "ink_check": ink_status,
         "glyph_check": _glyph_check(page, glyphs, chars, ink.flags),
     })
+    layout = parse_layout.build_page(
+        page_text=parsed["text"], columns=parsed["columns"], col_lines=col_lines, words=words,
+        char_boxes=ink.boxes, cell_words=cell_words, ink_ok=ink_status == "ok", tables=parsed["tables"],
+        doc_words=doc_words)
+    return parsed, {"n": page.page_number, **layout}, len(words)
 
 
 def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]],
@@ -358,6 +251,14 @@ def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]],
 
 def parse_pdf(path: str | Path) -> dict[str, Any]:
     """Parse a PDF file into the parse-JSON contract (see module docstring)."""
+    doc = parse_pdf_with_layout(path)
+    doc.pop("layout")
+    return doc
+
+
+def parse_pdf_with_layout(path: str | Path) -> dict[str, Any]:
+    """parse_pdf plus a ``layout`` key: the word-box sidecar document (parse_layout), which
+    ingest.parse_and_cache stores beside the parse JSON and never inside it."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(str(path))
@@ -367,12 +268,15 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
         check_streams(pdf.doc)
         check_glyph_budget(pdf.pages)            # glyph floods are refused before any layout
         metadata = _metadata(pdf.metadata)
-        pages = []
+        pages, layouts, n_words = [], [], 0
         ink, glyphs = InkChecker(str(path), len(pdf.pages)), GlyphChecker()
         try:
             for pg in pdf.pages:
                 deadline.check(pg.page_number)
-                pages.append(_parse_page(pg, ink, glyphs))
+                parsed, layout, n = _parse_page(pg, ink, glyphs, n_words)
+                pages.append(parsed)
+                layouts.append(layout)
+                n_words += n
                 pg.close()                       # drop the page's cached layout before the next one
         finally:
             ink.close()
@@ -384,4 +288,5 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
         "text_chars": sum(len(p["text"]) for p in pages),
         "metadata": metadata,
         "pages": pages,
+        "layout": parse_layout.build_document(sha, PARSER_NAME, layouts),
     }

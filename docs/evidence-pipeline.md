@@ -22,6 +22,11 @@ not from the plan.
     It is a lazy singleton; tests call `configure(':memory:')`.
   - `ingest.py` + `parse.py` (+ `parse_guard.py`, `parse_budget.py`, `parse_ink.py`, `parse_fonts.py`,
     `parse_sandbox.py`): validation and parse in a killable child, storage by sha256, `<sha256>.pages.json`.
+  - `parse_tables.py`: text lines, ruled and layout tables (with each cell's words).
+  - `parse_layout.py` (+ `parse_ink_match.py` glyph boxes): the layout sidecar, where each word of the
+    page text sits on the PDF page (see "Layout sidecar").
+  - `regions.py` / `render_child.py` / `render.py` / `render_cache.py` / `render_limits.py` /
+    `image_routes.py`: the page image of a record's cited value (see "Page image").
   - `normalize.py` + `verify.py`: the literal-match verifier, deterministic with no model involved.
   - `record_checks.py` / `value_checks.py` / `supersede.py` / `inclusion.py`: unit, hidden-text, qualifier,
     scale, style and glyph checks; the current proposal of a slot; which sources are currently included.
@@ -48,6 +53,8 @@ not from the plan.
 | `evidence/incoming/<uuid>.pdf` | POST /upload | Transient staging file, always removed |
 | `evidence/<sha256>.pdf` | POST /upload | Content-addressed, shared across sessions |
 | `evidence/<sha256>.pages.json` | `ingest.parse_and_cache` | Parse cache, re-checked against the PDF hash on every load |
+| `evidence/<sha256>.layout.json` | `ingest.parse_and_cache` | Layout sidecar (word boxes), written BEFORE the pages file; a cache hit needs both, sha- and parser-bound |
+| `evidence/render/<key>.png` + `<key>.json` | page-image route | Rendered crops of licensed pages and their geometry; LRU, capped at 256 MiB / 4000 entries (see "Page image"); include this directory in any data-dir cleanup |
 | `evidence/exports/evidence_<sid>_<YYYYmmddTHHMMSSZ>_<sha12>.csv` | `export_evidence_dataset` | Long CSV: page literal `value`, canonical point-decimal `value_num`, page `decimal_style`. Named by its own sha256 and created without replacing, so two exports in one second keep both files |
 | `evidence/exports/<long stem>_wide.csv` | `export_evidence_dataset` | Wide CSV: `<field>` = canonical number, `<field>_literal`, `<field>_unit` (one unit when all agree, else one per value in `<field>` order; `<long stem>_<sha12>_wide.csv` if that name holds other bytes) |
 
@@ -120,7 +127,7 @@ claim again clears it (`supersede.py`).
 
 ### Parse JSON (`<sha256>.pages.json`)
 
-- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 6", decimal_style, text_chars, metadata, pages:[...]}`.
+- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 7", decimal_style, text_chars, metadata, pages:[...]}`.
 - Each page: `{n, text, small_text, columns, tables, hidden_chars, ink_check, glyph_check}`. Only glyphs a reader can
   see reach the text; the rest are dropped before extraction and counted in `hidden_chars`, and a record
   citing such a page gets the warning `hidden_text`.
@@ -164,6 +171,11 @@ claim again clears it (`supersede.py`).
     after 5 s per page the same way).
     An unverified page keeps the first-pass text and every record citing it gets `hidden_text` as an
     **error**.
+- Version 7 only ADDS the layout sidecar: `text`, `small_text`, `columns`, `tables`, `hidden_chars`,
+  `ink_check` and `glyph_check` are byte-identical to version 6 (a golden-hash test over 29 fixtures,
+  `tests/evidence_layout_golden.json`, recorded before the change), because stored record spans index them.
+  `parse.parse_pdf` returns exactly the contract above; the sandbox target `parse.parse_pdf_with_layout`
+  adds a `layout` key that `ingest.parse_and_cache` writes to the sidecar and never into `pages.json`.
 - Parser caps (`parse_guard.py`, `parse_budget.py`): page box ≤ 20 000 pt, inflated streams ≤ 64 MB
   each / 256 MB total, ≤ 200 000 glyphs per page and ≤ 2 000 000 per document (an upper bound counted from
   the decompressed content streams before layout, Form XObject draws multiplied in), table detection
@@ -189,6 +201,114 @@ claim again clears it (`supersede.py`).
   page width.
 - Tables use pdfplumber's `lines` strategy first. When that finds none, a `Table N` caption starts a
   `layout` fallback that splits rows on word gaps and merges continuation rows.
+
+## Layout sidecar (`<sha256>.layout.json`, `parse_layout.py`)
+
+Where each word of a page's text sits on the PDF page, so a reviewer can be shown the cited value.
+
+```
+{sha256, parser, layout_version, pages: [{n, status, text_sha256, col_sha256, words, col_words, tables}]}
+```
+
+- `words`: `[start, end, l, b, r, t]` per word of `page.text` (code-point offsets) with the box in PDF USER
+  SPACE points (1 decimal, rounded outwards). A word with a character that has no matched visible
+  pdfium glyph is `[start, end]` only (no box). `col_words` is the same per column (offsets into
+  `page.columns[i]`, rebuilt from the same line / word lists that built the strings, so exact by
+  construction), or null without columns.
+- `tables`: `[{index, cells: {"row:col": [l, b, r, t]}}]`, `index` = position in `page.tables` (a
+  locator's `cell.table`). A cell has an entry only when its words, in reading order, read exactly the
+  cell's text (ruled tables: words whose centre lies in pdfplumber's cell box; layout tables: the words
+  `_cells` merged, continuation rows included).
+- Boxes are pdfium's glyph boxes: the same geometry the ink check measures, so rotation, CropBox and
+  MediaBox origin are the renderer's business. pdfplumber's displayed-frame coordinates are used only for
+  grouping words into lines and table cells, never as output: they are wrong for `/Rotate 180` and `270`
+  combined with a CropBox (see `evidence-pipeline-limits.md`).
+- `status`: `ok`; `no_boxes` (the page's ink check is `unverified`, so no glyph geometry is trusted);
+  `unmapped` (the words do not follow the page text, matched in order skipping whitespace only);
+  `skipped` (more than 6000 words on the page, or 300 000 in the document). Any exception while
+  building one page is `unmapped`: the page keeps its text and loses its boxes.
+- `text_sha256` / `col_sha256` bind the offsets to the exact texts they index; `regions.locate` refuses a
+  layout whose hash does not match the page it is used with (`layout_stale`).
+- A source parsed before version 7 has no sidecar and is NOT re-parsed on read (re-upload dedupes):
+  its records get the whole-page image with reason `layout_unavailable`. A new ingest of a PDF whose
+  cache is version 6 parses it again (the sidecar is part of the cache hit).
+
+## Page image (`image_routes.py`, `regions.py`, `render*.py`)
+
+The extracted value can be compared with the PIXELS of the page it was read from. This is the reviewer's
+check on the documented limit "a custom embedded outline under a correct glyph name passes", and on
+every glyph / hidden-text flag: the text layer is what the pipeline trusts, the image is what a reader
+sees (pdfium's rendering, the engine of the ink check; Acrobat or Preview can differ for font
+substitution, optional-content layers or form scripts).
+
+**Endpoints** (GET only, session-owned like every evidence route; no audit entry: reading is not a ledger event)
+
+| Path | Result |
+|---|---|
+| `/records/{record_id}/image/meta?zoom=1\|2` | JSON, does the work (authorise, re-hash the PDF, resolve the region, render or hit the cache) |
+| `/records/{record_id}/image?zoom=1\|2&sha=<image_sha256>` | `image/png`, the cached PNG the meta described |
+
+- Meta fields: `record_id, source_id, page, pages, zoom, dpi, resolved, precision, reason, width, height,
+  highlight[{x,y,w,h}] (image pixels, <= 12), snippet_box, crop_pt, image_sha256, png_bytes, pdf_sha256,
+  layout_version, extracted{value, unit, literal, kind}, page_checks{ink_check, hidden_chars,
+  glyph_check[codes]}, flags[urgent codes on the record], compare_urgent, notices[{code, severity, text}]`.
+- `precision`: `value` (the words holding the cited number; word-level, so punctuation or a neighbouring
+  character in the same word is inside the outline), `cell` (a table cell, with the column header and
+  row label cells as context in the crop), `line` (the cited text: a text field, or a table cell whose box
+  was not stored), `page` (not located: whole page at 90 dpi, `resolved: false`, `reason` one of
+  `layout_unavailable, layout_stale, span_stale, no_span, no_boxes, word_unmapped, cell_unmapped`).
+- `compare_urgent` is true when the record carries `glyph_text_mismatch`, `glyph_ink_mismatch`,
+  `glyph_unverified`, `overlapping_glyphs` or `hidden_text`, or the cited page's ink check is
+  `unverified`, or the precision is `page`. Notice texts are server-written (one source for UI and tests):
+  "Text layer and page may disagree: compare the image with the extracted value before approving."
+  (error), the page-not-checked text (warn), "Could not locate the cited value on the page. Showing the
+  whole page at lower resolution: find it yourself." plus a reason sentence (warn), and a row-only
+  notice for a table cell located by its row line.
+- The image's `sha` is required and must equal the cached entry's sha256 (else 409 `page image changed;
+  reload`), so a highlight computed for one raster is never drawn on another. An evicted entry is rendered
+  again (counted against the rate limit) and re-checked.
+- Response headers on the image: `Content-Type: image/png`, `Content-Length`, `X-Content-Type-Options:
+  nosniff`, `Cache-Control: private, no-store`, `Vary: Authorization`, `Content-Disposition: inline;
+  filename="record.png"`, `Content-Security-Policy: default-src 'none'; sandbox`,
+  `Cross-Origin-Resource-Policy: same-origin`, `X-Image-SHA256`.
+- Errors: unknown / other session's record or source 404 (same message, no existence oracle); `zoom` other than
+  1 or 2 -> 400 `zoom must be 1 or 2`; PDF missing or changed on disk (or outside the evidence directory)
+  -> 409; the record cites a page that does not exist -> 422; render failed (child killed, limit,
+  PNG too large) -> 422 `the page could not be rendered`; page too large for 72 dpi -> 422
+  `the page is too large to render at a readable resolution`; busy renderer -> 503 + `Retry-After`;
+  per-session render rate -> 429 + `Retry-After`. No path or exception text appears in any body.
+- Client input: `zoom` (1 or 2) and `sha` only. Page and boxes come from the ledger record and the layout
+  sidecar; a dpi, crop or box in the query is ignored (tested: identical bytes).
+
+**Where the value is** (`regions.locate`, pure). The layout must be bound to the exact page text, the
+record's `span` must still hold its snippet, its `token` must still be its `literal`, every word involved
+must have a box; text records use `col_words` when `locator.column` is set; table records use the cell box
+and fall back to the row line (`line`). Any doubt returns `page`: a wrong box is worse than none.
+
+**Rendering** (`render_child.py`, `render.py`). pdfium parses a hostile PDF only in the sandbox's killable
+child (`parse_sandbox.run_child`, the same child mechanism as the parse): wall 20 s, RSS 384 MiB, a MINIMAL
+environment (PATH, locale, temp dir: no API keys or tokens; a frozen desktop build starts its child by
+multiprocessing spawn and cannot scrub), and its OWN slot pool (2, `EVIDENCE_RENDER_SLOTS`; queue wait
+8 s, then 503), so a render storm cannot refuse uploads and a long parse cannot starve the reviewer. The
+child renders like the ink check (forms initialised first, `may_draw_forms`, `draw_annots`), so at zoom 1
+(144 dpi) the crop is literally the raster the visibility verdicts came from; zoom 2 is 216 dpi. The
+crop is the snippet's words (the value's when the snippet is > 55 % of the page) united with the context
+cells, padded 60 x 48 pt, at least 240 x 120 pt, never past the page; > 55 % of the page is the whole
+page. Output is <= 4 MP and <= 3200 px per side (the scale is lowered in 0.75 steps, never below 72 dpi:
+a page that cannot be shown that large is refused), PNG <= 2 MiB. The PNG is encoded from the pixels the
+child rendered, with NO highlight: the reviewer sees untouched pixels and the client overlays the outline. The parent
+never decodes the PNG (signature, IHDR size against the reply, byte cap, sha256).
+
+**Cache** (`render_cache.py`): `evidence/render/<key>.png` + `.json`, key = sha256 of the PDF hash, page,
+the validated render arguments (boxes rounded to 0.1 pt) and `RENDER_VERSION` (crop policy, flags, PNG
+settings, pdfium and Pillow versions), computed BEFORE rendering so a hit never starts a child. Atomic writes
+(PNG, then JSON; an entry without both, or whose PNG disagrees with its JSON in size or sha, is a miss and
+is deleted), single flight per key, LRU eviction (mtime touched on every hit) to 80 % of 256 MiB / 4000
+entries. Per session 60 uncached renders per 60 s (429); at most 8 renders in flight server-wide (503 at
+once beyond that); blocking work runs on the route's own 4-worker limiter. Entries are content-addressed
+and shared between sessions that hold the same PDF: safe because the route authorises per record and
+re-hashes the PDF before it looks in the cache. The directory holds crops of copyrighted pages: same
+auth tier as `/pdf`, `no-store` in the browser, and it belongs to the data directory's cleanup story.
 
 ## Trust model
 
@@ -309,7 +429,7 @@ reaches the CSV.
 ## Endpoints (`routes.py`, prefix `/api/sessions/{sid}/evidence`)
 
 All endpoints require session ownership (bearer token when `PHARMAGENT_API_TOKEN` is set). Error map:
-`ValueError` -> 400, `EvidenceStateError` -> 409, `IngestError` -> 422, parser busy -> 503, upload over 25 MB -> 413. The body
+`ValueError` -> 400, `EvidenceStateError` -> 409, `IngestError` -> 422, parser or renderer busy -> 503, render rate -> 429, upload over 25 MB -> 413. The body
 is main.py's `{success:false, error:{code, message, request_id}}` envelope.
 
 | Method | Path | Tool / behaviour |
@@ -327,6 +447,8 @@ is main.py's `{success:false, error:{code, message, request_id}}` envelope.
 | GET | `/api/sessions/{sid}/evidence/dataset/{filename}` | serves only a file this session exported (state mirror or ledger row, resolved under data_dir), else 404 |
 | GET | `/api/sessions/{sid}/evidence/sources/{src_id}/pages/{n}` | parsed page `{text, small_text, columns, tables, decimal_style}`; 400 when the PDF changed |
 | GET | `/api/sessions/{sid}/evidence/sources/{src_id}/pdf` | the stored PDF inline; 409 when it is missing or changed |
+| GET | `/api/sessions/{sid}/evidence/records/{record_id}/image/meta` | page-image description (precision, outline rects in image pixels, flags, notices); see "Page image" |
+| GET | `/api/sessions/{sid}/evidence/records/{record_id}/image` | the PNG of the cited page region; `?zoom=1\|2&sha=` |
 
 Decide endpoints: a failure on the first decision returns its mapped status (400, 404 for another
 session's id, 409 already decided); after a success, 400 `k of n decisions applied (...) before <id>

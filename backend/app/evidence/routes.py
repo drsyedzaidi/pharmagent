@@ -337,4 +337,6 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
         return FileResponse(str(path), media_type="application/pdf", filename=src.filename,
                             content_disposition_type="inline")
 
+    from app.evidence.image_routes import add_image_routes  # late: image_routes imports this module
+    add_image_routes(router, owned_session)
     return router

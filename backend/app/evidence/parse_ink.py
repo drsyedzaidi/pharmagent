@@ -29,6 +29,9 @@ document's forms are initialised before any page loads) and the verdict comes fr
    glyph's own group render on COVER_FRACTION of its box), are reported per page in
    ``InkChecker.flags``.
 
+Each matched char also keeps the union of its visible glyphs' tight boxes (``InkChecker.boxes``, user
+space): the geometry the layout sidecar (parse_layout) stores, so cited values can be shown on the page.
+
 Costs are bounded: 2 + groups renders per page at <= RENDER_SCALE (scaled down to MAX_RENDER_PIXELS),
 at most RENDER_MAX_PAGES pages and RENDER_BUDGET_S seconds per document. A page that cannot be judged
 (render error, budget spent, page counts disagree, too many groups or unmatched chars, scale below
@@ -266,6 +269,7 @@ class InkChecker:
     def __init__(self, path: str, n_pages: int) -> None:
         self.deadline = time.monotonic() + RENDER_BUDGET_S
         self.flags: dict[str, set[str]] = {}
+        self.boxes: dict[int, tuple[float, ...]] = {}      # char id -> glyph box [l, b, r, t] (user space)
         try:
             self.doc = _open_document(path)
             self.ok = len(self.doc) == n_pages            # pages must pair up one to one
@@ -273,7 +277,7 @@ class InkChecker:
             self.doc, self.ok = None, False
 
     def hidden(self, page: Any, chars: list[dict[str, Any]]) -> set[int] | None:
-        n, self.flags = page.page_number, {}
+        n, self.flags, self.boxes = page.page_number, {}, {}
         if (not self.ok or n > RENDER_MAX_PAGES or time.monotonic() > self.deadline
                 or len(chars) > MAX_INK_CHARS):
             return None
@@ -288,14 +292,14 @@ class InkChecker:
                 pdf_page.close()                           # pages and bitmaps must not pile up
         if out is None:
             return None
-        hidden, self.flags, respell = out
+        hidden, self.flags, respell, self.boxes = out
         for c in chars:                                    # a space char that draws a minus reads '-'
             if id(c) in respell:
                 c["text"] = respell[id(c)]
         return hidden
 
     def _hidden(self, pdf_page: Any, page: Any, chars: list[dict[str, Any]]
-                ) -> tuple[set[int], dict[str, set[str]], dict[int, str]] | None:
+                ) -> tuple[set[int], dict[str, set[str]], dict[int, str], dict[int, tuple[float, ...]]] | None:
         import pypdfium2.raw as raw
         w, h = pdf_page.get_size()
         scale = min(RENDER_SCALE, (MAX_RENDER_PIXELS / max(w * h, 1.0)) ** 0.5)
@@ -314,7 +318,7 @@ class InkChecker:
                 if strokes and len(renders) > 1 else None)
         visible, odd = (_judge(texts, boxes, [groups[k] for k in keys], renders, blank.to_numpy(),
                                blank.get_posconv(pdf_page), full) if keys else (np.zeros(0, bool), np.zeros(0, bool)))
-        return _transfer(page, chars, texts, origins, visible, odd)
+        return _transfer(page, chars, texts, origins, visible, odd, boxes)
 
     def close(self) -> None:
         if self.doc is not None:
