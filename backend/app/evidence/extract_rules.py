@@ -28,7 +28,7 @@ _PAREN_UNIT_RE = re.compile(r"^(?P<label>.*?)\s*[(\[](?P<unit>[^()\[\]]{1,40})[)
 _TRAIL_UNIT_RE = re.compile(r"^\s*(?P<unit>[A-Za-z%µμ][\w%/·^.*\-]{0,24})\s*$")
 _N_RE = re.compile(r"(?<![A-Za-z])n\s*=\s*(?P<num>\d{1,6})(?!\d)", re.IGNORECASE)
 _DOSE_RE = re.compile(r"(?<![\w.,])(?P<num>\d{1,5}(?:[.,]\d{1,3})?)\s*(?P<unit>mg/kg|µg/kg|μg/kg|mg|µg|μg|ug|g)"
-                      r"(?![\w/])", re.IGNORECASE)
+                      r"(?![\w/⁄∕／⧸÷⋅∙•·*])", re.IGNORECASE)
 _DOSE_CTX = re.compile(r"\bdos(?:e|es|ed|ing|age)\b|\badminist", re.IGNORECASE)
 TEXT_RULES = (("n", _N_RE, None), ("dose", _DOSE_RE, _DOSE_CTX))
 

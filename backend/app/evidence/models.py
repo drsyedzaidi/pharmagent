@@ -45,6 +45,7 @@ FLAG_SUPERSEDED = "superseded"                       # a later extraction run pr
 FLAG_GLYPH_MISMATCH = "glyph_text_mismatch"          # a font names a digit other than the glyph drawn (error)
 FLAG_GLYPH_UNVERIFIED = "glyph_unverified"           # the drawn glyph's identity cannot be established
 FLAG_OVERLAPPING_GLYPHS = "overlapping_glyphs"       # over-struck glyphs: both cannot be read (error)
+FLAG_GLYPH_INK = "glyph_ink_mismatch"                # a digit's ink is clipped / covered / marked (error)
 FLAG_CENSORED_VALUE = "censored_value"               # '<0.5', '≤1.0', '~2': not an exact number (error)
 FLAG_SCALED_HEADER = "scaled_header"                 # header / unit carries a multiplier ('×10³') (error)
 FLAG_DECIMAL_STYLE_AMBIGUOUS = "decimal_style_ambiguous"   # '3,412' read on weak style evidence (error)
@@ -54,7 +55,7 @@ FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG
               FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION,
               FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT, FLAG_SUPERSEDED,
               FLAG_GLYPH_MISMATCH, FLAG_GLYPH_UNVERIFIED, FLAG_OVERLAPPING_GLYPHS, FLAG_CENSORED_VALUE,
-              FLAG_SCALED_HEADER, FLAG_DECIMAL_STYLE_AMBIGUOUS, FLAG_ESTIMATE_OUTSIDE_CI)
+              FLAG_SCALED_HEADER, FLAG_DECIMAL_STYLE_AMBIGUOUS, FLAG_ESTIMATE_OUTSIDE_CI, FLAG_GLYPH_INK)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 

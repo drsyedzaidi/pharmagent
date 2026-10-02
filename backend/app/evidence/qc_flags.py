@@ -18,6 +18,7 @@ _SE_RE = re.compile(r"(^|[^a-z])(se|sd|sem|cv|rse)($|[^a-z])")          # 'cmax_
 _BOUNDS = {"lower": ("lower", "low", "lo", "lcl"), "upper": ("upper", "high", "hi", "ucl")}
 _BOUND_RES = {side: (re.compile(r"^(?P<stem>.*?)[_\s]?(" + "|".join(words) + r")$"),
                      re.compile(r"^(" + "|".join(words) + r")[_\s](?P<stem>.+)$")) for side, words in _BOUNDS.items()}
+_RANGE_NAME = re.compile(r"(^|[_\s])(range|min|max|minimum|maximum)($|[_\s])")
 _UNIT_SYNONYMS = ((re.compile(r"\b(hrs?|hours?)\b"), "h"), (re.compile(r"\b(liters?|litres?)\b"), "l"),
                   (re.compile(r"\bmcg\b"), "ug"), (re.compile(r"\b(seconds?|sec)\b"), "s"))
 _UNIT_STRIP = re.compile(r"[\s·*×.]+")
@@ -57,8 +58,10 @@ def _canon(rec: dict[str, Any], index: dict[str, dict[str, Any]]) -> str:
 
 
 def group_key(group: Any) -> str:
-    """Comparison form of a group label: NFKC, casefold, whitespace collapsed and trimmed."""
-    return " ".join(unicodedata.normalize("NFKC", str(group or "")).casefold().split())
+    """Comparison form of a group label: NFKC, invisible format characters (category Cf: U+200B,
+    U+2060, U+FEFF, bidi controls) removed, casefold, whitespace collapsed and trimmed."""
+    text = "".join(ch for ch in unicodedata.normalize("NFKC", str(group or "")) if unicodedata.category(ch) != "Cf")
+    return " ".join(text.casefold().split())
 
 
 def _key(rec: dict[str, Any]) -> Key:
@@ -100,6 +103,12 @@ def _field_flags(rec: dict[str, Any], spec: dict[str, Any], field: str, group: s
             flags.append(_flag(M.FLAG_UNIT_MISMATCH, "warn", f"{field}: unit {have!r} differs from template {want!r}",
                                field, group))
     return flags
+
+
+def is_interval_field(name: str) -> bool:
+    """True for a field that names one end of an interval or a range ('cl_lower', 'Upper 95% CI',
+    'cmax_min', 'tmax_range'): it may cite one end of a printed range."""
+    return _bound(name) is not None or bool(_RANGE_NAME.search(name.casefold()))
 
 
 def _bound(name: str) -> tuple[str, str] | None:

@@ -27,6 +27,9 @@ _NEXT_TOKEN_RE = re.compile(r"^\s*(/|per\b|\S+)")
 _NOT_CONTINUATIONS = {"x", "fold", "%"}
 _EQUIV = {"mcg": "ug", "cc": "ml", "hr": "h", "hrs": "h", "mins": "min", "sec": "s", "lit": "l"}
 CONTINUATION_CHARS = 60
+# slashes and product dots a unit is written with: folded before the unit is read ('mg⁄kg' is mg/kg)
+UNIT_FOLD = str.maketrans({"⁄": "/", "∕": "/", "／": "/", "⧸": "/", "÷": "/", "⋅": "·", "∙": "·", "•": "·"})
+_JOINERS = frozenset("/·*×^")         # a next token made only of these continues the unit ('mg · kg-1')
 _BASES = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
           "h", "min", "s", "d", "wk", "iu", "miu", "u", "%", "kda", "m2", "cells", "cell", "10^6", "10^9",
           "bpm", "mmhg", "x", "fold")
@@ -60,7 +63,9 @@ def _continues(tail: str) -> bool:
     if m is None:
         return False
     token = m.group(1).rstrip(".,;:)")
-    return token in ("/", "per") or (token not in _NOT_CONTINUATIONS and recognised_unit(token) is not None)
+    if token.lstrip("(") in ("/", "per") or (token and set(token) <= _JOINERS):
+        return True
+    return token not in _NOT_CONTINUATIONS and recognised_unit(token) is not None
 
 
 def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str | None, bool]:
@@ -72,7 +77,7 @@ def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str | Non
         return None, True
     text, _, end = ctx
     raw = text[end:end + CONTINUATION_CHARS]
-    rest = (" " if raw[:1].isspace() else "") + normalise(raw)[0]
+    rest = (" " if raw[:1].isspace() else "") + normalise(raw.translate(UNIT_FOLD))[0].translate(UNIT_FOLD)
     m = _UNIT_TOKEN_RE.match(rest)
     unit = recognised_unit(m.group(1)) if m else None
     if m is None or unit is None:

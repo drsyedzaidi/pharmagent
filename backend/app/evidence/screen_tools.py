@@ -226,7 +226,7 @@ def decide_screening(state: PharmState, ctx: ToolContext, args: dict[str, Any]) 
                  f"{reason.strip()}"),
         writes={"screening_results": results, "evidence_summary": summarise(store, sid)},
         result={"screen": asdict(decided)},
-        action=f"decide_screening({decided.id}, {inclusion}, {status})")
+        action=f"decide_screening({decided.id}, {inclusion}, {status})", reason=reason.strip())
 
 
 TOOLS = [

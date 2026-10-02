@@ -73,12 +73,15 @@ Immutability:
   A second decision affects 0 rows, raises `EvidenceStateError('already decided')`, and the API returns 409.
 - `reverify` only touches rows whose status is `proposed`.
 - Triggers `trg_evrec_frozen` / `trg_evrec_nodelete` abort any UPDATE or DELETE of an approved record
-  (`approved record is immutable`). There is no DELETE API.
+  (`approved record is immutable`); `trg_evrec_decided*` do the same for a rejected record and
+  `trg_evscr_*` for a decided screen (its `decided_verdict` drives inclusion). `trg_evrec_unverified*`
+  refuse `status='approved'` with a `verify_status` other than `pass`. There is no DELETE API.
 
 `record_hash` is the sha256 of the canonical JSON of {source_sha256, template_hash, field, group, value,
 unit, locator without span/literal/token, extractor}. It leaves out status, flags and verification, so the
 identity of a claim stays stable: re-extracting the same claim inserts nothing. A different value for a
-(source, canonical field, normalised group) that already has an approved record, or that any live
+(source, canonical field under the current template, normalised group: NFKC, invisible format characters
+such as U+200B removed, casefolded) that already has an approved record, or that any live
 proposal holds (the same batch or an earlier extraction run), gets the flag `duplicate` on both sides;
 approving it over an approved value needs `allow_conflict: true` on the decision. After a run, a live
 proposal of a slot the run proposed again under a different claim gets the warning `superseded` (the
@@ -114,7 +117,7 @@ claim again clears it (`supersede.py`).
 
 ### Parse JSON (`<sha256>.pages.json`)
 
-- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 4", decimal_style, text_chars, metadata, pages:[...]}`.
+- Top level: `{sha256, parser: "pdfplumber 0.11.10 / evidence-parse 5", decimal_style, text_chars, metadata, pages:[...]}`.
 - Each page: `{n, text, small_text, columns, tables, hidden_chars, ink_check, glyph_check}`. Only glyphs a reader can
   see reach the text; the rest are dropped before extraction and counted in `hidden_chars`, and a record
   citing such a page gets the warning `hidden_text`.
@@ -128,16 +131,26 @@ claim again clears it (`supersede.py`).
     5 % of its tight box (plus a 1 px unclaimed ring). Text under a later fill, near-background grey,
     clipped away, the colour of the box beneath it, or a hidden layer overlapping visible text is
     dropped. pdfplumber chars take the verdict of the pdfium glyph at the same origin (the two agree to
-    ~1e-4 pt). A copy of a glyph within 1 pt of the same text is dropped silently (one glyph to a reader).
+    ~1e-4 pt); when a Standard-14 width disagreement shifts a run (a Lancet mid-dot), the next glyph in
+    pdfium's order on the same baseline within 3 pt is taken instead of dropping the rest of the line.
+    A copy of a glyph within 1 pt of the same text is dropped silently (one glyph to a reader). Table
+    rulings ignore paths that put no ink on the page (white or unpainted strokes / fills).
   - `glyph_check` is `{flag code: characters}` ({} when nothing is in doubt): number characters whose
     font's ToUnicode disagrees with its glyph names, or that a Type3 program draws
     (`glyph_text_mismatch`, error), whose glyph cannot be identified (embedded CFF CID font, no cmap
     entry: `glyph_unverified`, warn), or that another glyph over-strikes by > 30 % of its advance
-    (`overlapping_glyphs`, error). A record whose literal holds one of them carries that flag
+    (`overlapping_glyphs`, error). Also `glyph_text_mismatch` for a number glyph that pdfium decodes
+    as other text at the same origin (`/ActualText`) or that is drawn rotated / mirrored against its
+    content-order neighbours, and `glyph_ink_mismatch` (error, `parse_marks.py`) for a number glyph
+    whose ink stops ≥ 3 px and ≥ 15 % short of a side of its outline box (clipped or covered), whose
+    box lies partly off the render, or whose box or gap to the next glyph holds non-text ink in the
+    text-free render (a path-drawn decimal point, a struck-through digit). A record whose literal holds one of them carries that flag
     (`parse_fonts.py`, `value_checks.py`). An embedded outline that draws another shape under a correct
     glyph name is not detected (that needs OCR).
   - `ink_check` is `ok`, or `unverified` when the page could not be judged (render error, 60 s render
-    budget per document spent, > 300 pages, > 8 overlap groups, > 20 % of chars without a pdfium glyph).
+    budget per document spent, > 300 pages, > 8 overlap groups, > 20 % of chars without a pdfium glyph,
+    > 25 000 glyphs on the page; the over-strike scan then flags every number character, and stops
+    after 5 s per page the same way).
     An unverified page keeps the first-pass text and every record citing it gets `hidden_text` as an
     **error**.
 - Parser caps (`parse_guard.py`, `parse_budget.py`): page box ≤ 20 000 pt, inflated streams ≤ 64 MB
@@ -168,7 +181,7 @@ claim again clears it (`supersede.py`).
 | Extraction input | only sources decided `include` under the CURRENT criteria hash (`inclusion.py`; no fallback to an older screen) | none | (decided above) |
 | Extraction | table header/alias matching and text rules (keyless); `verify()` on every proposal; scripted QC flags | proposes values with snippets; may add flags (add-only) | none yet |
 | Record decision | approval refused when `verify_status == 'fail'` or the source is not currently included, and refused without `allow_conflict` when an approved record holds a different value for the slot; approved rows frozen by trigger | none | approves or rejects every record with a reason |
-| Export | only approved rows of currently included sources (others listed in `left_out`), CSV formula guard, sha256, ledger row naming `ToolContext.actor` | none | starts the export |
+| Export | only approved rows with `verify_status == 'pass'` of currently included sources (others listed in `left_out`), CSV formula guard, sha256, ledger row naming `ToolContext.actor` | none | starts the export |
 
 A model never decides anything. Its output is always stored as `status='proposed'`, and every number
 must pass the literal-match verifier before it can be approved.
@@ -184,24 +197,32 @@ column) must EQUAL the proposed unit after normalisation and a small equivalence
 mL = ml, hr = h), else the error flag `unit_source_mismatch`; a printed `mg` never vouches for `mg/kg`.
 The unit is read on the page right after the verified `token` (never re-found in the snippet: `5` is not
 the `5` of `15 mg/kg`). No printed unit, or one the next token may continue (`100 mg kg-1`), gives the
-warning `unit_unverified`. Value checks (`value_checks.py`, errors): `censored_value` (`<0.5`, `≤1.0`,
-`~2`, `below 0.5` before the token), `scaled_header` (a multiplier in the header, row label, unit
-column or unit: `AUC ×10³ (ng·h/mL)`, `x1000`; a power after `/` or `per` is part of the unit),
-`decimal_style_ambiguous` (`3,412` on weak style evidence: < 3 decimals of the winning style or the
-other style ≥ a third of them, unless the template fixes the field's decimal).
+warning `unit_unverified`. Slashes and product dots are folded first (`mg⁄kg`, `mg∕kg` = mg/kg; `⋅ ∙ •`
+= `·`), and a next token made of them, or `(per`, continues the unit. Value checks (`value_checks.py`,
+errors): `censored_value` (`<0.5`, `≤1.0`, `~2`, `below 0.5` before the token, or one end of a range
+`12–15` / `12 to 15` unless the field names an interval or range), `scaled_header` (a multiplier in any
+header row above the cell, row label, unit column or unit: `AUC ×10³ (ng·h/mL)`, `x1000`, `E+03`; a
+power after `/` or `per` is part of the unit), `decimal_style_ambiguous` (a decimal separator other than
+the page's: `1,2` or `0,412` on a point page; or `3,412` on weak style evidence: < 3 decimals of the
+winning style or the other style ≥ a third of them, unless the template fixes the field's decimal),
+`composite_cell` as an error when the token is one piece of digit groups the strict reading splits
+(`12` of `12 145`, `456` of `1,23,456`). The warning `composite_cell` counts the numbers in the cited
+cell, not in the snippet.
 
 How numbers are matched:
 
 - The value has to equal a standalone number token in the snippet. A digit run inside a longer token
   does not count, so `24` does not match `245.6`.
 - Tokens are parsed with the page's decimal style: `3,412` is 3412 on a point-decimal page, and `18,2` is
-  18.2 on a comma-decimal page.
+  18.2 on a comma-decimal page. A lone `0` before the separator never groups thousands (`0,412` = 0.412).
+- A table cell whose page-text row prints its literal only inside a longer number (`2` of a row line
+  reading `281`) fails `partial_number`.
 - Non-ASCII digits (Arabic-Indic, fullwidth, superscript) are refused outright; one glued to an ASCII
   number on the page (`１2.5`) makes that token unreadable.
 - A mid dot between digits is a decimal point (`12·4` = 12.4, never `12` or `4`) unless it multiplies a
   power of ten (`2.5·10^4`); `’` / `ʼ` / `′` group digits like `'` (`24’560`). Citation lists (`[1,2]`)
   are not decimal-comma evidence.
-- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`. Citing
+- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `3.4 E-03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`. Citing
   only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
   the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
   `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the
@@ -213,7 +234,7 @@ How numbers are matched:
 `se_nonpositive`, `ci_inverted`, `composite_cell`, `table_low_confidence`, `verify_fail`, `non_numeric`,
 `suspicious_instruction_text`, `unit_source_mismatch`, `unit_unverified`, `hidden_text`, `superseded`,
 `glyph_text_mismatch`, `glyph_unverified`, `overlapping_glyphs`, `censored_value`, `scaled_header`,
-`decimal_style_ambiguous`, `estimate_outside_ci`. CI bounds pair by suffix or separated prefix
+`decimal_style_ambiguous`, `estimate_outside_ci`, `glyph_ink_mismatch`. CI bounds pair by suffix or separated prefix
 (`cl_lower`, `Lower 95% CI`); dispersion names include `%CV`, `SD(CL)`; a text field has no `value_num`.
 
 Each flag carries a severity (`warn` or `error`) and an origin (`script` or `llm`). A model can add flags
@@ -290,7 +311,8 @@ failed: ...`, and the earlier decisions stand.
 | `decide_records` | `decide_records(<rec_id>, <approved\|rejected>)` |
 | `export_evidence_dataset` | `exported evidence dataset <ds_id>: N approved records from K sources (long sha256 <12>, wide sha256 <12>)` |
 
-The audit entry stores `outputs_hash = hash_payload(result)`. For an export, `result` contains
+The audit entry stores `outputs_hash = hash_payload(result)`; for `decide_records` and `decide_screening`
+its `reason` is the reviewer's stated reason (`ToolResult.reason`). For an export, `result` contains
 `long_sha256`, so the downloaded file, the ledger row and the sealed audit entry can all be checked
 against each other. `live_smoke.sh` and `test_keyless_chat_drives_screen_extract_export` do this.
 
@@ -365,34 +387,6 @@ curl -s http://127.0.0.1:8010/api/health      # {"status":"ok", ..., "llm":"mock
 4. **Real paper (optional).** `EVIDENCE_OA_PDF=/path/to/open-access.pdf pytest tests/test_evidence_e2e.py`
    runs `test_real_open_access_pdf_smoke` (parses with ≥ 1 page, keyless path proposes ≥ 1 record).
 
-## Limits of phase 1
+## Limits and later phases
 
-- **No OCR.** A scanned PDF parses to `no_text` and is skipped. Glyph shapes are not read either: a
-  custom embedded outline under a correct glyph name and cmap passes (`glyph_check` covers the rest).
-- **The ink check is a threshold, not a proof.** A glyph that is mostly covered but still shows ink on
-  ≥ 5 % of its box counts as visible, and glyphs overlapping inside one text object (kerning) are not
-  separated. Rendering roughly doubles parse time (a 20-page paper: ~8 s, ~0.45 GB peak in the child);
-  pages past the 60 s render budget are `unverified` and flagged, not trusted.
-- **No figure digitising.** Values that only appear in plots cannot be extracted.
-- **Two-column detection is a heuristic** (an x-gap band crossed by few lines). Unusual layouts can merge
-  columns. Lines that span the gap stay in `text` but in neither column.
-- **Unruled tables have low confidence.** The `layout` fallback depends on a `Table N` caption and on
-  word gaps, and every record from it is flagged `table_low_confidence`.
-- **Header matching is exact after normalisation** (case, separators, ∞/µ folding): add `Cmax,ss` as
-  its own alias. Unmatched headers are listed. Keyless rules read only a cell's leading number
-  (`3,412 (812)` -> `3,412` + `composite_cell`).
-- **Ligatures.** A dropped ligature glyph ("ﬁnal" -> "nal") fails closed (`snippet_not_on_page`,
-  "quote not found"). **LLM screening quality is unmeasured**: quotes are proven, verdicts are not.
-- **Criteria changes.** A source is included only by a decision under the current criteria hash; after
-  an edit, re-screen and decide before extracting, approving or exporting its values.
-- **One template per session.** Re-saving it changes the hash. Records under the old hash stay readable
-  (the UI marks them "earlier template"), but the wide CSV uses the current field list.
-- **Limits.** 25 MB and 300 pages per PDF. Password-protected PDFs are refused; owner-password
-  (print-locked) PDFs are accepted.
-
-## Later phases
-
-- **Phase 2 — figure digitiser.** Plot regions with axes calibrated from tick labels; digitised points are
-  proposals whose locator is a figure bbox + calibration, each confirmed by a reviewer against an overlay.
-- **Phase 3 — merge and MBMA.** Join approved long CSVs by record_hash, harmonise units and dispersion
-  as deterministic transformations of approved records, and carry locators into model-input provenance.
+See [evidence-pipeline-limits.md](evidence-pipeline-limits.md).

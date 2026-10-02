@@ -45,7 +45,8 @@ _ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v"})   # 1:1, matches
 _SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _GAP = r"[ \x00]{0,2}"
 _EXP = r"(?:\^[ \x00]?(?P<pow>[+-]?\d{1,4})(?!\d)|(?P<sup>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]{1,4})|(?P<odd>[+-]\d{1,4}(?!\d)))"
-_SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|" + _GAP + r"[xX×·*]" + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
+_SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|[ \x00]{1,2}[eE](?P<eg>[+-]?\d{1,4})(?![\w.,]\d|\w)|"
+                     + _GAP + r"[xX×·*]" + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
 _POW_RE = re.compile(_EXP)
 MAX_EXPONENT = 300
 
@@ -93,7 +94,8 @@ def infer_decimal_style(text: str) -> str:
 
 def _to_float(token: str, decimal_style: str) -> float | None:
     """Token -> value. A separator followed by a non-3-digit group is always decimal ('0,5'); a
-    separator repeated is always thousands ('1.250.000'); a single 3-digit tail follows the style."""
+    separator repeated is always thousands ('1.250.000'); a single 3-digit tail follows the style,
+    except after a lone '0' ('0,412' groups no thousands: it is 0.412 whatever the style)."""
     sign = -1.0 if token.startswith("-") else 1.0
     body = token.lstrip("+-").replace(" ", "").replace("'", "")
     dot = next((c for c in body if c in MIDDOTS), None)
@@ -109,7 +111,8 @@ def _to_float(token: str, decimal_style: str) -> float | None:
         last = seps[-1]
         tail = body[body.rfind(last) + 1:]
         style_dec = "," if decimal_style == "," else "."
-        is_decimal = seps.count(last) == 1 and (len(tail) != 3 or last == style_dec)
+        whole = body[:body.rfind(last)]
+        is_decimal = seps.count(last) == 1 and (len(tail) != 3 or last == style_dec or whole in ("0", ""))
         body = body.replace("." if last == "," else ",", "")          # the other separator: thousands
         body = body.replace(last, ".") if is_decimal else body.replace(last, "")
     try:
@@ -130,8 +133,8 @@ def _scaled(mantissa: float, exponent: str | None) -> float | None:
 def _scientific(folded: str, end: int, mantissa: float, bare_ten: bool) -> tuple[int, float | None] | None:
     """(token end, value) when scientific notation follows the number ending at *end*, else None."""
     m = _SCI_RE.match(folded, end)
-    if m is not None and m.group("e") is not None:
-        return m.end(), _scaled(mantissa, m.group("e"))
+    if m is not None and (m.group("e") or m.group("eg")) is not None:     # '3.4E-03', SAS '3.4 E-03'
+        return m.end(), _scaled(mantissa, m.group("e") or m.group("eg"))
     if m is not None and (m.group("pow") or m.group("sup") or m.group("odd") or bare_ten):
         return m.end(), _scaled(mantissa, m.group("pow") or m.group("sup"))
     p = _POW_RE.match(folded, end) if mantissa == 10 and folded[end - 2:end] == "10" else None

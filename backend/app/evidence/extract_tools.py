@@ -27,12 +27,12 @@ from app.evidence.inclusion import current_screens, exclusion_reason, included_s
 from app.evidence.llm_access import current_llm, llm_available
 from app.evidence.models import DECISIONS, Record, Source, now_iso
 from app.evidence.normalize import normalise, numbers_in
-from app.evidence.qc_flags import group_key, merge_llm_flags, same_value, scripted_flags
+from app.evidence.qc_flags import merge_llm_flags, same_value, scripted_flags, slot_key
 from app.evidence.record_checks import page_checks
 from app.evidence.screen_tools import _select_sources
 from app.evidence.store import EvidenceStore, get_store
 from app.evidence.supersede import carried, claim_ids, run_marks
-from app.evidence.value_checks import document_evidence
+from app.evidence.value_checks import cell_numbers, document_evidence
 from app.evidence.verify import verify
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -60,13 +60,15 @@ def _suspicious(p: dict[str, Any]) -> list[dict[str, Any]]:
              "group": p.get("group_label") or "", "origin": "script"}]
 
 
-def _composite(p: dict[str, Any], ftype: str) -> list[dict[str, Any]]:
-    """A numeric table cell holding more than one number ('3,412 (812)'): the estimate was taken,
-    the reviewer must confirm which number it is."""
+def _composite(p: dict[str, Any], ftype: str, doc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """A numeric table cell holding more than one number ('3,412 (812)'), counted in the CITED CELL
+    (the snippet may quote one of them): the reviewer must confirm which number it is."""
     loc = p["locator"]
     if ftype == "text" or loc.get("kind") != "table" or any(f["code"] == M.FLAG_COMPOSITE_CELL for f in p["flags"]):
         return []
-    if len(numbers_in(str(loc.get("snippet") or ""), loc.get("decimal_style") or ".")) <= 1:
+    count = cell_numbers(p, doc)
+    if (len(numbers_in(str(loc.get("snippet") or ""), loc.get("decimal_style") or ".")) if count is None
+            else count) <= 1:
         return []
     return [{"code": M.FLAG_COMPOSITE_CELL, "severity": "warn",
              "message": f"{p['field']}: cell {loc.get('snippet')!r} holds more than one number; "
@@ -121,7 +123,7 @@ def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None,
     counted = {**doc, "decimal_evidence": document_evidence(doc)} if doc is not None else None
     out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, counted, index.get(norm_key(p.get("field"))))}
            for p, fl in zip(checked, flags)]
-    return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index))} for p in out]
+    return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index), doc)} for p in out]
 
 
 # ----------------------------------------------------------------- extract ---
@@ -301,11 +303,12 @@ def _owned_record(store: EvidenceStore, sid: str, record_id: Any) -> Record:
 
 
 def _approved_rival(store: EvidenceStore, rec: Record) -> Record | None:
-    """An approved record with a DIFFERENT value for the same source, field and (normalised) group."""
+    """An approved record with a DIFFERENT value for the same slot (source, CANONICAL field under the
+    current template, normalised group): the key the duplicate flag uses."""
+    tmpl = store.get_config(rec.session_id, "template")
+    template = tmpl["body"] if tmpl else {}
     for other in store.list_records(rec.session_id, status="approved", source_id=rec.source_id):
-        same_slot = (other.field.casefold() == rec.field.casefold()
-                     and group_key(other.group_label) == group_key(rec.group_label))
-        if same_slot and not same_value(asdict(other), asdict(rec)):
+        if slot_key(other, template) == slot_key(rec, template) and not same_value(asdict(other), asdict(rec)):
             return other
     return None
 
@@ -345,7 +348,7 @@ def decide_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
                 "source_sha256": src.sha256 if src else None, "locator": decided.locator, "value": decided.value,
                 "unit": decided.unit, "verify_status": decided.verify_status, "decision": status,
                 "reason": reason.strip()},
-        action=f"decide_records({decided.id}, {status})")
+        action=f"decide_records({decided.id}, {status})", reason=reason.strip())
 
 
 TOOLS = [

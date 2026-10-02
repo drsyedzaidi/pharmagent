@@ -71,11 +71,29 @@ CREATE TRIGGER IF NOT EXISTS trg_evrec_frozen BEFORE UPDATE ON evidence_record
     WHEN OLD.status='approved' BEGIN SELECT RAISE(ABORT,'approved record is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS trg_evrec_nodelete BEFORE DELETE ON evidence_record
     WHEN OLD.status='approved' BEGIN SELECT RAISE(ABORT,'approved record is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_evrec_decided BEFORE UPDATE ON evidence_record
+    WHEN OLD.status='rejected' BEGIN SELECT RAISE(ABORT,'decided record is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_evrec_decided_nodelete BEFORE DELETE ON evidence_record
+    WHEN OLD.status='rejected' BEGIN SELECT RAISE(ABORT,'decided record is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_evrec_unverified BEFORE UPDATE ON evidence_record
+    WHEN NEW.status='approved' AND NEW.verify_status<>'pass'
+    BEGIN SELECT RAISE(ABORT,'a record that failed verification cannot be approved'); END;
+CREATE TRIGGER IF NOT EXISTS trg_evrec_unverified_insert BEFORE INSERT ON evidence_record
+    WHEN NEW.status='approved' AND NEW.verify_status<>'pass'
+    BEGIN SELECT RAISE(ABORT,'a record that failed verification cannot be approved'); END;
 CREATE TABLE IF NOT EXISTS evidence_dataset (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL, template_hash TEXT NOT NULL,
     long_path TEXT NOT NULL, wide_path TEXT NOT NULL, long_sha256 TEXT NOT NULL,
     wide_sha256 TEXT NOT NULL, record_hashes_json TEXT NOT NULL, n_records INTEGER NOT NULL,
     n_sources INTEGER NOT NULL, exported_by TEXT NOT NULL, exported_at TEXT NOT NULL);
+"""
+
+# a decided screen (the reviewer's inclusion) is frozen like a decided record
+_SCREEN_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS trg_evscr_decided BEFORE UPDATE ON evidence_screen
+    WHEN OLD.status<>'proposed' BEGIN SELECT RAISE(ABORT,'decided screen is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_evscr_nodelete BEFORE DELETE ON evidence_screen
+    WHEN OLD.status<>'proposed' BEGIN SELECT RAISE(ABORT,'decided screen is immutable'); END;
 """
 
 # column -> dataclass attribute for JSON-encoded columns
@@ -122,6 +140,7 @@ class EvidenceStore:
             if "decided_verdict" not in cols:          # ledgers created before the reviewer's inclusion
                 self._conn.execute("ALTER TABLE evidence_screen ADD COLUMN decided_verdict TEXT "
                                    "CHECK(decided_verdict IN ('include','exclude'))")
+            self._conn.executescript(_SCREEN_TRIGGERS)   # after decided_verdict exists
             self._conn.commit()
 
     # ------------------------------------------------------------ sources --

@@ -250,6 +250,20 @@ def _row_span(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
     return best[1]
 
 
+def _row_fragment(literal: str, text: str, anchors: list[str], style: str) -> bool:
+    """True when a page-text line holding another cell of the row prints the cell's literal only as
+    PART of a longer number ('2' of a row line reading '281'): a ruling split the number."""
+    want = normalise(literal)[0]
+    keys = [k for k in (normalise(a)[0] for a in anchors) if k]
+    for line in text.split("\n"):
+        if not any(k in normalise(line)[0] for k in keys):
+            continue
+        toks = [normalise(line[s:e])[0] for s, e, *_ in number_tokens(line, style, strict=True)]
+        if want not in toks and any(want in t and digits_only(want) != digits_only(t) for t in toks):
+            return True
+    return False
+
+
 def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
                   style: str) -> M.VerifyResult:
     found = _cell_text(loc.get("cell"), page)
@@ -267,6 +281,8 @@ def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: 
     anchors = [str(x or "") for i, x in enumerate(row) if i != c]
     span = _row_span(snippet, lit, page.get("text") or "", style, anchors, str(row[0] or "") if row else "",
                      bare_ten)
+    if span is None and literal and _row_fragment(literal, page.get("text") or "", anchors, style):
+        return _fail(loc, M.REASON_PARTIAL_NUMBER)
     return _pass({**loc, "cell": cell}, span, literal, number, token)
 
 

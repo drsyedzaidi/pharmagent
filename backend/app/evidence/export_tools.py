@@ -213,11 +213,13 @@ def _dedupe_files(ds: Dataset, long_path: Path, wide_path: Path) -> None:
 def _split_included(store: EvidenceStore, sid: str, approved: list[Record]
                     ) -> tuple[list[Record], list[dict[str, str]]]:
     """(approved records of sources included under the current criteria, [{record_id, source_id,
-    reason}] for the approved records of sources that are not)."""
+    reason}] for the approved records of sources that are not, or that did not pass verification:
+    a hand-edited ledger never ships a number the verifier did not find)."""
     screens = current_screens(store, sid)
     keep, left_out = [], []
     for r in approved:
-        why = exclusion_reason(screens, r.source_id)
+        why = (f"verify_status is {r.verify_status!r}, not 'pass'" if r.verify_status != "pass"
+               else exclusion_reason(screens, r.source_id))
         if why is None:
             keep.append(r)
         else:

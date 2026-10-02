@@ -21,9 +21,10 @@ import pdfplumber
 
 from app.evidence.normalize import infer_decimal_style
 from app.evidence.parse_budget import check_glyph_budget
-from app.evidence.parse_fonts import UNVERIFIED, GlyphChecker
+from app.evidence.parse_fonts import MISMATCH, UNVERIFIED, GlyphChecker
 from app.evidence.parse_guard import (
     Deadline,
+    _is_white,
     check_page_box,
     check_streams,
     lay_out_visible,
@@ -32,11 +33,12 @@ from app.evidence.parse_guard import (
     tables_affordable,
     visibility_filter,
 )
-from app.evidence.parse_ink import InkChecker, duplicate_ids, overlapping_chars
+from app.evidence.parse_ink import InkChecker, duplicate_ids
+from app.evidence.parse_marks import orientation_outliers, overlapping_chars
 
 # The suffix versions this module's output: a parse cache written by an earlier version (no
 # visibility filter, thin spaces turned into word gaps, no rendered-ink check) is re-parsed.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 4"
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 5"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
@@ -166,6 +168,15 @@ def _columns(words: list[dict[str, Any]], lines: list[dict[str, Any]], width: fl
     return ["\n".join(left_lines), "\n".join(right_lines)]
 
 
+def _inked(o: dict[str, Any]) -> bool:
+    """False for a path that puts no ink on a white page (white stroke / fill, nothing painted): it
+    must not become a table ruling that splits a cell a reader sees whole."""
+    if o.get("object_type") not in ("line", "rect", "curve"):
+        return True
+    stroke = bool(o.get("stroke")) and not _is_white(o.get("stroking_color"))
+    return stroke or (bool(o.get("fill")) and not _is_white(o.get("non_stroking_color")))
+
+
 def _clean_cell(cell: Any) -> str:
     return " ".join(str(cell).split()) if cell is not None else ""
 
@@ -180,7 +191,7 @@ def _lines_tables(body, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not tables_affordable(body):          # dense ruling grid: cell finding would explode
         return out
-    for i, t in enumerate(body.find_tables()):
+    for i, t in enumerate(body.filter(_inked).find_tables()):
         rows = [[_clean_cell(c) for c in row] for row in t.extract()]
         rows = [r for r in rows if any(r)]
         if not rows:
@@ -261,7 +272,8 @@ def _tables(body, lines: list[dict[str, Any]], modal: float) -> list[dict[str, A
 
 
 def _visible_chars(page, ink: InkChecker) -> tuple[Any, int, str]:
-    """(predicate, chars dropped, ink status): colour / geometry rules, duplicate strikes, then ink."""
+    """(predicate, chars dropped, ink status): colour / geometry rules, duplicate strikes, then ink
+    (which leaves the page's glyph doubts in ink.flags)."""
     cheap, dropped = visibility_filter(page)     # white-on-white, squashed, off-page / off-crop glyphs
     candidates = [c for c in page.chars if cheap(c)]
     drop = duplicate_ids(candidates)             # one glyph to a reader; not counted as hidden
@@ -322,19 +334,23 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker) -> dict[str, Any]:
         "tables": _tables(body, lines, modal),
         "hidden_chars": hidden + dropped,
         "ink_check": ink_status,
-        "glyph_check": _glyph_check(page, glyphs, chars),
+        "glyph_check": _glyph_check(page, glyphs, chars, ink.flags),
     })
 
 
-def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]]) -> dict[str, str]:
-    """{flag code: characters} whose text may not be the glyph a reader sees (parse_fonts), plus
-    number characters over-struck by another glyph; {} when nothing is in doubt."""
+def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]],
+                 ink_flags: dict[str, set[str]]) -> dict[str, str]:
+    """{flag code: characters} whose text may not be the glyph a reader sees (parse_fonts, glyphs
+    rotated against their neighbours, decoded apart or drawn odd per the ink check), plus number
+    characters over-struck by another glyph; {} when nothing is in doubt."""
     try:
-        out = dict(glyphs.page(page))
+        out = {code: set(v) for code, v in glyphs.page(page).items()}
     except Exception:                            # fail closed: the fonts could not be judged
-        out = {UNVERIFIED: "0123456789"}
-    over = "".join(sorted(overlapping_chars(chars)))
-    return {**out, "overlapping_glyphs": over} if over else out
+        out = {UNVERIFIED: set("0123456789")}
+    extra = {**ink_flags, MISMATCH: set(ink_flags.get(MISMATCH, ())) | orientation_outliers(chars),
+             "overlapping_glyphs": overlapping_chars(chars)}
+    merged = {code: out.get(code, set()) | set(extra.get(code, ())) for code in {*out, *extra}}
+    return {code: "".join(sorted(v)) for code, v in sorted(merged.items()) if v}
 
 
 def parse_pdf(path: str | Path) -> dict[str, Any]:

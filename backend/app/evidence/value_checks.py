@@ -9,9 +9,9 @@
   (fewer than 3 decimals of the winning style, or the losing style at least a third of them),
   unless the template fixes the field's decimal style. The evidence is counted once per batch
   (check_proposals passes it as doc['decimal_evidence'], a (comma, point) tuple).
-- glyph_text_mismatch (error) / glyph_unverified (warn) / overlapping_glyphs (error): the literal
-  holds a character whose drawn glyph the parse could not tie to the text (parse_fonts.py,
-  parse_ink.overlapping_chars).
+- glyph_text_mismatch (error) / glyph_unverified (warn) / overlapping_glyphs (error) /
+  glyph_ink_mismatch (error): the literal holds a character whose drawn glyph the parse could not
+  tie to the text (parse_fonts.py, parse_ink.py, parse_marks.py).
 
 A pass without a token (a record verified before tokens were stored) reads nothing and raises none
 of the token checks; every extraction and re-verification stores one.
@@ -23,7 +23,8 @@ import unicodedata
 from typing import Any
 
 from app.evidence import models as M
-from app.evidence.normalize import decimal_evidence
+from app.evidence.normalize import MIDDOTS, decimal_evidence, number_spans
+from app.evidence.qc_flags import is_interval_field
 
 QUALIFIER_CHARS = 24
 _QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲≳]|\b(?:below|above|less than|more than|greater than|"
@@ -34,9 +35,15 @@ _QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲�
 # ('µL/min/10^6 cells') and is skipped.
 _SCALE_RE = re.compile(r"(?<![A-Za-z])[×xX*]\s*10(?![.,]?\d)|(?<![\d.,])10\s*(?:\^\s*[-−+]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)"
                        r"|\be[-−+]?\d+\b|(?<![A-Za-z])[×xX*]\s*1[ ,.']?000\b|/\s*1[ ,.']?000\b"
-                       r"|\b(?:thousands?|millions?|billions?)\b")
+                       r"|\b(?:thousands?|millions?|billions?)\b", re.IGNORECASE)
 _DENOMINATOR_RE = re.compile(r"(?:/|\bper)\s*$", re.IGNORECASE)
 _STYLE_DEPENDENT = re.compile(r"^[-+]?\d{1,3}[.,]\d{3}$")
+_RANGE_BEFORE = re.compile(r"\d\s*(?:[-‐‑‒–—]|\bto\b)\s*$", re.IGNORECASE)
+_RANGE_AFTER = re.compile(r"^\s*(?:[-‐‑‒–—]|to\b)\s*[-+]?\d", re.IGNORECASE)
+# a data cell: digits with number punctuation only (a header cell such as 'Day 1' has words)
+_DATA_CELL = re.compile(r"[\s\d.,·'()±%\-–−+<>≤≥~×/]*\d[\s\d.,·'()±%\-–−+<>≤≥~×/eE]*")
+# digit groups joined only by a space or by comma groups: '12 145', '1,23,456' (one grouped number?)
+_GROUP_RUN = re.compile(r"(?<![\w.,])\d{1,3}(?:[ ,]\d{2,3})+(?:[.,]\d+)?(?!\w)")
 DECISIVE_MIN, DECISIVE_RATIO = 3, 3
 
 
@@ -73,13 +80,18 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
     ctx = token_context(p.get("locator") or {}, page)
     if ctx is None:
         return []
-    text, a, _ = ctx
+    text, a, b = ctx
     before = _fold(text[max(0, a - QUALIFIER_CHARS):a])
     m = _QUALIFIER_RE.search(before)
-    if m is None:
+    literal = (p.get("locator") or {}).get("literal")
+    if m is not None:
+        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: the page prints {m.group(0).strip()!r} before "
+                      f"{literal!r}; a bound or approximation is not an exact value", p)]
+    after = _fold(text[b:b + QUALIFIER_CHARS])
+    if is_interval_field(str(p.get("field") or "")) or not (_RANGE_BEFORE.search(before) or _RANGE_AFTER.match(after)):
         return []
-    return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: the page prints {m.group(0).strip()!r} before "
-                  f"{(p.get('locator') or {}).get('literal')!r}; a bound or approximation is not an exact value", p)]
+    return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: {literal!r} is one end of a printed range; a "
+                  "range bound is not an exact value (use an interval field for it)", p)]
 
 
 def _scaled(label: str) -> bool:
@@ -95,7 +107,9 @@ def scaled_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]
         try:
             rows = (page.get("tables") or [])[cell["table"]]["rows"]
             header, row, col = rows[0], rows[cell["row"]], cell["col"]
-            labels += [str(header[col] or "") if col < len(header) else "", str(row[0] or "") if row else ""]
+            block = [h for h in rows[:cell["row"]] if not any(_DATA_CELL.fullmatch(str(x or "").strip())
+                                                              for x in h[1:])] or [header]
+            labels += [str(h[col] or "") for h in block if col < len(h)] + [str(row[0] or "") if row else ""]
             labels += [str(row[i] or "") for i, h in enumerate(header)
                        if i < len(row) and str(h or "").strip().casefold() in ("unit", "units")]
         except (KeyError, IndexError, TypeError):
@@ -113,13 +127,54 @@ def document_evidence(doc: dict[str, Any]) -> tuple[int, int]:
     return decimal_evidence("\n".join(str(pg.get("text") or "") for pg in doc.get("pages") or []))
 
 
+def _against_style(literal: str, style: str) -> bool:
+    """True when the literal's decimal separator is not the page's ('1,2' or '0,412' on a '.' page)."""
+    body = re.split(r"[eE×xX*^]", literal.lstrip("+-−"))[0].replace(" ", "").replace("'", "").replace("\u2009", "")
+    seps = [c for c in body if c in ".,"]
+    if not seps or any(d in body for d in MIDDOTS) or seps[-1] == style or seps.count(seps[-1]) > 1:
+        return False
+    whole, tail = body.rsplit(seps[-1], 1)
+    return len(tail) != 3 or whole in ("0", "")
+
+
+def grouped_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
+    """Error when the token is one piece of digit groups the strict reading splits ('12' of '12 145',
+    '456' of '1,23,456'): the source may print ONE grouped number."""
+    ctx = token_context(p.get("locator") or {}, page)
+    if ctx is None:
+        return []
+    text, a, b = ctx
+    style = (p.get("locator") or {}).get("decimal_style") or "."
+    for m in _GROUP_RUN.finditer(text):
+        if m.start() < b and a < m.end() and len(number_spans(m.group(0), style, strict=True)) > 1:
+            return [_flag(M.FLAG_COMPOSITE_CELL, "error", f"{p['field']}: {m.group(0)!r} may be one number grouped "
+                          "by a space or comma; read the value on the PDF", p)]
+    return []
+
+
+def cell_numbers(p: dict[str, Any], doc: dict[str, Any] | None) -> int | None:
+    """How many numbers the cited cell / text holds (strict reading), None without a token."""
+    pages, n = (doc or {}).get("pages") or [], (p.get("locator") or {}).get("page")
+    if not (isinstance(n, int) and 1 <= n <= len(pages)):
+        return None
+    ctx = token_context(p.get("locator") or {}, pages[n - 1])
+    style = (p.get("locator") or {}).get("decimal_style") or "."
+    return None if ctx is None else len(number_spans(ctx[0], style, strict=True))
+
+
 def decimal_flags(p: dict[str, Any], doc: dict[str, Any], spec: dict[str, Any] | None) -> list[dict[str, Any]]:
     literal = str((p.get("locator") or {}).get("literal") or "")
     evidence = doc.get("decimal_evidence")
-    if (spec or {}).get("decimal") in (".", ",") or not _STYLE_DEPENDENT.match(literal):
+    style = (p.get("locator") or {}).get("decimal_style") or "."
+    if (spec or {}).get("decimal") in (".", ","):
+        return []
+    if _against_style(literal, style):
+        return [_flag(M.FLAG_DECIMAL_STYLE_AMBIGUOUS, "error", f"{p['field']}: {literal!r} uses the other decimal "
+                      f"separator than this document ({style!r}): a list or a foreign decimal; set the field's "
+                      "decimal style in the template or read the value on the PDF", p)]
+    if not _STYLE_DEPENDENT.match(literal):
         return []
     comma, point = evidence if isinstance(evidence, tuple) else document_evidence(doc)
-    style = (p.get("locator") or {}).get("decimal_style") or "."
     win, lose = (comma, point) if style == "," else (point, comma)
     if win >= DECISIVE_MIN and DECISIVE_RATIO * lose <= win:
         return []
@@ -129,8 +184,11 @@ def decimal_flags(p: dict[str, Any], doc: dict[str, Any], spec: dict[str, Any] |
 
 
 _GLYPH_MESSAGES = {
-    M.FLAG_GLYPH_MISMATCH: ("error", "the font names {chars} for a glyph that draws something else (or draws "
-                                     "it with an arbitrary Type3 program); read the value on the PDF"),
+    M.FLAG_GLYPH_MISMATCH: ("error", "the text layer names {chars} for a glyph that may draw something else "
+                                     "(font remap, Type3 program, /ActualText, rotated or mirrored glyph); "
+                                     "read the value on the PDF"),
+    M.FLAG_GLYPH_INK: ("error", "the ink drawn for {chars} is not the plain glyph (partly clipped or covered, "
+                                "or non-text marks on or between the digits); read the value on the PDF"),
     M.FLAG_GLYPH_UNVERIFIED: ("warn", "the drawn glyph of {chars} could not be tied to the text; check the "
                                       "value on the PDF"),
     M.FLAG_OVERLAPPING_GLYPHS: ("error", "{chars} is over-struck by another glyph on this page, so the text "
@@ -157,5 +215,6 @@ def value_flags(p: dict[str, Any], page: dict[str, Any], doc: dict[str, Any],
     numeric = p.get("value_num") is not None
     out = glyph_flags(p, page)
     if numeric:
-        out = censored_flags(p, page) + scaled_flags(p, page) + decimal_flags(p, doc, spec) + out
+        out = (censored_flags(p, page) + scaled_flags(p, page) + decimal_flags(p, doc, spec)
+               + grouped_flags(p, page) + out)
     return out
