@@ -287,6 +287,7 @@ class FlexplotRequest(BaseModel):
 # ── public endpoints ─────────────────────────────────────────────────────────
 # ── LLM provider switch (mock / local Ollama / OpenAI "ChatGPT" / Anthropic Claude) ──
 from app.core.llm_config import LlmManager, build_llm, probe  # noqa: E402
+from app.evidence.routes import build_evidence_router  # noqa: E402
 
 llm_manager = LlmManager(Path(settings.data_dir))
 llm_manager.activate(orch)   # the remembered provider/model, when it can be built
@@ -1034,6 +1035,7 @@ def download_memo(sid: str, filename: str, sess=Depends(owned_session)) -> FileR
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
+app.include_router(build_evidence_router(owned_session, actor_id, lambda: orch))
 # ── static frontend (single-process desktop app) ───────────────────────────────
 # When the React frontend has been built (`npm run build` -> frontend/dist), serve
 # it from the same origin so the whole app runs on one port (no separate Vite dev

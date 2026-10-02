@@ -120,6 +120,12 @@ class PharmState(BaseModel):
     regulatory_report_path: str | None = None
     regulatory_refs: list[dict[str, Any]] | None = None
 
+    # --- evidence pipeline (Evidence Agent): summaries only, the SQLite ledger is the record ---
+    evidence_summary: dict[str, Any] | None = None     # source/screen/record counts + config hashes
+    screening_results: dict[str, Any] | None = None    # last screening run (verdict counts, criteria hash)
+    extraction_results: dict[str, Any] | None = None   # last extraction run (record counts, template hash)
+    evidence_dataset_path: str | None = None           # last exported long CSV
+
     # --- placeholders for later phases (PKPD / E-R / sim) -------------------
     model_results: dict[str, Any] | None = None
     covariate_results: dict[str, Any] | None = None
@@ -160,6 +166,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "statistician": {"stats_advice", "indirect_results", "widgets"},
     "clinpharm": {"clinpharm_results", "clinpharm_history", "widgets"},
     "er_dose": {"er_results", "er_history", "dose_selection_results", "widgets"},
+    "evidence": {"evidence_summary", "screening_results", "extraction_results", "evidence_dataset_path"},
 }
 
 

@@ -149,6 +149,7 @@ NEW_CASES: list[tuple[str, str]] = [
     ("make a briefing memo of the exposure-response and dose selection", "report"),
     ("memo with the indirect comparison result", "report"),
     ("write a memo on the NCA AUC and Cmax", "report"),
+    ("screen the publications against my inclusion criteria", "evidence"),
 ]
 
 

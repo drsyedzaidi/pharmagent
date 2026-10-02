@@ -75,6 +75,16 @@ ANCHORS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"\bbucher\b|\bindirect(?:ly)?[\s-]+(?:treatment[\s-]+)?compar\w*"
         r"|\bindirect[\s-]+(?:hazard|odds|risk)[\s-]+ratios?\b|\bitc\b"
         r"|\badjusted[\s-]+indirect\b|\bcommon[\s-]+comparator\b")),
+    # Evidence pipeline nouns only: bare 'screen', 'review', 'extract' and 'dataset' keep
+    # routing as before (QC, NCA, data_manager).
+    ("evidence", re.compile(
+        r"\bpublications?\b|\bpdfs?\b|\bsystematic[\s-]+reviews?\b"
+        r"|\bevidence[\s-]+(?:dataset|pipeline|table|records?|sources?|extraction|screening|base)\b"
+        r"|\b(?:extract|export|screen|collect|gather|review|verify|approve)\w*[\s-]+(?:the[\s-]+|all[\s-]+|my[\s-]+)?evidence\b"
+        r"|\bmeta[\s-]?analys[ie]s\b|\b(?:inclusion|exclusion|eligibility)[\s-]+criteri(?:a|on)\b"
+        r"|\bextraction[\s-]+template\b|\bliterature[\s-]+(?:review|search|screening|extraction)\b"
+        r"|\bscreen(?:ing)?[\s-]+(?:the[\s-]+|these[\s-]+|all[\s-]+|my[\s-]+)?"
+        r"(?:papers?|studies|articles?|abstracts?|literature)\b")),
 )
 
 _DASH = r"[\s\-‐-―]"   # space, hyphen and the unicode dashes (en, em, ...)
