@@ -18,14 +18,25 @@ DECISION_STATUSES, DECISIONS = ("proposed", "approved", "rejected"), ("approved"
 SCREEN_METHODS, EXTRACTORS, VERIFY_STATUSES = ("llm", "keyword"), ("llm", "table", "manual"), ("pass", "fail")
 CONFIG_KINDS, DECIMAL_STYLES, LOCATOR_KINDS = ("criteria", "template"), (".", ","), ("text", "table")
 
-# Verifier reason codes (verify_reason column). Empty string = verified.
-REASON_OK, REASON_PAGE_OUT_OF_RANGE, REASON_SNIPPET_NOT_FOUND = "", "page_out_of_range", "snippet_not_found"
-REASON_VALUE_NOT_IN_SNIPPET, REASON_CELL_MISMATCH = "value_not_in_snippet", "cell_mismatch"
-REASON_NO_TEXT, REASON_BAD_NUMBER, REASON_SOURCE_CHANGED = "no_text", "bad_number", "source_changed"
-# QC flag codes (flags_json entries: {code, severity, message, field, group, origin}).
-FLAG_DUPLICATE, FLAG_TABLE_LOW_CONFIDENCE, FLAG_OUT_OF_RANGE = "duplicate", "table_low_confidence", "out_of_range"
-FLAG_UNIT_MISSING, FLAG_UNIT_MISMATCH, FLAG_REQUIRED_MISSING = "unit_missing", "unit_mismatch", "required_missing"
-FLAG_NON_NUMERIC, FLAG_DECIMAL_AMBIGUOUS = "non_numeric", "decimal_ambiguous"
+# Verifier reason codes (verify_reason column). REASON_OK (empty string) = verified.
+REASON_OK = ""
+REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG = "empty_snippet", "snippet_too_long"
+REASON_PAGE_OUT_OF_RANGE, REASON_NON_ASCII_DIGITS = "page_out_of_range", "non_ascii_digits"
+REASON_NO_NUMBER, REASON_NUMBER_MISMATCH = "no_number", "number_mismatch"
+REASON_INTEGER_EXPECTED, REASON_SNIPPET_NOT_ON_PAGE = "integer_expected", "snippet_not_on_page"
+REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "source_changed"
+REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
+                REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
+                REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED)
+# QC flag codes (flags_json entries: {code, severity warn|error, message, field, group, origin script|llm}).
+FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N = "required_missing", "out_of_range", "non_integer_n"
+FLAG_DUPLICATE, FLAG_UNIT_MISMATCH, FLAG_UNIT_MISSING = "duplicate", "unit_mismatch", "unit_missing"
+FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL = "se_nonpositive", "ci_inverted", "composite_cell"
+FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC = "table_low_confidence", "verify_fail", "non_numeric"
+FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
+              FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
+              FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC)
+FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 
 class EvidenceStateError(RuntimeError):
@@ -34,6 +45,15 @@ class EvidenceStateError(RuntimeError):
 
 class IngestError(ValueError):
     """An uploaded file was rejected before anything was written."""
+
+
+def as_mapping(record_like: Any) -> dict[str, Any]:
+    """Read-only dict view of a proposal dict or a frozen dataclass (Record, Source, ...)."""
+    if isinstance(record_like, dict):
+        return record_like
+    if hasattr(record_like, "__dataclass_fields__"):
+        return asdict(record_like)
+    raise TypeError(f"unsupported record type {type(record_like).__name__}")
 
 
 def now_iso() -> str:

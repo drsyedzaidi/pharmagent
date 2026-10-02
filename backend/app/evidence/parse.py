@@ -16,6 +16,8 @@ from typing import Any
 
 import pdfplumber
 
+from app.evidence.normalize import infer_decimal_style
+
 PARSER_NAME = f"pdfplumber {pdfplumber.__version__}"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
@@ -29,9 +31,6 @@ CAPTION_RE = re.compile(r"^Table\s+\d+")
 STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+\d+")
 MAX_LAYOUT_ROWS = 80
 _META_KEYS = ("title", "author", "subject", "creator", "producer", "creation_date")
-_COMMA_DECIMAL = re.compile(r"\d,\d{1,2}(?!\d)")
-_POINT_DECIMAL = re.compile(r"\d\.\d+")
-_POINT_THOUSANDS = re.compile(r"\b\d{1,3}(?:\.\d{3})+,\d+")
 
 
 def file_sha256(path: Path) -> str:
@@ -40,15 +39,6 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def infer_decimal_style(text: str) -> str:
-    """',' when decimal-comma evidence outweighs decimal-point evidence, else '.'."""
-    comma = len(_POINT_THOUSANDS.findall(text))
-    text = _POINT_THOUSANDS.sub(" ", text)
-    comma += len(_COMMA_DECIMAL.findall(text))
-    point = len(_POINT_DECIMAL.findall(text))
-    return "," if comma > point else "."
 
 
 def _metadata(raw: dict[str, Any] | None) -> dict[str, str]:
