@@ -172,7 +172,13 @@ claim again clears it (`supersede.py`).
   (`ingest.page_count_report`: 30 s, 512 MB, an object-stream bomb is killed), runs in a fresh child interpreter, killed after
   150 s or above 1 GB RSS (polled by the parent; the child also watches its own peak), and at most 2
   parses run at once per server process across all sessions. A kill is recorded as `parse_status`
-  `failed`; an upload that waits 30 s for a parse slot gets 503 and nothing is recorded.
+  `failed`. Slots are scheduled fairly (`parse_queue.py`): a session holds at most one slot at a time, waiting
+  parses queue first in first out (at most 16 in all, 2 per session) and are served round-robin by session id,
+  so a session with many queued uploads cannot starve the others. An upload that waits 20 s for a slot, or finds
+  the queue full, gets 503 with a `Retry-After` header and nothing is recorded; the session id passes from ingest
+  into `run_isolated` (the validation child and the parse child both). Fairness is per session id: when every
+  client shares one anonymous owner, one client can open many sessions, and a multi-user deployment needs
+  auth-level quotas (per user) in front of this scheduler.
 - Uploads run off the event loop and are capped per session (200 sources, 1 GB, 30 per minute) and
   server-wide (32 in flight, then 503). Their blocking part runs on its own 4-worker limiter, never on
   the shared threadpool of the synchronous endpoints, so an upload flood cannot starve the API.
@@ -249,7 +255,12 @@ How numbers are matched:
   only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
   the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
   `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the
-  page's `small_text` holds no digits.
+  page's `small_text` holds no digits. A number, a multiplier (`x × · *`) and `10` followed by digits with no
+  caret, superscript or e-notation (`1.2 × 103`, `1.2 x 10 3`) is the shape of a power of ten whose exponent
+  was drawn at full size but raised: the text layer cannot say 10^3 from 103, so the whole token is unresolved
+  (no value: citing the mantissa or the digits fails `partial_number`, citing the `10` or the whole literal fails too; the parse JSON carries no
+  per-character raise, so the legitimate case also fails closed and the reviewer reads the page). A tail that
+  starts with 0 (`2 x 100 mg`, `3 x 1000 mg`) stays a plain dose product.
 
 ### QC flags (`models.FLAG_CODES`)
 

@@ -12,9 +12,11 @@ its entry point's freeze_support() serves), killable at any instruction:
 - MAX_PARSE_RSS: the parent polls the child's resident set (psutil when installed, /proc on Linux,
   ``ps`` otherwise, every RSS_POLL_S) and kills it above the cap. RLIMIT_AS is not enforced on macOS,
   so the child also runs its own watchdog thread on ru_maxrss and exits with _MEMORY_EXIT first.
-- MAX_CONCURRENT_PARSES: one semaphore for the whole server process, shared by every session, so
-  opening new sessions does not multiply concurrent parses. A caller that waits QUEUE_WAIT_S without a
-  slot gets ParseBusyError (HTTP 503, nothing recorded; the upload can be retried).
+- MAX_CONCURRENT_PARSES: one FairSlots scheduler (parse_queue) for the whole server process, so opening
+  new sessions does not multiply concurrent parses. A session holds at most one slot; waiting parses
+  queue first in first out and are served round-robin by session. A caller that waits QUEUE_WAIT_S without
+  a slot, or finds the queue full, gets ParseBusyError (HTTP 503 + Retry-After, nothing recorded; the
+  upload can be retried).
 
 A killed child raises ParseAbortedError and a child exception comes back with its type (ParseLimitError
 stays ParseLimitError); ingest records either as parse_status 'failed' with the message.
@@ -36,24 +38,25 @@ from typing import Any
 
 from app.evidence.models import IngestError
 from app.evidence.parse_guard import ParseLimitError
+from app.evidence.parse_queue import FairSlots, ParseBusyError
+
+__all__ = ["ParseAbortedError", "ParseBusyError", "ParseFailedError", "parse_isolated", "run_isolated"]
 
 PARSE_WALL_S = 150.0
 MAX_PARSE_RSS = 1024 * 2**20      # measured legit peak ~0.5 GB (20-page paper with ink check)
 MAX_CONCURRENT_PARSES = 2
-QUEUE_WAIT_S = 30.0
+QUEUE_WAIT_S = 20.0
+MAX_QUEUED_PARSES = 16            # parses waiting for a slot, all sessions together
+MAX_QUEUED_PER_SESSION = 2        # ... and per session id
 POLL_S = 0.05
 RSS_POLL_S = 0.25
 DEFAULT_TARGET = "app.evidence.parse:parse_pdf"
 _MEMORY_EXIT = 86
-_slots = threading.BoundedSemaphore(MAX_CONCURRENT_PARSES)
+_slots = FairSlots(MAX_CONCURRENT_PARSES, MAX_QUEUED_PARSES, MAX_QUEUED_PER_SESSION)
 
 
 class ParseAbortedError(IngestError):
     """The parse child was killed (time or memory limit) or died without an answer."""
-
-
-class ParseBusyError(IngestError):
-    """Every parse slot stayed taken for QUEUE_WAIT_S; nothing was parsed or recorded."""
 
 
 class ParseFailedError(IngestError):
@@ -190,29 +193,27 @@ def _answer(out: Path, exitcode: int | None) -> dict[str, Any]:
 
 
 def parse_isolated(path: str | Path, *, wall_s: float | None = None, max_rss: int | None = None,
-                   target: str = DEFAULT_TARGET) -> dict[str, Any]:
+                   target: str = DEFAULT_TARGET, session_id: str | None = None) -> dict[str, Any]:
     """parse_pdf(path) in a killable child process (see module docstring)."""
     return run_isolated(path, target=target, wall_s=PARSE_WALL_S if wall_s is None else wall_s,
-                        max_rss=MAX_PARSE_RSS if max_rss is None else max_rss)
+                        max_rss=MAX_PARSE_RSS if max_rss is None else max_rss, session_id=session_id)
 
 
-def run_isolated(path: str | Path, *, target: str, wall_s: float, max_rss: int) -> Any:
+def run_isolated(path: str | Path, *, target: str, wall_s: float, max_rss: int,
+                 session_id: str | None = None) -> Any:
     """``target(path)`` ('module:function', JSON-serialisable result) in a killable child process,
-    under a parse slot: the parse, and upload validation (ingest.page_count_report)."""
-    slots = _slots
-    if not slots.acquire(timeout=QUEUE_WAIT_S):
-        raise ParseBusyError(f"the PDF parser is busy ({MAX_CONCURRENT_PARSES} parses running); "
-                             "try the upload again shortly")
-    scratch = Path(tempfile.mkdtemp(prefix="evparse-"))
-    try:
-        out = scratch / "result.json"
-        proc = _start((target, str(path), str(out), max_rss))
+    under a parse slot of *session_id* (the fair scheduler's key): the parse, and upload validation
+    (ingest.page_count_report)."""
+    with _slots.slot(session_id, QUEUE_WAIT_S):
+        scratch = Path(tempfile.mkdtemp(prefix="evparse-"))
         try:
-            _watch(proc, wall_s, max_rss)
+            out = scratch / "result.json"
+            proc = _start((target, str(path), str(out), max_rss))
+            try:
+                _watch(proc, wall_s, max_rss)
+            finally:
+                if proc.is_alive():
+                    _kill(proc)
+            return _answer(out, proc.exitcode)
         finally:
-            if proc.is_alive():
-                _kill(proc)
-        return _answer(out, proc.exitcode)
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
-        slots.release()
+            shutil.rmtree(scratch, ignore_errors=True)

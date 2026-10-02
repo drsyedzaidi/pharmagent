@@ -31,6 +31,7 @@ from app.evidence import ingest, llm_access, upload_limits
 from app.evidence.config_tools import source_row
 from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
 from app.evidence.parse_sandbox import ParseBusyError
+from app.evidence.route_headers import HeaderKeepingRoute
 from app.evidence.store import get_store, source_id
 
 log = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ def _unwrap(body: Any, key: str) -> Any:
 def http_error(exc: Exception) -> HTTPException:
     """The one error map for evidence routes (IngestError before its ValueError base)."""
     if isinstance(exc, ParseBusyError):
-        return HTTPException(503, str(exc))
+        return HTTPException(503, str(exc), headers={"Retry-After": str(exc.retry_after)})
     if isinstance(exc, IngestError):
         return HTTPException(422, str(exc))
     if isinstance(exc, EvidenceStateError):
@@ -193,7 +194,7 @@ def _finish_upload(get_orch: Callable[[], Any], sid: str, data_dir: str, tmp: Pa
             return {"source": source_row(existing), "duplicate": True,
                     "summary": f"{existing.filename} was already uploaded to this session ({existing.id})."}
         try:
-            ingest.validate_pdf_file(tmp)
+            ingest.validate_pdf_file(tmp, sid)
         except IngestError as exc:
             raise http_error(exc) from exc
         dest = ingest.evidence_dir(data_dir) / f"{sha}.pdf"
@@ -216,7 +217,8 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
                           get_orch: Callable[[], Any],
                           get_jobs: Callable[[], Any] | None = None) -> APIRouter:
     """``get_jobs`` returns main.py's JobManager; without it the LLM screening path runs inline."""
-    router = APIRouter(prefix="/api/sessions/{sid}/evidence", tags=["evidence"])
+    router = APIRouter(prefix="/api/sessions/{sid}/evidence", tags=["evidence"],
+                       route_class=HeaderKeepingRoute)
 
     @router.post("/upload")
     async def upload_evidence(sid: str, file: UploadFile = File(...), licence_note: str | None = Form(None),

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hhmm } from '../shell/format';
 import { evidenceDecideScreen } from './api';
 import { InclusionPill, MetWord, VerdictPill } from './badges';
-import { inclusionOf, shaPrefix } from './format';
+import { inclusionOf, screenStems, shaPrefix } from './format';
 import type { CriteriaConfig, EvidenceSource, Inclusion, OnState, Run, ScreenDecision, ScreenRow } from './types';
 
 const MAX_REASON = 500;
@@ -63,6 +63,8 @@ export function ScreeningPanel({ sessionId, screens, sources, criteria, disabled
   const texts = new Map((criteria?.body ?? []).map(c => [c.id, c.text]));
   const names = new Map(sources.map(s => [s.id, s]));
   const label = (s: ScreenRow) => names.get(s.source_id)?.filename ?? s.source_id;
+  // Control names carry the file and a screen id prefix (shown in the row), unique over the whole ledger.
+  const stems = screenStems(screens.map(s => ({ id: s.id, file: label(s) })));
   const proposed = rows.filter(s => s.status === 'proposed');
   const picked = proposed.filter(s => selected.has(s.id));
 
@@ -153,13 +155,14 @@ export function ScreeningPanel({ sessionId, screens, sources, criteria, disabled
             const src = names.get(s.source_id);
             const reason = reasons[s.id] ?? '';
             const name = label(s);
+            const stem = stems.get(s.id) ?? name;
             const inclusion = inclusionOf(s);
             return (
               <tbody key={s.id} className="ev-rowgroup">
                 <tr>
                   <td>
                     {s.status === 'proposed' && (
-                      <input type="checkbox" aria-label={`Select ${name}`} checked={selected.has(s.id)}
+                      <input type="checkbox" aria-label={`Select ${stem}`} checked={selected.has(s.id)}
                         disabled={disabled} onChange={() => toggle(s.id)} />
                     )}
                   </td>
@@ -191,15 +194,15 @@ export function ScreeningPanel({ sessionId, screens, sources, criteria, disabled
                     <td colSpan={4}>
                       <div className="ev-decide">
                         <input className="ev-input" ref={el => { if (el) reasonRefs.current.set(s.id, el); else reasonRefs.current.delete(s.id); }}
-                          aria-label={`Reason for ${name}`} value={reason} maxLength={MAX_REASON}
+                          aria-label={`Reason for ${stem}`} value={reason} maxLength={MAX_REASON}
                           placeholder="Reason (required)" disabled={disabled}
                           onChange={e => setReasons(prev => ({ ...prev, [s.id]: e.target.value }))} />
                         <button type="button" className="btn btn-primary" disabled={disabled || !reason.trim()}
-                          aria-label={`Include ${name}`}
+                          aria-label={`Include ${stem}`}
                           title={reason.trim() ? `Include this publication (proposed: ${s.verdict})` : 'A reason is required'}
                           onClick={() => one(s.id, 'include')}>Include</button>
                         <button type="button" className="btn btn-red" disabled={disabled || !reason.trim()}
-                          aria-label={`Exclude ${name}`}
+                          aria-label={`Exclude ${stem}`}
                           title={reason.trim() ? `Exclude this publication (proposed: ${s.verdict})` : 'A reason is required'}
                           onClick={() => one(s.id, 'exclude')}>Exclude</button>
                       </div>

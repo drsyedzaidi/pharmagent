@@ -10,7 +10,7 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
   ≥ 5 % of its box counts as visible, and glyphs overlapping inside one text object (kerning) are not
   separated. A number glyph cut short by < 3 px (or < 15 %) on a side, or covered inside its box by
   ink of the background colour, is not flagged (`glyph_ink_mismatch` needs OCR to go further).
-- **Parse slots are server-wide.** Two parses run at once for all sessions; a dense document can hold
+- **Parse slots are server-wide, scheduled per session id.** Two parses run at once for all sessions, one per session at most, queued fairly with a 20 s wait; fairness holds per session id only (one client sharing one anonymous owner can open many sessions: a multi-user deployment needs auth-level quotas, and the 4-worker upload limiter still queues uploads first in first out before they reach the slot queue). A dense document can hold
   one until the 120 s parse budget (pages over 25 000 glyphs skip the visibility passes). Rendering roughly doubles parse time (a 20-page paper: ~8 s, ~0.45 GB peak in the child);
   pages past the 60 s render budget are `unverified` and flagged, not trusted.
 - **No figure digitising.** Values that only appear in plots cannot be extracted.

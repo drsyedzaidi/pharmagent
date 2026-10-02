@@ -6,7 +6,6 @@ from __future__ import annotations
 import itertools
 import resource
 import sys
-import threading
 import time
 
 import pytest
@@ -22,6 +21,7 @@ from app.evidence import store as evstore
 from app.evidence.models import IngestError
 from app.evidence.parse import parse_pdf
 from app.evidence.parse_guard import ParseLimitError
+from app.evidence.parse_queue import FairSlots
 from tests import evidence_rawpdf as raw
 
 BOX = [0, 0, 612, 792]
@@ -135,7 +135,7 @@ def test_abort_is_an_ingest_error_and_is_recorded_as_failed(tmp_path, monkeypatc
     evstore.configure(":memory:")
     assert issubclass(parse_sandbox.ParseAbortedError, IngestError)
 
-    def aborted(_path):
+    def aborted(_path, **_kw):
         raise parse_sandbox.ParseAbortedError("parse killed: exceeded 1 s wall clock")
 
     monkeypatch.setattr(parse_sandbox, "parse_isolated", aborted)
@@ -144,15 +144,15 @@ def test_abort_is_an_ingest_error_and_is_recorded_as_failed(tmp_path, monkeypatc
 
 
 def test_concurrency_cap_is_process_wide(tmp_path, monkeypatch):
-    monkeypatch.setattr(parse_sandbox, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(parse_sandbox, "_slots", FairSlots(capacity=1, max_queue=4, max_queued_per_session=2))
     monkeypatch.setattr(parse_sandbox, "QUEUE_WAIT_S", 0.2)
     path = _write(tmp_path, raw.build([(BOX, raw.text(raw.BODY))]))
-    assert parse_sandbox._slots.acquire(timeout=1)    # another session's parse holds the only slot
+    parse_sandbox._slots.acquire("other-session", wait_s=1)    # another session's parse holds the only slot
     try:
         with pytest.raises(parse_sandbox.ParseBusyError):
             parse_sandbox.parse_isolated(path)
     finally:
-        parse_sandbox._slots.release()
+        parse_sandbox._slots.release("other-session")
     assert parse_sandbox.parse_isolated(path)["text_chars"] > 0
 
 
@@ -168,7 +168,7 @@ def client(tmp_path, monkeypatch):
 
 
 def test_busy_parser_is_503_and_records_nothing(client, monkeypatch):
-    def busy(_path):
+    def busy(_path, **_kw):
         raise parse_sandbox.ParseBusyError("parser busy")
 
     monkeypatch.setattr(parse_sandbox, "parse_isolated", busy)

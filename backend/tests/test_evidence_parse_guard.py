@@ -129,13 +129,13 @@ def test_upload_parses_off_the_event_loop(client, monkeypatch):
     seen = []
     real = ingest.validate_pdf_file
 
-    def probe(path):
+    def probe(path, *args, **kw):
         try:
             asyncio.get_running_loop()
             seen.append("event-loop")
         except RuntimeError:
             seen.append("worker")
-        return real(path)
+        return real(path, *args, **kw)
 
     monkeypatch.setattr(ingest, "validate_pdf_file", probe)
     sid = client.post("/api/sessions").json()["id"]

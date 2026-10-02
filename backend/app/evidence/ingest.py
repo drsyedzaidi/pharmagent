@@ -84,11 +84,11 @@ def page_count_report(path: str) -> dict[str, Any]:
         return {"unreadable": type(exc).__name__}
 
 
-def _isolated_page_count(path: Path) -> int:
+def _isolated_page_count(path: Path, session_id: str | None = None) -> int:
     """Page count from a killable child (wall clock + RSS caps, the parse slots); IngestError otherwise."""
     try:
         report = parse_sandbox.run_isolated(path, target=VALIDATE_TARGET, wall_s=VALIDATE_WALL_S,
-                                            max_rss=VALIDATE_MAX_RSS)
+                                            max_rss=VALIDATE_MAX_RSS, session_id=session_id)
     except ParseBusyError:
         raise
     except IngestError as exc:                   # killed at a limit, or the child died
@@ -114,7 +114,7 @@ def _check_head(head: bytes, size: int) -> None:
         raise IngestError(f"too large ({size} bytes > {MAX_BYTES})")
 
 
-def validate_pdf_bytes(data: bytes) -> int:
+def validate_pdf_bytes(data: bytes, session_id: str | None = None) -> int:
     """Raise IngestError unless *data* is an openable, unencrypted PDF within limits. Returns page count.
     The open itself runs in the sandbox child (validate_pdf_file)."""
     _check_head(data or b"", len(data or b""))
@@ -122,18 +122,18 @@ def validate_pdf_bytes(data: bytes) -> int:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        return _isolated_page_count(Path(name))
+        return _isolated_page_count(Path(name), session_id)
     finally:
         Path(name).unlink(missing_ok=True)
 
 
-def validate_pdf_file(path: str | Path) -> int:
+def validate_pdf_file(path: str | Path, session_id: str | None = None) -> int:
     """validate_pdf_bytes for a file on disk, without reading it into the server process."""
     path = Path(path)
     with path.open("rb") as fh:
         head = fh.read(len(PDF_MAGIC))
     _check_head(head, path.stat().st_size)
-    return _isolated_page_count(path)
+    return _isolated_page_count(path, session_id)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -152,7 +152,8 @@ def write_by_sha256(data: bytes, data_dir: str | Path | None = None) -> tuple[st
     return sha, path
 
 
-def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None) -> tuple[dict[str, Any], Path]:
+def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None,
+                    session_id: str | None = None) -> tuple[dict[str, Any], Path]:
     """Parse once per (sha256, parser) and cache as <sha256>.pages.json. The parse runs in a killable
     child process under a process-wide concurrency cap (parse_sandbox)."""
     pdf_path = Path(pdf_path)
@@ -165,7 +166,7 @@ def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None) ->
                 return cached, parse_path
         except (OSError, ValueError):
             log.warning("evidence: unreadable parse cache %s; re-parsing", parse_path)
-    doc = parse_sandbox.parse_isolated(pdf_path)
+    doc = parse_sandbox.parse_isolated(pdf_path, session_id=session_id)
     _atomic_write(parse_path, json.dumps(doc, ensure_ascii=False).encode("utf-8"))
     return doc, parse_path
 
@@ -205,10 +206,10 @@ def ingest_pdf(data: bytes, filename: str, session_id: str, uploaded_by: str, *,
                data_dir: str | Path | None = None, store: EvidenceStore | None = None,
                licence_note: str | None = None) -> Source:
     """Validate -> store by sha256 -> parse+cache -> ledger row. Idempotent per (session, sha256)."""
-    pages = validate_pdf_bytes(data)
+    pages = validate_pdf_bytes(data, session_id)
     sha, pdf_path = write_by_sha256(data, data_dir)
     try:
-        doc, parse_path = parse_and_cache(pdf_path, data_dir)
+        doc, parse_path = parse_and_cache(pdf_path, data_dir, session_id)
         status = "parsed" if doc["text_chars"] > 0 else "no_text"
     except ParseBusyError:     # no slot: nothing parsed, nothing recorded; the upload can be retried
         raise

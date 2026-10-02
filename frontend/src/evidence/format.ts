@@ -40,6 +40,21 @@ export function recordLabels(rows: LabelledRecord[], names: Map<string, string>)
   return new Map(base.map(([r, l]) => [r.id, (count.get(l) ?? 0) > 1 ? `${l}, record ${shaPrefix(r.record_hash, 10)}` : l]));
 }
 
+const SCREEN_TAG_MIN_HEX = 4;
+
+/** Accessible-name stem of every screening row, unique across the whole ledger and stable when the view
+ *  filters: "paper_a.pdf, screen scr_1a2b". Several rows can share one file (one verdict per criteria
+ *  version), so the stem adds a prefix of the screen id, which the row shows in full in its provenance
+ *  line. The prefix is as short as keeps every screen id apart (at least 4 hex digits). `screens` is the
+ *  full list, never the filtered one. */
+export function screenStems(screens: { id: string; file: string }[]): Map<string, string> {
+  const ids = screens.map(s => s.id);
+  const lead = Math.max(0, ...ids.map(id => id.indexOf('_') + 1));
+  let n = lead + SCREEN_TAG_MIN_HEX;
+  while (new Set(ids.map(id => id.slice(0, n))).size < new Set(ids).size) n += 1;
+  return new Map(screens.map(s => [s.id, `${s.file}, screen ${s.id.slice(0, n)}`]));
+}
+
 /** First `n` hex characters of a sha256 (mono id chips). */
 export const shaPrefix = (h: string | null | undefined, n = 12): string => (h ? h.slice(0, n) : '');
 

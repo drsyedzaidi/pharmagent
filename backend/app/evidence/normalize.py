@@ -52,8 +52,13 @@ _EXP = r"(?:\^[ \x00]?(?P<pow>[+-]?\d{1,4})(?!\d)|(?P<sup>[⁺⁻]?[⁰¹²³⁴
 # Multiplier: x, *, or ANY non-ASCII character other than a comparison or plus-minus sign ('×', '·',
 # look-alikes '⋅ ∙ • ⨯ ✕ ✖ х'): a symbol between a number and '10' is never read as a token boundary.
 _MULTIPLIER = r"(?:[xX*]|[^\x00-\x7f±∓≤≥≦≧≈≃≅≠∼<>=])"
+# 'N x 10' followed by digits and no caret / superscript ('1.2 × 103', '1.2 x 10 3') is a power of ten
+# whose exponent was set at full size but raised: the text layer cannot say 10^3 from 103, so the token
+# is unresolved (group 'raw'). A tail starting with 0 ('2 x 100 mg', '3 x 1000 mg') is a plain
+# multiplication and stays plain numbers.
+_RAW_EXP = r"10(?P<raw>[1-9]\d{0,2}|[ \x00][1-9]\d?)(?!\d|[.,]\d)"
 _SCI_RE = re.compile(r"[eE](?P<e>[+-]?\d{1,4})(?!\d)|[ \x00]{1,2}[eE](?P<eg>[+-]?\d{1,4})(?![\w.,]\d|\w)|"
-                     + _GAP + _MULTIPLIER + _GAP + r"10(?!\d|[.,]\d)" + _EXP + "?")
+                     + _GAP + _MULTIPLIER + _GAP + "(?:" + _RAW_EXP + r"|10(?!\d|[.,]\d)" + _EXP + "?)")
 _POW_RE = re.compile(_EXP)
 MAX_EXPONENT = 300
 
@@ -142,6 +147,8 @@ def _scientific(folded: str, end: int, mantissa: float, bare_ten: bool) -> tuple
     m = _SCI_RE.match(folded, end)
     if m is not None and (m.group("e") or m.group("eg")) is not None:     # '3.4E-03', SAS '3.4 E-03'
         return m.end(), _scaled(mantissa, m.group("e") or m.group("eg"))
+    if m is not None and m.group("raw"):                                   # '1.2 × 103': exponent unreadable
+        return m.end(), None
     if m is not None and (m.group("pow") or m.group("sup") or m.group("odd") or bare_ten):
         return m.end(), _scaled(mantissa, m.group("pow") or m.group("sup"))
     p = _POW_RE.match(folded, end) if mantissa == 10 and folded[end - 2:end] == "10" else None
