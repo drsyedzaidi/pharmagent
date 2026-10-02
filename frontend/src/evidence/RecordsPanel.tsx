@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react';
 import { hhmm } from '../shell/format';
 import { evidenceDecideRecords, evidenceVerify } from './api';
 import { FlagChip, StatusPill, VerifyBadge } from './badges';
-import { failWords, recordLabel, shaPrefix } from './format';
+import { clipValue, failWords, recordLabels, shaPrefix } from './format';
 import { RecordContext } from './RecordContext';
 import type {
   Decision, EvidenceSource, OnState, OnTool, RecordDecision, RecordRow, Run, TemplateConfig,
@@ -22,6 +22,26 @@ const FILTERS: { key: Filter; label: string; test: (r: RecordRow) => boolean }[]
 /** Bulk approval only ever covers verified, unflagged proposals; the rest need a look each. */
 const bulkEligible = (r: RecordRow) => r.status === 'proposed' && r.verify_status === 'pass' && r.flags.length === 0;
 const hasConflict = (r: RecordRow) => r.flags.some(f => f.code === 'duplicate');
+
+/** A record's value: short values inline; a long one clipped, with the full text behind a disclosure
+ *  that wraps inside the cell (a long value never widens the table past the decision controls). */
+function RecordValue({ value, unit, name }: { value: string; unit: string | null; name: string }) {
+  const clip = clipValue(value);
+  return (
+    <div className="ev-value-cell">
+      <div className="ev-value-line">
+        <span className="mono ev-value" title={clip.clipped ? value : undefined}>{clip.text}</span>
+        {unit && <span className="ev-dim"> {unit}</span>}
+      </div>
+      {clip.clipped && (
+        <details className="ev-details">
+          <summary>Full value<span className="sr-only"> of {name}</span></summary>
+          <p className="mono ev-value-long">{value}</p>
+        </details>
+      )}
+    </div>
+  );
+}
 
 /** Records tab: proposed records with their literal-match verification and QC flags, filters,
  *  per-record decisions with a required reason, bulk approval of verified unflagged rows. The
@@ -61,7 +81,9 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   });
 
   const names = new Map(sources.map(s => [s.id, s.filename]));
-  const rowName = (r: RecordRow): string => recordLabel(r, names.get(r.source_id) ?? r.source_id);
+  // Names over every record (not only the filtered rows), so a row keeps its name across filters.
+  const labels = recordLabels(records, names);
+  const rowName = (r: RecordRow): string => labels.get(r.id) ?? r.id;
   const test = (FILTERS.find(f => f.key === filter) ?? FILTERS[0]).test;
   // Stable order (no status key): a decided record stays where it was.
   const rows = records.filter(test).sort((a, b) =>
@@ -150,6 +172,10 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
       <div className="ev-table-wrap">
         <table className="ev-table ev-records-table">
           <caption className="sr-only" ref={captionRef} tabIndex={-1}>Extracted records</caption>
+          {/* Fixed layout: the table is never wider than its wrap, so Approve / Reject stay in view. */}
+          <colgroup>
+            <col className="ev-col-select" /><col className="ev-col-value" /><col /><col /><col className="ev-col-status" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col"><span className="sr-only">Select</span></th>
@@ -180,7 +206,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
                       onClick={() => (isOpen ? close() : open(r.id))}>
                       {r.field}{r.group_label ? ` · ${r.group_label}` : ''}
                     </button>
-                    <div><span className="mono ev-value">{r.value}</span>{r.unit && <span className="ev-dim"> {r.unit}</span>}</div>
+                    <RecordValue value={r.value} unit={r.unit} name={name} />
                   </th>
                   <td>
                     <div className="ev-src-name">{names.get(r.source_id) ?? r.source_id}</div>

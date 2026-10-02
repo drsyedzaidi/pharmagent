@@ -9,10 +9,36 @@ import type {
 export const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const FIELD_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-/** Accessible name of a record row: field, group (when set) and publication, so rows with the same
- *  field from different papers are distinguishable to screen readers ("n in paper_b.pdf"). */
-export const recordLabel = (r: { field: string; group_label: string }, source: string): string =>
-  `${r.field}${r.group_label ? ` · ${r.group_label}` : ''} in ${source}`;
+/** Longest value (code points) shown inline in a records row or an accessible name. */
+export const VALUE_CLIP = 20;   // fits .ev-col-value (20ch of the mono font) in evidence.css
+
+/** A value cut to `max` code points (never inside a surrogate pair), ending in '…' when cut. */
+export function clipValue(value: string, max = VALUE_CLIP): { text: string; clipped: boolean } {
+  const cps = Array.from(value);
+  if (cps.length <= max) return { text: value, clipped: false };
+  return { text: `${cps.slice(0, max - 1).join('')}…`, clipped: true };
+}
+
+interface LabelledRecord {
+  id: string; field: string; group_label: string; value: string; unit: string | null;
+  locator: { page: number }; record_hash: string; source_id: string;
+}
+
+/** Accessible name of a record row: field, group, value, page and publication
+ *  ("cmax · 150 mg = 3,412 ng/mL, p. 1, paper_a.pdf"). */
+export const recordLabel = (r: Omit<LabelledRecord, 'id' | 'record_hash' | 'source_id'>, source: string): string =>
+  `${r.field}${r.group_label ? ` · ${r.group_label}` : ''} = ${clipValue(r.value).text}${r.unit ? ` ${r.unit}` : ''}`
+  + `, p. ${r.locator.page}, ${source}`;
+
+/** Accessible names for a list of records, unique across it: a name that two records would share
+ *  (same field, group, value, page and paper, e.g. a table and a text extraction) gets the record
+ *  hash prefix shown in the Source column (10 hex characters). */
+export function recordLabels(rows: LabelledRecord[], names: Map<string, string>): Map<string, string> {
+  const base = rows.map(r => [r, recordLabel(r, names.get(r.source_id) ?? r.source_id)] as const);
+  const count = new Map<string, number>();
+  for (const [, l] of base) count.set(l, (count.get(l) ?? 0) + 1);
+  return new Map(base.map(([r, l]) => [r.id, (count.get(l) ?? 0) > 1 ? `${l}, record ${shaPrefix(r.record_hash, 10)}` : l]));
+}
 
 /** First `n` hex characters of a sha256 (mono id chips). */
 export const shaPrefix = (h: string | null | undefined, n = 12): string => (h ? h.slice(0, n) : '');

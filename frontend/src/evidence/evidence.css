@@ -198,3 +198,19 @@
   display: inline-block; padding: 1px 7px; font-size: 12px; color: var(--text-h);
   background: var(--chip-bg); border-radius: 12px; overflow-wrap: anywhere;
 }
+
+/* ── records: decision controls stay reachable (no horizontal scroll at 1200 px and up) ── */
+.ev-records-table { table-layout: fixed; }
+.ev-col-select { width: 32px; }
+.ev-col-value { width: calc(20ch + 17px); font-family: var(--mono); font-size: 12px; }  /* VALUE_CLIP mono chars + padding */
+.ev-col-status { width: 112px; }
+.ev-records-table > tbody > tr:first-child > * { overflow-wrap: anywhere; }   /* record row only, not the cited grid */
+.ev-records-table .pill { white-space: nowrap; }
+.ev-records-table .ev-flag { white-space: normal; overflow-wrap: normal; }
+/* A value never wraps inside a number; should it ever exceed its column it scrolls, never hides. */
+.ev-value-line { overflow-x: auto; }
+.ev-value-long { margin: 4px 0 0; font-size: 12px; color: var(--text-h); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* An open cited page contributes no intrinsic width to the table: it fills its cell, and a wide
+   parsed grid scrolls inside its own .ev-grid-wrap instead of widening the records table. */
+.ev-context-row .ev-context { box-sizing: border-box; width: 0; min-width: 100%; }
+.ev-context .ev-prov { overflow-wrap: anywhere; }
