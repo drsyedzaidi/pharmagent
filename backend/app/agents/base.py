@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from app.core.audit import AuditChain
@@ -20,6 +21,53 @@ MAX_TOOL_STEPS = 6
 
 def _n(items) -> int:
     return len(items or [])
+
+
+def _evidence_hint(state: PharmState) -> str:
+    """The pipeline step waiting on the human. Reads the PharmState mirrors only:
+    evidence_summary {sources, criteria_hash, template_hash}, screening_results
+    {proposed, approved}, extraction_results {proposed, approved, verify_fail}."""
+    summary = state.evidence_summary or {}
+    n_src = summary.get("sources") or 0
+    if not n_src:
+        return ("[evidence] no publications uploaded — upload PDFs in the Evidence workspace, save "
+                "the inclusion/exclusion criteria, then ask me to screen the publications.")
+    srcs = f"{n_src} publication{'s' if n_src != 1 else ''} uploaded"
+    if not summary.get("criteria_hash"):
+        return (f"[evidence] {srcs}; no screening criteria saved yet — save them in the Evidence "
+                "workspace, then ask me to screen the publications.")
+    screens = state.screening_results or {}
+    if not screens:
+        return f"[evidence] {srcs} and criteria saved; ask me to screen the publications."
+    if screens.get("proposed"):
+        n = screens["proposed"]
+        return (f"[evidence] {n} screening verdict{'s' if n != 1 else ''} await your decision in the "
+                "Evidence workspace (approve or reject each); then ask me to extract the evidence.")
+    if not summary.get("template_hash"):
+        return (f"[evidence] {srcs}, screening decided; save an extraction template in the Evidence "
+                "workspace, then ask me to extract the evidence.")
+    records = state.extraction_results or {}
+    if not records:
+        return f"[evidence] {srcs}, screening decided; ask me to extract the evidence from the included papers."
+    parts = []
+    if records.get("verify_fail"):
+        n = records["verify_fail"]
+        parts.append(f"{n} proposed record{'s' if n != 1 else ''} failed verification (value not found "
+                     "literally on the cited page) and cannot be approved — re-verify or reject them")
+    if records.get("proposed"):
+        n = records["proposed"]
+        parts.append(f"{n} extracted record{'s' if n != 1 else ''} await your decision")
+    if parts:
+        return f"[evidence] {'; '.join(parts)}."
+    n_ok = records.get("approved") or 0
+    if n_ok and state.evidence_dataset_path:
+        return (f"[evidence] {n_ok} approved record{'s' if n_ok != 1 else ''}; last export "
+                f"{Path(state.evidence_dataset_path).name}. Approve more records and ask me to export "
+                "the evidence dataset again.")
+    if n_ok:
+        return (f"[evidence] {n_ok} approved record{'s' if n_ok != 1 else ''} and nothing pending; "
+                "ask me to export the evidence dataset.")
+    return f"[evidence] {srcs}; no approved records yet — approve extracted records, then export."
 
 
 def idle_hint(agent: str, state: PharmState) -> str:
@@ -55,6 +103,8 @@ def idle_hint(agent: str, state: PharmState) -> str:
             return (f"[nca] NCA already computed for {n_nca} subjects on {state.dataset_id}. "
                     "Next: QC review, bioequivalence, dose proportionality, or the report.")
         return f"[nca] {where}; ask me to compute NCA."
+    if agent == "evidence":
+        return _evidence_hint(state)
     if agent == "er_dose":
         if not loaded:
             return (f"[er_dose] {where}; exposure-response needs per-subject data (one row per subject "
@@ -116,6 +166,10 @@ class Agent:
             "qc_verdict": state.qc_verdict,
             "report_path": state.report_path,
             "memo_path": state.memo_path,
+            "evidence_sources": (state.evidence_summary or {}).get("sources") or 0,
+            "screening_results": "present" if state.screening_results else None,
+            "extraction_results": "present" if state.extraction_results else None,
+            "evidence_dataset_path": state.evidence_dataset_path,
         }
 
     def run_turn(self, *, state: PharmState, message: str, llm, registry: ToolRegistry,

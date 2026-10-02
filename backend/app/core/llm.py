@@ -1,8 +1,11 @@
 """LLM client.
 
-Two responsibilities only — everything quantitative is a tool:
+Three responsibilities only — everything quantitative is a tool:
   1. classify(message, options)  -> route to an agent
   2. select_tool(agent, ...)     -> pick the next tool (or None to stop)
+  3. extract_json(system, user, schema) -> one schema-shaped proposal from
+     untrusted document text (evidence pipeline), or None; the mock always
+     answers None so keyless runs stay on the deterministic path
 
 `RealLLM` uses Anthropic Claude (tool-use). `OpenAICompatLLM` talks to any
 OpenAI-compatible chat-completions server with function calling — a FREE,
@@ -15,12 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Protocol
 
 import requests
 
 from app.config import settings
+from app.core.llm_mock import MockLLM
 from app.tools.base import Tool
 
 log = logging.getLogger("pharmagent")
@@ -30,134 +33,15 @@ class LLM(Protocol):
     def classify(self, message: str, options: list[str], descriptions: dict[str, str]) -> str: ...
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None: ...
+    def extract_json(self, system: str, user: str, schema: dict[str, Any], *,
+                     max_tokens: int = 2048) -> dict[str, Any] | None: ...
 
 
-_PATH_RE = re.compile(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", re.IGNORECASE)
+EMIT_TOOL = "emit"
+EMIT_DESCRIPTION = "Return the answer as a single JSON object matching the schema."
 
-
-_KE_RE = re.compile(r"\bke\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
-_HL_RE = re.compile(r"half[- ]life\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
-
-
-def _mock_numbers(low: str, tool: str) -> dict[str, Any]:
-    """Best-effort numeric extraction for the keyless mock (half-life / ke only;
-    everything else is left for the tool to ask for)."""
-    if tool in ("calc_half_life", "calc_accumulation"):
-        m = _KE_RE.search(low)
-        if m:
-            return {"ke": float(m.group(1))}
-        m = _HL_RE.search(low)
-        if m:
-            return {"half_life": float(m.group(1))}
-    return {}
-
-
-_ER_SELECT = ("optimal dose", "dose selection", "select the dose", "optimus", "utility")
-_ER_FIT = ("logistic", "odds ratio", "hazard ratio", "cox", "kaplan", "exposure-response",
-           "exposure response")
-_ER_TTE = ("hazard", "cox", "kaplan", "survival", "time to event", "time-to-event")
-
-
-def _mock_er_dose(low: str, s: dict[str, Any]) -> dict[str, Any] | None:
-    """Keyless exposure-response choices. The mock cannot read column names, the
-    doses or the utility weight from prose: the tool's own refusal names what is
-    missing. The bootstrap is only ever PROPOSED (expensive+proposable); the mock
-    never confirms on the human's behalf."""
-    if any(k in low for k in _ER_SELECT):
-        return None if s.get("dose_selection") else {"name": "select_optimal_dose", "input": {"doses": []}}
-    if "bootstrap" in low:
-        return {"name": "bootstrap_exposure_response", "input": {}}
-    if any(k in low for k in _ER_FIT):
-        if s.get("er_fits"):
-            return None
-        endpoint = "time_to_event" if any(k in low for k in _ER_TTE) else "binary"
-        return {"name": "fit_exposure_response", "input": {"endpoint": endpoint}}
-    return None
-
-
-class MockLLM:
-    """Deterministic, keyless. Drives the core NCA flow heuristically."""
-
-    def classify(self, message: str, options: list[str], descriptions: dict[str, str]) -> str:
-        return options[0] if options else "data_manager"
-
-    def select_tool(self, agent: str, message: str, tools: list[Tool],
-                    state_summary: dict[str, Any]) -> dict[str, Any] | None:
-        s = state_summary
-        if agent == "data_manager":
-            if not s.get("dataset_id"):
-                m = _PATH_RE.search(message or "")
-                return {"name": "load_dataset", "input": {"path": m.group(0)}} if m else None
-            # `data_quality` in the summary is the quality_flags LIST: an empty
-            # list means "profiled, nothing flagged", not "not profiled" — a
-            # falsy check here re-profiled clean datasets MAX_TOOL_STEPS times.
-            if s.get("data_quality") is None:
-                return {"name": "profile_pk_dataset", "input": {}}
-            return None
-        if agent == "nca":
-            return None if s.get("nca_parameters") else {"name": "compute_nca", "input": {}}
-        if agent == "be":
-            return None if s.get("be_results") else {"name": "run_bioequivalence", "input": {}}
-        if agent == "dose_prop":
-            return None if s.get("dose_prop_results") else {"name": "run_dose_proportionality", "input": {}}
-        if agent == "compartmental":
-            return None if s.get("compartmental_results") else {"name": "fit_compartmental", "input": {}}
-        if agent == "poppk":
-            return None if s.get("poppk_results") else {"name": "run_poppk", "input": {}}
-        if agent == "modeler":
-            return None if s.get("pk_model_results") else {"name": "fit_pk_model", "input": {"compare": True}}
-        if agent == "qc":
-            return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
-        if agent == "report":
-            low = (message or "").lower()
-            if "memo" in low or "briefing" in low:
-                return None if s.get("memo_path") else {"name": "build_briefing_memo", "input": {}}
-            return None if s.get("report_path") else {"name": "generate_report", "input": {}}
-        if agent == "statistician":
-            low = (message or "").lower()
-            # An indirect comparison needs the two direct effects, which the keyless
-            # mock cannot read from prose: stop with the idle hint naming the inputs.
-            if any(k in low for k in ("indirect", "bucher", "common comparator")):
-                return None
-            return None if s.get("stats_advice") else {"name": "recommend_statistics", "input": {}}
-        if agent == "er_dose":
-            return _mock_er_dose((message or "").lower(), s)
-        if agent == "clinpharm":
-            low = (message or "").lower()
-            # keyword → calculator; the keyless mock passes the numbers it can find
-            # as a best effort and the tool names any input still missing.
-            table = (("calc_renal_function", ("creatinine", "crcl", "egfr", "ckd", "cockcroft", "renal")),
-                     ("calc_be_sample_size", ("sample size", "how many subjects")),
-                     ("calc_dose_regimen", ("loading dose", "maintenance dose")),
-                     ("calc_accumulation", ("accumulation", "steady state", "steady-state")),
-                     ("calc_allometric", ("allometric", "allometry", "body weight scaling")),
-                     ("convert_concentration", ("micromolar", "µm", "umol", "mg/l", "molar mass",
-                                                "molecular weight")),
-                     ("quick_one_compartment", ("compartment profile", "simulate a one")),
-                     ("calc_half_life", ("half-life", "half life", "rate constant", " ke ", "ke is",
-                                         "elimination rate")))
-            for name, keys in table:
-                if any(k in low for k in keys):
-                    if s.get("last_calculation") == name:
-                        return None            # already answered this turn
-                    return {"name": name, "input": _mock_numbers(low, name)}
-            return None
-        if agent == "simulator":
-            low = (message or "").lower()
-            # Every choice here is a PROPOSAL (expensive+proposable tools): the
-            # keyless mock never confirms on the human's behalf and cannot
-            # compose a `design`/`params` from prose -- the human fills/approves.
-            if any(k in low for k in ("simulation-estimation", "simulation estimation",
-                                      "simest", "sim-est")):
-                return {"name": "run_simest", "input": {}}
-            if "bootstrap" in low:
-                return {"name": "run_bootstrap", "input": {}}
-            if any(k in low for k in ("importance resampling", "sampling importance", " sir")):
-                return {"name": "run_sir", "input": {}}
-            if any(k in low for k in ("likelihood profil", "profile likelihood")):
-                return {"name": "run_profile", "input": {}}
-            return None
-        return None
+__all__ = ["LLM", "MockLLM", "RealLLM", "OpenAICompatLLM", "get_llm", "is_loopback",
+           "LOCAL_REASONING_EFFORT", "EMIT_TOOL", "EMIT_DESCRIPTION"]
 
 
 class RealLLM:
@@ -199,6 +83,25 @@ class RealLLM:
                 return {"name": block.name, "input": block.input}
         return None
 
+    def extract_json(self, system: str, user: str, schema: dict[str, Any], *,
+                     max_tokens: int = 2048) -> dict[str, Any] | None:
+        """Forced ``emit`` tool call; its input is the schema-shaped answer. Any failure
+        (API error, text-only reply, another tool) is None, never an exception."""
+        try:
+            resp = self._client.messages.create(
+                model=self.model, max_tokens=max_tokens, system=system,
+                tools=[{"name": EMIT_TOOL, "description": EMIT_DESCRIPTION, "input_schema": schema}],
+                tool_choice={"type": "tool", "name": EMIT_TOOL},
+                messages=[{"role": "user", "content": user}],
+            )
+        except Exception as exc:  # noqa: BLE001 - the tool falls back deterministically
+            log.warning("llm_extract_failed", extra={"model": self.model, "error": str(exc)[:200]})
+            return None
+        for block in resp.content:
+            if block.type == "tool_use" and block.name == EMIT_TOOL and isinstance(block.input, dict):
+                return block.input
+        return None
+
 
 LOCAL_REASONING_EFFORT = "none"
 
@@ -238,11 +141,14 @@ class OpenAICompatLLM:
 
     # -- transport ----------------------------------------------------------
     def _chat(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None,
-              max_tokens: int = 512, quick: bool = False) -> dict[str, Any]:
+              max_tokens: int = 512, quick: bool = False,
+              tool_choice: dict[str, Any] | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {"model": self.model, "messages": messages,
                                 "max_tokens": max_tokens, "temperature": 0}
         if tools:
             body["tools"] = tools
+        if tool_choice:
+            body["tool_choice"] = tool_choice
         if quick and self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -316,6 +222,35 @@ class OpenAICompatLLM:
             else:
                 args = dict(raw)
             return {"name": name, "input": args if isinstance(args, dict) else {}}
+        return None
+
+    def extract_json(self, system: str, user: str, schema: dict[str, Any], *,
+                     max_tokens: int = 2048) -> dict[str, Any] | None:
+        """Forced ``emit`` function call (``tool_choice``); its arguments are the answer.
+        Transport errors, a prose-only reply, another function or unparsable / non-object
+        arguments all yield None so the calling tool falls back deterministically."""
+        tool = {"type": "function", "function": {"name": EMIT_TOOL, "description": EMIT_DESCRIPTION,
+                                                 "parameters": schema}}
+        try:
+            msg = self._chat([{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                             tools=[tool], max_tokens=max_tokens,
+                             tool_choice={"type": "function", "function": {"name": EMIT_TOOL}})
+        except (RuntimeError, ValueError, requests.RequestException) as exc:
+            log.warning("llm_extract_failed", extra={"model": self.model, "error": str(exc)[:200]})
+            return None
+        for call in msg.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            if fn.get("name") != EMIT_TOOL:
+                continue
+            raw = fn.get("arguments")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.warning("llm_bad_extract_arguments", extra={"model": self.model})
+                    return None
+            return raw if isinstance(raw, dict) else None
         return None
 
 

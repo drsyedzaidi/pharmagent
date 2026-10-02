@@ -30,6 +30,7 @@ from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import collect_provenance
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.core.store import SecureWriteConflict, SessionStore
+from app.evidence import llm_access
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 from app.tools.builtins import default_registry
 from app.tools.data_tools import _read as _read_dataset
@@ -71,6 +72,7 @@ class Orchestrator:
                  audit_security: AuditSecurity | None | object =
                  _AUDIT_SECURITY_FROM_SETTINGS) -> None:
         self.llm = llm or get_llm()
+        llm_access.set_llm(self.llm)
         self.registry = registry or default_registry()
         self.supervisor = Supervisor(self.llm)
         self.clock = clock or _iso_clock
@@ -99,6 +101,7 @@ class Orchestrator:
         """Swap the routing/tool-selection model at runtime (UI provider switch).
         Tools, state and audit are untouched — the LLM only decides what to call."""
         self.llm = llm
+        llm_access.set_llm(llm)
         self.supervisor = Supervisor(llm)
 
     def session_lock(self, sid: str) -> threading.RLock:
