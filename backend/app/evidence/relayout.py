@@ -14,12 +14,15 @@ child (the fair parse queue, the session id) and writes ONLY the sidecar, under 
   a reason, and the reviewer compares each value with the PDF itself.
 
 ``layout_info`` is the per-source status the ledger exposes: ``ready``, ``missing``, ``text_changed``,
-``unreadable``. Idempotent: a ``ready`` source is not parsed again. The marker is content-level (keyed by
-sha256 and parser) like the cache it describes.
+``unreadable``. Idempotent: a ``ready`` source is not parsed again, and a refused one is not parsed again
+until the stored parse cache changes (the marker carries the cache's stat key), so repeated calls cost one
+parse. The marker is content-level (keyed by sha256 and parser) like the cache it describes. A reason is
+always a fixed sentence: exception text and server paths go to the log, never to the marker or the listing.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -30,17 +33,22 @@ from typing import Any
 from app.evidence import ingest, parse_sandbox
 from app.evidence.models import Source, now_iso, sha256_text
 from app.evidence.parse import PARSER_NAME
-from app.evidence.parse_sandbox import ParseBusyError
+from app.evidence.parse_guard import ParseLimitError
+from app.evidence.parse_sandbox import ParseAbortedError, ParseBusyError
 
 STATUSES = ("ready", "missing", "text_changed", "unreadable")
 OUTCOMES = ("rebuilt", "unchanged", "text_changed", "unreadable")
 MAX_BULK = 10                         # sources rebuilt per bulk call (each is a full parse)
-STATUS_LRU = 64
+STATUS_LRU = 4096                     # >= a session's 200-source cap for many sessions (tuples of a few bytes)
 REASON_MISSING = "Page positions were not stored when this source was parsed."
 REASON_TEXT_CHANGED = ("The page text of this PDF now parses differently ({where}), so stored page positions "
                        "cannot be tied to the text the records cite. Upload the PDF to a new session, run "
                        "extraction there, and compare every value with the PDF itself.")
 REASON_FAILED_PARSE = "The original parse failed, so there is no page text to attach positions to."
+REASON_UNREADABLE_STORE = "The stored PDF or its parse cache cannot be read."
+REASON_REPARSE = "The PDF could not be parsed again ({why})."
+REASON_NO_MATCH = "The re-parsed page positions do not match the stored page text."
+log = logging.getLogger(__name__)
 _ok_cache: OrderedDict[tuple[Any, ...], bool] = OrderedDict()
 _ok_lock = threading.Lock()
 _sha_locks: dict[str, threading.Lock] = {}
@@ -186,8 +194,17 @@ def _sha_lock(sha: str) -> threading.Lock:
         return _sha_locks.setdefault(sha, threading.Lock())
 
 
+def _pages_stat(src: Source) -> list[int] | None:
+    """[mtime_ns, size] of the stored parse cache: what a recorded refusal was made against."""
+    try:
+        return list(_stat_key(Path(src.parse_path))[1:])
+    except OSError:
+        return None
+
+
 def _record(src: Source, status: str, reason: str) -> None:
-    body = {"sha256": src.sha256, "parser": PARSER_NAME, "status": status, "reason": reason, "at": now_iso()}
+    body = {"sha256": src.sha256, "parser": PARSER_NAME, "status": status, "reason": reason, "at": now_iso(),
+            "pages_stat": _pages_stat(src)}
     write_atomic(marker_file(src), json.dumps(body).encode("utf-8"))
 
 
@@ -210,16 +227,41 @@ def _refuse(src: Source, status: str, reason: str, doc: dict[str, Any] | None) -
     return _outcome(src, status, reason, doc)
 
 
+def _why_not_parsed(exc: Exception) -> str:
+    """A fixed phrase for a failed re-parse; the exception itself (it may carry paths) goes to the log."""
+    log.info("layout rebuild: re-parse failed (%s): %s", type(exc).__name__, str(exc)[:300])
+    if isinstance(exc, ParseAbortedError):
+        return "the parse was stopped at its time or memory limit"
+    if isinstance(exc, ParseLimitError):
+        return "the PDF is over a parse limit"
+    if isinstance(exc, FileNotFoundError):
+        return "the stored PDF file is missing"
+    return "the parser could not read it"
+
+
+def _remembered(src: Source) -> dict[str, Any] | None:
+    """The recorded refusal of this PDF and parser while the stored parse cache is the one it was made
+    against (an older marker without the stat key, or a rewritten cache, is not trusted)."""
+    mark = _marker(src)
+    stat = _pages_stat(src)
+    if mark is None or stat is None or mark.get("pages_stat") != stat:
+        return None
+    return mark
+
+
 def rebuild_layout(src: Source, session_id: str) -> dict[str, Any]:
     """Rebuild *src*'s layout sidecar (module docstring). Returns the outcome dict; ParseBusyError (no
     parse slot) propagates and nothing is recorded. Writes nothing but the sidecar and its status marker."""
     with _sha_lock(src.sha256):
         if src.parse_status != "failed" and _sidecar_ok(src):
             return _outcome(src, "unchanged", None, _read_json(Path(src.parse_path)))
+        if src.parse_status != "failed" and (mark := _remembered(src)) is not None:
+            return _outcome(src, mark["status"], str(mark.get("reason") or ""), _read_json(Path(src.parse_path)))
         try:
             stored = ingest.load_pages(src)
         except (OSError, ValueError) as exc:
-            return _refuse(src, "unreadable", f"The stored PDF or its parse cache cannot be read: {exc}", None)
+            log.info("layout rebuild: stored parse unreadable: %s", exc)
+            return _refuse(src, "unreadable", REASON_UNREADABLE_STORE, None)
         if src.parse_status == "failed" or "error" in stored:
             return _refuse(src, "unreadable", REASON_FAILED_PARSE, stored)
         try:
@@ -227,15 +269,13 @@ def rebuild_layout(src: Source, session_id: str) -> dict[str, Any]:
         except ParseBusyError:
             raise
         except Exception as exc:                  # encrypted, corrupt, over a limit, killed: not rebuildable
-            return _refuse(src, "unreadable", f"The PDF could not be parsed again ({type(exc).__name__}: "
-                           f"{str(exc)[:200]}).", stored)
+            return _refuse(src, "unreadable", REASON_REPARSE.format(why=_why_not_parsed(exc)), stored)
         layout = doc.pop("layout", None)
         where = first_difference(stored, doc)
         if where is not None:
             return _refuse(src, "text_changed", REASON_TEXT_CHANGED.format(where=where), stored)
         if not isinstance(layout, dict) or not _all_pages_bind(layout, stored):
-            return _refuse(src, "unreadable", "The re-parsed page positions do not match the stored page text.",
-                           stored)
+            return _refuse(src, "unreadable", REASON_NO_MATCH, stored)
         out = {**layout, "rebuilt_for": stored.get("parser")}
         write_atomic(layout_file(src), json.dumps(out, ensure_ascii=False).encode("utf-8"))
         marker_file(src).unlink(missing_ok=True)
@@ -245,3 +285,22 @@ def rebuild_layout(src: Source, session_id: str) -> dict[str, Any]:
 def pending_sources(sources: list[Source]) -> list[Source]:
     """Sources a bulk rebuild should try: no sidecar and no recorded reason it cannot be made."""
     return [s for s in sources if rebuildable(s)]
+
+
+# ------------------------------------------------------------- hand-over ---
+# The HTTP endpoint runs the (slow) rebuild first, outside the session lock, and then lets the audited
+# ``rebuild_source_layout`` tool call (which takes that lock) pick the finished outcome up instead of parsing
+# under the lock. Keyed by session and source; consumed once; the tool parses itself when nothing is waiting
+# (a call from chat).
+_handover: dict[tuple[str, str], dict[str, Any]] = {}
+_handover_lock = threading.Lock()
+
+
+def hand_over(session_id: str, source_id: str, outcome: dict[str, Any]) -> None:
+    with _handover_lock:
+        _handover[(session_id, source_id)] = outcome
+
+
+def take_handover(session_id: str, source_id: str) -> dict[str, Any] | None:
+    with _handover_lock:
+        return _handover.pop((session_id, source_id), None)

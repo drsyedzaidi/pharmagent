@@ -3,11 +3,11 @@ import type { ChangeEvent, DragEvent } from 'react';
 import { AlertTriangle, CheckCircle, FileText, Loader2, Upload, XCircle } from 'lucide-react';
 import { hhmm } from '../shell/format';
 import { evidenceUpload } from './api';
-import { errorMessage, fmtBytes, MAX_PDF_BYTES, PARSE_LABEL, shaPrefix } from './format';
+import { errorMessage, fmtBytes, MAX_PDF_BYTES, PARSE_LABEL, pagesText, shaPrefix } from './format';
 import { LayoutCell } from './LayoutCell';
 import { missingSources, rebuildAllLabel } from './layoutRebuild';
 import type { EvidenceSource, ParseStatus, UploadResponse } from './types';
-import { useRelayout } from './useRelayout';
+import type { RelayoutControls } from './useRelayout';
 
 type UploadState = 'queued' | 'uploading' | 'done' | 'duplicate' | 'error';
 interface UploadItem { key: string; name: string; size: number; state: UploadState; note: string }
@@ -37,21 +37,20 @@ function UploadIcon({ state }: { state: UploadState }) {
 /** Library tab: PDF drop zone (sequential uploads with per-file status) and the
  *  session's source list. Titles and filenames come from the document and are
  *  rendered as text only. */
-export function LibraryPanel({ sessionId, sources, disabled, onUploaded, onLayoutChanged }: {
+export function LibraryPanel({ sessionId, sources, disabled, relayout, onUploaded }: {
   sessionId: string;
   sources: EvidenceSource[];
   disabled: boolean;
+  /** The workspace's rebuild controls: one in-flight set and one result map for the Library and every record. */
+  relayout: RelayoutControls;
   /** Called once per batch after the last upload settles (refresh snapshot + state). */
   onUploaded: (last: UploadResponse | null) => void;
-  /** Called after each layout rebuild call settles (refresh snapshot + state: the audit entry). */
-  onLayoutChanged: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [licence, setLicence] = useState('');
   const [items, setItems] = useState<UploadItem[]>([]);
   const [running, setRunning] = useState(false);
-  const relayout = useRelayout(sessionId, onLayoutChanged);
   const missing = missingSources(sources);
 
   const patch = (key: string, p: Partial<UploadItem>) =>
@@ -75,7 +74,7 @@ export function LibraryPanel({ sessionId, sources, disabled, onUploaded, onLayou
         last = res;
         patch(item.key, res.duplicate
           ? { state: 'duplicate', note: `already in this session as ${res.source.id}` }
-          : { state: 'done', note: `${res.source.pages} pages · ${PARSE_LABEL[res.source.parse_status]}` });
+          : { state: 'done', note: `${pagesText(res.source.pages)} · ${PARSE_LABEL[res.source.parse_status]}` });
       } catch (e) {
         patch(item.key, { state: 'error', note: errorMessage(e) });
       }

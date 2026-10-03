@@ -258,8 +258,15 @@ fair parse queue under the session id) and writes ONLY the sidecar:
   is written to the cache: a marker `<sha256>.layout.status.json` records `text_changed` (the reason names the
   first differing field, e.g. `page 1 text`, and tells the reviewer to extract again on a new parse) or
   `unreadable`. The records of such a source keep the whole-page image and stay `compare_urgent`.
-- Idempotent: a `ready` source is not parsed (outcome `unchanged`). Outcomes: `rebuilt, unchanged,
+- Idempotent: a `ready` source is not parsed (outcome `unchanged`), and a refused one is not parsed again while the
+  stored `pages.json` is the one the refusal was made against (the marker carries its mtime and size; an older marker
+  without them, or a rewritten cache, is parsed again): repeated calls cost one parse. A reason is always a fixed
+  sentence: exception text and server paths go to the log, never to the marker or the listing. Outcomes: `rebuilt, unchanged,
   text_changed, unreadable`. A parse slot that stays busy is a 503 and records nothing.
+- The endpoint is admission-controlled (`relayout_limits.py`): one rebuild at a time per session and 12 per 60 s
+  (429 + Retry-After), 4 at once server-wide (503 + Retry-After), on its own 2-token worker limiter (not the upload
+  limiter, not the shared pool). The parse runs before, and outside, the session lock; the audited tool call then
+  takes the lock only to write its entry and reports the outcome handed over to it (`relayout.hand_over`).
 - The tool is on the `evidence` agent, not human-only (it only derives data). Each call is one audit entry:
   `rebuild_source_layout(<src_id>, outcome=<o>, sidecar_sha256=<64>, pages=<n>, page_text_sha256=<sha of the
   per-page hashes>)`, and `outputs_hash` binds the whole result including `page_text_sha256[]`.
@@ -361,8 +368,9 @@ review-gate change.
 
 - *Compare gate.* In the Records tab Approve stays unavailable (`aria-disabled`, still focusable, with a visible hint
   named by `aria-describedby`) until the reviewer ticks "I compared the value with the page image". Which tick
-  a record needs is derived from what the panel knows: the open record's page image (loaded, calm and located:
-  no tick; `compare_urgent`, an urgent flag on the record or an unlocated value: the image tick) and every unknown
+  a record needs is derived from what the panel knows: the open record's page image (a record with NO flags whose
+  image is loaded, located and explicitly `compare_urgent: false`: no tick; ANY flag on the record, `compare_urgent`
+  or anything missing from the meta, or an unlocated value: the image tick) and every unknown
   (the cited page is not open, the image failed or cannot be drawn: "I compared the value with the PDF itself", fail
   closed). While the image loads Approve is unavailable. The tick is held in React state only and is bound to the
   record id, value, literal, source page and the loaded image's sha256: another record, value, page or image
@@ -373,7 +381,9 @@ review-gate change.
   `Compared with the PDF itself: <reviewer reason>`, shown to the reviewer ("Will be recorded as") exactly as sent;
   the server limit of 500 characters (`extract_tools.MAX_REASON`, counted on the stripped text) includes the prefix, so
   the reason field stops 35 or 30 characters earlier and the hint says by how much a too-long text is over. Reject needs
-  no tick. Bulk approval offers only records that need no picture comparison, behind one tick "I compared every
+  no tick. While the image loads (also after a reload) the tick stays visible but disabled and Approve says why. The
+  decision controls of the open record sit directly under its page image. Bulk approval offers only unflagged,
+  verified records whose source has a ready layout (the rest are counted in the bar, with the reason), behind one tick "I compared every
   selected value with the PDF itself" composed into each record's own reason. The chat and the API are not gated.
 - *Layout rebuild.* The Library list shows each source's `layout_status` as an icon and words ("Page images
   ready", "Layout missing", "Text changed", "Unreadable"), a "Rebuild layout" button per missing source, and

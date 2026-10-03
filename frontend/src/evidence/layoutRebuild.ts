@@ -44,6 +44,15 @@ export function rebuildErrorText(e: unknown): string {
   return stop;
 }
 
+/** Whether the rebuild result is drawn under the source's layout notice. A refusal (text changed, unreadable)
+ *  is already said, in full, by the notice itself: repeating the outcome sentence under it would show it twice.
+ *  Running, failed and successful calls always show theirs; a screen reader still hears it (live region). */
+export function showOutcomeNote(status: LayoutStatus, item: RebuildItem | undefined): boolean {
+  if (!item) return false;
+  const refusal = item.phase === 'done' && (item.outcome === 'text_changed' || item.outcome === 'unreadable');
+  return !(refusal && status !== 'missing' && status !== 'ready');
+}
+
 /** Per-source state of a rebuild in the UI: running, finished (with the outcome) or failed. */
 export interface RebuildItem { phase: 'running' | 'done' | 'error'; outcome?: RelayoutOutcome; text: string }
 

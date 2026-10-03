@@ -5,6 +5,8 @@ __pycache__/
 backend/.venv/
 # data (uploads), DB & artifacts — sample_data/ is intentionally committed
 backend/data/
+# settings.data_dir is relative: a run with the repo root as cwd writes here
+/data/
 backend/pharmagent.db
 *.db
 # node (all frontends: frontend/, dashboard/, website/)

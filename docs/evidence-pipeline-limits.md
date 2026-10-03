@@ -39,7 +39,13 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
   `unreadable`. Every rebuild costs a full parse in the sandbox (up to 150 s, one slot) and bulk calls stop at
   10 sources; a busy parser is a 503 that records nothing. The rebuild proves the page text is unchanged, not
   that the boxes are right: they carry the same word-level and ink-check limits as a fresh parse. The status
-  marker of a refused rebuild is per PDF and parser version, so it applies to every session holding the PDF.
+  marker of a refused rebuild is per PDF and parser version, so it applies to every session holding the PDF, and
+  it is remembered until the stored parse cache changes: a PDF killed once at a time or memory limit stays
+  `unreadable` until it is parsed again in a new session. Rebuilds are rate-limited per session and server-wide
+  (`relayout_limits.py`).
+- **Re-saving the template re-proposes every claim.** Records are keyed on the template hash. A new proposal that
+  repeats a claim decided under an earlier template carries a `decided_earlier` flag naming that decision
+  (`earlier_decisions.py`); nothing is carried over or decided for the reviewer.
 - **Pre-existing, not fixed here:** pdfplumber's cropbox is wrong for `/Rotate 180` and `270` combined with
   a CropBox (a probe page reports `hidden_chars` 20 and drops visible lines as off-crop, text read
   mirrored). It fails closed (`hidden_text`) but loses text; the layout does not inherit it (pdfium
@@ -71,7 +77,8 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
 - **Limits.** 25 MB and 300 pages per PDF. Password-protected PDFs are refused; owner-password
   (print-locked) PDFs are accepted.
 - **Error headers come from a deny-list.** The global handler forwards the headers of any raised
-  `HTTPException` except a fixed unsafe set (`app/response_headers.py`); a route that needs a header in that
+  `HTTPException` whose name is an RFC 9110 token and whose value is latin-1 without control characters (anything
+  else is dropped, never a 500), except a fixed unsafe set (`app/response_headers.py`); a route that needs a header in that
   set (a cookie, a CORS header) cannot set it through an exception and must build its own response.
 
 ## Later phases

@@ -1,8 +1,8 @@
 """Layout rebuild endpoints (mounted on the evidence router, same prefix and auth):
 
 ``POST .../sources/{source_id}/relayout`` rebuilds one source's page-position sidecar now (the parse runs
-on the upload worker limiter, not the shared threadpool); ``POST .../relayout`` rebuilds every source of
-the session that lacks one, at most MAX_BULK per call, one at a time through the parse queue, as a
+on its own worker limiter and admission limits, outside the session lock); ``POST .../relayout`` rebuilds
+every source of the session that lacks one, at most MAX_BULK per call, one at a time through the parse queue, as a
 JobManager job (poll /jobs/{id}); the response says how many were picked and how many remain.
 Each rebuild is one audited ``rebuild_source_layout`` tool call. A source of another session is 404.
 """
@@ -13,17 +13,33 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app.evidence import relayout, upload_limits
+from app.evidence import relayout, relayout_limits
 from app.evidence.config_tools import source_row
-from app.evidence.routes import AGENT, http_error, owned_source, run_tool
+from app.evidence.routes import AGENT, http_error, owned_source
 from app.evidence.store import get_store
 
 JOB_KIND = "evidence_relayout"
 TOOL = "rebuild_source_layout"
 
 
+def _rebuild(orch: Any, sid: str, source_id: str, actor: str) -> dict[str, Any]:
+    """The rebuild runs HERE, outside the session lock (it can take minutes); the audited tool call then
+    takes the lock only to write its entry, and reports the outcome handed over to it."""
+    src = get_store().get_source(source_id)
+    if src is None or src.session_id != sid:
+        raise ValueError(f"unknown evidence source: {source_id}")
+    relayout.hand_over(sid, source_id, relayout.rebuild_layout(src, sid))
+    try:
+        return orch.run_tool(sid, TOOL, AGENT, {"source_id": source_id}, actor=actor)
+    finally:
+        relayout.take_handover(sid, source_id)           # nothing left behind if the tool never ran
+
+
 def _one(orch: Any, sid: str, source_id: str, actor: str) -> dict[str, Any]:
-    out = run_tool(orch, sid, TOOL, {"source_id": source_id}, actor)
+    try:
+        out = _rebuild(orch, sid, source_id, actor)
+    except Exception as exc:          # mapped, never swallowed (a busy parser is a 503 that records nothing)
+        raise http_error(exc) from exc
     src = get_store().get_source(source_id)
     return {"source": source_row(src) if src else None, **out["result"], "summary": out["summary"]}
 
@@ -33,7 +49,7 @@ def _bulk(orch: Any, sid: str, source_ids: list[str], actor: str) -> dict[str, A
     results: list[dict[str, Any]] = []
     for source_id in source_ids:
         try:
-            out = orch.run_tool(sid, TOOL, AGENT, {"source_id": source_id}, actor=actor)
+            out = _rebuild(orch, sid, source_id, actor)
             results.append({"source_id": source_id, **out["result"]})
         except Exception as exc:
             results.append({"source_id": source_id, "outcome": "error", "reason": http_error(exc).detail})
@@ -50,7 +66,8 @@ def add_layout_routes(router: APIRouter, owned_session: Callable[..., Any], acto
     async def relayout_source(sid: str, source_id: str, sess=Depends(owned_session),
                               actor: str = Depends(actor_id)) -> dict:
         src = owned_source(sid, source_id)
-        return await upload_limits.run_blocking(_one, get_orch(), sid, src.id, actor)
+        async with relayout_limits.relayout_slot(sid):
+            return await relayout_limits.run_blocking(_one, get_orch(), sid, src.id, actor)
 
     @router.post("/relayout")
     def relayout_all(sid: str, sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:

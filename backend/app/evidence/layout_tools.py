@@ -32,7 +32,7 @@ def rebuild_source_layout(state: PharmState, ctx: ToolContext, args: dict[str, A
     src = get_store().get_source(source_id)
     if src is None or src.session_id != state.session_id:
         raise ValueError(f"unknown evidence source: {source_id}")
-    out = relayout.rebuild_layout(src, state.session_id)
+    out = relayout.take_handover(state.session_id, src.id) or relayout.rebuild_layout(src, state.session_id)
     return ToolResult(
         summary=SUMMARY[out["outcome"]].format(name=src.filename),
         result=out,

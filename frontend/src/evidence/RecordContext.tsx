@@ -1,13 +1,14 @@
 import { OctagonAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { evidencePage } from './api';
 import { errorMessage } from './format';
 import { contextText, highlight, markScrollTop } from './highlight';
-import { imageAnnouncement, imageUnavailableText, urgentFlagCodes } from './imageGeometry';
+import { compareLabel, imageAnnouncement, imageUnavailableText, urgentFlagCodes } from './imageGeometry';
 import { PageImage } from './PageImage';
 import type { EvidenceSource, PageText, ParsedTable, RecordRow, TableCell } from './types';
 import type { PageImageView } from './usePageImage';
-import { useRelayout } from './useRelayout';
+import type { RelayoutControls } from './useRelayout';
 
 /** The marked snippet, with the verified literal (when present in it) in bold. */
 function Hit({ hit, literal }: { hit: string; literal: string | null }) {
@@ -49,17 +50,20 @@ function CellGrid({ table, cell, literal }: { table: ParsedTable; cell: TableCel
  *  guessed place in the text). Page text is untrusted document content and is rendered as
  *  text nodes only. Opened by the reviewer, it takes focus on its heading; Close or Escape
  *  hands focus back (onClose). */
-export function RecordContext({ sessionId, record, filename, view, source, autoFocus = false, onClose, onLayoutChanged }: {
+export function RecordContext({ sessionId, record, filename, view, source, rebuild, decide, autoFocus = false, onClose }: {
   sessionId: string;
   record: RecordRow;
   filename: string;
   /** The record's page image, owned by the records panel (the compare gate reads it too). */
   view: PageImageView;
   source: EvidenceSource | null;
+  /** The workspace's rebuild controls (shared with the Library list). */
+  rebuild: RelayoutControls;
+  /** The record's decision controls, drawn right under the page image so the picture, the compare tick and
+   *  Approve are on screen together (the snippet and page text below them are for reference). */
+  decide?: ReactNode;
   autoFocus?: boolean;
   onClose?: () => void;
-  /** A layout rebuild settled: the ledger (the source's layout status) is read again. */
-  onLayoutChanged: () => void;
 }) {
   const loc = record.locator;
   const [page, setPage] = useState<PageText | null>(null);
@@ -67,9 +71,9 @@ export function RecordContext({ sessionId, record, filename, view, source, autoF
   const boxRef = useRef<HTMLPreElement>(null);
   const markRef = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLHeadingElement>(null);
-  const rebuild = useRelayout(sessionId, onLayoutChanged);
   // Urgency is known from the record's own flags, so it survives an image that never loads.
   const urgent = urgentFlagCodes(record.flags).length > 0;
+  const decided = record.status !== 'proposed';
 
   useEffect(() => {
     let alive = true;
@@ -121,8 +125,8 @@ export function RecordContext({ sessionId, record, filename, view, source, autoF
       <div className="ev-context-head">
         <h3 ref={headRef} tabIndex={-1}>
           Cited page for {title} = <span className="mono">{record.value}</span>{record.unit ? ` ${record.unit}` : ''}
-          {(urgent || view.ready?.meta.compare_urgent) && (
-            <span className="ev-compare-label"><OctagonAlert size={12} aria-hidden="true" /> Compare before approving</span>
+          {(urgent || record.flags.length > 0 || view.ready?.meta.compare_urgent) && (
+            <span className="ev-compare-label"><OctagonAlert size={12} aria-hidden="true" /> {compareLabel(decided, urgent)}</span>
           )}
         </h3>
         {onClose && (
@@ -134,10 +138,11 @@ export function RecordContext({ sessionId, record, filename, view, source, autoF
       <p className="ev-prov">{filename} · {parts.join(' · ')}</p>
       <p className="sr-only" role="status">
         {current ? `Page ${loc.page} loaded for ${title}. ${where}` : error ? '' : `Loading page ${loc.page}`}
-        {view.ready && !view.failure?.broken ? ` ${imageAnnouncement(view.ready.meta)}` : ''}
-        {view.unavailable ? ` ${imageUnavailableText(urgent)}` : ''}
+        {view.ready && !view.failure?.broken ? ` ${imageAnnouncement(view.ready.meta, decided)}` : ''}
+        {view.unavailable ? ` ${imageUnavailableText(urgent, decided)}` : ''}
       </p>
       <PageImage view={view} record={record} filename={filename} source={source} rebuild={rebuild} onRebuilt={view.reload} />
+      {decide}
       <p className="ev-snippet"><span className="ev-label">Cited snippet</span> <span className="mono">{loc.snippet}</span></p>
       {error && <p className="ev-problem" role="alert">Could not load page {loc.page}: {error}</p>}
       {!current && !error && <p className="ev-empty">Loading page {loc.page}…</p>}

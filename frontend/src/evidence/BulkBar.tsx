@@ -5,8 +5,10 @@ import { LABEL_PDF, MAX_REASON, PDF_PREFIX } from './compareGate';
 /** Bulk approval of verified, unflagged records. Records that need their picture compared are not offered
  *  here (open and approve them one by one); the others share one tick for a comparison with the PDF itself,
  *  composed into each record's own reason. Approve is `aria-disabled` while blocked, with a visible hint. */
-export function BulkBar({ eligible, picked, bulk, isTicked, reason, disabled, onToggleAll, onReason, onTick, onApprove }: {
+export function BulkBar({ eligible, leftOut, picked, bulk, isTicked, reason, disabled, onToggleAll, onReason, onTick, onApprove }: {
   eligible: number;
+  /** Why verified, unflagged records are not offered (their PDF has no usable page layout); '' when none. */
+  leftOut: string;
   picked: number;
   bulk: BulkApproval;
   isTicked: boolean;
@@ -47,6 +49,7 @@ export function BulkBar({ eligible, picked, bulk, isTicked, reason, disabled, on
             Records covered by the tick are recorded as: <q>{PDF_PREFIX}{reason.trim()}</q>
           </p>
         )}
+        {leftOut && <p className="ev-gate-hint">{leftOut}</p>}
       </div>
     </>
   );

@@ -50,12 +50,14 @@ FLAG_CENSORED_VALUE = "censored_value"               # '<0.5', '≤1.0', '~2': n
 FLAG_SCALED_HEADER = "scaled_header"                 # header / unit carries a multiplier ('×10³') (error)
 FLAG_DECIMAL_STYLE_AMBIGUOUS = "decimal_style_ambiguous"   # '3,412' read on weak style evidence (error)
 FLAG_ESTIMATE_OUTSIDE_CI = "estimate_outside_ci"     # point estimate outside its own interval
+FLAG_DECIDED_EARLIER = "decided_earlier"             # the same claim was approved / rejected under an earlier template
 FLAG_CODES = (FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N, FLAG_DUPLICATE, FLAG_UNIT_MISMATCH,
               FLAG_UNIT_MISSING, FLAG_SE_NONPOSITIVE, FLAG_CI_INVERTED, FLAG_COMPOSITE_CELL,
               FLAG_TABLE_LOW_CONFIDENCE, FLAG_VERIFY_FAIL, FLAG_NON_NUMERIC, FLAG_SUSPICIOUS_INSTRUCTION,
               FLAG_UNIT_SOURCE_MISMATCH, FLAG_UNIT_UNVERIFIED, FLAG_HIDDEN_TEXT, FLAG_SUPERSEDED,
               FLAG_GLYPH_MISMATCH, FLAG_GLYPH_UNVERIFIED, FLAG_OVERLAPPING_GLYPHS, FLAG_CENSORED_VALUE,
-              FLAG_SCALED_HEADER, FLAG_DECIMAL_STYLE_AMBIGUOUS, FLAG_ESTIMATE_OUTSIDE_CI, FLAG_GLYPH_INK)
+              FLAG_SCALED_HEADER, FLAG_DECIMAL_STYLE_AMBIGUOUS, FLAG_ESTIMATE_OUTSIDE_CI, FLAG_GLYPH_INK,
+              FLAG_DECIDED_EARLIER)
 FLAG_SEVERITIES, FLAG_ORIGINS = ("warn", "error"), ("script", "llm")
 
 

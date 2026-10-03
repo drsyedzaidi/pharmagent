@@ -5072,7 +5072,7 @@ export default function App() {
               <DatasetProfile items={profileItems} />
             </ResultSection>
           )}
-          {messages.length === 0 && (
+          {messages.length === 0 && !showEvidence && (      // the open Evidence workspace is the page, not an empty state
             <div className="empty">
               <FlaskConical size={36} />
               <span>Upload a PK dataset and choose a workflow.</span>

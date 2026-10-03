@@ -7,6 +7,15 @@ export interface ImageSource {
 }
 export interface LoadedImage { meta: PageImageMeta; url: string }
 
+/** The image on screen counts as the current one only when it is this record's, at the zoom asked for AND from
+ *  the load attempt now wanted: a reload (retry, after a layout rebuild) makes the old picture stale at once,
+ *  so the gate waits for the new meta instead of trusting the one from before. */
+export function isFreshImage(
+  own: { meta: { zoom: number }; attempt: number } | null, zoom: number, attempt: number,
+): boolean {
+  return own !== null && own.meta.zoom === zoom && own.attempt === attempt;
+}
+
 const isChanged = (e: unknown): boolean => (e as { status?: number } | null)?.status === 409;
 
 /** Meta then image. A 409 (the raster changed between the two calls, e.g. a cache eviction) retries once

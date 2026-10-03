@@ -12,9 +12,13 @@ that is unsafe or wrong on a response the handler builds:
 * ``Access-Control-*``: CORS policy belongs to the middleware alone;
 * ``X-Request-ID``: owned by the request-context middleware.
 
-A name or value containing control characters is dropped too (header splitting)."""
+A name that is not an RFC 9110 token (a space, a colon, a control character: ``"X-Request-Id "`` is not
+``X-Request-ID`` to the deny-list but is to some peers) is dropped, and so is a value with a control character
+(header splitting) or a character outside latin-1 (it cannot be put on the wire: dropping it keeps the
+original status instead of turning the error into a 500)."""
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 DENIED = frozenset({
@@ -26,8 +30,21 @@ DENIED = frozenset({
 DENIED_PREFIXES = ("access-control-",)
 
 
-def _clean(text: str) -> bool:
-    return all(c == "\t" or (" " <= c and c != "\x7f") for c in text)
+_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
+def _valid_name(name: str) -> bool:
+    return _TOKEN.fullmatch(name) is not None
+
+
+def _valid_value(value: str) -> bool:
+    if not all(c == "\t" or (" " <= c and c != "\x7f") for c in value):
+        return False
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def safe_exception_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -35,9 +52,9 @@ def safe_exception_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for name, value in (headers or {}).items():
         low = name.lower()
-        if not name or low in DENIED or low.startswith(DENIED_PREFIXES):
+        if not _valid_name(name) or low in DENIED or low.startswith(DENIED_PREFIXES):
             continue
-        if not (_clean(name) and _clean(str(value))):
+        if not _valid_value(str(value)):
             continue
         out[name] = str(value)
     return out

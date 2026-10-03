@@ -1,5 +1,5 @@
 import { AlertTriangle, Loader2, OctagonAlert } from 'lucide-react';
-import { rebuildName } from './layoutRebuild';
+import { rebuildName, showOutcomeNote } from './layoutRebuild';
 import { RebuildNote } from './LayoutCell';
 import type { EvidenceSource } from './types';
 import type { RelayoutControls } from './useRelayout';
@@ -42,7 +42,7 @@ export function LayoutFallback({ source, rebuild, onRebuilt }: {
                 {running ? <><Loader2 size={12} className="spin" aria-hidden="true" /> Rebuilding…</> : 'Rebuild layout for this source'}
               </button>
             )}
-            {item && <RebuildNote item={item} />}
+            {item && showOutcomeNote(status, item) && <RebuildNote item={item} />}
           </div>
         </div>
       ) : item && <div className="ev-fallback-done"><RebuildNote item={item} /></div>}

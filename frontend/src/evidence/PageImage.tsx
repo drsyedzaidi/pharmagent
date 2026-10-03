@@ -2,7 +2,7 @@ import { AlertTriangle, OctagonAlert } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef } from 'react';
 import { FlagChip } from './badges';
 import {
-  ZOOM_LABEL, ZOOM_MODES, altText, captionText, imageUnavailableText, mergeNotices, nonAsciiNames, rectStyle,
+  ZOOM_LABEL, ZOOM_MODES, altText, captionText, defaultZoomMode, imageUnavailableText, mergeNotices, nonAsciiNames, rectStyle,
   scrollToCenter, unionRect, urgentFlagCodes, visibleRects,
 } from './imageGeometry';
 import { LayoutFallback } from './LayoutFallback';
@@ -101,6 +101,9 @@ export function PageImage({ view, record, filename, source, rebuild, onRebuilt }
   const meta = ready?.meta ?? null;
   const drawn = ready !== null && !failure?.broken;     // a picture the browser could not draw is never shown
   const layoutOff = source !== null && source.layout_status !== 'ready';
+  const decided = record.status !== 'proposed';
+  // A whole page with no located value: the value card goes above the picture so the viewer gets the width.
+  const whole = meta ? defaultZoomMode(meta) === 'actual' : layoutOff;
 
   // The Retry button unmounts when the retry starts: park focus on the section first, then hand it to the
   // viewer (loaded) or back to Retry (failed again), so keyboard focus never falls to <body>.
@@ -144,10 +147,10 @@ export function PageImage({ view, record, filename, source, rebuild, onRebuilt }
   const serverNotices = layoutOff ? (meta?.notices ?? []).filter(n => n.code !== 'value_not_located') : (meta?.notices ?? []);
   return (
     <div className="ev-compare-host">
-    <section className="ev-compare" ref={sectionRef} tabIndex={-1} aria-label="Compare the extracted value with the page image">
+    <section className={`ev-compare${whole ? ' ev-compare-whole' : ''}`} ref={sectionRef} tabIndex={-1} aria-label="Compare the extracted value with the page image">
       <ValueCard record={record} />
       <div className="ev-imagecol">
-        <Notices notices={mergeNotices(urgent, serverNotices)} record={record} codes={meta ? meta.flags : urgentCodes} />
+        <Notices notices={mergeNotices(urgent, serverNotices, decided)} record={record} codes={meta ? meta.flags : urgentCodes} />
         {source && <LayoutFallback source={source} rebuild={rebuild} onRebuilt={onRebuilt} />}
         <div className="ev-imgtools" role="group" aria-label="Page image zoom">
           {ZOOM_MODES.map(m => (
@@ -160,7 +163,7 @@ export function PageImage({ view, record, filename, source, rebuild, onRebuilt }
           <p className="ev-problem" role="alert">
             <AlertTriangle size={14} aria-hidden="true" />
             <span>Could not load the page image: {/[.!?]$/.test(failure.message) ? failure.message : `${failure.message}.`}{' '}
-              {stale && `Still showing the ${meta?.dpi} dpi image.`}{unavailable && imageUnavailableText(urgent)}</span>
+              {stale && `Still showing the ${meta?.dpi} dpi image.`}{unavailable && imageUnavailableText(urgent, decided)}</span>
             <button type="button" ref={retryRef} className="btn btn-ghost" onClick={onRetry}>Retry</button>
           </p>
         )}

@@ -6,6 +6,9 @@ import type {
 } from './types';
 
 /** Client-side mirror of the backend upload cap (ingest.MAX_BYTES). */
+/** "1 page", "12 pages". */
+export const pagesText = (n: number): string => `${n} page${n === 1 ? '' : 's'}`;
+
 export const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const FIELD_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 

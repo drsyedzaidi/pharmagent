@@ -47,7 +47,7 @@ export function Composer({
         <textarea
           id="ask"
           rows={1}
-          placeholder="Ask the agents, e.g. refit λz for a subject with its last four points"
+          placeholder="Ask the agents, e.g. refit λz for subject 3"
           value={value}
           onChange={e => onChange(e.target.value)}
           onKeyDown={onKeyDown}

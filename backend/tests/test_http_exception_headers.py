@@ -99,3 +99,29 @@ def test_busy_parser_503_keeps_retry_after_through_the_global_handler(client):
     finally:
         _unmount(PATH + "_busy")
     assert res.status_code == 503 and res.headers["Retry-After"] == "7"
+
+
+def test_invalid_header_names_cannot_smuggle_a_denied_header():
+    """A trailing space, a colon or any non-token character in the NAME is dropped: ``'X-Request-Id '`` must
+    not get past the deny-list as a different spelling of a denied header."""
+    out = safe_exception_headers({"X-Request-Id ": "evil", "Set-Cookie ": "a=b", "Content-Length ": "1",
+                                  "Bad Name:": "x", "Bad:Name": "x", " Retry-After": "5", "Retry-After": "3"})
+    assert out == {"Retry-After": "3"}
+
+
+def test_header_values_that_are_not_latin_1_are_dropped_not_a_500():
+    out = safe_exception_headers({"X-A": "caf€", "X-B": "ok", "Retry-After": "2"})
+    assert out == {"X-B": "ok", "Retry-After": "2"}
+
+
+def test_non_latin_1_value_still_returns_the_original_status(client):
+    def odd():
+        raise HTTPException(503, "busy", headers={"X-A": "caf€", "Retry-After": "4"})
+
+    _mount_first(PATH + "_odd", odd)
+    try:
+        res = client.get(PATH + "_odd")
+    finally:
+        _unmount(PATH + "_odd")
+    assert res.status_code == 503 and res.json()["error"]["code"] == "http_503"
+    assert res.headers["Retry-After"] == "4" and "x-a" not in res.headers

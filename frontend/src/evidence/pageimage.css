@@ -66,6 +66,13 @@
   .ev-imgtools { grid-column: 2; grid-row: 1; align-self: start; }
   .ev-imagecol > :not(.ev-imgtools) { grid-column: 1 / -1; margin-top: 8px; }
 }
+/* A whole page with no located value (a source without layout): the value card sits above the picture as one
+   compact row, so the viewer gets the full width and the table text can be read at Actual size. */
+@container (width >= 540px) {
+  .ev-compare.ev-compare-whole { grid-template-columns: minmax(0, 1fr); }
+  .ev-compare-whole .ev-valuecard { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 8px 12px; }
+  .ev-compare-whole .ev-valuecard .ev-bigvalue { font-size: 18px; }
+}
 /* ── layout fallback (a whole page because the source has no stored layout) ── */
 .ev-fallback.warn { color: var(--text-h); }
 .ev-fallback-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }

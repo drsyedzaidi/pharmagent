@@ -33,7 +33,7 @@ export type FlagCode =
   | 'se_nonpositive' | 'ci_inverted' | 'composite_cell' | 'table_low_confidence' | 'verify_fail'
   | 'non_numeric' | 'suspicious_instruction_text' | 'unit_source_mismatch' | 'unit_unverified' | 'hidden_text'
   | 'superseded' | 'glyph_text_mismatch' | 'glyph_unverified' | 'overlapping_glyphs' | 'censored_value'
-  | 'scaled_header' | 'decimal_style_ambiguous' | 'estimate_outside_ci' | 'glyph_ink_mismatch';
+  | 'scaled_header' | 'decimal_style_ambiguous' | 'estimate_outside_ci' | 'glyph_ink_mismatch' | 'decided_earlier';
 
 /** Result-card markers the evidence tools push into the transcript (S9 renders them). */
 export type EvidenceMarker = '__EVIDENCE_SCREEN__' | '__EVIDENCE_RECORDS__' | '__EVIDENCE_DATASET__';

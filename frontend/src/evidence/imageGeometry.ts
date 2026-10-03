@@ -29,6 +29,13 @@ export function visibleRects(meta: PageImageMeta): ImageRect[] {
 
 export const serverZoom = (mode: ZoomMode): 1 | 2 => (mode === 'larger' ? 2 : 1);
 
+/** The zoom a record opens in when the reviewer has not chosen one: Fit, except for a whole page with no
+ *  located value (a source without layout), where Fit draws the table text a few pixels high and the cited
+ *  number cannot be read: Actual size. Both use the same server raster, so it is a client-side choice only. */
+export function defaultZoomMode(meta: Pick<PageImageMeta, 'resolved' | 'precision'> | null): ZoomMode {
+  return meta !== null && (meta.resolved !== true || meta.precision === 'page') ? 'actual' : 'fit';
+}
+
 /** The next zoom mode one step up (+1) or down (-1), saturating at either end. */
 export function stepMode(mode: ZoomMode, dir: 1 | -1): ZoomMode {
   const i = ZOOM_MODES.indexOf(mode) + dir;
@@ -58,10 +65,11 @@ export function captionText(meta: PageImageMeta): string {
 }
 
 /** The sentence added to the polite live region when an image arrives. */
-export function imageAnnouncement(meta: PageImageMeta): string {
+export function imageAnnouncement(meta: PageImageMeta, decided = false): string {
   const where = !meta.resolved || meta.precision === 'page' ? 'whole page, cited value not located'
     : meta.precision === 'line' ? 'cited row outlined' : 'cited value outlined';
-  return `${meta.compare_urgent ? 'Compare before approving. ' : ''}Page image loaded, ${meta.dpi} dpi, ${where}.`;
+  return `${meta.compare_urgent ? (decided ? 'This page needs a comparison. ' : 'Compare before approving. ') : ''}`
+    + `Page image loaded, ${meta.dpi} dpi, ${where}.`;
 }
 
 const NAMES: Record<number, string> = {
@@ -109,18 +117,30 @@ const DISAGREE_NOTICE: ImageNotice = {
   text: 'Text layer and page may disagree: compare the image with the extracted value before approving.',
 };
 
+/** A notice for a record that is already approved or rejected: the same facts, without telling the reviewer
+ *  to compare "before approving" a decision that has been made. */
+export const settledText = (text: string): string => text.replace(/ before approving(?=[.:]|$)/i, '');
+
 /** The notices to show: an urgent record always carries the disagree notice (from its own flags), the
- *  server's notices follow, and a code is never shown twice. */
-export function mergeNotices(urgent: boolean, server: readonly ImageNotice[]): ImageNotice[] {
+ *  server's notices follow, and a code is never shown twice. A decided record gets the settled wording. */
+export function mergeNotices(urgent: boolean, server: readonly ImageNotice[], decided = false): ImageNotice[] {
   const all = urgent ? [DISAGREE_NOTICE, ...server] : [...server];
-  return all.filter((n, i) => all.findIndex(o => o.code === n.code) === i);
+  return all.filter((n, i) => all.findIndex(o => o.code === n.code) === i)
+    .map(n => (decided ? { ...n, text: settledText(n.text) } : n));
 }
 
 /** What the reviewer is told when no page image can be shown. */
-export function imageUnavailableText(urgent: boolean): string {
-  return urgent
+export function imageUnavailableText(urgent: boolean, decided = false): string {
+  const text = urgent
     ? 'Image unavailable: compare with the PDF itself before approving. The text layer may disagree with the page.'
     : 'Image unavailable: compare with the PDF itself before approving.';
+  return decided ? settledText(text) : text;
+}
+
+/** The badge in the cited-page heading: an instruction while a decision is open, a statement once it is made. */
+export function compareLabel(decided: boolean, urgent: boolean): string {
+  if (!decided) return 'Compare before approving';
+  return urgent ? 'Text layer and page may disagree' : 'Page needs a comparison with the PDF';
 }
 
 export interface Box { x: number; y: number; w: number; h: number }

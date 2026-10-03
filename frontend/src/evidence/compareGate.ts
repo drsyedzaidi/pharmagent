@@ -3,7 +3,10 @@
  *
  *  This is a UI control, not a server rule: the server, the tools and the review gate are untouched. The
  *  acknowledgement is recorded in the audit trail by composing the decision reason ("Compared with page
- *  image 1a2b3c4d: <reason>"); the server only ever sees a reason string, capped at MAX_REASON. */
+ *  image 1a2b3c4d: <reason>"); the server only ever sees a reason string, capped at MAX_REASON.
+ *
+ *  Fail closed: the only record that needs no tick is one with NO flags at all whose image arrived, was located
+ *  and said (explicitly) that it needs no comparison. A flagged record is never calm, whatever its flag. */
 import { urgentFlagCodes } from './imageGeometry.ts';
 import type { QcFlag } from './types';
 
@@ -31,19 +34,22 @@ export interface ViewLike {
   phase: 'loading' | 'ready' | 'error';
   ready: { meta: { image_sha256: string; compare_urgent: boolean; resolved: boolean; precision: string } } | null;
   failure: { broken?: boolean } | null;
+  /** The view's own verdict: a failure left no picture the reviewer can rely on. */
+  unavailable?: boolean;
 }
 
 /** Image facts of the open record: no view is a closed page; a load in flight is pending; a picture the
  *  reviewer can actually see (including an older zoom after a failed zoom change) is ready; the rest is
- *  unavailable. */
+ *  unavailable. The meta is untyped JSON at runtime: only an explicit `compare_urgent: false` and an explicit
+ *  `resolved: true` count as calm, anything missing or odd is urgent / not located. */
 export function factsFromView(view: ViewLike | null): ImageFacts {
   if (view === null) return { state: 'closed' };
   if (view.phase === 'loading') return { state: 'loading' };
-  if (view.ready === null || view.failure?.broken === true) return { state: 'unavailable' };
+  if (view.ready === null || view.failure?.broken === true || view.unavailable === true) return { state: 'unavailable' };
   const { meta } = view.ready;
   return {
-    state: 'ready', sha256: meta.image_sha256, compareUrgent: meta.compare_urgent,
-    located: meta.resolved && meta.precision !== 'page',
+    state: 'ready', sha256: meta.image_sha256, compareUrgent: meta.compare_urgent !== false,
+    located: meta.resolved === true && meta.precision !== 'page',
   };
 }
 
@@ -58,16 +64,19 @@ export type Gate =
 
 const KEY_SEP = '\u0000';
 
-/** Which acknowledgement this record needs right now. `none` only for an image that arrived, was located,
- *  and carries no urgency; every unknown (page closed, image failed) fails closed to a PDF comparison. */
+/** Which acknowledgement this record needs right now. `none` only for a record with no flags at all, whose
+ *  image arrived, was located and carries no urgency; every flag, every unknown (page closed, image failed)
+ *  and every unlocated value needs a tick (the picture, or the PDF itself when there is no picture). */
 export function gateFor(rec: GateRecord, facts: ImageFacts): Gate {
   if (facts.state === 'loading') return { mode: 'pending', key: null, why: 'The page image is still loading.' };
   const urgent = urgentFlagCodes(rec.flags).length > 0;
+  const flagged = rec.flags.length > 0;
   const bound = (mode: 'image' | 'pdf', sha: string) =>
     [rec.id, rec.value, rec.locator.literal ?? '', rec.source_id, rec.locator.page, mode, sha].join(KEY_SEP);
   if (facts.state === 'ready') {
-    if (!urgent && !facts.compareUrgent && facts.located) return { mode: 'none', key: null };
+    if (!flagged && !facts.compareUrgent && facts.located) return { mode: 'none', key: null };
     const why = urgent ? 'The text layer may disagree with the page: compare the value with the picture.'
+      : flagged ? 'This record carries a QC flag: compare the value with the picture.'
       : !facts.located ? 'The cited value was not located in the picture: find it on the page and compare.'
       : 'This page needs a comparison: compare the value with the picture.';
     return { mode: 'image', key: bound('image', facts.sha256), why, label: LABEL_IMAGE, prefix: imagePrefix(facts.sha256) };
@@ -106,7 +115,7 @@ const tickHint = (gate: Gate & { mode: 'image' | 'pdf' }): string => `Tick the b
 
 /** Decide whether Approve may go ahead for one record and what reason the server will receive. */
 export function approval(gate: Gate, isTicked: boolean, reviewerReason: string): Approval {
-  if (gate.mode === 'pending') return blockedBy(`Approve is unavailable while the page image loads. ${gate.why}`);
+  if (gate.mode === 'pending') return blockedBy('Approve is unavailable while the page image loads.');
   const text = reviewerReason.trim();
   const lacks: string[] = [];
   if (gate.mode !== 'none' && !isTicked) lacks.push(tickHint(gate));

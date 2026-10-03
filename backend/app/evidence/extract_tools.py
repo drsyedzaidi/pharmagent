@@ -21,6 +21,7 @@ from app.core.pharmstate import PharmState
 from app.evidence import ingest
 from app.evidence import models as M
 from app.evidence.config_tools import summarise
+from app.evidence.earlier_decisions import decided_records, earlier_flags
 from app.evidence.extract_llm import MAX_PAGE_CHARS, llm_extract, llm_flags
 from app.evidence.extract_rules import field_index, norm_key, rule_extract, value_number
 from app.evidence.inclusion import current_screens, exclusion_reason, included_sources
@@ -109,10 +110,12 @@ def _verify_one(p: dict[str, Any], doc: dict[str, Any], ftype: str) -> dict[str,
 
 
 def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None, template: dict[str, Any],
-                    approved: list[Any] | None = None, live: list[Any] | None = None) -> list[dict[str, Any]]:
+                    approved: list[Any] | None = None, live: list[Any] | None = None,
+                    decided: list[Any] | None = None, template_hash: str = "") -> list[dict[str, Any]]:
     """Pure: literal verification of every proposal (all fail 'source_changed' when *doc* is None),
-    then scripted QC flags (conflicts against *approved* and the *live* proposals of earlier runs) and
-    the instruction-text flag. Returns new dicts; inputs are untouched."""
+    then scripted QC flags (conflicts against *approved* and the *live* proposals of earlier runs), the
+    instruction-text flag and the 'decided_earlier' flag (a claim already approved / rejected under another
+    template hash, from *decided*). Returns new dicts; inputs are untouched."""
     index = field_index(template)
     if doc is None:
         checked = [{**p, "locator": {**p["locator"], "span": None, "literal": None}, "verify_status": "fail",
@@ -121,8 +124,9 @@ def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None,
         checked = [_verify_one(p, doc, _field_type(p, index)) for p in proposals]
     flags = scripted_flags(checked, template, list(approved or []), list(live or []))
     counted = {**doc, "decimal_evidence": document_evidence(doc)} if doc is not None else None
-    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, counted, index.get(norm_key(p.get("field"))))}
-           for p, fl in zip(checked, flags)]
+    earlier = earlier_flags(checked, list(decided or []), template, template_hash)
+    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, counted, index.get(norm_key(p.get("field")))) + ea}
+           for p, fl, ea in zip(checked, flags, earlier, strict=True)]
     return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index), doc)} for p in out]
 
 
@@ -161,12 +165,13 @@ def extraction_results(store: EvidenceStore, sid: str, template_hash: str, metho
 
 def _refresh_rows(store: EvidenceStore, rows: list[Record], doc: dict[str, Any] | None, template: dict[str, Any],
                   approved: list[Record], marks: dict[str, list[dict[str, Any]]],
-                  only: set[str] | None = None) -> list[tuple[Record, Record]]:
+                  only: set[str] | None = None, decided: list[Record] | None = None) -> list[tuple[Record, Record]]:
     """Re-check one source's proposed *rows* together (so a conflict between runs is flagged on both
     sides), keep their LLM flags and set their superseded flags from *marks*; only the ids in *only*
     (all when None) are written. Returns (old, new) pairs; decided rows are never touched (reverify)."""
     out = []
-    for rec, c in zip(rows, check_proposals([asdict(r) for r in rows], doc, template, approved)):
+    for rec, c in zip(rows, check_proposals([asdict(r) for r in rows], doc, template, approved,
+                                            decided=decided), strict=True):
         if only is not None and rec.id not in only:
             continue
         flags = merge_llm_flags(c["flags"] + marks.get(rec.id, carried(rec)), _llm_flags_of(rec))
@@ -176,18 +181,20 @@ def _refresh_rows(store: EvidenceStore, rows: list[Record], doc: dict[str, Any] 
 
 
 def _extract_source(store: EvidenceStore, sid: str, src: Source, template: dict[str, Any], thash: str,
-                    llm: Any, approved: list[Record]) -> tuple[dict[str, Any], list[Record]]:
+                    llm: Any, approved: list[Record], decided: list[Record]) -> tuple[dict[str, Any], list[Record]]:
     doc = ingest.load_pages(src)
     out = _propose(llm, template, src, doc)
     prior = store.list_records(sid, status="proposed", source_id=src.id)
-    checked = check_proposals(out["proposals"], doc, template, approved, live=prior)
+    checked = check_proposals(out["proposals"], doc, template, approved, live=prior, decided=decided,
+                              template_hash=thash)
     if llm is not None and checked:
         checked = [{**p, "flags": f} for p, f in zip(checked, llm_flags(llm, template, checked))]
     inserted = store.insert_records(sid, src, thash, checked)
     if prior:                                   # earlier runs' proposals: conflicts and superseded marks
         rows = store.list_records(sid, status="proposed", source_id=src.id)
         marks = run_marks(rows, claim_ids(sid, src.sha256, thash, checked), template)
-        fresh = {new.id: new for _, new in _refresh_rows(store, rows, doc, template, approved, marks)}
+        fresh = {new.id: new for _, new in
+                 _refresh_rows(store, rows, doc, template, approved, marks, decided=decided)}
         inserted = [fresh.get(r.id, r) for r in inserted]
     statuses = Counter(p["verify_status"] for p in checked)
     row = {"source_id": src.id, "method": out["method"], "note": out["note"], "n_candidates": len(checked),
@@ -209,10 +216,11 @@ def extract_evidence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) 
                          f"first ({len(skipped)} skipped)")
     llm = current_llm() if llm_available() else None
     approved = store.list_records(sid, status="approved")
+    decided = decided_records(store, sid, approved)
     rows, inserted = [], []
     for src in included:
         try:
-            row, new = _extract_source(store, sid, src, template, thash, llm, approved)
+            row, new = _extract_source(store, sid, src, template, thash, llm, approved, decided)
         except (OSError, ValueError) as exc:                  # fail closed: changed/missing file
             skipped.append({"source_id": src.id, "reason": str(exc)})
             continue
@@ -267,6 +275,7 @@ def verify_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
     proposed = store.list_records(sid, status="proposed")
     selected = _selected_ids(store, sid, args, proposed)
     approved = store.list_records(sid, status="approved")
+    decided = decided_records(store, sid, approved)
     refreshed: list[Record] = []
     changed = 0
     for src_id in dict.fromkeys(r.source_id for r in proposed):
@@ -276,7 +285,8 @@ def verify_records(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
             doc = ingest.load_pages(src) if src is not None else None
         except (OSError, ValueError):
             doc = None
-        for old, new in _refresh_rows(store, rows, doc, template, approved, {}, only=selected):
+        for old, new in _refresh_rows(store, rows, doc, template, approved, {}, only=selected,
+                                              decided=decided):
             changed += (new.verify_status, new.verify_reason) != (old.verify_status, old.verify_reason)
             refreshed.append(new)
     counts = Counter(r.verify_status for r in refreshed)

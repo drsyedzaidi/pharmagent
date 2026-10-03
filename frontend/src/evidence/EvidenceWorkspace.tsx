@@ -12,6 +12,7 @@ import { LibraryPanel } from './LibraryPanel';
 import { RecordsPanel } from './RecordsPanel';
 import { ScreeningPanel } from './ScreeningPanel';
 import { TemplatePanel } from './TemplatePanel';
+import { useRelayout } from './useRelayout';
 import type { EvidenceFocus, EvidenceMarker, EvidenceSnapshot, EvidenceTab, OnTool, Run } from './types';
 import './evidence.css';
 
@@ -98,6 +99,9 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
     syncState().catch(e => setError(errorMessage(e)));
   }, [refresh, syncState]);
 
+  // One set of rebuild controls for the Library list and every open record's notice: one in-flight guard.
+  const relayout = useRelayout(sessionId, onLayoutChanged);
+
   const run: Run = useCallback(async (label, task) => {
     setPending(label);
     setTick(0);
@@ -163,8 +167,8 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
           <>
             <div hidden={tab !== 'library'}>
               <LibraryPanel sessionId={sessionId} sources={live.sources} disabled={disabled}
-                onUploaded={() => { refresh(); syncState().catch(e => setError(errorMessage(e))); }}
-                onLayoutChanged={onLayoutChanged} />
+                relayout={relayout}
+                onUploaded={() => { refresh(); syncState().catch(e => setError(errorMessage(e))); }} />
             </div>
             <div hidden={tab !== 'criteria'}>
               <CriteriaPanel key={live.criteria?.body_hash ?? 'none'} sessionId={sessionId} config={live.criteria}
@@ -182,7 +186,7 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
             </div>
             <div hidden={tab !== 'records'}>
               <RecordsPanel sessionId={sessionId} records={live.records} sources={live.sources} template={live.template}
-                disabled={disabled} run={run} onState={onResult} onTool={onTool} onLayoutChanged={onLayoutChanged} />
+                disabled={disabled} run={run} onState={onResult} onTool={onTool} relayout={relayout} />
             </div>
             <div hidden={tab !== 'dataset'}>
               <DatasetPanel sessionId={sessionId} summary={live.summary} counts={live.counts} datasets={live.datasets}
