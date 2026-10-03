@@ -5,8 +5,8 @@
 import { api, download, fetchBlob, req } from '../api';
 import type {
   ConfigResponse, CriteriaConfig, Criterion, EvidenceSnapshot, ExportResult, ExtractResult, PageImageMeta, PageText,
-  ProposeResponse, RecordDecideResponse, RecordDecision, RecordFilter, ScreenDecideResponse, ScreenDecision,
-  ScreenResult, TemplateBody, TemplateConfig, ToolEnvelope, UploadResponse, VerifyRecordsResult,
+  ProposeResponse, RecordDecideResponse, RecordDecision, RecordFilter, RelayoutAllResponse, RelayoutBulk, RelayoutResult,
+  ScreenDecideResponse, ScreenDecision, ScreenResult, TemplateBody, TemplateConfig, ToolEnvelope, UploadResponse, VerifyRecordsResult,
 } from './types';
 
 const ev = (sid: string) => `/sessions/${encodeURIComponent(sid)}/evidence`;
@@ -79,3 +79,16 @@ export const evidencePageImageMeta = (sid: string, recordId: string, zoom: 1 | 2
 /** The PNG the meta described; `sha` binds it to that exact raster (409 when it changed). */
 export const evidencePageImageBlob = (sid: string, recordId: string, zoom: 1 | 2, sha: string, signal?: AbortSignal):
   Promise<Blob> => fetchBlob(`${image(sid, recordId)}?zoom=${zoom}&sha=${encodeURIComponent(sha)}`, signal);
+
+/** Rebuild one source's layout sidecar now (a full parse in the sandbox: up to 150 s; 503 when no parse slot is free). */
+export const evidenceRelayoutSource = (sid: string, sourceId: string): Promise<RelayoutResult> =>
+  req(`${ev(sid)}/sources/${encodeURIComponent(sourceId)}/relayout`, { method: 'POST' });
+
+/** Rebuild every source that lacks a layout, at most the server's cap per call. A job handle is polled; with
+ *  nothing to do (or no job manager) the result is inline. Resolves to the call's summary and its results. */
+export async function evidenceRelayoutAll(sid: string, onTick?: (elapsedSec: number) => void):
+  Promise<{ call: RelayoutAllResponse; bulk: RelayoutBulk }> {
+  const call = await req<RelayoutAllResponse>(`${ev(sid)}/relayout`, { method: 'POST' });
+  if (call.job_id) return { call, bulk: await api.pollJob<RelayoutBulk>(sid, call.job_id, onTick) };
+  return { call, bulk: { results: call.results ?? [], counts: call.counts ?? {} } };
+}

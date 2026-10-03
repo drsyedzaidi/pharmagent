@@ -4,7 +4,10 @@ import { AlertTriangle, CheckCircle, FileText, Loader2, Upload, XCircle } from '
 import { hhmm } from '../shell/format';
 import { evidenceUpload } from './api';
 import { errorMessage, fmtBytes, MAX_PDF_BYTES, PARSE_LABEL, shaPrefix } from './format';
+import { LayoutCell } from './LayoutCell';
+import { missingSources, rebuildAllLabel } from './layoutRebuild';
 import type { EvidenceSource, ParseStatus, UploadResponse } from './types';
+import { useRelayout } from './useRelayout';
 
 type UploadState = 'queued' | 'uploading' | 'done' | 'duplicate' | 'error';
 interface UploadItem { key: string; name: string; size: number; state: UploadState; note: string }
@@ -34,18 +37,22 @@ function UploadIcon({ state }: { state: UploadState }) {
 /** Library tab: PDF drop zone (sequential uploads with per-file status) and the
  *  session's source list. Titles and filenames come from the document and are
  *  rendered as text only. */
-export function LibraryPanel({ sessionId, sources, disabled, onUploaded }: {
+export function LibraryPanel({ sessionId, sources, disabled, onUploaded, onLayoutChanged }: {
   sessionId: string;
   sources: EvidenceSource[];
   disabled: boolean;
   /** Called once per batch after the last upload settles (refresh snapshot + state). */
   onUploaded: (last: UploadResponse | null) => void;
+  /** Called after each layout rebuild call settles (refresh snapshot + state: the audit entry). */
+  onLayoutChanged: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [licence, setLicence] = useState('');
   const [items, setItems] = useState<UploadItem[]>([]);
   const [running, setRunning] = useState(false);
+  const relayout = useRelayout(sessionId, onLayoutChanged);
+  const missing = missingSources(sources);
 
   const patch = (key: string, p: Partial<UploadItem>) =>
     setItems(prev => prev.map(it => (it.key === key ? { ...it, ...p } : it)));
@@ -123,13 +130,31 @@ export function LibraryPanel({ sessionId, sources, disabled, onUploaded }: {
         </ul>
       )}
 
+      {missing.length > 0 && (
+        <div className="ev-actions ev-rebuild-bar">
+          <button type="button" className="btn btn-ghost" disabled={blocked || relayout.running}
+            onClick={() => void relayout.all(missing)}>
+            {rebuildAllLabel(missing.length)}
+          </button>
+          <span className="ev-hint">Sources parsed before page positions were stored show a whole-page image until
+            their layout is rebuilt (one full parse each, at most 10 per run).</span>
+        </div>
+      )}
+      <p className="ev-rebuild-status" role="status">
+        {relayout.error ? '' : relayout.summary}
+        {relayout.running && relayout.tick > 0 && <span aria-hidden="true"> {relayout.tick} s</span>}
+      </p>
+      {relayout.error && (
+        <p className="ev-rebuild-status bad" role="alert"><XCircle size={12} aria-hidden="true" /> {relayout.error}</p>
+      )}
+
       {sources.length === 0 ? (
         <p className="ev-empty">No publications yet. Uploaded PDFs are parsed on the server; nothing is read by a model until you run screening.</p>
       ) : (
         <table className="ev-table">
           <caption className="sr-only">Publications in this session</caption>
           <thead>
-            <tr><th scope="col">Publication</th><th scope="col" className="num">Pages</th><th scope="col">SHA-256</th><th scope="col">Parse</th></tr>
+            <tr><th scope="col">Publication</th><th scope="col" className="num">Pages</th><th scope="col">SHA-256</th><th scope="col">Parse and layout</th></tr>
           </thead>
           <tbody>
             {sources.map(s => (
@@ -145,7 +170,13 @@ export function LibraryPanel({ sessionId, sources, disabled, onUploaded }: {
                 </th>
                 <td className="num">{s.pages}</td>
                 <td><span className="id-chip" title={s.sha256}>{shaPrefix(s.sha256)}</span></td>
-                <td><ParsePill status={s.parse_status} /></td>
+                <td>
+                  <div className="ev-status-cell">
+                    <ParsePill status={s.parse_status} />
+                    <LayoutCell source={s} item={relayout.items[s.id]} disabled={blocked || relayout.running}
+                      onRebuild={src => void relayout.one(src)} />
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>

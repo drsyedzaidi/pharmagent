@@ -1,7 +1,12 @@
 /* Page image beside the extracted value (Records source panel). Flat, no motion; the outline is drawn
    outside the cited glyphs with a white keyline so it reads on dark or coloured regions. */
 .ev-compare-host { container-type: inline-size; min-width: 0; }
-.ev-compare { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+/* Wide (the panel is at least 540 px): the value card (200 px) beside the picture's column. Narrower (below):
+   the card and the zoom buttons share the first row and everything else spans under it, so the picture starts
+   right under the heading. */
+.ev-compare { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+.ev-compare:focus { outline: none; }
+.ev-compare:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ev-valuecard {
   display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px;
   background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -12,14 +17,16 @@
 }
 .ev-valuemeta { margin: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
 .ev-imagecol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.ev-imagecol:focus { outline: none; }
-.ev-imagecol:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ev-keyhint { margin: 0; }
-/* Holds the viewer's place while the image renders, so Approve / Reject do not move under the pointer. */
+/* Holds the viewer's place while the image renders, so Approve / Reject do not move under the pointer. Same
+   chrome as .ev-viewer (1px border + 8px padding, border-box); the inline style gives it the image's own shape
+   once the meta is back, or the full cap for a probable whole page. */
 .ev-skeleton {
-  min-height: 240px; display: flex; align-items: center; justify-content: center;
+  box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 8px;
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
+.ev-skeleton-inner { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; background: var(--bg-card); }
+.ev-skeleton-inner .ev-empty { padding: 0; }
 .ev-imgtools { display: flex; flex-wrap: wrap; gap: 6px; }
 .ev-zoombtn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); }
 .ev-viewer {
@@ -36,7 +43,7 @@
 }
 .ev-outline.dashed { outline-style: dashed; }
 .ev-outline::after { content: ""; position: absolute; inset: -5px; border: 1px solid var(--bg-card); pointer-events: none; }
-.ev-caption { overflow-wrap: anywhere; }
+.ev-caption { overflow-wrap: anywhere; min-height: calc(2 * 1.45em); }   /* two lines held while the image renders */
 .ev-notices { display: flex; flex-direction: column; gap: 6px; }
 .ev-notice { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 6px 8px; font-size: 12px; border-radius: var(--radius-sm); }
 .ev-notice svg { flex-shrink: 0; margin-top: 2px; }
@@ -47,10 +54,21 @@
   color: var(--red); background: var(--red-bg); border-radius: 12px; vertical-align: middle;
 }
 .ev-problem .btn { margin-left: auto; }
-/* Stack when the panel itself is narrow (the records panel shares the page with rails), not only the viewport. */
-@container (max-width: 700px) {
-  .ev-compare { grid-template-columns: minmax(0, 1fr); }
-  /* Stacked, the value card is one compact row so the picture starts near the heading, not below a tall card. */
-  .ev-valuecard { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 8px 12px; }
+/* Narrow panel (the records panel shares the page with the rails, so this is about the panel, not the viewport). */
+@container (width < 540px) {
+  .ev-compare { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 0; }
+  .ev-imagecol { display: contents; }
+  .ev-valuecard {
+    grid-column: 1; grid-row: 1; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 8px 12px;
+  }
   .ev-valuecard .ev-bigvalue { font-size: 18px; }
+  .ev-valuecard .ev-metafield { display: none; }          /* the heading above already names the field and group */
+  .ev-imgtools { grid-column: 2; grid-row: 1; align-self: start; }
+  .ev-imagecol > :not(.ev-imgtools) { grid-column: 1 / -1; margin-top: 8px; }
 }
+/* ── layout fallback (a whole page because the source has no stored layout) ── */
+.ev-fallback.warn { color: var(--text-h); }
+.ev-fallback-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.ev-fallback-body p { margin: 0; overflow-wrap: anywhere; }
+.ev-fallback-reason { color: var(--text); }
+.ev-fallback-done { margin: 0; }

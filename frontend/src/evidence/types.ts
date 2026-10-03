@@ -7,6 +7,9 @@ import type { PharmState } from '../types';
 
 // ── vocabularies (backend app/evidence/models.py) ────────────────────────────
 export type ParseStatus = 'parsed' | 'no_text' | 'failed';
+/** Whether a source has the layout sidecar the page image needs (backend relayout.STATUSES). */
+export type LayoutStatus = 'ready' | 'missing' | 'text_changed' | 'unreadable';
+export type RelayoutOutcome = 'rebuilt' | 'unchanged' | 'text_changed' | 'unreadable';
 export type Verdict = 'include' | 'exclude' | 'unsure';
 export type DecisionStatus = 'proposed' | 'approved' | 'rejected';
 /** What a reviewer sends for a record; the stored status becomes 'approved' | 'rejected'. */
@@ -58,7 +61,26 @@ export interface EvidenceSource {
   licence_note: string | null;
   uploaded_by: string;
   uploaded_at: string;
+  layout_status: LayoutStatus;
+  /** Why the layout is not ready (server text); null when ready. */
+  layout_reason: string | null;
 }
+
+/** POST .../sources/{id}/relayout: one audited rebuild. */
+export interface RelayoutResult {
+  source_id: string; outcome: RelayoutOutcome; reason: string | null;
+  layout_status: LayoutStatus; layout_reason: string | null; summary: string;
+}
+/** One source's entry in a bulk rebuild; `error` is a failure of that source only. */
+export interface RelayoutEntry {
+  source_id: string; outcome: RelayoutOutcome | 'error'; reason?: string | null; layout_status?: LayoutStatus;
+}
+export interface RelayoutBulk { results: RelayoutEntry[]; counts: Record<string, number> }
+/** POST .../relayout: a job handle (poll it) or, with nothing to do or no job manager, the result inline. */
+export type RelayoutAllResponse = {
+  selected: number; remaining: number; cap: number; source_ids: string[]; job_id: string | null;
+  status: 'running' | 'done';
+} & Partial<RelayoutBulk>;
 
 export interface UploadResponse { source: EvidenceSource; duplicate: boolean; summary: string }
 
@@ -334,6 +356,7 @@ export interface PageImageMeta {
   resolved: boolean; precision: ImagePrecision; reason: string | null;
   width: number; height: number; highlight: ImageRect[]; snippet_box: ImageRect | null;
   crop_pt: number[]; image_sha256: string; png_bytes: number; pdf_sha256: string; layout_version: number | null;
+  layout_status: LayoutStatus; layout_rebuild_available: boolean;
   extracted: { value: string; unit: string | null; literal: string | null; kind: string };
   page_checks: { ink_check: string | null; hidden_chars: number | null; glyph_check: string[] };
   flags: string[]; compare_urgent: boolean; notices: ImageNotice[];

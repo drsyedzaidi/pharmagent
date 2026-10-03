@@ -3,13 +3,16 @@ import type { MouseEvent } from 'react';
 import { hhmm } from '../shell/format';
 import { evidenceDecideRecords, evidenceVerify } from './api';
 import { FlagChip, StatusPill, VerifyBadge } from './badges';
-import { clipValue, failWords, recordLabels, shaPrefix } from './format';
+import { BulkBar } from './BulkBar';
+import { approval, bulkApproval, factsFromView, gateFor, ticked, type Gate } from './compareGate';
+import { DecideRow } from './DecideRow';
+import { clipValue, recordLabels, shaPrefix } from './format';
 import { RecordContext } from './RecordContext';
 import type {
-  Decision, EvidenceSource, OnState, OnTool, RecordDecision, RecordRow, Run, TemplateConfig,
+  EvidenceSource, OnState, OnTool, RecordDecision, RecordRow, Run, TemplateConfig,
 } from './types';
+import { usePageImage } from './usePageImage';
 
-const MAX_REASON = 500;
 const COLS = 5;
 type Filter = 'all' | 'flagged' | 'fail' | 'proposed';
 const FILTERS: { key: Filter; label: string; test: (r: RecordRow) => boolean }[] = [
@@ -48,7 +51,7 @@ function RecordValue({ value, unit, name }: { value: string; unit: string | null
  *  cited page opens directly under its record, above that record's decision, so the evidence and
  *  the decision are read together. A record that failed verification cannot be approved (the
  *  server refuses it too); one that conflicts with an approved value needs an explicit keep-both. */
-export function RecordsPanel({ sessionId, records, sources, template, disabled, run, onState, onTool }: {
+export function RecordsPanel({ sessionId, records, sources, template, disabled, run, onState, onTool, onLayoutChanged }: {
   sessionId: string;
   records: RecordRow[];
   sources: EvidenceSource[];
@@ -57,6 +60,8 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   run: Run;
   onState: OnState;
   onTool: OnTool;
+  /** Called after a layout rebuild settles (refresh snapshot + state). */
+  onLayoutChanged: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [ctxId, setCtxId] = useState<string | null>(null);
@@ -65,6 +70,13 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkReason, setBulkReason] = useState('');
   const [status, setStatus] = useState('');
+  // The compare ticks: record id -> the gate key it was given for. Never persisted; a key that no longer
+  // matches the record's gate (another value, page or image) is deleted at once, not merely ignored.
+  const [acks, setAcks] = useState<Record<string, string>>({});
+  const [bulkAck, setBulkAck] = useState<string | null>(null);
+  const deciding = useRef(false);                            // one decision call at a time, however it was triggered
+  // The page image of the open record lives here, so its facts reach the gate in the same render.
+  const view = usePageImage(sessionId, ctxId);
   const focusKey = useRef<string | null>(null);              // where focus goes once controls re-enable
   const focusables = useRef(new Map<string, HTMLElement>());
   const captionRef = useRef<HTMLTableCaptionElement>(null);
@@ -89,32 +101,62 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
   const rows = records.filter(test).sort((a, b) =>
     (names.get(a.source_id) ?? '').localeCompare(names.get(b.source_id) ?? '')
     || a.field.localeCompare(b.field) || a.group_label.localeCompare(b.group_label) || a.id.localeCompare(b.id));
-  const eligible = rows.filter(bulkEligible);
+  const gates = new Map<string, Gate>(records.map(r => [r.id, gateFor(r, r.id === ctxId ? factsFromView(view) : { state: 'closed' })]));
+  const gateOf = (r: RecordRow): Gate => gates.get(r.id) ?? gateFor(r, { state: 'closed' });
+  const isTicked = (r: RecordRow): boolean => ticked(gateOf(r), acks[r.id] ?? null);
+  const approvalFor = (r: RecordRow) => approval(gateOf(r), isTicked(r), reasons[r.id] ?? '');
+  const eligible = rows.filter(r => bulkEligible(r) && ['none', 'pdf'].includes(gateOf(r).mode));
   const picked = eligible.filter(r => selected.has(r.id));
+  const bulkKey = picked.map(r => `${r.id}\u0000${gateOf(r).key ?? ''}`).join('\u0001');
+  const bulkTicked = bulkAck !== null && bulkAck === bulkKey;
+  const bulk = bulkApproval(picked.map(r => ({ id: r.id, gate: gateOf(r) })), bulkTicked, bulkReason);
   const proposed = rows.filter(r => r.status === 'proposed');
+  // A tick is for exactly the record, value, page and image it was given for: drop every other one now.
+  const staleAcks = Object.keys(acks).filter(id => acks[id] !== (gates.get(id)?.key ?? null));
+  if (staleAcks.length > 0) setAcks(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !staleAcks.includes(id))));
+  if (bulkAck !== null && bulkAck !== bulkKey) setBulkAck(null);
 
   const decide = async (decisions: RecordDecision[]) => {
-    const ok = await run(`Recording ${decisions.length} decision${decisions.length === 1 ? '' : 's'}…`, async () => {
-      const res = await evidenceDecideRecords(sessionId, decisions);
-      onState(res.state, res.summary);
-    });
-    if (!ok) return false;
-    const done = new Set(decisions.map(d => d.record_id));
-    const left = proposed.filter(r => !done.has(r.id));
-    const after = proposed.findIndex(r => done.has(r.id));
-    const next = left.find((_, i) => i >= after) ?? left[0];
-    const first = rows.find(r => r.id === decisions[0].record_id);
-    setStatus(`${decisions.length === 1 && first ? `${decisions[0].decision === 'approve' ? 'Approved' : 'Rejected'} ${rowName(first)}`
-      : `${decisions.length} decisions recorded`}; ${left.length} proposed record${left.length === 1 ? '' : 's'} left.`);
-    focusKey.current = next ? `reason:${next.id}` : 'caption';
-    setReasons(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => !done.has(k))));
-    setSelected(prev => new Set([...prev].filter(id => !done.has(id))));
-    return true;
+    if (deciding.current) return false;                      // a second click never sends a second call
+    deciding.current = true;
+    try {
+      const ok = await run(`Recording ${decisions.length} decision${decisions.length === 1 ? '' : 's'}…`, async () => {
+        const res = await evidenceDecideRecords(sessionId, decisions);
+        onState(res.state, res.summary);
+      });
+      if (!ok) return false;
+      const done = new Set(decisions.map(d => d.record_id));
+      const left = proposed.filter(r => !done.has(r.id));
+      const after = proposed.findIndex(r => done.has(r.id));
+      const next = left.find((_, i) => i >= after) ?? left[0];
+      const first = rows.find(r => r.id === decisions[0].record_id);
+      setStatus(`${decisions.length === 1 && first ? `${decisions[0].decision === 'approve' ? 'Approved' : 'Rejected'} ${rowName(first)}`
+        : `${decisions.length} decisions recorded`}; ${left.length} proposed record${left.length === 1 ? '' : 's'} left.`);
+      focusKey.current = next ? `reason:${next.id}` : 'caption';
+      setReasons(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => !done.has(k))));
+      setAcks(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => !done.has(k))));
+      setSelected(prev => new Set([...prev].filter(id => !done.has(id))));
+      return true;
+    } finally {
+      deciding.current = false;
+    }
   };
-  const one = (r: RecordRow, decision: Decision) => void decide([{
-    record_id: r.id, decision, reason: (reasons[r.id] ?? '').trim(),
-    ...(decision === 'approve' && keepBoth.has(r.id) ? { allow_conflict: true } : {}),
-  }]);
+  /** Approve one record. The gate is checked again here, from the same state the controls were drawn from,
+   *  so a blocked Approve sends nothing however it was activated. The reason sent is the composed one. */
+  const approveOne = (r: RecordRow) => {
+    const a = approvalFor(r);
+    if (!a.allowed || r.verify_status === 'fail') return;
+    void decide([{ record_id: r.id, decision: 'approve', reason: a.reason, ...(keepBoth.has(r.id) ? { allow_conflict: true } : {}) }]);
+  };
+  const rejectOne = (r: RecordRow) => {
+    const reason = (reasons[r.id] ?? '').trim();
+    if (reason) void decide([{ record_id: r.id, decision: 'reject', reason }]);
+  };
+  const approveBulk = () => {
+    if (!bulk.allowed) return;
+    void decide(picked.map(r => ({ record_id: r.id, decision: 'approve' as const, reason: bulk.reasons[r.id] })))
+      .then(ok => { if (ok) setBulkReason(''); });
+  };
   const reverify = () => run('Re-verifying proposed records…', async () => onTool(await evidenceVerify(sessionId)));
   const toggleIn = (set: (f: (prev: Set<string>) => Set<string>) => void, id: string) => set(prev => {
     const next = new Set(prev);
@@ -142,7 +184,7 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
       <div className="ev-actions">
         <div className="seg" role="group" aria-label="Filter records">
           {FILTERS.map(f => (
-            <button key={f.key} type="button" aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>
+            <button key={f.key} type="button" aria-pressed={filter === f.key} onClick={() => { setFilter(f.key); setAcks({}); setBulkAck(null); }}>
               {f.label} ({records.filter(f.test).length})
             </button>
           ))}
@@ -152,21 +194,10 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
           Re-verify proposed
         </button>
       </div>
-      <div className="ev-actions">
-        <button type="button" className="btn btn-ghost" disabled={disabled || eligible.length === 0}
-          onClick={() => setSelected(picked.length === eligible.length ? new Set() : new Set(eligible.map(r => r.id)))}>
-          {picked.length === eligible.length && eligible.length > 0 ? 'Clear selection' : `Select verified, unflagged (${eligible.length})`}
-        </button>
-        <input className="ev-input ev-bulk-reason" aria-label="Reason for the selected records" value={bulkReason}
-          maxLength={MAX_REASON} placeholder="Reason, applied to every selected record" disabled={disabled}
-          onChange={e => setBulkReason(e.target.value)} />
-        <button type="button" className="btn btn-primary" disabled={disabled || picked.length === 0 || !bulkReason.trim()}
-          title={picked.length === 0 ? 'Select verified, unflagged records first' : !bulkReason.trim() ? 'A reason is required' : undefined}
-          onClick={() => void decide(picked.map(r => ({ record_id: r.id, decision: 'approve', reason: bulkReason.trim() })))
-            .then(ok => { if (ok) setBulkReason(''); })}>
-          Approve selected ({picked.length})
-        </button>
-      </div>
+      <BulkBar eligible={eligible.length} picked={picked.length} bulk={bulk} isTicked={bulkTicked} reason={bulkReason}
+        disabled={disabled}
+        onToggleAll={() => setSelected(picked.length === eligible.length ? new Set() : new Set(eligible.map(r => r.id)))}
+        onReason={setBulkReason} onTick={on => setBulkAck(on ? bulkKey : null)} onApprove={approveBulk} />
       <p className="sr-only" role="status">{status}</p>
 
       <div className="ev-table-wrap">
@@ -188,7 +219,6 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
           )}
           {rows.map(r => {
             const reason = reasons[r.id] ?? '';
-            const failed = r.verify_status === 'fail';
             const name = rowName(r);
             const isOpen = r.id === ctxId;
             return (
@@ -236,7 +266,8 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
                   <tr className="ev-context-row">
                     <td colSpan={COLS}>
                       <RecordContext sessionId={sessionId} record={r} filename={names.get(r.source_id) ?? r.source_id}
-                        autoFocus onClose={close} />
+                        view={view} source={sources.find(x => x.id === r.source_id) ?? null}
+                        autoFocus onClose={close} onLayoutChanged={onLayoutChanged} />
                     </td>
                   </tr>
                 )}
@@ -244,26 +275,16 @@ export function RecordsPanel({ sessionId, records, sources, template, disabled, 
                   <tr className="ev-decide-row">
                     <td />
                     <td colSpan={COLS - 1}>
-                      <div className="ev-decide">
-                        <input className="ev-input" ref={keep(`reason:${r.id}`)} aria-label={`Reason for ${name}`}
-                          value={reason} maxLength={MAX_REASON} placeholder="Reason (required)" disabled={disabled}
-                          onChange={e => setReasons(prev => ({ ...prev, [r.id]: e.target.value }))} />
-                        {hasConflict(r) && (
-                          <label className="ev-check" title="An approved record already holds a different value for this field and group">
-                            <input type="checkbox" checked={keepBoth.has(r.id)} disabled={disabled}
-                              onChange={() => toggleIn(setKeepBoth, r.id)} /> Keep both values
-                          </label>
-                        )}
-                        <button type="button" className="btn btn-primary" disabled={disabled || failed || !reason.trim()}
-                          aria-label={`Approve ${name}`}
-                          title={failed ? `Cannot approve: ${failWords(r)}. The value was not found on the cited page.`
-                            : reason.trim() ? 'Approve this record' : 'A reason is required'}
-                          onClick={() => one(r, 'approve')}>Approve</button>
-                        <button type="button" className="btn btn-red" disabled={disabled || !reason.trim()}
-                          aria-label={`Reject ${name}`}
-                          title={reason.trim() ? 'Reject this record' : 'A reason is required'}
-                          onClick={() => one(r, 'reject')}>Reject</button>
-                      </div>
+                      <DecideRow rec={r} name={name} gate={gateOf(r)} isTicked={isTicked(r)} approval={approvalFor(r)}
+                        reason={reason} keepBoth={keepBoth.has(r.id)} hasConflict={hasConflict(r)} disabled={disabled}
+                        reasonRef={keep(`reason:${r.id}`)} onReason={v => setReasons(prev => ({ ...prev, [r.id]: v }))}
+                        onTick={on => setAcks(prev => {
+                          const next = { ...prev };
+                          const key = gateOf(r).key;
+                          if (on && key !== null) next[r.id] = key; else delete next[r.id];
+                          return next;
+                        })}
+                        onKeepBoth={() => toggleIn(setKeepBoth, r.id)} onApprove={() => approveOne(r)} onReject={() => rejectOne(r)} />
                     </td>
                   </tr>
                 )}

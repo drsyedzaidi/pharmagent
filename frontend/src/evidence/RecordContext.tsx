@@ -5,8 +5,9 @@ import { errorMessage } from './format';
 import { contextText, highlight, markScrollTop } from './highlight';
 import { imageAnnouncement, imageUnavailableText, urgentFlagCodes } from './imageGeometry';
 import { PageImage } from './PageImage';
-import { usePageImage } from './usePageImage';
-import type { PageText, ParsedTable, RecordRow, TableCell } from './types';
+import type { EvidenceSource, PageText, ParsedTable, RecordRow, TableCell } from './types';
+import type { PageImageView } from './usePageImage';
+import { useRelayout } from './useRelayout';
 
 /** The marked snippet, with the verified literal (when present in it) in bold. */
 function Hit({ hit, literal }: { hit: string; literal: string | null }) {
@@ -48,12 +49,17 @@ function CellGrid({ table, cell, literal }: { table: ParsedTable; cell: TableCel
  *  guessed place in the text). Page text is untrusted document content and is rendered as
  *  text nodes only. Opened by the reviewer, it takes focus on its heading; Close or Escape
  *  hands focus back (onClose). */
-export function RecordContext({ sessionId, record, filename, autoFocus = false, onClose }: {
+export function RecordContext({ sessionId, record, filename, view, source, autoFocus = false, onClose, onLayoutChanged }: {
   sessionId: string;
   record: RecordRow;
   filename: string;
+  /** The record's page image, owned by the records panel (the compare gate reads it too). */
+  view: PageImageView;
+  source: EvidenceSource | null;
   autoFocus?: boolean;
   onClose?: () => void;
+  /** A layout rebuild settled: the ledger (the source's layout status) is read again. */
+  onLayoutChanged: () => void;
 }) {
   const loc = record.locator;
   const [page, setPage] = useState<PageText | null>(null);
@@ -61,7 +67,7 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
   const boxRef = useRef<HTMLPreElement>(null);
   const markRef = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLHeadingElement>(null);
-  const view = usePageImage(sessionId, record.id);
+  const rebuild = useRelayout(sessionId, onLayoutChanged);
   // Urgency is known from the record's own flags, so it survives an image that never loads.
   const urgent = urgentFlagCodes(record.flags).length > 0;
 
@@ -131,7 +137,7 @@ export function RecordContext({ sessionId, record, filename, autoFocus = false, 
         {view.ready && !view.failure?.broken ? ` ${imageAnnouncement(view.ready.meta)}` : ''}
         {view.unavailable ? ` ${imageUnavailableText(urgent)}` : ''}
       </p>
-      <PageImage view={view} record={record} filename={filename} />
+      <PageImage view={view} record={record} filename={filename} source={source} rebuild={rebuild} onRebuilt={view.reload} />
       <p className="ev-snippet"><span className="ev-label">Cited snippet</span> <span className="mono">{loc.snippet}</span></p>
       {error && <p className="ev-problem" role="alert">Could not load page {loc.page}: {error}</p>}
       {!current && !error && <p className="ev-empty">Loading page {loc.page}…</p>}

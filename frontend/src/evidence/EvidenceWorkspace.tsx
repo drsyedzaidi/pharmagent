@@ -92,6 +92,12 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
     onResult(await api.getState(sessionId), '');
   }, [sessionId, onResult]);
 
+  /** A layout rebuild settled: re-read the ledger (layout status) and PharmState (its audit entry). */
+  const onLayoutChanged = useCallback(() => {
+    refresh();
+    syncState().catch(e => setError(errorMessage(e)));
+  }, [refresh, syncState]);
+
   const run: Run = useCallback(async (label, task) => {
     setPending(label);
     setTick(0);
@@ -157,7 +163,8 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
           <>
             <div hidden={tab !== 'library'}>
               <LibraryPanel sessionId={sessionId} sources={live.sources} disabled={disabled}
-                onUploaded={() => { refresh(); syncState().catch(e => setError(errorMessage(e))); }} />
+                onUploaded={() => { refresh(); syncState().catch(e => setError(errorMessage(e))); }}
+                onLayoutChanged={onLayoutChanged} />
             </div>
             <div hidden={tab !== 'criteria'}>
               <CriteriaPanel key={live.criteria?.body_hash ?? 'none'} sessionId={sessionId} config={live.criteria}
@@ -175,7 +182,7 @@ export function EvidenceWorkspace({ sessionId, audit, busy, focus = null, stamp 
             </div>
             <div hidden={tab !== 'records'}>
               <RecordsPanel sessionId={sessionId} records={live.records} sources={live.sources} template={live.template}
-                disabled={disabled} run={run} onState={onResult} onTool={onTool} />
+                disabled={disabled} run={run} onState={onResult} onTool={onTool} onLayoutChanged={onLayoutChanged} />
             </div>
             <div hidden={tab !== 'dataset'}>
               <DatasetPanel sessionId={sessionId} summary={live.summary} counts={live.counts} datasets={live.datasets}

@@ -214,3 +214,28 @@
    parsed grid scrolls inside its own .ev-grid-wrap instead of widening the records table. */
 .ev-context-row .ev-context { box-sizing: border-box; width: 0; min-width: 100%; }
 .ev-context .ev-prov { overflow-wrap: anywhere; }
+
+/* ── library: layout status and rebuild ── */
+.ev-status-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 190px; }
+.ev-layout-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.ev-layout-reason { margin: 0; max-width: 36ch; }
+.ev-rebuild-btn { height: 28px; }
+.ev-rebuild-note { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.ev-rebuild-note svg { flex-shrink: 0; margin-top: 2px; }
+.ev-rebuild-note.ok svg { color: var(--green); }
+.ev-rebuild-note.bad svg { color: var(--red); }
+.ev-rebuild-status { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--text); }
+.ev-rebuild-status:empty { margin: -6px 0; }        /* cancels the panel's flex gap while there is nothing to say */
+.ev-rebuild-status.bad { color: var(--red); }
+.ev-rebuild-bar .ev-hint { max-width: 60ch; }
+
+/* ── compare gate (Records): the tick, the hint that says why Approve is unavailable, the recorded text ── */
+.ev-gate { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; max-width: 72ch; }
+.ev-gate-tick { font-weight: 600; color: var(--text-h); }
+.ev-gate-hint { margin: 0; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.ev-recorded q { color: var(--text-h); quotes: "“" "”"; }
+/* A blocked Approve stays reachable by keyboard (aria-disabled, not disabled): it looks disabled and never lifts on hover. */
+.ev-decide .btn[aria-disabled="true"], .ev-actions .btn[aria-disabled="true"],
+.ev-decide .btn-primary[aria-disabled="true"]:hover, .ev-actions .btn-primary[aria-disabled="true"]:hover {
+  color: var(--text-dim); background: var(--bg-hover); border-color: var(--border); cursor: not-allowed;
+}

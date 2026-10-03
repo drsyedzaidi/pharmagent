@@ -355,6 +355,38 @@ and shared between sessions that hold the same PDF: safe because the route autho
 re-hashes the PDF before it looks in the cache. The directory holds crops of copyrighted pages: same
 auth tier as `/pdf`, `no-store` in the browser, and it belongs to the data directory's cleanup story.
 
+**Reviewer UI** (`frontend/src/evidence/`: `compareGate.ts`, `DecideRow.tsx`, `BulkBar.tsx`, `PageImage.tsx`,
+`LayoutCell.tsx`, `LayoutFallback.tsx`, `useRelayout.ts`, `viewerLayout.ts`). All of it is UI: no server, tool or
+review-gate change.
+
+- *Compare gate.* In the Records tab Approve stays unavailable (`aria-disabled`, still focusable, with a visible hint
+  named by `aria-describedby`) until the reviewer ticks "I compared the value with the page image". Which tick
+  a record needs is derived from what the panel knows: the open record's page image (loaded, calm and located:
+  no tick; `compare_urgent`, an urgent flag on the record or an unlocated value: the image tick) and every unknown
+  (the cited page is not open, the image failed or cannot be drawn: "I compared the value with the PDF itself", fail
+  closed). While the image loads Approve is unavailable. The tick is held in React state only and is bound to the
+  record id, value, literal, source page and the loaded image's sha256: another record, value, page or image
+  (a zoom change loads another raster) deletes it, as does a filter change. The click handler checks the gate again, so
+  Enter or Space on a blocked Approve, a second click or a click during a record switch send nothing; one decision
+  call runs at a time. The audit trail records the acknowledgement by composing the reason:
+  `Compared with page image <first 8 hex of image_sha256>: <reviewer reason>` or
+  `Compared with the PDF itself: <reviewer reason>`, shown to the reviewer ("Will be recorded as") exactly as sent;
+  the server limit of 500 characters (`extract_tools.MAX_REASON`, counted on the stripped text) includes the prefix, so
+  the reason field stops 35 or 30 characters earlier and the hint says by how much a too-long text is over. Reject needs
+  no tick. Bulk approval offers only records that need no picture comparison, behind one tick "I compared every
+  selected value with the PDF itself" composed into each record's own reason. The chat and the API are not gated.
+- *Layout rebuild.* The Library list shows each source's `layout_status` as an icon and words ("Page images
+  ready", "Layout missing", "Text changed", "Unreadable"), a "Rebuild layout" button per missing source, and
+  "Rebuild all (n)" (a job: progress by seconds, a polite status line, one failed source is its own error). A
+  whole-page image of a source without a layout carries a notice with "Rebuild layout for this source" (on
+  success the image meta and image are fetched again); `text_changed` and `unreadable` get an explanation and no
+  button, and the records keep the compare tick.
+- *Viewer layout.* The viewer's height is held from the first moment: the full 520 px cap for a probable whole page
+  (source without layout, or a `hidden_text` record), a typical crop otherwise, and the real size (the image's
+  aspect ratio, capped) as soon as the meta is back; the caption and key-hint lines are held too. From a 540 px wide
+  panel the value card (200 px) sits beside the picture; narrower, the value shares the zoom toolbar's row. In Actual
+  size and Larger the records pane is scrolled to the outline (not animated) as well as the viewer.
+
 ## Trust model
 
 | Step | Deterministic code | Language model (optional) | Human |

@@ -14,8 +14,10 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
   one until the 120 s parse budget (pages over 25 000 glyphs skip the visibility passes). Rendering roughly doubles parse time (a 20-page paper: ~8 s, ~0.45 GB peak in the child);
   pages past the 60 s render budget are `unverified` and flagged, not trusted.
 - **The page image is a human control, not a proof.** It helps only if the reviewer compares the value with
-  the picture (automation bias is likely: `compare_urgent` records say so loudly, and nothing blocks
-  Approve on the server; the human-review gate is untouched). It is the one defence for the "custom outline
+  the picture (automation bias is likely: `compare_urgent` records say so loudly, the Records tab holds Approve
+  until the reviewer ticks that they compared the value, and records the tick in the decision reason; that is a
+  UI control, so nothing blocks Approve on the server or through the chat and API, and the human-review gate is
+  untouched; a tick is a statement, not proof that anyone looked). It is the one defence for the "custom outline
   under a correct glyph name" limit above, and it shows what pdfium draws, which can differ from Acrobat or
   Preview (font substitution, optional-content layers, form scripts).
 - **Outlines are word-level.** The box wraps the whole word, so adjacent punctuation or a neighbouring digit
