@@ -34,6 +34,7 @@ from app.evidence.models import (
     Record,
     Source,
 )
+from app.evidence.path_guard import OutsideDataDirError
 from app.evidence.routes import http_error, owned_record_id
 from app.evidence.store import get_store
 
@@ -65,13 +66,13 @@ class _Context:
     """Everything one request resolved before it rendered or looked in the cache."""
 
     def __init__(self, rec: Record, src: Source, doc: dict[str, Any], n: int, region: regions.Region,
-                 layout: dict[str, Any] | None, zoom: int, data_dir: str) -> None:
+                 layout: dict[str, Any] | None, zoom: int, data_dir: str, pdf_path: Path) -> None:
         self.rec, self.src, self.doc, self.n, self.region = rec, src, doc, n, region
         self.layout, self.zoom, self.data_dir = layout, zoom, data_dir
         self.page_doc = doc["pages"][n - 1]
         self.args = render.render_args(n, zoom, region)
         self.key = render_cache.cache_key(src.sha256, self.args, render.render_version())
-        self.pdf_path = Path(src.pdf_path)
+        self.pdf_path = pdf_path                  # resolved and confined by _resolve before anything was read
 
 
 def _zoom(raw: str) -> int:
@@ -121,18 +122,19 @@ def _resolve(sid: str, record_id: str, zoom: int, data_dir: str) -> _Context:
     if rec is None or src is None or src.session_id != sid:
         raise HTTPException(404, f"unknown record: {record_id}")
     try:
-        doc = ingest.load_pages(src)
+        pdf_path, _ = ingest.stored_paths(src, data_dir)       # confinement first: nothing is hashed or read yet
+        doc = ingest.load_pages(src, data_dir)
+    except OutsideDataDirError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except (OSError, ValueError) as exc:
         raise HTTPException(409, "source file missing or changed on disk") from exc
     pages = doc.get("pages") or []
     n = rec.locator.get("page")
     if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= len(pages):
         raise HTTPException(422, "record cites a page that does not exist")
-    if not Path(src.pdf_path).resolve().is_relative_to(ingest.evidence_dir(data_dir).resolve()):
-        raise HTTPException(409, "source file missing or changed on disk")
     layout = _layout_doc(src, doc.get("parser"))
     region = regions.locate(rec.locator, pages[n - 1], _layout_page(layout, n))
-    return _Context(rec, src, doc, n, region, layout, zoom, data_dir)
+    return _Context(rec, src, doc, n, region, layout, zoom, data_dir, pdf_path)
 
 
 def _entry(ctx: _Context, sid: str) -> tuple[bytes, dict[str, Any]]:

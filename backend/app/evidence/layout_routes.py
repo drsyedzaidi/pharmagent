@@ -22,34 +22,35 @@ JOB_KIND = "evidence_relayout"
 TOOL = "rebuild_source_layout"
 
 
-def _rebuild(orch: Any, sid: str, source_id: str, actor: str) -> dict[str, Any]:
+def _rebuild(orch: Any, sid: str, source_id: str, actor: str, data_dir: str) -> dict[str, Any]:
     """The rebuild runs HERE, outside the session lock (it can take minutes); the audited tool call then
     takes the lock only to write its entry, and reports the outcome handed over to it."""
     src = get_store().get_source(source_id)
     if src is None or src.session_id != sid:
         raise ValueError(f"unknown evidence source: {source_id}")
-    relayout.hand_over(sid, source_id, relayout.rebuild_layout(src, sid))
+    outcome = relayout.outside_outcome(src, data_dir) or relayout.rebuild_layout(src, sid)   # confined first
+    relayout.hand_over(sid, source_id, outcome)
     try:
         return orch.run_tool(sid, TOOL, AGENT, {"source_id": source_id}, actor=actor)
     finally:
         relayout.take_handover(sid, source_id)           # nothing left behind if the tool never ran
 
 
-def _one(orch: Any, sid: str, source_id: str, actor: str) -> dict[str, Any]:
+def _one(orch: Any, sid: str, source_id: str, actor: str, data_dir: str) -> dict[str, Any]:
     try:
-        out = _rebuild(orch, sid, source_id, actor)
+        out = _rebuild(orch, sid, source_id, actor, data_dir)
     except Exception as exc:          # mapped, never swallowed (a busy parser is a 503 that records nothing)
         raise http_error(exc) from exc
     src = get_store().get_source(source_id)
     return {"source": source_row(src) if src else None, **out["result"], "summary": out["summary"]}
 
 
-def _bulk(orch: Any, sid: str, source_ids: list[str], actor: str) -> dict[str, Any]:
+def _bulk(orch: Any, sid: str, source_ids: list[str], actor: str, data_dir: str) -> dict[str, Any]:
     """One audited call per source, sequentially; a failure is that source's entry, never the job's."""
     results: list[dict[str, Any]] = []
     for source_id in source_ids:
         try:
-            out = _rebuild(orch, sid, source_id, actor)
+            out = _rebuild(orch, sid, source_id, actor, data_dir)
             results.append({"source_id": source_id, **out["result"]})
         except Exception as exc:
             results.append({"source_id": source_id, "outcome": "error", "reason": http_error(exc).detail})
@@ -67,7 +68,7 @@ def add_layout_routes(router: APIRouter, owned_session: Callable[..., Any], acto
                               actor: str = Depends(actor_id)) -> dict:
         src = owned_source(sid, source_id)
         async with relayout_limits.relayout_slot(sid):
-            return await relayout_limits.run_blocking(_one, get_orch(), sid, src.id, actor)
+            return await relayout_limits.run_blocking(_one, get_orch(), sid, src.id, actor, str(sess.ctx.data_dir))
 
     @router.post("/relayout")
     def relayout_all(sid: str, sess=Depends(owned_session), actor: str = Depends(actor_id)) -> dict:
@@ -77,9 +78,9 @@ def add_layout_routes(router: APIRouter, owned_session: Callable[..., Any], acto
                 "source_ids": picked, "kind": JOB_KIND, "tool": TOOL}
         if not picked:
             return {**base, "job_id": None, "status": "done"}
-        orch = get_orch()
+        orch, data_dir = get_orch(), str(sess.ctx.data_dir)
         if get_jobs is None:                                  # no JobManager: inline
-            return {**base, "job_id": None, "status": "done", **_bulk(orch, sid, picked, actor)}
+            return {**base, "job_id": None, "status": "done", **_bulk(orch, sid, picked, actor, data_dir)}
         job_id = get_jobs().submit(session_id=sid, kind=JOB_KIND,       # JobRejected -> main's 429 handler
-                                   fn=lambda: _bulk(orch, sid, picked, actor))
+                                   fn=lambda: _bulk(orch, sid, picked, actor, data_dir))
         return {**base, "job_id": job_id, "status": "running"}

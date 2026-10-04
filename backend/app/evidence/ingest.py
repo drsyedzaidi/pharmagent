@@ -23,6 +23,7 @@ from app.evidence import parse_sandbox
 from app.evidence.models import IngestError, Source
 from app.evidence.parse import PARSER_NAME, file_sha256
 from app.evidence.parse_sandbox import ParseBusyError
+from app.evidence.path_guard import OutsideDataDirError, confine
 from app.evidence.store import EvidenceStore, get_store
 
 log = logging.getLogger(__name__)
@@ -191,23 +192,34 @@ def parse_and_cache(pdf_path: str | Path, data_dir: str | Path | None = None,
     return doc, parse_path
 
 
-def source_file_intact(source: Source) -> bool:
-    """True when the stored PDF still hashes to the ledger's sha256 (fail closed on any error)."""
+def stored_paths(source: Source, data_dir: str | Path) -> tuple[Path, Path]:
+    """(PDF path, parse-cache path) of *source*, resolved and confined to the evidence directory of *data_dir*
+    BEFORE any of them is opened (path_guard); OutsideDataDirError when either leaves it."""
+    root = evidence_dir(data_dir)
+    return confine(source.pdf_path, root), confine(source.parse_path, root)
+
+
+def source_file_intact(source: Source, data_dir: str | Path | None = None) -> bool:
+    """True when the stored PDF still hashes to the ledger's sha256 (fail closed on any error). With a
+    *data_dir* the stored path must also lie inside its evidence directory (checked before the file is read)."""
     try:
-        pdf_path = Path(source.pdf_path)
+        pdf_path = Path(source.pdf_path) if data_dir is None else stored_paths(source, data_dir)[0]
         return pdf_path.is_file() and file_sha256(pdf_path) == source.sha256
-    except OSError:
+    except (OSError, OutsideDataDirError):
         return False
 
 
-def load_pages(source: Source) -> dict[str, Any]:
-    """Parse JSON for a source; fails closed if the PDF or the cache no longer match the ledger."""
-    pdf_path = Path(source.pdf_path)
+def load_pages(source: Source, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Parse JSON for a source; fails closed if the PDF or the cache no longer match the ledger. With a
+    *data_dir* both stored paths are confined to its evidence directory first (OutsideDataDirError, nothing
+    read); callers without one (agent tools) read the stored paths as they are."""
+    pdf_path, parse_path = ((Path(source.pdf_path), Path(source.parse_path)) if data_dir is None
+                            else stored_paths(source, data_dir))
     if not pdf_path.is_file():
         raise ValueError("source file missing")
     if file_sha256(pdf_path) != source.sha256:
         raise ValueError("source file changed")
-    doc = json.loads(Path(source.parse_path).read_text("utf-8"))
+    doc = json.loads(parse_path.read_text("utf-8"))
     if doc.get("sha256") != source.sha256:
         raise ValueError("parse cache mismatch")
     return doc

@@ -31,6 +31,7 @@ from app.evidence import ingest, llm_access, upload_limits
 from app.evidence.config_tools import source_row
 from app.evidence.models import DECISION_STATUSES, VERIFY_STATUSES, EvidenceStateError, IngestError, Source
 from app.evidence.parse_sandbox import ParseBusyError
+from app.evidence.path_guard import OutsideDataDirError
 from app.evidence.store import get_store, source_id
 
 log = logging.getLogger(__name__)
@@ -315,7 +316,7 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
     def source_page(sid: str, src_id: str, n: int, sess=Depends(owned_session)) -> dict:
         src = owned_source(sid, src_id)
         try:
-            doc = ingest.load_pages(src)
+            doc = ingest.load_pages(src, sess.ctx.data_dir)
         except (OSError, ValueError) as exc:
             raise http_error(exc) from exc
         pages = doc.get("pages") or []
@@ -329,7 +330,10 @@ def build_evidence_router(owned_session: Callable[..., Any], actor_id: Callable[
     @router.get("/sources/{src_id}/pdf")
     def source_pdf(sid: str, src_id: str, sess=Depends(owned_session)) -> FileResponse:
         src = owned_source(sid, src_id)
-        path = Path(src.pdf_path)
+        try:
+            path = ingest.stored_paths(src, sess.ctx.data_dir)[0]        # confined before it is hashed or served
+        except OutsideDataDirError as exc:
+            raise http_error(exc) from exc
         if not path.is_file() or file_sha256(path) != src.sha256:
             raise HTTPException(409, "source file missing or changed on disk")
         return FileResponse(str(path), media_type="application/pdf", filename=src.filename,

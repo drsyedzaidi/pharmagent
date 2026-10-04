@@ -23,6 +23,7 @@ from app.evidence.invisible import HARD, MARK, SOFT, kind, strip_invisible
 from app.evidence.normalize import normalise, number_tokens, parse_number
 from app.evidence.value_checks import censored_flags, scaled_flags
 from app.evidence.verify import verify
+from tests.evidence_timing import limit
 
 ZWJ, ZWNJ, ZWSP, WJ, SHY = "‍", "‌", "​", "⁠", "­"
 VS1, VS17 = "️", "\U000e0100"
@@ -308,7 +309,9 @@ def test_differential_full_variation_selector_ranges():
     for name, page, snippet, value, style in EXPRESSIONS:
         total += _run(name, page, snippet, value, style, VARIATION_SELECTORS, per_kind=2)
     assert total > 10_000
-    assert time.monotonic() - started < 60
+    # 60 s strictly; limit() scales it only while a line tracer is installed (the coverage gate), so the
+    # work done (total > 10_000 checks) stays the regression guard and the wall clock stays strict otherwise
+    assert time.monotonic() - started < limit(60)
 
 
 TABLE_CELLS = ["12.5", "1.2 × 103", "1.2 x 10^3", "<0.5"]

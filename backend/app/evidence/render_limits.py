@@ -4,7 +4,6 @@ and a flood waits at most RENDER_QUEUE_WAIT_S (render.py) or is refused at once 
 from __future__ import annotations
 
 import asyncio
-import math
 import threading
 import time
 import weakref
@@ -15,7 +14,8 @@ from typing import Any
 
 import anyio
 import anyio.to_thread
-from fastapi import HTTPException
+
+from app.evidence.busy import refuse, seconds_until_window_opens
 
 RENDERS_PER_WINDOW, WINDOW_S = 60, 60.0
 MAX_RENDERS_IN_FLIGHT = 8          # running + waiting for a slot, all sessions together
@@ -36,10 +36,9 @@ def admit(sid: str) -> None:
         while window and now - window[0] > WINDOW_S:
             window.popleft()
         if len(window) >= RENDERS_PER_WINDOW:
-            wait = max(1, math.ceil(WINDOW_S - (now - window[0])))
-            raise HTTPException(429, f"too many page renders: at most {RENDERS_PER_WINDOW} per "
-                                     f"{WINDOW_S:.0f} s per session; try again shortly",
-                                headers={"Retry-After": str(wait)})
+            raise refuse(429, f"too many page renders: at most {RENDERS_PER_WINDOW} per "
+                              f"{WINDOW_S:.0f} s per session; try again shortly",
+                         seconds_until_window_opens(WINDOW_S, now, window[0]))
         window.append(now)
 
 
@@ -48,8 +47,7 @@ def in_flight() -> Iterator[None]:
     """Hold one of the MAX_RENDERS_IN_FLIGHT places; 503 at once when none is free."""
     with _lock:
         if _in_flight[0] >= MAX_RENDERS_IN_FLIGHT:
-            raise HTTPException(503, "the server is rendering many pages; try again shortly",
-                                headers={"Retry-After": str(RETRY_AFTER_S)})
+            raise refuse(503, "the server is rendering many pages; try again shortly", RETRY_AFTER_S)
         _in_flight[0] += 1
     try:
         yield

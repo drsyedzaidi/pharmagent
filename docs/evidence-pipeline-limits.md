@@ -76,6 +76,16 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
   (the UI marks them "earlier template"), but the wide CSV uses the current field list.
 - **Limits.** 25 MB and 300 pages per PDF. Password-protected PDFs are refused; owner-password
   (print-locked) PDFs are accepted.
+- **Stored paths are confined, in the routes.** The image, page-text, PDF-download and layout-rebuild routes (and the
+  rebuild tool) resolve the ledger's `pdf_path` and `parse_path` (symlinks followed) and refuse with 409 unless they
+  lie inside `data_dir/evidence`, before anything is hashed, read, parsed or served (`path_guard.py`). The other
+  agent tools (extract, screen, export, approve) still read the stored paths as the ledger gives them, behind the
+  sha256 check, because they carry no data directory; the ledger is internal, so this is defence in depth.
+- **Every 429 / 503 carries `Retry-After`** (uploads included, `busy.py`): the 429 gives the seconds until the oldest
+  request leaves the window, the saturation 503 a fixed 5 s.
+- **The coverage gate runs under a line tracer.** `scripts/evidence_coverage.py` needs every `app/evidence` module at
+  80 % or more of its executable lines (`--min`; `--data FILE` merges chunked runs). Wall-clock assertions use
+  `tests/evidence_timing.limit()`, strict normally and scaled x4 only while a tracer is installed.
 - **Error headers come from a deny-list.** The global handler forwards the headers of any raised
   `HTTPException` whose name is an RFC 9110 token and whose value is latin-1 without control characters (anything
   else is dropped, never a 500), except a fixed unsafe set (`app/response_headers.py`); a route that needs a header in that

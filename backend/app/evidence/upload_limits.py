@@ -1,8 +1,8 @@
 """Upload admission. Per session: a source-count cap, a stored-bytes cap and a sliding-window rate
 limit, checked before anything is staged (and the byte cap again once the size is known), so one
-session cannot queue unbounded parse work or disk use. Refusals are HTTP 429 (rate) / 413 (caps).
+session cannot queue unbounded parse work or disk use. Refusals are HTTP 429 (rate, with Retry-After) / 413 (caps).
 
-Server-wide: at most MAX_UPLOADS_IN_FLIGHT uploads at once (503 at once beyond that, whatever the
+Server-wide: at most MAX_UPLOADS_IN_FLIGHT uploads at once (503 + Retry-After at once beyond that, whatever the
 session), and their blocking part (hash, validation, the wait for a parse slot, the parse) runs on
 its own UPLOAD_WORKERS-token limiter, never on the shared threadpool every synchronous endpoint uses:
 a flood of uploads from many sessions waits without holding a thread and cannot starve the API."""
@@ -22,6 +22,7 @@ import anyio
 import anyio.to_thread
 from fastapi import HTTPException
 
+from app.evidence.busy import refuse, seconds_until_window_opens
 from app.evidence.store import get_store
 
 MAX_SOURCES_PER_SESSION = 200
@@ -29,6 +30,7 @@ MAX_SESSION_BYTES = 1024 * 1024 * 1024
 UPLOADS_PER_WINDOW, WINDOW_S = 30, 60.0
 UPLOAD_WORKERS = 4                 # threads finishing uploads (2 parse slots + hashing / validation)
 MAX_UPLOADS_IN_FLIGHT = 32         # all sessions together; the rest are refused with 503 at once
+RETRY_AFTER_S = 5                  # what the 503 tells a client to wait
 
 _lock = threading.Lock()
 _recent: dict[str, deque[float]] = {}
@@ -41,8 +43,8 @@ async def upload_slot() -> AsyncIterator[None]:
     """Hold one of the server-wide upload slots for the body of the block; 503 when none is free."""
     with _lock:
         if _in_flight[0] >= MAX_UPLOADS_IN_FLIGHT:
-            raise HTTPException(503, f"the server is processing {MAX_UPLOADS_IN_FLIGHT} uploads; "
-                                     "try again shortly")
+            raise refuse(503, f"the server is processing {MAX_UPLOADS_IN_FLIGHT} uploads; try again shortly",
+                         RETRY_AFTER_S)
         _in_flight[0] += 1
     try:
         yield
@@ -83,8 +85,9 @@ def admit(sid: str) -> None:
         while window and now - window[0] > WINDOW_S:
             window.popleft()
         if len(window) >= UPLOADS_PER_WINDOW:
-            raise HTTPException(429, f"too many uploads: at most {UPLOADS_PER_WINDOW} per "
-                                     f"{WINDOW_S:.0f} s per session; try again shortly")
+            raise refuse(429, f"too many uploads: at most {UPLOADS_PER_WINDOW} per "
+                              f"{WINDOW_S:.0f} s per session; try again shortly",
+                         seconds_until_window_opens(WINDOW_S, now, window[0]))
         window.append(now)
 
 

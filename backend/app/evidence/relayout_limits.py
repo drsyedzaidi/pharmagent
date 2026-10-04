@@ -23,6 +23,8 @@ import anyio
 import anyio.to_thread
 from fastapi import HTTPException
 
+from app.evidence.busy import refuse
+
 RELAYOUTS_PER_WINDOW, WINDOW_S = 12, 60.0     # rebuild requests per session per window
 MAX_IN_FLIGHT = 4                              # all sessions together
 RELAYOUT_WORKERS = 2                           # threads running rebuilds (the parse itself has 2 slots)
@@ -36,7 +38,7 @@ _limiters: weakref.WeakKeyDictionary[Any, anyio.CapacityLimiter] = weakref.WeakK
 
 
 def _refuse(status: int, message: str, retry_after: int = RETRY_AFTER_S) -> HTTPException:
-    return HTTPException(status, message, headers={"Retry-After": str(retry_after)})
+    return refuse(status, message, retry_after)
 
 
 @asynccontextmanager

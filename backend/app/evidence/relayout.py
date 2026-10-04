@@ -35,6 +35,7 @@ from app.evidence.models import Source, now_iso, sha256_text
 from app.evidence.parse import PARSER_NAME
 from app.evidence.parse_guard import ParseLimitError
 from app.evidence.parse_sandbox import ParseAbortedError, ParseBusyError
+from app.evidence.path_guard import OutsideDataDirError
 
 STATUSES = ("ready", "missing", "text_changed", "unreadable")
 OUTCOMES = ("rebuilt", "unchanged", "text_changed", "unreadable")
@@ -46,6 +47,7 @@ REASON_TEXT_CHANGED = ("The page text of this PDF now parses differently ({where
                        "extraction there, and compare every value with the PDF itself.")
 REASON_FAILED_PARSE = "The original parse failed, so there is no page text to attach positions to."
 REASON_UNREADABLE_STORE = "The stored PDF or its parse cache cannot be read."
+REASON_OUTSIDE = "The stored files of this source lie outside the evidence directory, so they were not read."
 REASON_REPARSE = "The PDF could not be parsed again ({why})."
 REASON_NO_MATCH = "The re-parsed page positions do not match the stored page text."
 log = logging.getLogger(__name__)
@@ -249,23 +251,48 @@ def _remembered(src: Source) -> dict[str, Any] | None:
     return mark
 
 
-def rebuild_layout(src: Source, session_id: str) -> dict[str, Any]:
+def _outside(src: Source) -> dict[str, Any]:
+    """The refusal for a source whose stored paths leave the evidence directory: it touches no file (not even
+    the status marker, which would be written beside the forged path), so nothing is recorded."""
+    return {"source_id": src.id, "outcome": "unreadable", "reason": REASON_OUTSIDE, "sidecar_sha256": None,
+            "n_pages": 0, "page_text_sha256": [], "pages_sha256": None,
+            "layout_status": "unreadable", "layout_reason": REASON_OUTSIDE}
+
+
+def outside_outcome(src: Source, data_dir: str | Path | None) -> dict[str, Any] | None:
+    """The 'unreadable' outcome when *src*'s stored paths leave the evidence directory of *data_dir*, else None
+    (also None without a data_dir). Touches no file."""
+    if data_dir is None:
+        return None
+    try:
+        ingest.stored_paths(src, data_dir)
+    except OutsideDataDirError:
+        return _outside(src)
+    return None
+
+
+def rebuild_layout(src: Source, session_id: str, data_dir: str | Path | None = None) -> dict[str, Any]:
     """Rebuild *src*'s layout sidecar (module docstring). Returns the outcome dict; ParseBusyError (no
-    parse slot) propagates and nothing is recorded. Writes nothing but the sidecar and its status marker."""
+    parse slot) propagates and nothing is recorded. Writes nothing but the sidecar and its status marker.
+    With a *data_dir* the stored PDF and parse paths must lie inside its evidence directory, checked before
+    anything is read, parsed or written; a source that does not is 'unreadable' and nothing is recorded."""
+    if (refused := outside_outcome(src, data_dir)) is not None:
+        return refused
     with _sha_lock(src.sha256):
         if src.parse_status != "failed" and _sidecar_ok(src):
             return _outcome(src, "unchanged", None, _read_json(Path(src.parse_path)))
         if src.parse_status != "failed" and (mark := _remembered(src)) is not None:
             return _outcome(src, mark["status"], str(mark.get("reason") or ""), _read_json(Path(src.parse_path)))
         try:
-            stored = ingest.load_pages(src)
+            stored = ingest.load_pages(src, data_dir)
         except (OSError, ValueError) as exc:
             log.info("layout rebuild: stored parse unreadable: %s", exc)
             return _refuse(src, "unreadable", REASON_UNREADABLE_STORE, None)
         if src.parse_status == "failed" or "error" in stored:
             return _refuse(src, "unreadable", REASON_FAILED_PARSE, stored)
         try:
-            doc = parse_sandbox.parse_isolated(Path(src.pdf_path), session_id=session_id)
+            pdf_path = Path(src.pdf_path) if data_dir is None else ingest.stored_paths(src, data_dir)[0]
+            doc = parse_sandbox.parse_isolated(pdf_path, session_id=session_id)
         except ParseBusyError:
             raise
         except Exception as exc:                  # encrypted, corrupt, over a limit, killed: not rebuildable

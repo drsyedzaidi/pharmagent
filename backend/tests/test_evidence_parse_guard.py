@@ -16,11 +16,12 @@ from app.config import settings
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
-from app.evidence import ingest, parse_guard, upload_limits
+from app.evidence import ingest, parse_guard, screen_rules, upload_limits
 from app.evidence import store as evstore
 from app.evidence.parse import parse_pdf
 from app.evidence.screen_rules import keyword_screen
 from tests import evidence_rawpdf as raw
+from tests.evidence_timing import limit
 
 EV = "/api/sessions/{sid}/evidence"
 BOX = [0, 0, 612, 792]
@@ -94,14 +95,21 @@ def test_parse_limit_becomes_parse_status_failed(tmp_path):
     assert src.parse_status == "failed"
 
 
-def test_keyword_screen_tokenises_each_page_once():
+def test_keyword_screen_tokenises_each_page_once(monkeypatch):
     text = " ".join(f"word{i} plasma concentration" for i in range(400))
     pages = [{"n": i + 1, "text": text, "columns": None} for i in range(100)]
     crit = [{"id": f"C{i}", "text": "x", "kind": "inclusion", "required": False,
              "keywords": [f"absent{i}{j}" for j in range(20)]} for i in range(2)]
+    calls = []
+    real = screen_rules._tokens
+    monkeypatch.setattr(screen_rules, "_tokens", lambda text: (calls.append(1), real(text))[1])
     t0 = time.monotonic()
     keyword_screen(crit, pages)
-    assert time.monotonic() - t0 < 4.0
+    elapsed = time.monotonic() - t0
+    assert len(calls) == len(pages)                  # once per page text, however many terms are looked up
+    # 4 s strictly; limit() scales it only while a line tracer is installed (the coverage gate runs the
+    # suite under one: it made this pass-in-3-s test take 6 s), so a real regression still fails
+    assert elapsed < limit(4.0), elapsed
 
 
 # ---------------------------------------------------------------- upload route --

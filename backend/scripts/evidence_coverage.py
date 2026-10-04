@@ -10,10 +10,18 @@ main thread only and its ignore cache is keyed by bare module name, so ignoring 
 module is below ``--min`` (default 80 %).
 
     cd backend && .venv/bin/python scripts/evidence_coverage.py [--min 80] [pytest args...]
+
+A full traced run is slow; ``--data FILE`` merges the lines hit by this run into FILE (a JSON map of
+file -> lines) and reports on the union, so the suite can run in chunks (each chunk's exit status only
+reflects its own tests; the gate is the last chunk's report):
+
+    scripts/evidence_coverage.py --data /tmp/cov.json --min 0 tests/test_evidence_a*.py
+    scripts/evidence_coverage.py --data /tmp/cov.json tests/test_evidence_z*.py
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import threading
 import trace
@@ -60,8 +68,33 @@ def _collect(pytest_args: list[str]) -> tuple[int, dict[Path, set[int]]]:
     return int(rc), merged
 
 
-def run(pytest_args: list[str], minimum: float) -> int:
+def _merge_data(hit: dict[Path, set[int]], data: Path | None) -> dict[Path, set[int]]:
+    """Union of *hit* and the lines stored in *data*, which is rewritten with the union."""
+    if data is None:
+        return hit
+    merged = {k: set(v) for k, v in hit.items()}
+    if data.exists():
+        for name, lines in json.loads(data.read_text("utf-8")).items():
+            merged.setdefault(Path(name), set()).update(lines)
+    data.write_text(json.dumps({str(k): sorted(v) for k, v in merged.items()}), "utf-8")
+    return merged
+
+
+def _missing(lines: set[int]) -> str:
+    """Compact ``a-b, c`` ranges of the executable lines that no test reached."""
+    out, run = [], []
+    for n in sorted(x for x in lines if x is not None):   # the line finder lists one None per module
+        if run and n != run[-1] + 1:
+            out.append(run)
+            run = []
+        run.append(n)
+    out.extend([run] if run else [])
+    return ", ".join(f"{r[0]}-{r[-1]}" if len(r) > 1 else str(r[0]) for r in out)
+
+
+def run(pytest_args: list[str], minimum: float, data: Path | None = None) -> int:
     rc, hit = _collect(pytest_args)
+    hit = _merge_data(hit, data)
     rows, below = [], []
     for mod in sorted(EVIDENCE.glob("*.py")):
         total = _executable_lines(mod)
@@ -70,6 +103,7 @@ def run(pytest_args: list[str], minimum: float) -> int:
         rows.append((mod.name, len(done), len(total), pct))
         if pct < minimum:
             below.append(mod.name)
+            print(f"{mod.name} lines not executed: {_missing(total - done)}")
     width = max(len(r[0]) for r in rows)
     print(f"\n{'module':<{width}}  executed/total  statements")
     for name, done, total, pct in rows:
@@ -85,10 +119,11 @@ def run(pytest_args: list[str], minimum: float) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--min", type=float, default=80.0, help="minimum statement coverage per module")
+    ap.add_argument("--data", type=Path, help="JSON file of hit lines merged across chunked runs")
     ap.add_argument("pytest_args", nargs="*", help="pytest arguments (default: tests/test_evidence_*.py)")
     ns = ap.parse_args(argv)
     args = ns.pytest_args or sorted(str(p.relative_to(ROOT)) for p in (ROOT / "tests").glob("test_evidence_*.py"))
-    return run(args, ns.min)
+    return run(args, ns.min, ns.data)
 
 
 if __name__ == "__main__":
