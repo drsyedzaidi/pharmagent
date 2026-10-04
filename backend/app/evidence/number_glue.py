@@ -7,7 +7,11 @@ token unreadable (fail closed), so a fragment of the printed number can never pa
   estimate from its dispersion and stay a boundary. A backtick counts as such a character.
 - A minus / plus / hyphen look-alike, or an invisible format character, directly before the
   token ('˗20', a soft hyphen): the sign of the number is unknown.
-- A vulgar fraction or combining mark glued after the digits ('12½', '3́').
+- A vulgar fraction or combining mark glued after the digits ('12½', '3́'), or a mixed number: a
+  fraction ('12 ½', '12 1/2', '12 1⁄2') one gap after the digits, or a vulgar fraction before them.
+- An unreadable character (private use, noncharacter / unassigned, lone surrogate, U+FFFC / U+FFFD,
+  C1 control: what a text layer emits for an unmapped glyph, which may BE a digit or a minus) touching
+  the token or one gap away from it.
 - Strict (page) text only: a thin / no-break space with a digit on its other side that the
   number grammar did not take as a 3-digit group ('0.123 4' ISO decimal grouping).
 """
@@ -18,6 +22,8 @@ import unicodedata
 
 _ASCII_DIGITS = frozenset("0123456789")
 _SEPARATES = frozenset("±∓")
+_GAPS = " \x00"                                    # a word gap in folded text (strict mode turns ASCII gaps into NUL)
+_RATIO = re.compile(r"\d+[/\u2044]\d")
 _LETTERS = re.compile(r"[^\W\d_]+")
 # units (and ordinals) a paper may glue to the digits; case matters ('l', 'I', 'O' look like digits)
 GLUED_UNITS = frozenset({
@@ -63,6 +69,30 @@ def _fraction_or_mark(ch: str) -> bool:
     return cat.startswith("M") or (cat == "No" and "⁄" in unicodedata.normalize("NFKC", ch))
 
 
+def _unreadable(ch: str) -> bool:
+    """A character the text layer cannot have meant literally: it may stand for a digit or a sign."""
+    cp = ord(ch)
+    return ch in "\ufffc\ufffd" or 0x80 <= cp <= 0x9F or unicodedata.category(ch) in ("Co", "Cn", "Cs")
+
+
+def _unreadable_near(ch: str, beyond: str) -> bool:
+    """*ch* (the character next to a token) is unreadable, or is a gap with an unreadable one behind it."""
+    return bool(ch) and (_unreadable(ch) or (ch in _GAPS and bool(beyond) and _unreadable(beyond)))
+
+
+def _vulgar(ch: str) -> bool:
+    return unicodedata.category(ch) == "No" and "\u2044" in unicodedata.normalize("NFKC", ch)
+
+
+def _mixed_number(text: str, start: int, end: int) -> bool:
+    """'12 ½', '12 1/2', '12 1⁄2' (a whole number and a fraction one gap apart) or '½ 12', '½12'."""
+    before, before2 = text[start - 1:start] if start > 0 else "", text[start - 2:start - 1] if start > 1 else ""
+    after = text[end:end + 1]
+    if after in _GAPS and after and (_RATIO.match(text, end + 1) or (end + 1 < len(text) and _vulgar(text[end + 1]))):
+        return True
+    return bool(before) and (_vulgar(before) or (before in _GAPS and bool(before2) and _vulgar(before2)))
+
+
 def glued(text: str, start: int, end: int, *, strict: bool) -> bool:
     """True when text[start:end] (a folded number token) touches a character a reader may read as
     part of it (see the module docstring)."""
@@ -77,6 +107,8 @@ def glued(text: str, start: int, end: int, *, strict: bool) -> bool:
     if after and after2 in _ASCII_DIGITS and _odd_between(after):
         return True
     if after and (_fraction_or_mark(after) or _letters_after(text, end)):
+        return True
+    if _unreadable_near(before, before2) or _unreadable_near(after, after2) or _mixed_number(text, start, end):
         return True
     if strict and ((after == " " and after2 in _ASCII_DIGITS) or (before == " " and before2 in _ASCII_DIGITS)):
         return True

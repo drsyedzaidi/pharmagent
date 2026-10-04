@@ -465,12 +465,25 @@ How numbers are matched:
   sign) inside or adjacent to it, make it unresolved. A mantissa-only, `10`-only or exponent-only
   citation of such a token fails `partial_number` as for clean text. The censored-value and
   scaled-header checks read the page around the token with the same characters removed.
+  Bidi state is positional: an embedding, override or isolate (`LRE RLE LRO RLO LRI RLI FSI`) stays open
+  until its `PDF` / `PDI` or the end of the paragraph, and every token inside an open run is unresolved
+  (`RLO AUC 12.5 mg/L` is drawn `L/gm 5.21 CUA`). ASCII control characters (C0 except tab and line breaks,
+  DEL) draw nothing and are folded out like the Cf characters (`1<DEL>2` is one number with a gap inside:
+  unresolved). An unreadable character (private use, noncharacter or unassigned, lone surrogate, U+FFFC,
+  U+FFFD, C1 control: what a text layer emits for an unmapped glyph) touching a token, or one gap away, makes
+  it unresolved, and so does a mixed number (`12 ½`, `12 1/2`, `12 1⁄2`).
+  The qualifier and range-bound windows count VISIBLE characters (invisible, combining and unreadable
+  characters skipped, whitespace runs counted once, at most 2048 raw characters walked: more is flagged
+  `censored_value`), so padding cannot push a `<` or a range dash out of them.
 - A mid dot between digits is a decimal point (`12·4` = 12.4, never `12` or `4`) unless it multiplies a
   power of ten (`2.5·10^4`); `’` / `ʼ` / `′` group digits like `'` (`24’560`). Citation lists (`[1,2]`)
   are not decimal-comma evidence.
 - Scientific notation is one token: `1.2e-3`, `1.2E+03`, `3.4 E-03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`;
-  any non-ASCII symbol or letter between the number and `10` other than a comparison or `±` sign is a
-  multiplier (`⋅ ∙ • ⨯ ✕ ✖ х`). Citing
+  the multiplier is `x X *` or a real multiplication sign (`× · ⋅ ∙ • ⨯ ⨉ ✕ ✖ ∗ ⋆ ⁎ ＊ х`); any other symbol,
+  junk, look-alike ten (`１０`, `⑩`, `l0`, `1O`, `І0`) or exponent outside the grammar (`10₃`, `10 ^ 3`,
+  `10**3`, `10^³`, `10ⁿ`) leaves the whole token unresolved whatever the page's small glyphs say.
+  Line and paragraph separators, NEL, the Ogham space and the Braille blank are gaps, not multipliers.
+  Citing
   only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
   the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
   `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the

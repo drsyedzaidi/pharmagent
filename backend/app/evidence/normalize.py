@@ -17,12 +17,14 @@ from typing import NamedTuple
 
 from app.evidence.invisible import Cleaned, clean, is_invisible, touches
 from app.evidence.number_glue import glued
+from app.evidence.sci_tail import MULT_CHARS, exponent_end, scientific_end
 
 IdxMap = list[int]
 
 _DASHES = "‐‑‒–—―−﹘﹣－˗➖⁃⸺⸻"        # look-alike minus signs fold to '-'
 _PLUSES = "﹢＋"
-_SPACES = "              　"
+_SPACES = ("\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x200B))) + "\u202f\u205f\u3000"
+           "\x85\u2028\u2029\u2800")           # Zs, Zl, Zp, NEL and the Braille blank all draw as a gap
 _APOSTROPHES = "’ʼ′"          # typographic apostrophe / modifier letter / prime: Swiss digit grouping too
 _FOLD = str.maketrans({**{c: "-" for c in _DASHES}, **{c: " " for c in _SPACES}, **{c: "'" for c in _APOSTROPHES},
                        **{c: "+" for c in _PLUSES},
@@ -44,16 +46,19 @@ _POINT_DECIMAL = re.compile(r"\d\.\d+")
 _POINT_THOUSANDS = re.compile(r"\b\d{1,3}(?:\.\d{3})+,\d+")
 _DIGITS_ONLY = re.compile(r"[^0-9]")
 _WORD_RE = re.compile(r"\w", re.ASCII)
-_ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v"})   # 1:1, matches no NUM_RE separator
+# 1:1, matches no NUM_RE separator; line / paragraph separators, NEL, Ogham space and the Braille blank
+# are gaps like '\n' and never group digits
+_ASCII_GAPS = str.maketrans({c: "\x00" for c in " \t\n\r\f\v\x85\u2028\u2029\u1680\u2800"})
 # Scientific notation belongs to the number it follows: '1.2e-3', '1.2E+03', '1.2 x 10^3', '1.2 × 10⁻³'.
 # A '10' after the multiplier with no readable exponent ('4.5 x 10' whose superscript went to small_text,
 # or '10-3') makes the token UNRESOLVED (value None): it can never pass as its mantissa or as 10.
 _SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _GAP = r"[ \x00]{0,2}"
 _EXP = r"(?:\^[ \x00]?(?P<pow>[+-]?\d{1,4})(?!\d)|(?P<sup>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]{1,4})|(?P<odd>[+-]\d{1,4}(?!\d)))"
-# Multiplier: x, *, or ANY non-ASCII character other than a comparison or plus-minus sign ('×', '·',
-# look-alikes '⋅ ∙ • ⨯ ✕ ✖ х'): a symbol between a number and '10' is never read as a token boundary.
-_MULTIPLIER = r"(?:[xX*]|[^\x00-\x7f±∓≤≥≦≧≈≃≅≠∼<>=])"
+# Multiplier: x, *, or one of the real multiplication signs / dots (sci_tail.MULT_CHARS). Any OTHER symbol
+# between a number and a ten (a division sign, replacement character, private use) leaves the token
+# unresolved (sci_tail.scientific_end) instead of reading the exponent or passing the mantissa.
+_MULTIPLIER = "[" + re.escape(MULT_CHARS) + "]"
 # 'N x 10' followed by digits and no caret / superscript ('1.2 × 103', '1.2 x 10 3') is a power of ten
 # whose exponent was set at full size but raised: the text layer cannot say 10^3 from 103, so the token
 # is unresolved (group 'raw'). A tail starting with 0 ('2 x 100 mg', '3 x 1000 mg') is a plain
@@ -146,14 +151,22 @@ def _scaled(mantissa: float, exponent: str | None) -> float | None:
 
 
 def _scientific(folded: str, end: int, mantissa: float, bare_ten: bool) -> tuple[int, float | None] | None:
-    """(token end, value) when scientific notation follows the number ending at *end*, else None."""
+    """(token end, value) when scientific notation follows the number ending at *end*, else None. A tail
+    that looks like notation but is not in the grammar is unresolved (value None) whatever *bare_ten* says."""
     m = _SCI_RE.match(folded, end)
     if m is not None and (m.group("e") or m.group("eg")) is not None:     # '3.4E-03', SAS '3.4 E-03'
         return m.end(), _scaled(mantissa, m.group("e") or m.group("eg"))
     if m is not None and m.group("raw"):                                   # '1.2 × 103': exponent unreadable
         return m.end(), None
-    if m is not None and (m.group("pow") or m.group("sup") or m.group("odd") or bare_ten):
+    if m is not None and (m.group("pow") or m.group("sup")):
         return m.end(), _scaled(mantissa, m.group("pow") or m.group("sup"))
+    if m is not None:                                                      # a bare 'N x 10', maybe an odd exponent
+        odd = exponent_end(folded, m.end())
+        if m.group("odd") or bare_ten or odd is not None:
+            return odd or m.end(), None
+    far = None if m is not None else scientific_end(folded, end)          # look-alike ten / symbol / junk
+    if far is not None:
+        return far, None
     p = _POW_RE.match(folded, end) if mantissa == 10 and folded[end - 2:end] == "10" else None
     if p is not None:                                                      # a bare power: '10^6'
         return p.end(), _scaled(1.0, p.group("pow") or p.group("sup"))

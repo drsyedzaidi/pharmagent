@@ -21,6 +21,7 @@ from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
 from app.evidence.unit_norm import canonical_unit, normalise_unit, prefix_conflict
 from app.evidence.value_checks import token_context, value_flags
+from app.evidence.visible_window import ignorable
 
 _UNIT_TOKEN_RE = re.compile(r"^\s*([%‰‱]|[^\W\d_][\w/·*.^\-]*(?:\s+[^\W\d_]{1,3}(?:/[\w.^\-]+)+)?)")
 _NEXT_TOKEN_RE = re.compile(r"^\s*(/|per\b|\S+)")
@@ -73,7 +74,9 @@ def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> Printed:
     if ctx is None:
         return None, True, None
     text, _, end = ctx
-    raw = text[end:end + CONTINUATION_CHARS].translate(UNIT_FOLD)
+    window = text[end:end + CONTINUATION_CHARS]
+    window = text[end:end + CONTINUATION_CHARS + min(sum(map(ignorable, window)), 4 * CONTINUATION_CHARS)]
+    raw = window.translate(UNIT_FOLD)
     norm, idx = normalise(raw)
     lead = " " if raw[:1].isspace() else ""
     rest = lead + norm.translate(UNIT_FOLD)
@@ -85,7 +88,7 @@ def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> Printed:
     printed = raw[idx[a]:idx[b - 1] + 1] if 0 <= a < b <= len(idx) else None
     tail = rest[m.end():]
     if not tail.strip():
-        return unit, end + CONTINUATION_CHARS >= len(text), printed
+        return unit, end + len(window) >= len(text), printed
     return unit, not _continues(tail), printed
 
 

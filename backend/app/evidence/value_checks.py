@@ -26,6 +26,7 @@ from app.evidence import models as M
 from app.evidence.invisible import strip_invisible
 from app.evidence.normalize import MIDDOTS, decimal_evidence, number_spans
 from app.evidence.qc_flags import is_interval_field
+from app.evidence.visible_window import visible_after, visible_before
 
 QUALIFIER_CHARS = 24
 _QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲≳≮≯≰≱≁≉]|\b(?:below|above|less than|more than|greater than|"
@@ -84,13 +85,20 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
     if ctx is None:
         return []
     text, a, b = ctx
-    before = _fold(text[max(0, a - QUALIFIER_CHARS):a])
-    m = _QUALIFIER_RE.search(before)
     literal = (p.get("locator") or {}).get("literal")
+    # the windows hold VISIBLE characters: padding with marks, invisible or unreadable characters or long
+    # whitespace cannot push a qualifier or a range bound out of them
+    prefix, capped_before = visible_before(text, a, QUALIFIER_CHARS)
+    suffix, capped_after = visible_after(text, b, QUALIFIER_CHARS)
+    before, after = _fold(prefix), _fold(suffix)
+    m = _QUALIFIER_RE.search(before)
     if m is not None:
         return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: the page prints {m.group(0).strip()!r} before "
                       f"{literal!r}; a bound or approximation is not an exact value", p)]
-    after = _fold(text[b:b + QUALIFIER_CHARS])
+    if capped_before or capped_after:
+        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: too many unreadable or invisible characters "
+                      f"lie next to {literal!r} to rule out a qualifier or a range bound; read the value on the PDF",
+                      p)]
     if is_interval_field(str(p.get("field") or "")) or not (_RANGE_BEFORE.search(before) or _RANGE_AFTER.match(after)):
         return []
     return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: {literal!r} is one end of a printed range; a "
