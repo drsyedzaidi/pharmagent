@@ -453,6 +453,18 @@ How numbers are matched:
   minus / plus / hyphen look-alike or invisible format character in sign position (`˗20`, a soft
   hyphen), a vulgar fraction glued after it (`12½`), and in page text a thin-space group that is not
   three digits (`0.123 4`). `˗ ➖ ⁃ ⸺ ⸻` fold to `-` and `﹢ ＋` to `+`.
+- Invisible and combining characters (`invisible.py`). Characters that render as nothing (category Cf,
+  Default_Ignorable: soft hyphen, zero-width space / joiners, word joiner, variation selectors, tag
+  characters, Mongolian free variation selectors, Hangul fillers) are folded out of the number
+  reading with an offset map back to the raw text, so `1.2 x<ZWJ>10 3` reads exactly like
+  `1.2 x 10 3` (the raised-exponent shape: unresolved). The token stays unresolved when such a
+  character could stand for a sign or a digit-group break: directly before a number, between its
+  digits, or right before an exponent sign or digits. A combining or enclosing mark (U+0300, U+20D0
+  blocks, ...) on a digit, decimal point, sign, multiplier or `e` of the token or on the character
+  next to it, and a bidi control, interlinear annotation mark or drawn Cf character (Arabic number
+  sign) inside or adjacent to it, make it unresolved. A mantissa-only, `10`-only or exponent-only
+  citation of such a token fails `partial_number` as for clean text. The censored-value and
+  scaled-header checks read the page around the token with the same characters removed.
 - A mid dot between digits is a decimal point (`12·4` = 12.4, never `12` or `4`) unless it multiplies a
   power of ten (`2.5·10^4`); `’` / `ʼ` / `′` group digits like `'` (`24’560`). Citation lists (`[1,2]`)
   are not decimal-comma evidence.

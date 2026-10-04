@@ -23,11 +23,12 @@ import unicodedata
 from typing import Any
 
 from app.evidence import models as M
+from app.evidence.invisible import strip_invisible
 from app.evidence.normalize import MIDDOTS, decimal_evidence, number_spans
 from app.evidence.qc_flags import is_interval_field
 
 QUALIFIER_CHARS = 24
-_QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲≳]|\b(?:below|above|less than|more than|greater than|"
+_QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲≳≮≯≰≱≁≉]|\b(?:below|above|less than|more than|greater than|"
                            r"up to|at least|at most|approximately|approx\.?|about|circa|ca\.?|blq|bloq|"
                            r"lloq|uloq))\s*$", re.IGNORECASE)
 # a multiplier of the printed number: 'x10^3', '×10³', 'x 10' (exponent lost), '10³ ng·h/mL', 'e3',
@@ -73,7 +74,9 @@ def token_context(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str, int, 
 
 
 def _fold(text: str) -> str:
-    return unicodedata.normalize("NFKC", text)
+    """NFKC after invisible characters are dropped ('<' + ZWJ is still '<'; '<' + U+0338 composes to '≮');
+    any combining mark left is then removed, so a marked qualifier is still a qualifier."""
+    return strip_invisible(unicodedata.normalize("NFKC", strip_invisible(text)), marks=True)
 
 
 def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -95,6 +98,7 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
 
 
 def _scaled(label: str) -> bool:
+    label = strip_invisible(label, marks=True)         # 'x' + ZWJ + '10^3' and a struck-through 'x' still scale
     return any(not (_DENOMINATOR_RE.search(label[:m.start()]) and not m.group(0).startswith("/"))
                for m in _SCALE_RE.finditer(label))
 

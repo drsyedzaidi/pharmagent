@@ -2,6 +2,8 @@
 
 Every transform returns (text, idx_map) with idx_map[i] = offset of text[i] in the
 ORIGINAL string, so a match found in normalised text maps back to raw page offsets.
+Characters that render as nothing (Cf, Default_Ignorable) are dropped with offset mapping and
+combining marks / bidi controls leave a touching number unresolved (invisible.py).
 Pipeline: per-char NFKC -> dash/space folding -> casefold -> de-hyphenate line
 wraps -> collapse whitespace. Numbers are matched with ASCII digits only; any other
 Unicode digit is reported by has_non_ascii_digits() and must be rejected upstream.
@@ -13,6 +15,7 @@ import re
 import unicodedata
 from typing import NamedTuple
 
+from app.evidence.invisible import Cleaned, clean, is_invisible, touches
 from app.evidence.number_glue import glued
 
 IdxMap = list[int]
@@ -24,7 +27,6 @@ _APOSTROPHES = "’ʼ′"          # typographic apostrophe / modifier letter / 
 _FOLD = str.maketrans({**{c: "-" for c in _DASHES}, **{c: " " for c in _SPACES}, **{c: "'" for c in _APOSTROPHES},
                        **{c: "+" for c in _PLUSES},
                        "µ": "μ"})
-_DROP = {"­", "​", "‌", "‍", "﻿"}        # soft hyphen, zero-width marks
 _ASCII_DIGITS = set("0123456789")
 
 # ASCII-only number token: optional sign (only when not glued to a word), digits with optional
@@ -180,7 +182,19 @@ def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
     (U+2009, U+202F, U+00A0, ...) groups digits. Lenient mode (snippets, proposed values, which a
     model writes with plain spaces) accepts a single ASCII space too. *bare_ten* reads 'N x 10'
     with no exponent as notation whose exponent was lost (unresolved, fail closed); pass False only
-    when the page has no small glyphs that could have held it."""
+    when the page has no small glyphs that could have held it.
+
+    Characters that render as nothing are folded out first (invisible.py) and offsets are mapped
+    back to *text*; a combining mark, bidi control or sign-ambiguous invisible character on or next
+    to a token leaves it unresolved (value None)."""
+    view = clean(text)
+    if view is None:
+        return _tokens(text, decimal_style, strict, bare_ten, None)
+    tokens = _tokens(view.text, decimal_style, strict, bare_ten, view)
+    return [NumToken(view.cmap[t.start], view.cmap[t.end - 1] + 1, t.value, t.mantissa) for t in tokens]
+
+
+def _tokens(text: str, decimal_style: str, strict: bool, bare_ten: bool, view: Cleaned | None) -> list[NumToken]:
     folded = fold_chars(text.translate(_ASCII_GAPS) if strict else text)
     out: list[NumToken] = []
     last_end = -1
@@ -202,8 +216,9 @@ def number_tokens(text: str, decimal_style: str = ".", *, strict: bool = False,
             continue
         sci = _scientific(folded, m.end(), value, bare_ten)
         tok = NumToken(start, m.end(), value) if sci is None else NumToken(start, sci[0], sci[1], value)
-        if glued(folded, start, tok.end, strict=strict):          # '12З', '12․4', '˗20', '12½': unreadable
-            tok = NumToken(start, tok.end, None, tok.mantissa)
+        marked = view is not None and touches(view, start, tok.end, m.end())
+        if marked or glued(folded, start, tok.end, strict=strict):
+            tok = NumToken(start, tok.end, None, tok.mantissa)    # '12З', '12․4', '˗20', '12½', marked digit
         out.append(tok)
         last_end = out[-1].end
     return out
@@ -251,7 +266,7 @@ def _expand_with_map(text: str, idx_map: IdxMap | None, fn) -> tuple[str, IdxMap
 
 
 def nfkc_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    return _expand_with_map(text, idx_map, lambda ch: "" if ch in _DROP else unicodedata.normalize("NFKC", ch))
+    return _expand_with_map(text, idx_map, lambda ch: "" if is_invisible(ch) else unicodedata.normalize("NFKC", ch))
 
 
 def casefold_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
