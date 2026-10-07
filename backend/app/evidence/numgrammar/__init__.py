@@ -3,12 +3,17 @@ allowed alphabet; every other character inside a numeric expression, or within o
 expression unresolved (see docs/evidence-pipeline.md, "How numbers are matched")."""
 from __future__ import annotations
 
-from app.evidence.numgrammar.alphabet import CID_MARKER, CONTEXT, GAP, INSIDE, LINE, cls
+from app.evidence.numgrammar.alphabet import CID_MARKER, CONTEXT, GAP, INSIDE, LINE, NUMBER_CHARS, cls
 from app.evidence.numgrammar.api import (
+    claim_decimal,
+    digit_group,
+    digits_of,
     find_dose,
     find_n,
     find_n_lead,
     is_data_cell,
+    is_digit_run,
+    loose_in,
     number_spans,
     numbers_in,
     parse_claim,
@@ -23,6 +28,7 @@ from app.evidence.numgrammar.equivalents import EQUIV
 from app.evidence.numgrammar.tok import Tok
 from app.evidence.numgrammar.tokenizer import tokens
 
-__all__ = ["CID_MARKER", "CONTEXT", "EQUIV", "GAP", "INSIDE", "LINE", "Tok", "cls", "find_dose", "find_n",
-           "find_n_lead", "is_data_cell", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at",
-           "tokens", "unreadable", "words_after", "words_around", "words_before"]
+__all__ = ["CID_MARKER", "CONTEXT", "EQUIV", "GAP", "INSIDE", "LINE", "NUMBER_CHARS", "Tok", "claim_decimal", "cls",
+           "digit_group", "digits_of", "find_dose", "find_n", "find_n_lead", "is_data_cell", "is_digit_run",
+           "loose_in", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at", "tokens",
+           "unreadable", "words_after", "words_around", "words_before"]

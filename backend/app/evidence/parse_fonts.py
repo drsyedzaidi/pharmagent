@@ -5,9 +5,10 @@ layer names. A font can say otherwise in two ways: its /ToUnicode CMap maps a co
 character than the glyph drawn for that code (Helvetica's 'three' reported as '4'), or its glyph
 program is arbitrary (a Type3 procedure named 'three' that paints a 4). Numbers are what the
 verifier trusts, so every font a page draws with is checked for the characters numbers are made of
-(CRITICAL: digits, sign, decimal / grouping marks, exponent marks):
+(NUMBER_CHARS, the one list of the reader: every character the alphabet lets stand inside a number and every
+approved equivalent; a text is compared after the equivalents table, never after NFKC or a dash list):
 
-- Type3 font: its glyphs are drawing procedures, so the identity of any CRITICAL character it can
+- Type3 font: its glyphs are drawing procedures, so the identity of any number character it can
   produce is unknown -> ``glyph_text_mismatch`` (error). A procedure can paint a digit under ANY
   code (a glyph decoded as a space), so a page that draws with a Type3 font has every digit in doubt.
 - A drawn number glyph whose text is no number character (a ToUnicode mapping the glyph 'one' to a
@@ -15,21 +16,20 @@ verifier trusts, so every font a page draws with is checked for the characters n
   of the page is in doubt (``glyph_text_mismatch``).
 - Simple font (Type1 / TrueType) with /ToUnicode: each code's ToUnicode text is compared with the
   character its encoding names (base encoding + /Differences, Adobe Glyph List). A disagreement on a
-  CRITICAL character -> ``glyph_text_mismatch``; no usable glyph name (symbolic embedded font
+  number character -> ``glyph_text_mismatch``; no usable glyph name (symbolic embedded font
   without /Encoding, unknown glyph name) -> ``glyph_unverified`` (warn).
 - Type0 font with /ToUnicode: for an embedded TrueType (CIDFontType2) the glyph a CID selects
   (CIDToGIDMap) is looked up in the font's own cmap / glyph names (fontTools); a disagreement ->
   ``glyph_text_mismatch``, no identity (CFF CIDs, no cmap entry, unreadable program) ->
   ``glyph_unverified``.
 
-The result per page is {code: CRITICAL characters affected}; records whose literal contains one of
+The result per page is {code: number characters affected}; records whose literal contains one of
 them carry the flag (record_checks.glyph_flags). Limit: an embedded outline that draws a different
 shape under a correct glyph name and cmap entry is not detected (that needs OCR).
 """
 from __future__ import annotations
 
 import io
-import unicodedata
 from typing import Any
 
 from pdfminer.encodingdb import name2unicode
@@ -37,21 +37,16 @@ from pdfminer.pdffont import PDFCIDFont, PDFType3Font
 from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdftypes import PDFObjRef, PDFStream, resolve1
 
+from app.evidence.numgrammar.alphabet import DIGITS, NUMBER_CHARS
+from app.evidence.numgrammar.equivalents import fold
+
 MISMATCH, UNVERIFIED = "glyph_text_mismatch", "glyph_unverified"
-CRITICAL = frozenset("0123456789.,+-eE×^·'")
-DIGITS = frozenset("0123456789")
-_BENIGN = frozenset("\u00ad")          # a hyphen glyph reported as a soft hyphen (the tokenizer treats it as a sign)
-_DASHES = str.maketrans({c: "-" for c in "‐‑‒–—―−﹘﹣－"})
 MAX_FORM_DEPTH = 4
 MAX_FONTS = 400
 
 
-def _fold(text: str) -> str:
-    return unicodedata.normalize("NFKC", text or "").translate(_DASHES)
-
-
 def _critical(text: str | None) -> set[str]:
-    return {c for c in _fold(text or "") if c in CRITICAL}
+    return {c for c in fold(text or "") if c in NUMBER_CHARS}
 
 
 def _name(obj: Any) -> str:
@@ -132,14 +127,12 @@ def _encoding(font: Any, spec: dict) -> dict[int, str] | None:
 def _hides(text: str | None, drawn: set[str]) -> bool:
     """True when the glyph drawn is a number character the text does not report: a digit reported as
     anything without a digit, or any number character reported as whitespace / nothing."""
-    folded = _fold(text or "")
-    if folded in _BENIGN:
-        return False
+    folded = fold(text or "")
     return bool(drawn & DIGITS and not set(folded) & DIGITS) or bool(drawn and not folded.strip())
 
 
 def _simple(font: Any, spec: dict) -> tuple[set[str], set[str]]:
-    """(mismatch, unverified) CRITICAL characters of a Type1 / TrueType font with a ToUnicode map."""
+    """(mismatch, unverified) number characters of a Type1 / TrueType font with a ToUnicode map."""
     encoding = _encoding(font, spec)
     bad, unknown = set(), set()
     for code, text in _tounicode(font).items():
@@ -149,7 +142,7 @@ def _simple(font: Any, spec: dict) -> tuple[set[str], set[str]]:
             continue
         if enc is None:
             unknown |= crit
-        elif _fold(text) != _fold(enc):
+        elif fold(text) != fold(enc):
             bad |= crit | (DIGITS if _hides(text, _critical(enc)) else set())
     return bad, unknown
 
@@ -192,7 +185,7 @@ def _glyph_chars(order: list[str], names: dict[str, set[str]], gid: int | None) 
 
 
 def _cid(font: Any, spec: dict) -> tuple[set[str], set[str]]:
-    """(mismatch, unverified) CRITICAL characters of a Type0 font with a ToUnicode map."""
+    """(mismatch, unverified) number characters of a Type0 font with a ToUnicode map."""
     descendants = resolve1(spec.get("DescendantFonts"))
     desc = resolve1(descendants[0]) if isinstance(descendants, list) and descendants else None
     desc = desc if isinstance(desc, dict) else {}
@@ -207,13 +200,13 @@ def _cid(font: Any, spec: dict) -> tuple[set[str], set[str]]:
             continue
         if not glyph:
             unknown |= crit
-        elif _fold(text) not in {_fold(g) for g in glyph}:
+        elif fold(text) not in {fold(g) for g in glyph}:
             bad |= crit | (DIGITS if _hides(text, drawn) else set())
     return bad, unknown
 
 
 def _type3(font: Any, spec: dict) -> set[str]:
-    """Every CRITICAL character a Type3 font can produce (its codes FirstChar..LastChar, or ToUnicode),
+    """Every number character a Type3 font can produce (its codes FirstChar..LastChar, or ToUnicode),
     and every digit: a procedure decoded as a space or a letter may paint one beside a number."""
     first, last = int(resolve1(spec.get("FirstChar")) or 0), int(resolve1(spec.get("LastChar")) or 255)
     codes = range(max(0, first), min(255, last) + 1)
@@ -244,7 +237,7 @@ class GlyphChecker:
         return self.cache[key]
 
     def page(self, page: Any) -> dict[str, str]:
-        """{flag code: CRITICAL characters} for the fonts the page's chars use; {} when all agree."""
+        """{flag code: number characters} for the fonts the page's chars use; {} when all agree."""
         used = {str(c.get("fontname")) for c in page.chars}
         try:
             specs = _font_specs(page.page_obj.resources)

@@ -337,5 +337,14 @@ def test_the_reader_keeps_no_codepoint_blocklist_by_name():
         assert token not in text, token
 
 
+def test_the_digit_helpers_of_the_callers_are_the_alphabets_not_private_copies():
+    import app.evidence.value_checks as VC
+    import app.evidence.verify as V
+    for module, names in ((VC, ("_DIGITS", "_DIGITS_SET", "_bare_group")), (V, ("_NON_DIGITS", "digits_only", "_close"))):
+        for name in names:
+            assert not hasattr(module, name), (module.__name__, name)
+    assert hasattr(V, "digits_of") and hasattr(VC, "digit_group")
+
+
 def test_the_message_module_uses_unicodedata_only_to_name_a_code_point():
     assert {a for a, _ in _calls(EVIDENCE / "verify_messages.py")} == {"unicodedata.name"}

@@ -20,8 +20,9 @@ than then there their they them these those such via per within without about ab
 study studies report reports reported reporting describe describes described include includes included
 exclude excludes excluded paper papers article articles publication publications data value values
 """.split())
-_TOKEN_RE = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
-_TERM_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*", re.UNICODE)
+# keyword tokens (never a value): runs of letters, runs of ASCII digits; a non-ASCII digit is neither
+_TOKEN_RE = re.compile(r"[^\W0-9_]+|[0-9]+", re.UNICODE)
+_TERM_RE = re.compile(r"[^\W0-9_][^\W_]*(?:-[^\W_]+)*", re.UNICODE)
 _OR_RE = re.compile(r"\bor\b|;", re.IGNORECASE)
 MAX_SNIPPET, MAX_EVIDENCE_PER_CRITERION, MIN_TERM_LEN = 300, 6, 2
 
@@ -79,12 +80,6 @@ def _find(want: tuple[str, ...], stems: list[str], spans: list[tuple[int, int]])
         if tuple(stems[i:i + n]) == want:
             return [spans[i][0], spans[i + n - 1][1]]
     return None
-
-
-def find_term(term: str, text: str) -> list[int] | None:
-    """Raw [start, end) of the first whole-token match of *term* (phrases allowed) in *text*."""
-    want = stem_phrase(term)
-    return _find(want, *_tokens(text)) if want else None
 
 
 Indexed = list[tuple[int, int | None, str, list[str], list[tuple[int, int]]]]   # page, column, text, stems, spans

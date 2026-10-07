@@ -46,13 +46,13 @@ from __future__ import annotations
 
 import ctypes
 import time
-import unicodedata
 from typing import Any
 
 import numpy as np
 
+from app.evidence.numgrammar.alphabet import NUMBER_CHARS as OVERLAP_CRITICAL
+from app.evidence.numgrammar.alphabet import cls
 from app.evidence.parse_ink_match import _transfer
-from app.evidence.parse_marks import CRITICAL as OVERLAP_CRITICAL
 from app.evidence.parse_marks import MAX_INK_CHARS, ink_odd
 
 RENDER_SCALE = 2.0                 # 144 dpi
@@ -68,7 +68,6 @@ MAX_GROUPS = 8
 DUPLICATE_PT = 1.0
 COVER_FRACTION = 0.1               # share of a number glyph's box another group's stroked text may change
 _STROKE_MODES = frozenset({1, 2, 5, 6})
-_UNOWNED = ("Mn", "Me", "Sk", "Lm")   # combining marks / modifiers sit on another glyph by design
 
 
 def _open_document(path: str) -> Any:
@@ -241,7 +240,8 @@ def _judge(texts: list[str], boxes: np.ndarray, groups: list[int], renders: dict
     padded = _pad(px, blank.shape)
     first: dict[tuple, int] = {}
     canon = np.array([first.setdefault((groups[i], *np.round(boxes[i], 2).tolist()), i) for i in range(len(texts))])
-    marks = np.array([unicodedata.category(t[:1]) in _UNOWNED for t in texts])
+    # a glyph the reader cannot read (a combining mark, a modifier, any OUTSIDE character) claims no ink box of its own
+    marks = np.array([bool(t) and cls(t[0]) == "outside" for t in texts])
     claims = (canon == np.arange(len(texts))) & ~marks
     inside = (px[:, 2] - px[:, 0]) * (px[:, 3] - px[:, 1])          # box pixels on the rendered page
     visible, odd = np.zeros(len(texts), bool), np.zeros(len(texts), bool)

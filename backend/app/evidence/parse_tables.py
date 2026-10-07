@@ -15,8 +15,8 @@ from app.evidence.parse_guard import _is_white, tables_affordable
 
 CELL_GAP_FACTOR = 2.0           # horizontal gap (x modal size) that separates layout-table cells
 LINE_Y_TOLERANCE = 3.0
-CAPTION_RE = re.compile(r"^Table\s+\d+")
-STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+\d+")
+CAPTION_RE = re.compile(r"^Table\s+[0-9]+")
+STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+[0-9]+")
 MAX_LAYOUT_ROWS = 80
 
 

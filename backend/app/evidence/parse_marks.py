@@ -1,7 +1,7 @@
 """Shape checks on number glyphs: is the ink a reader sees the plain glyph the text layer names?
 
 The ink check (parse_ink.py) proves a glyph puts SOME ink on the page. These checks catch the ways
-that ink can still read as another number (each returns the CRITICAL characters involved; the parse
+that ink can still read as another number (each returns the number characters involved; the parse
 lists them in the page's glyph_check so records whose literal holds one carry an error flag):
 
 - ``orientation_outliers`` (glyph_text_mismatch): a number glyph drawn rotated or mirrored against
@@ -24,7 +24,8 @@ from typing import Any
 
 import numpy as np
 
-CRITICAL = frozenset("0123456789.,+-−")
+from app.evidence.numgrammar.alphabet import NUMBER_CHARS as CRITICAL  # every character the reader can resolve
+
 NEIGHBOURS = 3                      # content-order neighbours on each side that set the orientation
 LOSS_PX = 3                         # ink missing from a side of the outline box ...
 LOSS_FRACTION = 0.15                # ... and at least this share of the box's width / height

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 from bisect import bisect_right
 from itertools import groupby
@@ -56,8 +57,22 @@ GOLDEN = Path(__file__).with_name("evidence_r6_golden.json")
 _WORDS = re.compile("[^ \t\n\r]+")
 _MULT = frozenset("xX*×·")
 _ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
-_GREEK = frozenset(chr(c) for c in (0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x3B7, 0x3B8, 0x3B5, 0x3B3, 0x3C3, 0x3C7,
+_GREEK = frozenset(chr(c) for c in (0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x3B7, 0x3B8, 0x3B5, 0x3B3, 0x3C3,
                                     0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3))
+
+
+def repo_state() -> dict:
+    """{"head": the commit the code under test is at, "dirty": the files that differ from it (git status --porcelain)}.
+    A log of a run on a dirty tree is evidence of the tree, not of the commit: the run records both, and the pytest
+    wrapper refuses a dirty tree unless R6_ALLOW_DIRTY=1."""
+    root = Path(__file__).resolve().parents[1]
+
+    def git(*args: str) -> str:
+        try:
+            return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return {"head": git("rev-parse", "HEAD").strip(), "dirty": git("status", "--porcelain").splitlines()}
 
 
 # ------------------------------------------------------------------ class machinery ---
@@ -300,6 +315,10 @@ def full_run(workers: int, log: Path | None, stratified: int = 0, pairs: list[tu
     import multiprocessing as mp
     pairs = pairs if pairs is not None else PAIRS
     t0, done, variants_n, failures = time.perf_counter(), 0, 0, []
+    state = repo_state()
+    if log is not None:
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"RUN head={state['head']} dirty={len(state['dirty'])} files={state['dirty'][:20]}\n")
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers) as pool:
         for res in pool.imap_unordered(_task, [(p, stratified) for p in pairs]):
@@ -314,7 +333,8 @@ def full_run(workers: int, log: Path | None, stratified: int = 0, pairs: list[tu
                 with log.open("a", encoding="utf-8") as fh:
                     fh.write(line + "\n" + "".join(f"    {m}\n" for m in res.errors[:5]))
     summary = {"pairs": len(pairs), "variants": variants_n, "errors": len(failures),
-               "wall_seconds": round(time.perf_counter() - t0, 1), "workers": workers}
+               "wall_seconds": round(time.perf_counter() - t0, 1), "workers": workers, "head": state["head"],
+               "dirty": state["dirty"]}
     if log is not None:
         with log.open("a", encoding="utf-8") as fh:
             fh.write(f"SUMMARY {json.dumps(summary)}\n")

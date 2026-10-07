@@ -5,10 +5,12 @@ table cell). Offsets in the returned locator are RAW page-text offsets (raw[star
 Check order: empty_snippet, snippet_too_long, page_out_of_range, readability (a character outside the
 allowed number alphabet, or a pdfminer ``(cid:N)`` marker, in the snippet or the value: unresolved_context),
 number (unresolved_context / unresolved_shape / no_number / number_mismatch / integer_expected / partial_number),
-location (snippet_not_on_page for text, table_cell_mismatch for table; partial_number when the snippet is there
+location (snippet_not_on_page for text, table_cell_mismatch for table; for a table cell also unresolved_context when the
+cell before or after it holds a character outside the allowed alphabet; partial_number when the snippet is there
 but its number is only part of a longer page number or expression: '2.4' in '12.4', '20' in '-20', '234' in
 '1,234'; unresolved_context / unresolved_shape when the page prints that very number in a form the grammar
-cannot read). A pass sets span, literal (the WHOLE page / cell token) and number (that token's value in the
+cannot read). A claim and a page token are the same number only when their canonical decimals are equal (no tolerance).
+A pass sets span, literal (the WHOLE page / cell token) and number (that token's value in the
 page's decimal style, which is what value_num must be), and (when used) column. A table record's span is the
 cited cell's row in the page text, or None when the row cannot be found there. Numbers are read ONLY by
 ``numgrammar`` (an explicit allowed alphabet; every other character in or next to a number makes it unresolved);
@@ -16,28 +18,19 @@ the locator below (``normalise``) finds text, it never yields a value.
 """
 from __future__ import annotations
 
-import math
-import re
 from bisect import bisect_right
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 
 from app.evidence import models as M
 from app.evidence.normalize import IdxMap, normalise
-from app.evidence.numgrammar import Tok, parse_claim, tokens, unreadable
-from app.evidence.verify_messages import tok_sentence, unreadable_sentence
+from app.evidence.numgrammar import Tok, claim_decimal, digits_of, tokens, unreadable
+from app.evidence.read_cache import read
+from app.evidence.verify_columns import ColumnLines
+from app.evidence.verify_messages import context_sentence, tok_sentence, unreadable_sentence
 
 MAX_SNIPPET_CHARS = 300
-_REL_TOL = 1e-9
-_NON_DIGITS = re.compile("[^0-9]")
-
-
-def digits_only(text: str) -> str:
-    return _NON_DIGITS.sub("", text)
-
-
-def _close(a: float, b: float) -> bool:
-    return math.isclose(a, b, rel_tol=_REL_TOL, abs_tol=1e-12)
 
 
 def _occurrences(needle: str, hay: str) -> Iterator[int]:
@@ -68,21 +61,24 @@ def find_snippet_in_page(snippet: str, page_text: str) -> list[int] | None:
 
 
 def find_number_in_snippet(value: str, snippet: str, decimal_style: str, integer: bool) -> str | None:
-    """The literal token in *snippet* equal to *value* (parsed with *decimal_style*), else None."""
+    """The literal token in *snippet* equal to *value* (parsed with *decimal_style*), else None. (Test-only.)"""
     span, reason, _ = _number_check(value, snippet, decimal_style, integer)
     return snippet[span[0]:span[1]] if span is not None and reason == M.REASON_OK else None
 
 
-def _targets(value: str, style: str) -> tuple[list[float], str, str]:
-    """(values the proposal names, reason, detail): exactly ONE resolved number, in the page's style and (proposed
-    values usually arrive in canonical point-decimal form: '18.2' for a page that prints '18,2') in point style."""
+def _targets(value: str, style: str) -> tuple[list[Decimal], str, str]:
+    """(the exact decimals the proposal names, reason, detail): exactly ONE resolved number, in the page's style and
+    (proposed values usually arrive in canonical point-decimal form: '18.2' for a page that prints '18,2') in point
+    style. A number is the same number only when its canonical decimal is equal: no tolerance, so 3.2e-13 is never 0
+    and a changed last digit of a long integer is never the page's number."""
     toks = tokens(value, style, mode="claim")
     if len(toks) != 1:
         return [], M.REASON_NO_NUMBER, ""
     if toks[0].value is None:
         return [], toks[0].reason, tok_sentence(toks[0], value)
-    point = parse_claim(value, ".")
-    return [toks[0].value] + ([point] if point is not None and not _close(point, toks[0].value) else []), "", ""
+    read_style = toks[0].decimal_value
+    point = claim_decimal(value, ".")
+    return [read_style] + ([point] if point is not None and point != read_style else []), "", ""
 
 
 def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
@@ -93,23 +89,24 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
     targets, reason, detail = _targets(value, decimal_style)
     if not targets:
         return None, reason, detail
-    if integer and not float(targets[0]).is_integer():
+    if integer and targets[0] != targets[0].to_integral_value():
         return None, M.REASON_INTEGER_EXPECTED, ""
     toks = tokens(snippet, decimal_style, mode="claim")
     for t in toks:
-        if t.value is not None and any(_close(t.value, x) for x in targets):
+        if t.value is not None and t.decimal_value in targets:
             return (t.start, t.end), M.REASON_OK, ""
-    vdig = digits_only(value)
-    holding = [t for t in toks if any(_close(p, x) for p in t.parts for x in targets)]
+    floats = [float(x) for x in targets]
+    vdig = digits_of(value)
+    holding = [t for t in toks if any(p in floats for p in t.parts)]
     tainted = next((t for t in toks if t.reason == M.REASON_UNRESOLVED_CONTEXT
-                    and (t in holding or (vdig and vdig in digits_only(snippet[t.start:t.end])))), None)
+                    and (t in holding or (vdig and vdig in digits_of(snippet[t.start:t.end])))), None)
     if tainted is not None:                       # the cited number touches a character outside the alphabet
         return None, M.REASON_UNRESOLVED_CONTEXT, tok_sentence(tainted, snippet)
     if holding:                                   # ... or is only a part of an expression the grammar rejects
         return None, M.REASON_PARTIAL_NUMBER, ""
     # A fragment is a STRICT sub-run of a token's digits ('24' in '245.6'); equal digits with a
     # different reading ('3.412' vs '3,412') are a separator mismatch, i.e. number_mismatch.
-    fragment = any(vdig and vdig != digits_only(snippet[t.start:t.end]) and vdig in digits_only(snippet[t.start:t.end])
+    fragment = any(vdig and vdig != digits_of(snippet[t.start:t.end]) and vdig in digits_of(snippet[t.start:t.end])
                    for t in toks)
     return None, (M.REASON_NO_NUMBER if not toks or fragment else M.REASON_NUMBER_MISMATCH), ""
 
@@ -135,7 +132,7 @@ def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
     nt, m = normalise(text)
     rng = _norm_range(sm, lit) if lit is not None else None
     hits: list[Hit] = []
-    seen, blocked, toks, starts = False, None, None, []
+    seen, blocked, reading = False, None, None
     for i in _occurrences(ns, nt):
         seen = True
         span = _raw_span(i, len(ns), m)
@@ -144,12 +141,11 @@ def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
             continue
         if rng is None:
             continue
-        if toks is None:
-            toks = tokens(text, style, mode=mode)
-            starts = [t.start for t in toks]
+        if reading is None:
+            reading = read(text, style, mode)
         a, b = m[i + rng[0]], m[i + rng[1] - 1] + 1
-        k = bisect_right(starts, a) - 1
-        tok = toks[k] if k >= 0 and toks[k].end >= b else None      # the token or expression that holds text[a:b]
+        k = bisect_right(reading.starts, a) - 1
+        tok = reading.toks[k] if k >= 0 and reading.toks[k].end >= b else None   # holds text[a:b]
         if tok is None:
             continue
         if tok.value is not None:
@@ -188,47 +184,19 @@ def _candidates(loc: dict[str, Any], page: dict[str, Any]) -> list[tuple[int | N
     return [(None, page.get("text") or "")] + list(enumerate(columns))
 
 
-def _split_lines(columns: list[str]) -> tuple[set[str], set[str]]:
-    return ({normalise(x)[0] for x in columns[0].split("\n") if x.strip()},
-            {normalise(x)[0] for x in columns[1].split("\n") if x.strip()})
-
-
-def _cut(line: str, left: set[str], right: set[str]) -> tuple[int, int] | None:
-    """(raw end of the left part, raw start of the right part) when *line* is a merged line: one
-    column's line followed by the other column's line on the same baseline; else None."""
-    nl, m = normalise(line)
-    for lp in left:
-        if len(lp) < len(nl) and nl.startswith(lp + " ") and nl[len(lp) + 1:] in right:
-            return m[len(lp) - 1] + 1, m[len(lp) + 1]
-    return None
-
-
-def _crosses(span: list[int], text: str, columns: list[str]) -> bool:
-    """True when a page-text span joins the two columns: it covers the boundary of a merged line, or
-    runs over a line break while touching a merged line (two-column lines interleave the columns)."""
-    left, right = _split_lines(columns)
-    ls, cuts = text.rfind("\n", 0, span[0]) + 1, []
-    while ls < span[1]:
-        le = text.find("\n", ls)
-        le = len(text) if le < 0 else le
-        cut = _cut(text[ls:le], left, right)
-        cuts.append(None if cut is None else (ls + cut[0], ls + cut[1]))
-        ls = le + 1
-    if len(cuts) > 1:
-        return any(c is not None for c in cuts)
-    return cuts[0] is not None and span[0] < cuts[0][0] and span[1] > cuts[0][1]
-
-
 def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
                  style: str) -> M.VerifyResult:
     seen_any, crossed, blocked = False, False, None
     columns = [c for c in (page.get("columns") or []) if isinstance(c, str)]
+    lines: ColumnLines | None = None
     for column, text in _candidates(loc, page):
         hits, seen, block = _hits(snippet, lit, text, style)
         seen_any, blocked = seen_any or seen, blocked or block
-        if column is None and len(columns) == 2:
-            kept = [h for h in hits if not _crosses(h[0], text, columns)]
-            crossed, hits = crossed or len(kept) < len(hits), kept
+        if column is None and len(columns) == 2 and hits:
+            lines = lines or ColumnLines(columns)            # the columns are read once, not once per occurrence
+            kept = next((h for h in hits if not lines.crosses(h[0], text)), None)
+            crossed = crossed or kept is None
+            hits = [] if kept is None else [kept]
         if hits:
             span, literal, number, token = hits[0]
             return _pass({**loc, "column": column}, span, literal, number, token)
@@ -284,9 +252,20 @@ def _row_fragment(literal: str, text: str, anchors: list[str], style: str) -> bo
         if not any(k in normalise(line)[0] for k in keys):
             continue
         toks = [normalise(line[t.start:t.end])[0] for t in tokens(line, style, mode="page")]
-        if want not in toks and any(want in t and digits_only(want) != digits_only(t) for t in toks):
+        if want not in toks and any(want in t and digits_of(want) != digits_of(t) for t in toks):
             return True
     return False
+
+
+def _neighbour_offence(row: list[Any], col: int, literal: str) -> str:
+    """The reviewer sentence when the cell right before or after the cited one holds a character outside the allowed
+    alphabet or a ``(cid:N)`` marker (a qualifier, a sign or a multiplier the reader cannot read), else ''. A cell is
+    one line; its neighbours are the words one separator away, so a look-alike ``≲`` in the next cell leaves the
+    number as unresolved as it does on a page line."""
+    for k, where in ((col - 1, "in the previous cell"), (col + 1, "in the next cell")):
+        if 0 <= k < len(row) and (bad := unreadable(str(row[k] or ""))) is not None:
+            return context_sentence(literal, bad[1], where)
+    return ""
 
 
 def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
@@ -304,6 +283,8 @@ def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: 
     cell = {**loc["cell"], "strategy": table.get("strategy")}
     r, c = loc["cell"]["row"], loc["cell"]["col"]
     row = (table.get("rows") or [])[r]
+    if literal and (offence := _neighbour_offence(row, c, literal)):
+        return _fail(loc, M.REASON_UNRESOLVED_CONTEXT, offence)
     anchors = [str(x or "") for i, x in enumerate(row) if i != c]
     span = _row_span(snippet, lit, page.get("text") or "", style, anchors, str(row[0] or "") if row else "")
     if span is None and literal and _row_fragment(literal, page.get("text") or "", anchors, style):

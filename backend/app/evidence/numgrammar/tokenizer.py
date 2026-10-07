@@ -10,6 +10,8 @@ REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
          ``10 ^ 3`` ``10 ³`` ``10^ 3``                    detached_exponent
          ``3.4 E-03`` ``2012 e1553``                      spaced_exponent
          ``12 3/4``                                       mixed_number (a lone ``3/4`` is ``fraction``)
+         ``12 / 15`` ``12 .5`` ``5.2 (x10^3 cells)``      fraction, detached_decimal, bracketed_multiplier
+         (the rules live in forms.py)
 
 then the taint tiers (taint.py) turn an expression with an outside character in its word, its neighbouring words
 or its line into ``unresolved_context``. Decimal style decides only the ``A,BBB`` / ``A.BBB`` cases.
@@ -25,24 +27,16 @@ from app.evidence.numgrammar.alphabet import (
     INSIDE_ONLY_RE,
     LETTERS,
     MULTIPLIERS,
-    QUALIFIERS,
+    RANGE_WORDS,
     WORD_RE,
 )
-from app.evidence.numgrammar.body import to_float
 from app.evidence.numgrammar.equivalents import fold
-from app.evidence.numgrammar.scan import (
-    TAIL_MULT,
-    TAIL_NONE,
-    TAIL_STAR,
-    Scan,
-    read_power,
-    scan_word,
-)
+from app.evidence.numgrammar.forms import Forms
+from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_CONTEXT, REASON_SHAPE, Tok
 
 MODES = ("page", "claim", "cell")
-_DOUBLE_QUAL = frozenset({"<=", ">=", "=<", "=>"})
 ABSORB_WORDS = 2          # words of INSIDE characters a ten after a multiplier swallows ('1.2 x 10 3', '10 ^ 3')
 # a word led by one of these is a unit or a plain label: no multi-word form starts with it
 _UNIT_LEADS = frozenset(LETTERS - {"e", "E", "x", "X"})
@@ -62,7 +56,7 @@ def _demote(tok: Tok, detail: str) -> Tok:
     return Tok(tok.start, tok.end, None, REASON_CONTEXT, parts, tok.qualified, tok.ranged, "", "", detail)
 
 
-class Reader:
+class Reader(Forms):
     """The words of one folded text and the forms that read them. One instance per ``tokens`` call."""
     __slots__ = ("t", "style", "starts", "ends", "n", "marks", "cache", "anchors")
 
@@ -183,6 +177,8 @@ class Reader:
         if sc.kind == "rejected":
             if sc.why == "ten_after_multiplier":
                 return self._ten(out, a, a, s0, consumed_from=a)
+            if w.endswith("/") and sc.why == "glued_symbol" and a + 1 < self.n and W.digit_led(self.text(a + 1)):
+                return self.ratio_run(out, a, a + 1, s0, sc.parts)              # '12/ 15'
             return self._word_expr(out, a, sc.why, sc.parts)
         if sc.kind != "numeric":
             return a
@@ -210,139 +206,34 @@ class Reader:
             if d:
                 out.extend(_demote(x, d) for x in toks)
                 return a
-        out.extend(self.flagged(toks, prev, nxt))
+        out.extend(self.flagged(toks, a))
         return a
 
-    def forms(self, a: int, sc: Scan, consumed: int, out: list[Tok], nxt: str, prev: str) -> int | None:
-        """The multi-word forms; the new ``consumed`` index of the first that applies, None when none does."""
-        if sc.tail:
-            done = self.form_tail(a, sc, out, nxt)
-            if done is not None:
-                return done
-        if nxt:
-            c = nxt[0]
-            if c in MULTIPLIERS:
-                done = self.form_mult(a, sc, out, nxt)
-            elif c == "e" or c == "E":
-                done = self.form_exponent(a, sc, out, nxt)
-            elif c in DIGITS:
-                done = self.form_fraction(a, sc, out, nxt)
-            else:
-                done = None
-            if done is not None:
-                return done
-        return self.form_detached(a, sc, consumed, out, nxt, prev)
 
-    @staticmethod
-    def flagged(toks: tuple[Tok, ...], prev: str, nxt: str) -> tuple[Tok, ...]:
-        """Tokens of a word with the qualifier / range flags the neighbouring words add."""
-        q = bool(prev) and (prev[-1] in QUALIFIERS or prev[-2:] in _DOUBLE_QUAL)
-        r = prev == "-" or nxt == "-"
-        if not (q or r):
-            return toks
-        return tuple(t._replace(qualified=t.qualified or q, ranged=t.ranged or r) for t in toks)
+    def qualified_before(self, a: int) -> bool:
+        """A qualifier stands right before word *a* (up to three words back; see ``words.qualifies``)."""
+        return W.qualifies([self.text(k) for k in range(max(0, a - 3), a)])
 
-    # ------------------------------------------------------------------ forms ---
-    def joinable(self, a: int, sc: Scan) -> bool:
-        """One plain token that ends the word (before a glued multiplier): a mantissa a power can join."""
-        t = sc.toks[0]
-        tail = 1 if sc.tail == TAIL_MULT else 0
-        return len(sc.toks) == 1 and t.shape not in ("sci", "bare_power") and t.end == self.ends[a] - tail
-
-    def sci(self, out: list[Tok], a: int, sc: Scan, last: int, power_text: str, at: int) -> int:
-        """One scientific token from the mantissa of word *a* and the power at ``power_text[at:]`` (word *last*)."""
-        t = sc.toks[0]
-        pw = read_power(power_text, at, len(power_text))
-        value, canon = None, ""
-        if pw is not None and pw[0] is not None:
-            canon = f"{t.canonical}e{pw[0]}"
-            value = to_float(canon)
-        if value is None:
-            return self.expr(out, a, last, t.start, self.ends[last], "exponent_range", (t.value,))
+    def flagged(self, toks: tuple[Tok, ...], a: int, b: int | None = None) -> tuple[Tok, ...]:
+        """Tokens of the words a..b with the qualifier and range flags the neighbouring words add. A lone range word
+        (``-`` ``~``) before or after marks every token; a dash glued to the word edge marks the one token it joins to
+        the next word: the right end of ``12 -15`` and ``12- 15``, the left end of ``12 -15`` and ``5.0- 12.4``."""
+        b = a if b is None else b
         prev = self.text(a - 1) if a else ""
-        nxt = self.text(last + 1) if last + 1 < self.n else ""
-        tok = Tok(t.start, self.ends[last], value, "sci", (t.value,), t.qualified, t.ranged, canon, t.decimal)
-        self.put(out, a, last, self.flagged((tok,), prev, nxt)[0])
-        return last
+        nxt = self.text(b + 1) if b + 1 < self.n else ""
+        last = self.text(b)
+        q = self.qualified_before(a)
+        lone = prev in RANGE_WORDS or nxt in RANGE_WORDS
+        left = bool(nxt) and ((nxt[0] == "-" and W.signed_digits(nxt) and W.ends_with_number(last))
+                              or (last.endswith("-") and W.digit_led(nxt)))
+        right = bool(prev) and ((W.ends_with_number(prev) and self.t[toks[0].start] == "-")
+                                or (prev.endswith("-") and W.ends_with_number(prev[:-1]) and W.digit_led(self.text(a))))
+        if not (q or lone or left or right):
+            return toks
+        end = len(toks) - 1
+        return tuple(t._replace(qualified=t.qualified or q, ranged=t.ranged or lone or (left and k == end)
+                                or (right and k == 0)) for k, t in enumerate(toks))
 
-    def operand(self, out: list[Tok], a: int, sc: Scan, last: int) -> int:
-        """A multiplier without a number to its right: the left token and the operand word are one expression."""
-        return self.expr(out, a, last, sc.toks[0].start, self.ends[last], "multiplier_operand",
-                         self.parts_of(a, last))
-
-    def ten(self, out: list[Tok], a: int, sc: Scan, ten_word: int) -> int:
-        return self._ten(out, a, ten_word, sc.toks[0].start, consumed_from=a)
-
-    def form_tail(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
-        """A multiplier or star run glued to the end of the word (``1.2×``, ``2x``, ``12*``)."""
-        j = a + 1
-        if sc.tail == TAIL_STAR:                                           # '12* 10^3': a star is not a multiplier here
-            if nxt and (W.BARE_POWER_RE.fullmatch(nxt) or W.ten_shape(nxt)):
-                return self.operand(out, a, sc, j)
-            return None
-        if not nxt:
-            return self.operand(out, a, sc, a)
-        if self.joinable(a, sc) and W.BARE_POWER_RE.fullmatch(nxt):
-            return self.sci(out, a, sc, j, nxt, 2)
-        if W.ten_shape(nxt):
-            return self.ten(out, a, sc, j)
-        return None if self.numeric_word(j) else self.operand(out, a, sc, j)
-
-    def form_mult(self, a: int, sc: Scan, out: list[Tok], t1: str) -> int | None:
-        """A word led by a multiplier character right after the number (``x``, ``×10^3``, ``xenon``, ``x1O³``)."""
-        j = a + 1
-        if W.is_mult_word(t1):
-            return self._mult_word(a, sc, j, out)
-        sp = W.special(t1)
-        if sp == W.MULT_POWER:
-            return self.sci(out, a, sc, j, t1, 3) if self.joinable(a, sc) else self.operand(out, a, sc, j)
-        if sp == W.MULT_TEN or W.ten_shape(t1[1:]):                         # 'x103', 'x10mg': a ten, no power
-            return self.ten(out, a, sc, j)
-        rest = scan_word(t1[1:], self.starts[j] + 1, self.style) if len(t1) > 1 and t1[1] in DIGITS else None
-        return None if rest is not None and rest.kind == "numeric" else self.operand(out, a, sc, j)
-
-    def _mult_word(self, a: int, sc: Scan, j: int, out: list[Tok]) -> int | None:
-        """``N x <operand>``: the operand is the word after the multiplier word."""
-        k = j + 1
-        if k >= self.n:
-            return self.operand(out, a, sc, j)
-        t2 = self.text(k)
-        if self.joinable(a, sc) and W.BARE_POWER_RE.fullmatch(t2):
-            return self.sci(out, a, sc, k, t2, 2)
-        if W.ten_shape(t2):
-            return self.ten(out, a, sc, k)
-        return None if self.numeric_word(k) else self.operand(out, a, sc, k)
-
-    def form_exponent(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
-        """``3.4 E-03``: an exponent in the next word."""
-        if W.E_WORD_RE.fullmatch(nxt):
-            return self.expr(out, a, a + 1, sc.toks[0].start, self.ends[a + 1], "spaced_exponent",
-                             self.parts_of(a, a))
-        return None
-
-    def form_fraction(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
-        """``12 3/4``: an integer followed by a fraction word is a mixed number."""
-        t = sc.toks[0]
-        if len(sc.toks) == 1 and t.shape == "int" and t.end == self.ends[a] and "/" in nxt \
-                and W.FRACTION_RE.fullmatch(nxt):
-            return self.expr(out, a, a + 1, t.start, self.ends[a + 1], "mixed_number", (t.value,))
-        return None
-
-    def form_detached(self, a: int, sc: Scan, consumed: int, out: list[Tok], nxt: str, prev: str) -> int | None:
-        """``10 ^ 3``, ``10 ³``, ``10^ 3``: an exponent word next to a number that is not a power."""
-        if nxt and W.exp_like(nxt):
-            last = self.absorb(a + 1)
-            return self.expr(out, a, last, sc.toks[0].start, self.ends[last], "detached_exponent",
-                             self.parts_of(a, a))
-        if prev and W.exp_like(prev):
-            if consumed == a - 1 and out and out[-1].value is None and out[-1].end == self.ends[a - 1]:
-                before = out.pop()                                  # the rejected word before holds the caret
-                return self.expr(out, a - 1, a, before.start, self.ends[a], "detached_exponent",
-                                 before.parts + self.parts_of(a, a))
-            if consumed < a - 1:
-                return self.expr(out, a - 1, a, self.starts[a - 1], self.ends[a], "detached_exponent",
-                                 self.parts_of(a, a))
-        return None
 
 
 def tokens(text: str, style: str = ".", *, mode: str = "page") -> list[Tok]:

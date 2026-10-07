@@ -32,6 +32,7 @@ from app.evidence.numgrammar.alphabet import (
     LETTERS,
     MULTIPLIERS,
     OPENERS_BR,
+    OPERATORS,
     PERCENTS,
     PLUS_MINUS,
     QUALIFIERS,
@@ -46,13 +47,14 @@ from app.evidence.numgrammar.alphabet import (
     char_class,
 )
 from app.evidence.numgrammar.body import MAX_DIGITS, MIDDOT, exp_int, read_body, to_float
+from app.evidence.numgrammar.body import mantissa as read_mantissa
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_SHAPE, Tok
 
 _DIG = re.compile("[0-9]+")
 _PLAIN_INT = re.compile("0|[1-9][0-9]{0,39}")
 _PLAIN_DEC = re.compile("(0|[1-9][0-9]{0,38})([.,])([0-9]{1,39})")
 _SUPDIG = re.compile(char_class(SUP_DIGITS, negate=False) + "+")
-_DOUBLE_QUAL = frozenset({"<=", ">=", "=<", "=>"})
+_CITATION = re.compile("\\[[1-9][0-9]?,[0-9]{1,2}\\]")      # '[1,2]': a pair of reference numbers, never a decimal
 OK, PCT, STAR, TAIL, BAD = 0, 1, 2, 3, -1
 TAIL_NONE, TAIL_MULT, TAIL_STAR = 0, 1, 2
 _SUP_MINUS = "\u207b"
@@ -167,10 +169,17 @@ def read_token(w: str, s: int, n: int, style: str) -> tuple | None:
         groups.append(w[j + 1:k])
         j = k
     body = read_body(groups, seps, style)
+    exp = None
+    if j < n:                         # a mantissa (an exponent follows) reads one separator as a decimal
+        mant = read_mantissa(groups, seps, style)
+        if mant is not None and not isinstance(mant, str):
+            exp = _exponent(w, j, n, sign, mant[0])
+            body = mant if exp is not None else body
     if isinstance(body, str):
         return j, None, body, "", ""
     canon, shape, mark = body
-    exp = _exponent(w, j, n, sign, canon) if j < n else None
+    if exp is None and j < n:
+        exp = _exponent(w, j, n, sign, canon)
     if exp is not None:
         if exp[1] is None:
             return exp[0], None, exp[2], sign + canon, mark          # the canonical mantissa rides along as a part
@@ -225,6 +234,15 @@ def post(w: str, e: int, n: int) -> tuple[int, int, str]:
     return BAD, e, "glued_letters" if p in LETTERS else "glued_symbol"
 
 
+def _qualified(w: str, i: int) -> bool:
+    """A qualifier stands before the token at w[i] in its own word, with only openers, ``=``, ``:``, ``;``, ``*`` and
+    signs between (``<5``, ``<=5``, ``~=5``, ``\u2264(5)``, ``<-5``)."""
+    k = i
+    while k > 0 and w[k - 1] in OPERATORS:
+        k -= 1
+    return any(c in QUALIFIERS for c in w[k:i])
+
+
 def _rejected(why: str, parts: list[float]) -> Scan:
     return Scan("rejected", why=why, parts=tuple(parts[:MAX_PARTS]))
 
@@ -237,6 +255,8 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     m = _PLAIN_DEC.fullmatch(w)
     if m is not None and not isinstance(body := read_body([m[1], m[3]], [m[2]], style), str):
         return Scan("numeric", (Tok(off, off + n, to_float(body[0]), body[1], (), False, False, body[0], body[2]),))
+    if w[0] == "[" and _CITATION.fullmatch(w.rstrip(".,;:)'")) is not None:
+        return _rejected("citation_list", [])
     lead_i = 1 if w[0] in STARTERS else 0
     lead = w[lead_i] if lead_i < n else ""
     numeric_led = lead != "" and lead in INSIDE and lead not in ASCII_LETTERS
@@ -272,7 +292,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
         if act == BAD:
             return _rejected(why, parts + [value]) if numeric_led else LABEL
         ranged = joiner and pre == "-"
-        qualified = pre in QUALIFIERS or (i >= 2 and w[i - 2:i] in _DOUBLE_QUAL)
+        qualified = _qualified(w, i)
         if ranged and toks:
             toks[-1] = toks[-1]._replace(ranged=True)
         # a scientific token remembers its mantissa (``1.2`` of ``1.2e-3``), a bare power its ten: citing only that

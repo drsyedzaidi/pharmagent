@@ -66,7 +66,7 @@ def test_a_character_outside_the_context_one_word_away_makes_the_number_unresolv
 
 def test_the_context_characters_one_word_away_are_fine():
     for ok in ("Cmax 12 (ng/mL)", "AUC [12] μg/L", "n = 12; p = 0.03", "12/kg", "ΔOFV 3.84", "ω = 0.40",
-               "t1/2 = 8 h", "37°C", "see (12)", "12 : 13", "x 12", "dose of 12 mg."):
+               "t1/2 = 8 h", "37°C", "see (12)", "x 12", "dose of 12 mg."):
         assert [v for v in V(ok) if v is None] == [], ok
 
 

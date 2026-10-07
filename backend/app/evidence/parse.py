@@ -20,6 +20,8 @@ import pdfplumber
 
 from app.evidence import parse_layout
 from app.evidence.normalize import infer_decimal_style
+from app.evidence.numgrammar.alphabet import DIGITS, SIGN_CHARS
+from app.evidence.numgrammar.equivalents import EQUIV
 from app.evidence.parse_budget import check_glyph_budget
 from app.evidence.parse_fonts import MISMATCH, UNVERIFIED, GlyphChecker
 from app.evidence.parse_guard import (
@@ -29,7 +31,6 @@ from app.evidence.parse_guard import (
     close_zero_gaps,
     lay_out_visible,
     protect_thin_spaces,
-    restore,
     visibility_filter,
 )
 from app.evidence.parse_ink import InkChecker, duplicate_ids
@@ -47,7 +48,7 @@ COLUMN_MIN_WORDS = 20
 COLUMN_MIN_SPLIT_LINES = 8      # a page needs this many lines with text on both sides
 COLUMN_LINE_FRACTION = 0.5      # share of text lines that must have words on both sides
 COLUMN_LINE_CROSSING = 0.15     # share of text lines allowed to span the gap (title, abstract)
-RAISABLE = frozenset("0123456789+-−⁻")   # exponent glyphs
+RAISABLE = DIGITS | SIGN_CHARS | frozenset(k for k, v in EQUIV.items() if v in SIGN_CHARS)   # exponent glyphs
 RAISED_SIZE_RATIO = 0.95        # an exponent is set smaller than its base ...
 RAISE_FRACTION = 0.15           # ... with its baseline at least this x the base size higher
 _META_KEYS = ("title", "author", "subject", "creator", "producer", "creation_date")
@@ -196,7 +197,7 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker, doc_words: int = 0
     check_page_box(page)
     hidden = lay_out_visible(page)               # render modes 3 / 7 never reach the char list
     visible, dropped, ink_status = _visible_chars(page, ink)
-    protect_thin_spaces(page)
+    thin = protect_thin_spaces(page)
     close_zero_gaps(page)
     chars = [c for c in page.chars if visible(c)]
     raised = _raised_ids(chars)
@@ -217,7 +218,7 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker, doc_words: int = 0
     lines = text_lines(words)
     col_lines = _columns(words, lines, float(page.width))
     tables, cell_words = find_tables(body, lines, words, modal)
-    parsed = restore({
+    parsed = thin.restore({
         "n": page.page_number,
         "text": text,
         "small_text": small_text,
@@ -230,7 +231,7 @@ def _parse_page(page, ink: InkChecker, glyphs: GlyphChecker, doc_words: int = 0
     layout = parse_layout.build_page(
         page_text=parsed["text"], columns=parsed["columns"], col_lines=col_lines, words=words,
         char_boxes=ink.boxes, cell_words=cell_words, ink_ok=ink_status == "ok", tables=parsed["tables"],
-        doc_words=doc_words)
+        doc_words=doc_words, thin=thin)
     return parsed, {"n": page.page_number, **layout}, len(words)
 
 

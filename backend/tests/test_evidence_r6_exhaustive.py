@@ -79,7 +79,7 @@ def test_the_reference_outside_line_and_cid_insertions_satisfy_the_oracle_at_eve
 def test_every_listed_code_point_at_every_boundary(golden):
     """209 listed code points (inside, context, line, gap, equivalents) x every boundary, read directly."""
     cps = O.non_outside_cps()
-    assert len(cps) == 45 + 8 + 4 + 74 + 2 + 76                     # equivalents counted with their target class
+    assert len(cps) == 45 + 8 + 4 + 73 + 2 + 77                     # equivalents counted with their target class
     bad = []
     for ei, b in O.PAIRS:
         e = O.EXPRESSIONS[ei]
@@ -162,6 +162,12 @@ def test_the_sweep_catches_a_changed_class_representative(monkeypatch, golden):
     assert found
 
 
+def test_the_run_records_the_commit_and_the_dirty_files():
+    state = O.repo_state()
+    assert set(state) == {"head", "dirty"} and isinstance(state["dirty"], list)
+    assert state["head"] == "" or (len(state["head"]) == 40 and set(state["head"]) <= set("0123456789abcdef"))
+
+
 # ------------------------------------------------------------------- the full run ---
 @pytest.mark.exhaustive
 @pytest.mark.skipif(os.environ.get("R6_EXHAUSTIVE") != "1", reason="set R6_EXHAUSTIVE=1 for the 1.1 M code-point run")
@@ -170,5 +176,7 @@ def test_every_code_point_at_every_boundary_on_a_process_pool():
     log = Path(os.environ["R6_EXHAUSTIVE_LOG"]) if os.environ.get("R6_EXHAUSTIVE_LOG") else None
     result = O.full_run(workers, log)
     assert result["failures"] == [] and result["errors"] == 0, result
+    assert result["dirty"] == [] or os.environ.get("R6_ALLOW_DIRTY") == "1", (
+        "the log is evidence of a dirty tree, not of the commit: commit first or set R6_ALLOW_DIRTY=1", result["dirty"])
     assert result["pairs"] == len(O.PAIRS)
     assert result["variants"] == len(O.PAIRS) * 1_112_064

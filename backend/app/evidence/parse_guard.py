@@ -12,18 +12,23 @@ squashed to (near) zero width or height, and glyphs outside the page box or the 
 before extraction and counted per page (hidden_chars). The second pass (parse_ink.py) judges what is
 left from rendered ink, so hidden text can drive neither a verdict nor a value.
 Thin / no-break spaces inside numbers ('18 900') survive extraction as U+2009 (pdfplumber would
-turn them into ASCII spaces, which the verifier treats as a word gap).
+turn them into ASCII spaces, which the verifier treats as a word gap). Exactly the characters the approved
+equivalents table maps to a thin space are kept that way (``THIN_SPACES``); every other space character
+(U+2007 figure space, U+2008, U+200A, em space...) is a word break, as it is for pdfplumber, so it can never
+join two digit groups into one number.
 """
 from __future__ import annotations
 
 import time
-import unicodedata
 import zlib
 from typing import Any
 
 from pdfminer.pdfinterp import PDFPageInterpreter
 from pdfminer.pdftypes import PDFStream, resolve1
 from pdfplumber.page import PDFPageAggregatorWithMarkedContent
+
+from app.evidence.numgrammar.alphabet import DIGITS, cls
+from app.evidence.numgrammar.equivalents import THIN, THIN_SOURCES
 
 MAX_PAGE_PT = 20_000.0                 # 7 m: no real page; huge boxes drive per-x allocations
 MAX_STREAM_BYTES = 64 * 1024 * 1024    # one inflated stream
@@ -33,9 +38,10 @@ MAX_RULING_PRODUCT = 10_000            # horizontal x vertical ruling edges befo
 INVISIBLE_RENDER_MODES = (3, 7)
 MIN_WIDTH_EM = 0.04                    # narrowest real glyph ('i' at 50 % Tz) is ~0.1 em wide
 MIN_GLYPH_PT = 1.0                     # a glyph box under 1 pt tall cannot be read
-THIN_SPACES = frozenset("\u2009\u202f\u00a0\u2007\u2008\u200a")
-THIN = "\u2009"
-_PLACEHOLDER = "\ue000"                # private use, not whitespace: survives word grouping
+THIN_SPACES = THIN_SOURCES             # from the equivalents table: U+2009, U+202F, U+00A0
+# private-use code points a page's placeholder is taken from: not whitespace, so extraction keeps a placeholder inside
+# its word; the first one no glyph of the page already is (BMP, then plane 15, then plane 16)
+_MARKS = (*range(0xE000, 0xF900), *range(0xF0000, 0xFFFFE), *range(0x100000, 0x10FFFE))
 
 
 class ParseLimitError(ValueError):
@@ -158,7 +164,7 @@ def _on_dark_box(c: dict[str, Any], boxes: list[dict[str, Any]]) -> bool:
 def _squashed(c: dict[str, Any]) -> bool:
     """Drawn with (near) zero width or height: '1 Tz', a squashing Tm, or a sub-point font."""
     text = str(c.get("text", ""))
-    if not text.strip() or unicodedata.category(text[:1]) in ("Mn", "Me"):   # spaces, combining marks
+    if not text.strip() or cls(text[:1]) == "outside":     # spaces; a character the reader cannot read is never dropped
         return False
     width, height = float(c["x1"]) - float(c["x0"]), float(c["bottom"]) - float(c["top"])
     return height < MIN_GLYPH_PT or width < MIN_WIDTH_EM * max(height, float(c.get("size") or 0.0))
@@ -181,12 +187,47 @@ def visibility_filter(page: Any):
     return visible, dropped
 
 
-def protect_thin_spaces(page: Any) -> None:
-    """Mark thin / no-break spaces so extraction keeps them inside the number (restore() undoes it).
+class ThinSpaces:
+    """The thin / no-break spaces of ONE page, kept inside their numbers while pdfplumber extracts the text: each is
+    replaced by *mark*, a private-use character that no glyph of the page is, and ``restore`` puts U+2009 back for
+    exactly those. A real private-use character of the PDF (icon fonts map there) is never confused with them."""
+    __slots__ = ("mark",)
+
+    def __init__(self, mark: str = "") -> None:
+        self.mark = mark
+
+    def restore(self, value: Any) -> Any:
+        """The parse output with every protected space back as U+2009 (str, list or nested rows)."""
+        if not self.mark:
+            return value
+        if isinstance(value, str):
+            return value.replace(self.mark, THIN)
+        if isinstance(value, list):
+            return [self.restore(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self.restore(v) for k, v in value.items()}
+        return value
+
+
+def _free_mark(page: Any) -> str:
+    """The first private-use character that is in no glyph text of the page; refuses a page that uses them all."""
+    used = set("".join(str(c.get("text", "")) for c in page.chars))
+    for cp in _MARKS:
+        if chr(cp) not in used:
+            return chr(cp)
+    raise ParseLimitError(f"page {page.page_number} draws every private-use character")
+
+
+def protect_thin_spaces(page: Any) -> ThinSpaces:
+    """Mark thin / no-break spaces so extraction keeps them inside the number (``ThinSpaces.restore`` undoes it).
     Edits pdfplumber's own char dicts for this page only; the page object is discarded after parse."""
-    for c in page.chars:
-        if c.get("text") in THIN_SPACES:
-            c["text"] = _PLACEHOLDER
+    spaces = [c for c in page.chars if c.get("text") in THIN_SPACES]
+    if not spaces:
+        return ThinSpaces()
+    thin = ThinSpaces(_free_mark(page))
+    for c in spaces:
+        c["text"] = thin.mark
+    return thin
 
 
 ZERO_GAP_EM = 0.1                  # a space char between digits this narrow (x font size) is no gap
@@ -200,7 +241,7 @@ def close_zero_gaps(page: Any) -> None:
     drop = set()
     for i in range(1, len(chars) - 1):
         c, a, b = chars[i], chars[i - 1], chars[i + 1]
-        if c.get("text") != " " or not (str(a.get("text")).isdigit() and str(b.get("text")).isdigit()):
+        if c.get("text") != " " or not (str(a.get("text")) in DIGITS and str(b.get("text")) in DIGITS):
             continue
         size = float(c.get("size") or a.get("size") or 0)
         same_line = abs(float(a["bottom"]) - float(b["bottom"])) <= 0.2 * size
@@ -208,14 +249,3 @@ def close_zero_gaps(page: Any) -> None:
             drop.add(id(c))
     if drop:
         chars[:] = [c for c in chars if id(c) not in drop]
-
-
-def restore(value: Any) -> Any:
-    """The parse output with every placeholder back as U+2009 (str, list or nested rows)."""
-    if isinstance(value, str):
-        return value.replace(_PLACEHOLDER, THIN)
-    if isinstance(value, list):
-        return [restore(v) for v in value]
-    if isinstance(value, dict):
-        return {k: restore(v) for k, v in value.items()}
-    return value

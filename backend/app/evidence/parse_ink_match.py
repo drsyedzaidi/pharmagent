@@ -12,14 +12,15 @@ from typing import Any
 
 import numpy as np
 
-from app.evidence.parse_marks import CRITICAL as OVERLAP_CRITICAL
+from app.evidence.numgrammar.alphabet import CID_MARKER
+from app.evidence.numgrammar.alphabet import NUMBER_CHARS as OVERLAP_CRITICAL
+from app.evidence.numgrammar.equivalents import fold
 
 MATCH_PT = 0.5
 EXACT_PT = 0.05                    # origins of one glyph agree to ~1e-4 pt between the two libraries
 MAX_UNMATCHED = 0.2
 DRIFT_PT = 3.0                     # a run's origins may drift this far apart (Standard-14 widths)
 MISMATCH, INK_MISMATCH = "glyph_text_mismatch", "glyph_ink_mismatch"
-_DASHES = str.maketrans({c: "-" for c in "‐‑‒–—―−﹘﹣－"})
 
 
 def _norm(text: str) -> str:
@@ -34,19 +35,16 @@ def _pdfminer_ctm(page: Any) -> np.ndarray:
     return np.array([[a, c, e], [b, d, f], [0, 0, 1]], dtype=float)
 
 
-def _fold(text: str) -> str:
-    return _norm(text).translate(_DASHES)
-
-
 def _decoded_apart(text: str, exact: list[int], texts: list[str]) -> set[str]:
     """Number characters of a char and the glyphs at its exact origin that decode to OTHER text
     (pdfium follows /ActualText, pdfminer reads the drawn code): the text layer is in doubt. A side
-    that could not decode the glyph at all ('(cid:1)', a control or private-use code) is no evidence."""
-    if text.startswith("(cid:"):
+    that could not decode the glyph at all ('(cid:1)') is no evidence; a decode outside the alphabet (a control, a
+    private-use code, U+FFFD) that differs from the text layer is NOT: it is a glyph in doubt. Texts are compared
+    through the approved equivalents table, never NFKC or a dash list."""
+    if CID_MARKER.match(text):
         return set()
-    decoded = [t for t in (_fold(texts[k]) for k in exact) if t and t != "\ufffd"
-               and not unicodedata.category(t[0]).startswith("C")]
-    out = {ch for t in decoded if t != _fold(text) for ch in t + _fold(text)}
+    decoded = [t for t in (fold(texts[k]) for k in exact) if t]
+    out = {ch for t in decoded if t != fold(text) for ch in t + fold(text)}
     return out & OVERLAP_CRITICAL
 
 
@@ -84,13 +82,14 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
     claimed: set[int] = set()
     found: dict[int, tuple[float, ...]] = {}
     for c in chars:
-        text = _norm(str(c.get("text", "")))
+        raw = str(c.get("text", ""))          # identity is judged on the raw text; the NFKC text only pairs glyphs
+        text = _norm(raw)
         ux, uy, _ = inv @ np.array([float(c["matrix"][4]), float(c["matrix"][5]), 1.0])
         near = [k for i in (-1, 0, 1) for j in (-1, 0, 1) for k in grid.get((int(ux // 2) + i, int(uy // 2) + j), [])]
         near = [(float(np.hypot(origins[k, 0] - ux, origins[k, 1] - uy)), k) for k in near]
         if not text.strip():
             spaces[id(c)] = [k for d, k in sorted(near)
-                             if d <= EXACT_PT and visible[k] and _fold(texts[k]) in OVERLAP_CRITICAL]
+                             if d <= EXACT_PT and visible[k] and fold(texts[k]) in OVERLAP_CRITICAL]
             continue
         judged += 1
         same = sorted((d, k) for d, k in near if d <= MATCH_PT and norm[k] and (norm[k] in text or text in norm[k]))
@@ -102,20 +101,20 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
             used = [k for d, k in near if d <= EXACT_PT]
             unmatched += not used
             ok = bool(used) and all(visible[k] for k in used)
-            flags[MISMATCH] |= _decoded_apart(text, used, texts)
+            flags[MISMATCH] |= _decoded_apart(raw, used, texts)
         prev = used[0] if used else None
         claimed.update(used)
         shown = [k for k in used if visible[k]]
         if glyph_boxes is not None and ok and shown:
             found[id(c)] = _union(glyph_boxes, shown)
         if any(odd[k] for k in used):
-            flags[INK_MISMATCH] |= set(_fold(text)) & OVERLAP_CRITICAL
+            flags[INK_MISMATCH] |= set(fold(raw)) & OVERLAP_CRITICAL
         if not ok:
             hidden.add(id(c))
     if judged and unmatched > MAX_UNMATCHED * judged:
         return None
     free = {cid: [k for k in ks if k not in claimed] for cid, ks in spaces.items()}
-    respell = {cid: _fold(texts[ks[0]]) for cid, ks in free.items() if ks}
+    respell = {cid: fold(texts[ks[0]]) for cid, ks in free.items() if ks}
     if glyph_boxes is not None:
         found.update({cid: _union(glyph_boxes, [ks[0]]) for cid, ks in free.items() if ks})
     return hidden, {code: chars_ for code, chars_ in flags.items() if chars_}, respell, found

@@ -7,6 +7,10 @@ from app.evidence.numgrammar.alphabet import (
     DIGITS,
     LETTERS,
     MULTIPLIERS,
+    NUMBER_CLOSERS,
+    OPENERS_BR,
+    OPERATORS,
+    QUALIFIERS,
     SIGNS,
     STARTERS,
     SUP_CHARS,
@@ -70,3 +74,46 @@ def exp_like(w: str) -> bool:
     if letter_led(w) or CARET_OR_SUP_RE.search(w) is None:
         return False
     return BARE_POWER_RE.fullmatch(w) is None and MULT_POWER_RE.fullmatch(w) is None
+
+
+RATIO_CHARS = frozenset("/:")                           # a lone word of one of these between two numbers is a ratio
+
+
+def operator_tail(w: str) -> str:
+    """The trailing run of OPERATORS characters of *w* ('' when it ends in another character)."""
+    k = len(w)
+    while k > 0 and w[k - 1] in OPERATORS:
+        k -= 1
+    return w[k:]
+
+
+def qualifies(words: list[str]) -> bool:
+    """True when the words before a number (nearest LAST, at most three read) hold a qualifier right before it: the
+    nearest word ends in a run of operator characters that holds one (``<``, ``<=``, ``~=``, ``\u2264(``, ``<-``), or is
+    made only of operator characters without one (``=``, ``(``) and the word before it does, so ``< = 5`` and ``< ( 5``
+    qualify like ``<5`` and nothing a gap, an opener or an equals sign adds can hide the qualifier."""
+    for w in reversed(words[-3:]):
+        run = operator_tail(w)
+        if any(c in QUALIFIERS for c in run):
+            return True
+        if not run or len(run) < len(w):
+            return False
+    return False
+
+
+def ends_with_number(w: str) -> bool:
+    """The word, without the closers and punctuation that may follow a number, ends in an ASCII digit."""
+    k = len(w)
+    while k > 0 and w[k - 1] in NUMBER_CLOSERS:
+        k -= 1
+    return k > 0 and w[k - 1] in DIGITS
+
+
+def digit_led(w: str) -> bool:
+    """The word starts with an ASCII digit, or with one opener or sign right before one."""
+    return bool(w) and (w[0] in DIGITS or (len(w) > 1 and (w[0] in OPENERS_BR or w[0] in SIGNS) and w[1] in DIGITS))
+
+
+def signed_digits(w: str) -> bool:
+    """The word starts with a sign and a digit (``-15``): a number that may be the right end of ``12 -15``."""
+    return len(w) > 1 and w[0] in SIGNS and w[1] in DIGITS

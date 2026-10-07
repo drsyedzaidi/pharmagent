@@ -101,7 +101,12 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
 
 - **Mixed numbers.** `12 3/4`, `12 1/2`, `12 ½` (`½` is a LINE character: it taints a number beside it). A lone fraction or
   ratio (`3/4`, `140/90 mmHg`, `6/10`, `0.1/0.2/0.4 mg/kg`) is unresolved too, so a blood pressure or a dose ratio is never
-  read as two exact values.
+  read as two exact values; so is a spaced one (`12 / 15`, `12 /15`, `12/ 15`, `1 : 2`, `5 / 12 / 2020`) and a division in
+  running text (`17 / 0.7`).
+- **Split decimals and bracketed scales.** `12 .5` and `12 ,5` (a text layer that split a number at its point; both are
+  unresolved), `5.2 (x10^3 cells/mL)` and `5.2 [× 10^3]` (the scale hides in a bracket), a reference pair `[1,2]` (never a
+  decimal). `(4,6)` stays a decimal: in decimal-comma papers a parenthesised decimal is ordinary, so a reference pair in
+  parentheses on a comma page is read as 4.6 (a known gap, not closable without losing every parenthesised SD).
 - **Raised exponents without an explicit marker.** `1.2 × 103` and `1.2 x 10 3` (an exponent set at full size but raised: the
   text layer cannot say 10^3 from 103), a bare `× 10` (`7.23 ×10 *`), `2 x 10 mg`, `n = 12 x 10`, the Lancet `0·10`, `12·105`;
   a raised ten without a multiplier (`10³`, `per 10⁶ cells`), a detached exponent (`10 ^ 3`, `10 ³`), a spaced exponent
@@ -110,7 +115,7 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
 - **Non-ASCII digits.** Arabic-Indic, fullwidth, circled, Roman, vulgar fractions and every other non-ASCII digit are outside
   the alphabet; a snippet or a proposed value that holds one (a text field's too) fails verification
   (`unresolved_context`). The superscript digits are readable only after a multiplier (`1.2 × 10⁻³`).
-- **Look-alike symbols.** Dashes (`‒ ― ﹘ ﹣ － ˗ ➖ ⁃ ⸺`), pluses, dots (`‧ ˙ ٫ ․`), multipliers (`⋅ ∙ ⨯ ✕ ✖ ∗ х Х`), comparisons
+- **Look-alike symbols.** Dashes (`‒ ― ﹘ ﹣ － ˗ ➖ ⁃ ⸺`), pluses, dots (`‧ ˙ ٫ ․`), multipliers (`⋅ ∙ ⨯ ✕ ✖ ∗ х Х χ`), comparisons
   (`≦ ≧ ⩽ ⩾ ≲ ≳ ≠`), `÷`, `‱`, fullwidth and small-form signs, Cyrillic and math letters are not in the alphabet and not in the
   equivalents table (ten entries: `− – ‐ ‑ ’` U+202F U+00A0 `µ ∼ ◦`). A number next to one is unresolved: a look-alike multiplier
   would be fail-open, so there is no folding. The em dash (`—`) is a LINE character: it may stand on a number's line but not
@@ -118,8 +123,9 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
 - **Bullets, footnote marks and symbols next to numbers.** `• 150 mg`, `Adalat® 30 mg`, `partner§ 33 574`, `cm‖ 33.3`, `312†`,
   `t½ 11.4 h`, `$18`, `£150 mg`, an arrow or a quote glued to a number, and `_ | ? " # & @` beside it (R code, markdown
   tables, file names): LINE characters taint the number's own word and the words before and after it. Letters beyond
-  the 29 accented Latin letters and the 17 Greek letters of the alphabet (`É Š ž ō`, `δ φ ψ ν`) taint the same way until
-  admitted by the corpus rule.
+  the 29 accented Latin letters and the 16 Greek letters of the alphabet (`É Š ž ō`, `δ φ ψ ν`, and `χ`, which draws like a
+  multiplier) taint the same way until admitted by the corpus rule. `χ` was a CONTEXT letter; moving it costs 2 numbers of
+  186,287 (`ΔOFV > 6.63 (χ² df=1`).
 - **Units glued to digits.** `150mg`, `24h`, `1.73m2`, `3MIU`, `10mL`, `100µg`: a letter glued to the digits is rejected
   whatever the letter (a list of allowed unit letters would be a fourth list and would re-admit `10mL` read as `1OmL`). The
   honest cost is mostly text layers that lost every space; per-document counts are in `corpus_after.tsv`.
@@ -151,8 +157,30 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   `corpus_after.tsv` of the r6 work directory. A number whose own word, neighbouring words and line hold only allowed characters,
   and that is none of the shapes above, resolves exactly as before; one beside an ASCII LINE character (`_ " $ # & ? @ |`: R code,
   file names, markdown tables) does not, by the owner's design.
+- **Round-1 corpus delta (same 448 caches, 2026-10-07).** Resolved numbers 165,325 -> 165,209 (-116, 0.07 %, no value
+  changed): reference pairs `[1,2]` (52), ratios and dates with a slash or colon word (55), `12 .5` splits (4), `ΔOFV > 6.63
+  (χ²` (2), the rest `10.1016/S0024-` shaped references. End-to-end records: 163,918 of the 181,225 that passed the old
+  reader still pass (HEAD of round 0: 164,036), 17,307 do not (9.55 %), 0 value disagreements among those that pass both;
+  value-like records of the 60 papers that no longer pass 1,606 of 44,072 (3.64 %, was 3.60 %). The table-cell neighbour rule
+  costs 22 cells of 900 with a number, all in the attack fixtures (`1.2 ⋅ 10^3`, `12․4`, `12З` next to a value): none in a
+  paper. Newly flagged only (the number still resolves): 359 range ends (`... -\n[16]`, page ranges), 26 qualified values
+  (`TVCL <- 5` in R code: `<-` holds a `<`).
 - **Speed.** Page text reads at about 0.6 times the cost of the old reader; a hostile 1 MB page of separate one-digit
-  tokens (`1 ` repeated) costs about 2 s, realistic dense pages at most about 1 s.
+  tokens (`1 ` repeated) costs about 2 s, realistic dense pages at most about 1 s. Round 1 removed the quadratic paths the
+  audit found: a 120-row table page (720 records) 6.6 s -> 0.17 s (the page is normalised and tokenised once per request, the
+  header rows of a table once), a 100 000-number dose page 14 s -> 0.7 s, two columns with 2 000 occurrences of the snippet
+  238 s -> 0.07 s, the style evidence of a 128 KB run of digit groups 40 s -> linear, one 200 000-glyph page of `ﷺ` 3 s and
+  470 MB -> bounded (NFKC never expands a glyph past four characters).
+- **What round 1 leaves, by design.** (a) The unit vocabulary (`unit_norm.py`), the group-label key (`qc_flags.group_key`), the
+  template header key (`extract_rules.norm_key`) and the snippet locator keep NFKC / `str.is*` / a Unicode category: none reads
+  a number, and each is named with its reason in `tests/test_evidence_r6_scope.py`, which fails for any other use in
+  `app/evidence`. The locator's NFKC no longer crosses the numeric alphabet. (b) Space characters other than the three the
+  equivalents table maps to a thin space are word breaks (pdfplumber's own rule), not OUTSIDE characters: `1<U+2007>234` reads
+  as `1` and `234`, each flagged `composite_cell`. (c) Parse caches written before round 1 keep their text (the parser version
+  is unchanged: the output differs only for a PDF with a private-use character or U+2007 / U+2008 / U+200A in a number); parse
+  the PDF again in a new session. (d) `(4,6)` in parentheses is read as a decimal. (e) A legitimate negative list written
+  `−11.8 −14.2` in running text flags both values as range ends (`censored_value`): the shape `12 -15` is the documented range.
+  (f) `<-` (R assignment) qualifies the value after it.
 
 ## Later phases
 

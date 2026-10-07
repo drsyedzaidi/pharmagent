@@ -3,22 +3,23 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { evidencePage } from './api';
 import { errorMessage } from './format';
-import { contextText, highlight, markScrollTop } from './highlight';
+import { contextText, highlight, markLiteral, markScrollTop } from './highlight';
 import { compareLabel, imageAnnouncement, imageUnavailableText, urgentFlagCodes } from './imageGeometry';
 import { PageImage } from './PageImage';
-import type { EvidenceSource, PageText, ParsedTable, RecordRow, TableCell } from './types';
+import type { EvidenceSource, PageText, ParsedTable, RecordRow, Span, TableCell } from './types';
 import type { PageImageView } from './usePageImage';
 import type { RelayoutControls } from './useRelayout';
 
-/** The marked snippet, with the verified literal (when present in it) in bold. */
-function Hit({ hit, literal }: { hit: string; literal: string | null }) {
-  const at = literal ? hit.indexOf(literal) : -1;
-  if (!literal || at < 0) return <>{hit}</>;
-  return <>{hit.slice(0, at)}<strong>{literal}</strong>{hit.slice(at + literal.length)}</>;
+/** The marked snippet, with the verified literal in bold at the verifier's token (`start`: where `hit` begins in the
+ *  text the token indexes; 0 for a table cell), never at an earlier occurrence of the same digits. */
+function Hit({ hit, literal, token, start }: { hit: string; literal: string | null; token?: Span | null; start: number }) {
+  const parts = markLiteral(hit, literal, token, start);
+  if (!parts) return <>{hit}</>;
+  return <>{parts[0]}<strong>{parts[1]}</strong>{parts[2]}</>;
 }
 
 /** The parsed table a table locator cites, with the cited cell marked. */
-function CellGrid({ table, cell, literal }: { table: ParsedTable; cell: TableCell; literal: string | null }) {
+function CellGrid({ table, cell, literal, token }: { table: ParsedTable; cell: TableCell; literal: string | null; token?: Span | null }) {
   return (
     <div className="ev-grid-wrap">
       <table className="ev-grid">
@@ -32,7 +33,7 @@ function CellGrid({ table, cell, literal }: { table: ParsedTable; cell: TableCel
                 return (
                   <Cell key={k} scope={r === 0 ? 'col' : undefined} className={hit ? 'ev-cell-hit' : undefined}
                     aria-current={hit ? 'true' : undefined}>
-                    {hit ? <mark><Hit hit={c} literal={literal} /></mark> : c}
+                    {hit ? <mark><Hit hit={c} literal={literal} token={token} start={0} /></mark> : c}
                   </Cell>
                 );
               })}
@@ -146,7 +147,7 @@ export function RecordContext({ sessionId, record, filename, view, source, rebui
       <p className="ev-snippet"><span className="ev-label">Cited snippet</span> <span className="mono">{loc.snippet}</span></p>
       {error && <p className="ev-problem" role="alert">Could not load page {loc.page}: {error}</p>}
       {!current && !error && <p className="ev-empty">Loading page {loc.page}…</p>}
-      {table && loc.cell && <CellGrid table={table} cell={loc.cell} literal={loc.literal} />}
+      {table && loc.cell && <CellGrid table={table} cell={loc.cell} literal={loc.literal} token={loc.token} />}
       {current && loc.kind === 'table' && !table && (
         <p className="ev-problem">Table {loc.cell ? loc.cell.table + 1 : '?'} is not in the parsed page.</p>
       )}
@@ -154,7 +155,7 @@ export function RecordContext({ sessionId, record, filename, view, source, rebui
         <>
           <p className="ev-hint">{where}</p>
           <pre ref={boxRef} className="ev-pagetext" tabIndex={0} aria-label={`Text of page ${loc.page}`}>
-            {hl ? <>{hl.before}<mark ref={markRef} className={hl.approx ? 'approx' : undefined}><Hit hit={hl.hit} literal={loc.literal} /></mark>{hl.after}</> : ctx.text}
+            {hl ? <>{hl.before}<mark ref={markRef} className={hl.approx ? 'approx' : undefined}><Hit hit={hl.hit} literal={loc.literal} token={loc.token} start={hl.start} /></mark>{hl.after}</> : ctx.text}
           </pre>
         </>
       )}

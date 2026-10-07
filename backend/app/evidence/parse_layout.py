@@ -24,12 +24,13 @@ import hashlib
 import math
 from typing import Any
 
-from app.evidence.parse_guard import _PLACEHOLDER, restore
+from app.evidence.parse_guard import ThinSpaces
 
 MAX_PAGE_WORDS = 6000
 MAX_DOC_WORDS = 300_000
 LAYOUT_VERSION = 1
 Box = tuple[float, float, float, float]
+NO_THIN = ThinSpaces()
 
 
 def sha256_text(text: str) -> str:
@@ -42,11 +43,11 @@ def _round_out(box: Box) -> list[float]:
     return [math.floor(l * 10) / 10, math.floor(b * 10) / 10, math.ceil(r * 10) / 10, math.ceil(t * 10) / 10]
 
 
-def word_box(word: dict[str, Any], char_boxes: dict[int, Box]) -> Box | None:
+def word_box(word: dict[str, Any], char_boxes: dict[int, Box], thin: ThinSpaces = NO_THIN) -> Box | None:
     """Union of the glyph boxes of the word's characters; None when a non-space char has none."""
     boxes: list[Box] = []
     for c in word.get("chars") or ():
-        if not str(c.get("text", "")).strip() or c.get("text") == _PLACEHOLDER:
+        if not str(c.get("text", "")).strip() or (thin.mark and c.get("text") == thin.mark):
             continue                          # spacing (a protected thin space draws nothing)
         box = char_boxes.get(id(c))
         if box is None:
@@ -58,17 +59,17 @@ def word_box(word: dict[str, Any], char_boxes: dict[int, Box]) -> Box | None:
             max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
-def _word_text(word: dict[str, Any]) -> str:
-    return restore(str(word.get("text", "")))
+def _word_text(word: dict[str, Any], thin: ThinSpaces = NO_THIN) -> str:
+    return thin.restore(str(word.get("text", "")))
 
 
-def map_words(text: str, words: list[dict[str, Any]]) -> list[tuple[int, int]] | None:
+def map_words(text: str, words: list[dict[str, Any]], thin: ThinSpaces = NO_THIN) -> list[tuple[int, int]] | None:
     """[start, end) of each word in *text*, matching in order and skipping whitespace only; None when a
     word does not start where the cursor stands or non-space text is left over."""
     out: list[tuple[int, int]] = []
     cur = 0
     for w in words:
-        wt = _word_text(w)
+        wt = _word_text(w, thin)
         if not wt:
             return None
         while cur < len(text) and text[cur].isspace() and not text.startswith(wt, cur):
@@ -82,23 +83,24 @@ def map_words(text: str, words: list[dict[str, Any]]) -> list[tuple[int, int]] |
     return out
 
 
-def _entries(offsets: list[tuple[int, int]], words: list[dict[str, Any]], char_boxes: dict[int, Box]
-             ) -> list[list[float]]:
+def _entries(offsets: list[tuple[int, int]], words: list[dict[str, Any]], char_boxes: dict[int, Box],
+             thin: ThinSpaces = NO_THIN) -> list[list[float]]:
     out: list[list[float]] = []
     for (s, e), w in zip(offsets, words, strict=True):
-        box = word_box(w, char_boxes)
+        box = word_box(w, char_boxes, thin)
         out.append([s, e] if box is None else [s, e, *_round_out(box)])
     return out
 
 
-def column_offsets(col_text: str, lines: list[list[dict[str, Any]]]) -> list[tuple[int, int]] | None:
+def column_offsets(col_text: str, lines: list[list[dict[str, Any]]],
+                   thin: ThinSpaces = NO_THIN) -> list[tuple[int, int]] | None:
     """Offsets of the words of one column string built as '\\n'.join(' '.join(words of a line)); None
     when that rebuild does not give *col_text* back."""
     out: list[tuple[int, int]] = []
     rebuilt: list[str] = []
     cur = 0
     for line in lines:
-        texts = [_word_text(w) for w in line]
+        texts = [_word_text(w, thin) for w in line]
         for t in texts:
             out.append((cur, cur + len(t)))
             cur += len(t) + 1
@@ -107,13 +109,13 @@ def column_offsets(col_text: str, lines: list[list[dict[str, Any]]]) -> list[tup
 
 
 def cell_boxes(cell_words: dict[str, list[dict[str, Any]]], cell_texts: dict[str, str],
-               char_boxes: dict[int, Box]) -> dict[str, list[float]]:
+               char_boxes: dict[int, Box], thin: ThinSpaces = NO_THIN) -> dict[str, list[float]]:
     """{"row:col": [l, b, r, t]} for every cell whose words (in reading order) read exactly its text."""
     out: dict[str, list[float]] = {}
     for key, words in cell_words.items():
-        if not words or " ".join(_word_text(w) for w in words) != restore(cell_texts.get(key, "")):
+        if not words or " ".join(_word_text(w, thin) for w in words) != thin.restore(cell_texts.get(key, "")):
             continue
-        boxes = [word_box(w, char_boxes) for w in words]
+        boxes = [word_box(w, char_boxes, thin) for w in words]
         if any(b is None for b in boxes):
             continue
         out[key] = _round_out((min(b[0] for b in boxes), min(b[1] for b in boxes),   # type: ignore[index]
@@ -122,12 +124,12 @@ def cell_boxes(cell_words: dict[str, list[dict[str, Any]]], cell_texts: dict[str
 
 
 def _table_cells(tables: list[dict[str, Any]], cell_words: list[dict[str, list[dict[str, Any]]]],
-                 char_boxes: dict[int, Box]) -> list[dict[str, Any]]:
+                 char_boxes: dict[int, Box], thin: ThinSpaces = NO_THIN) -> list[dict[str, Any]]:
     out = []
     for pos, (table, words) in enumerate(zip(tables, cell_words, strict=False)):
         texts = {f"{r}:{c}": str(cell or "") for r, row in enumerate(table.get("rows") or [])
                  for c, cell in enumerate(row)}
-        cells = cell_boxes(words, texts, char_boxes)
+        cells = cell_boxes(words, texts, char_boxes, thin)
         if cells:
             out.append({"index": pos, "cells": cells})      # position in page.tables (a locator's cell.table)
     return out
@@ -141,7 +143,8 @@ def _empty(page_text: str, columns: list[str] | None, status: str) -> dict[str, 
 
 def build_page(*, page_text: str, columns: list[str] | None, col_lines: list[list[list[dict[str, Any]]]] | None,
                words: list[dict[str, Any]], char_boxes: dict[int, Box], cell_words: list[dict[str, Any]],
-               ink_ok: bool, tables: list[dict[str, Any]], doc_words: int) -> dict[str, Any]:
+               ink_ok: bool, tables: list[dict[str, Any]], doc_words: int,
+               thin: ThinSpaces = NO_THIN) -> dict[str, Any]:
     """The layout record of one page (without ``n``). *page_text*, *columns* and *tables* are the parse's
     restored page fields; *words* are pdfplumber's (with their chars), *char_boxes* the ink check's
     {char id: glyph box}. Never raises: any failure is an ``unmapped`` page."""
@@ -150,22 +153,22 @@ def build_page(*, page_text: str, columns: list[str] | None, col_lines: list[lis
             return _empty(page_text, columns, "no_boxes")
         if len(words) > MAX_PAGE_WORDS or doc_words + len(words) > MAX_DOC_WORDS:
             return _empty(page_text, columns, "skipped")
-        offsets = map_words(page_text, words)
+        offsets = map_words(page_text, words, thin)
         if offsets is None:
             return _empty(page_text, columns, "unmapped")
         out = _empty(page_text, columns, "ok")
-        out["words"] = _entries(offsets, words, char_boxes)
+        out["words"] = _entries(offsets, words, char_boxes, thin)
         if columns and col_lines:
             cols = []
             for text, lines in zip(columns, col_lines, strict=True):
                 flat = [w for ln in lines for w in ln]
-                offs = column_offsets(text, lines)
+                offs = column_offsets(text, lines, thin)
                 if offs is None:
                     cols = None
                     break
-                cols.append(_entries(offs, flat, char_boxes))
+                cols.append(_entries(offs, flat, char_boxes, thin))
             out["col_words"] = cols
-        out["tables"] = _table_cells(tables, cell_words, char_boxes)
+        out["tables"] = _table_cells(tables, cell_words, char_boxes, thin)
         return out
     except Exception:                      # fail closed: the page keeps its text, loses its boxes
         return _empty(page_text, columns, "unmapped")

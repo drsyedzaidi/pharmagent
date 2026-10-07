@@ -119,7 +119,14 @@ claim again clears it (`supersede.py`).
   must be a WHOLE page token (sign included): `2.4` cited inside `12.4`, or `20` inside `-20`, fails
   `partial_number`. A record's `value_num` is that token's value in the page's decimal style.
 - An ASCII space or line break on the page separates numbers; only a thin / no-break space groups digits
-  (`18 900`), and the parser keeps it as U+2009.
+  (`18 900`), and the parser keeps it as U+2009. "Thin" means exactly the characters the approved equivalents table
+  maps to a thin space (U+2009, U+202F, U+00A0: `THIN_SPACES` is built from the table); every other space character
+  (U+2007, U+2008, U+200A, U+2003, U+3000 ...) is a word break, as it is for pdfplumber, so it never joins two digit
+  groups. While pdfplumber extracts, each kept space is replaced by a private-use placeholder that NO glyph of that page
+  is (`ThinSpaces`: the first unused of U+E000-U+F8FF, then planes 15 and 16; a page that draws all of them is refused),
+  and `restore()` puts U+2009 back for exactly those: a real private-use character of the PDF (icon fonts map there)
+  stays what it is, is outside the alphabet and leaves the number it touches unresolved. Parse caches written before this
+  change keep their text; a PDF with such a character is parsed again in a new session.
 - `column` is 0 or 1 when the snippet was found inside one column of a two-column page. `span` then
   indexes `page.columns[column]`, not `page.text`. A snippet found in `page.text` only across the column
   gap (a merged line: one column's line + the other's) fails `crosses_columns`.
@@ -150,7 +157,10 @@ claim again clears it (`supersede.py`).
     pdfium's order on the same baseline within 3 pt is taken instead of dropping the rest of the line.
     A copy of a glyph within 1 pt of the same text is dropped silently (one glyph to a reader). Table
     rulings ignore paths that put no ink on the page (white or unpainted strokes / fills).
-  - `glyph_check` is `{flag code: characters}` ({} when nothing is in doubt): number characters whose
+  - `glyph_check` is `{flag code: characters}` ({} when nothing is in doubt): number characters (the ONE list
+    `numgrammar.alphabet.NUMBER_CHARS` = every INSIDE character and every approved-equivalent source; fonts,
+    ActualText, orientation, ink and overlap checks all read it, and texts are compared through the equivalents table, never
+    NFKC, a dash list or a soft-hyphen exception) whose
     font's ToUnicode disagrees with its glyph names, or that a Type3 program draws
     (`glyph_text_mismatch`, error; a page drawing with any Type3 font, or a font whose ToUnicode
     reports a drawn digit as a space or other non-digit, puts every digit of the page in doubt), whose
@@ -447,17 +457,24 @@ printed unit (`MG/ML`) only gives the warning; `‰` is a unit of its own (never
 There is no folding of look-alike slashes and dots: a number next to `mg⁄kg`, `mg∕kg` or `mg⋅kg−1` is unresolved and
 the record fails verification before any unit is read; a next token made of `/ · * × ^`, or `(per`, continues the unit.
 Value checks (`value_checks.py`, errors) read the words around the verified token, never characters:
-`censored_value` (the token is qualified, `<0.5`, `≤1.0`, `~2`, `∼45%`; the word before it is `below`, `above`, `under`,
+`censored_value` (the token is qualified, `<0.5`, `≤(1.0)`, `~=2`, `∼45%`; the word before it is `below`, `above`, `under`,
 `over`, `approximately`, `approx`, `about`, `circa`, `ca`, `BLQ`, `LLOQ` or one of `less than`, `more than`,
-`greater than`, `up to`, `at least`, `at most`; or it is one end of a range, `12–15`, `12 - 15`, `12 -15`, `12 to 15`,
-unless the field names an interval or range), `scaled_header` (a multiplier in any header row above the cell, row label,
-unit column or unit: `AUC ×10³ (ng·h/mL)`, `x1000`, `E+03`, `thousands`; a power after `/` or `per` is part of the
-unit; a word that starts with a letter, `AUC0–∞`, never counts), `decimal_style_ambiguous` (the token's shape is a
+`greater than`, `up to`, `at least`, `at most`, `less than or equal to`; or it is one end of a range, `12–15`, `12 - 15`,
+`12 -15`, `5.0- 12.4`, `12.5 ∼ 15.0`, `12 to 15`, unless the field names an interval or range; every word list is matched with
+`loose_in`, where a non-ASCII character stands for any one character or for none: `αbove`, `τo` and a zero-width character
+inside `above` flag like the plain words), `scaled_header` (a multiplier in any header row above the cell, row label,
+unit column, unit or a cell right beside it: `AUC ×10³ (ng·h/mL)`, `x1000`, `x 1000`, `E+03`, `thousands`; a power after `/` or
+`per` is part of the unit; a word that starts with a letter, `AUC0–∞`, never counts. Nothing is dropped from the label: it is
+read as it stands and with every non-ASCII character removed, and either reading raises the flag, so a look-alike or invisible
+character next to `1000`, `10^3` or `thousands`, or a number of the label touching a character outside the alphabet, still
+flags), `decimal_style_ambiguous` (the token's shape is a
 decimal separator other than the page's: `1,2` or `0,412` on a point page; a one-separator shape that depends on the
 style (`3,412`) on weak style evidence: < 3 decimals of the winning style or the other style ≥ a third of them; or a raised
 dot between digits (`12·4`) in a document with 3 or more point decimals, which is more likely a product; none of these when
-the template fixes the field's decimal), `composite_cell` as an error when the token and the word beside it are bare digit
-groups the reader splits (`12` of `12 145`). The warning `composite_cell` counts the resolved numbers in the cited cell,
+the template fixes the field's decimal; also a mantissa with the other separator, and a number grouped with the character the
+document prints its decimals with, `3.101.102` on a point page), `composite_cell` as an error when the token and the word
+beside it are a head of 1-3 digits and a group of 3 digits (2-3 when bare) the reader splits (`12` of `12 145`, `1` and `234.5` of
+`1 234.5`, `1` of `(1 234)`, `-1` of `-1 234`; a decimal on the head, `12.4 145`, never makes one). The warning `composite_cell` counts the resolved numbers in the cited cell,
 not in the snippet.
 
 ### Number reader (`numgrammar/`)
@@ -468,7 +485,8 @@ expression, or within one visual separator of it, makes the expression unresolve
 fails, the record is flagged and the reviewer compares the value with the page image. There is no list of bad
 characters anywhere in the reader: no Unicode category, no code-point blocklist, no `str.isdigit`. The only lists are the
 allowed alphabet, the context sets, the gap set and the equivalents table. (The snippet locator, `normalize.py`, finds
-text and never yields a value; it keeps NFKC per character and applies exactly the equivalents table.)
+text and never yields a value; it keeps NFKC per character EXCEPT into or out of the numeric alphabet or into more than
+four characters, and applies exactly the equivalents table; see "Locator" below.)
 
 **Alphabet.** Five classes; a character is in exactly one (`numgrammar/alphabet.py`, written a second time as bare
 code points in `tests/evidence_r6_pins.py`; the two copies are compared entry by entry):
@@ -477,8 +495,8 @@ code points in `tests/evidence_r6_pins.py`; the two copies are compared entry by
 |---|---|
 | INSIDE (45) | may stand inside a numeric token: digits `0-9`; signs `+ -`; separators `. , '` U+2009 THIN SPACE, U+00B7 `·`; exponent marker `e E`; multipliers `x X * ×` (and `·`); `^`; superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and signs `⁺⁻`; `% ‰`; `±`; qualifiers `< > ≤ ≥ ~ ≈` |
 | GAP (4) | space, tab, line feed, carriage return: one visual separator (a run of any length and mix is ONE) |
-| CONTEXT (74) | allowed in a word within one separator of a token: the other 48 ASCII letters, 17 Greek letters (`μ ω β α τ λ η θ ε γ σ χ ρ π Δ Ω Σ`), `( ) [ ] ; : / = °` |
-| LINE (76) | allowed anywhere on the token's line but not in its word nor in the word before or after it: the printable ASCII `! " # $ & ? @ \ _ { } \|` and the backtick, typographic `‘ “ ” — … • © ® ™ † ‡ § ¶ ‖ ′ → ← ↑ ↓ ∞ ½`, subscripts `₀-₉ ₊ ₋`, `κ`, 29 accented Latin letters seen in author names |
+| CONTEXT (73) | allowed in a word within one separator of a token: the other 48 ASCII letters, 16 Greek letters (`μ ω β α τ λ η θ ε γ σ ρ π Δ Ω Σ`), `( ) [ ] ; : / = °` |
+| LINE (77) | allowed anywhere on the token's line but not in its word nor in the word before or after it: the printable ASCII `! " # $ & ? @ \ _ { } \|` and the backtick, typographic `‘ “ ” — … • © ® ™ † ‡ § ¶ ‖ ′ → ← ↑ ↓ ∞ ½`, subscripts `₀-₉ ₊ ₋`, `κ`, `χ` (it draws like the multiplier `x`: `1.2 χ 10^3` must not read as 1.2), 29 accented Latin letters seen in author names |
 | OUTSIDE | everything else (about 1.11 million code points) and the pdfminer marker `(cid:N)` (the text layer's U+FFFD, treated as one character): controls except tab and line breaks, every format character (soft hyphen, zero-width, bidi), combining marks, private use, unassigned, every non-ASCII digit, look-alike dashes, dots, multipliers and comparisons, fullwidth forms, Cyrillic, math letters, `‱`, `€`, ligatures |
 
 **Equivalents (the only normalisation, 1:1 so offsets never move).** `−` U+2212, `–` U+2013, `‐` U+2010 and `‑` U+2011
@@ -497,6 +515,13 @@ Separators follow the page's decimal style only where the text cannot decide (`3
 a group other than three digits is a decimal (`18,2`, `0,412`), a repeated or apostrophe / thin-space separator groups
 thousands (`1.250.000`, `24'560`, `18 900`), `A.BBB` with `A` longer than three digits and the wrong style is
 `ambiguous_tail`, two kinds read as thousands plus one decimal (`1,234,567.89`), up to 40 digits and `|e| ≤ 300`.
+A number an exponent follows (a mantissa: `1.234e+03`, `1.234 x 10^3`) reads ONE separator as a decimal point whatever the
+page's style (a thousands group never carries an exponent), so `1.234e+03` on a decimal-comma page is 1.234e3 = 1234, never
+1 234 000; the token keeps its separator, and a mantissa whose separator is not the page's raises `decimal_style_ambiguous`.
+A qualifier before a token is read through a RUN of operator characters (`< > ≤ ≥ ~ ≈` and `= ( [ : ; * + -`) in its own word or
+in the words right before it: `≤(12.5)`, `~=12.5`, `<=(5)`, `< = 5`, `< ( 5 )`, `<- 5` are qualified like `<5`; a run without a
+qualifier (`=`, `(`) is not. A range is marked on both ends however it is spaced: `12–15`, `12 - 15`, `12 -15` (the right end is a
+signed number right after a number), `5.0- 12.4`, `0.5-` + line break + `1.5`, `12.5 ∼ 15.0`.
 Three reading modes: `page` (page text and columns: a line feed ends a line; an ASCII space never groups digits),
 `cell` (a table cell is one line) and `claim` (a snippet or a proposed value: one line, and a space in thousands
 position reads as a thin space, so `18 900` is 18900).
@@ -509,28 +534,35 @@ every token of the word unresolved, so `Adalat® 30 mg`, `AUC0–∞ 1234`, `$18
 `<⠀12` (U+2800 between a qualifier and its number) are all unresolved; (3) a character OUTSIDE anywhere on the token's
 line (a table cell, snippet or value: the whole string) makes every token on that line unresolved, which is why an
 unmapped `(cid:3)` or a soft hyphen poisons its line. LINE characters are allowed on the line but not within one separator.
-Padding never widens a window: 5000 spaces are one separator. Hidden-qualifier attacks are impossible by construction:
-to separate a visible `<` from its number something must be inserted, and everything that can be inserted is either
-a gap (one separator), an allowed word (then the qualifier is visibly two words away) or a tainting character.
+Padding never widens a window: 5000 spaces are one separator. A qualifier cannot be hidden by a character that taints
+(it taints the number), and a gap, an opener or an equals sign inserted between a qualifier and its number does not hide it:
+the qualifier is read through the operator run (see Grammar).
 
 **Multi-word forms** (across exactly one gap run, line breaks included). Accepted: `1.2 × 10^3`, `1.2 ×10⁻³`,
 `1.2× 10^3`. Unresolved shapes: `ten_after_multiplier` (`2 x 10 mg`, `1.2 × 103`, `1.2 x 10 3`: a ten with no readable power,
 possibly a raised exponent the text layer lost), `multiplier_operand` (`2 × daily`, `1.2 ×` at a line end, `1.2 × l0³`),
-`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (`3/4`),
-`bare_superscript_power` (`10³` without a multiplier). `2 x 100 mg` is two plain numbers.
+`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (`3/4`; also a
+ratio, a score or a date with a slash or colon word between two numbers, spaced or glued to one of them: `12 / 15`, `12 /15`,
+`12/ 15`, `1 : 2`, `5 / 12 / 2020`), `detached_decimal` (`12 .5`, `12 ,5`: a text layer split the number at its point),
+`bracketed_multiplier` (`5.2 (x10^3 cells/mL)`, `5.2 [× 10^3]`: the scale hides in a bracket after the number),
+`bare_superscript_power` (`10³` without a multiplier). `2 x 100 mg` is two plain numbers. A pair of reference numbers in
+square brackets (`[1,2]`, head 1-99, tail 1-2 digits) is `citation_list`, never a decimal; `(4,6)` stays a decimal (in
+decimal-comma papers a parenthesised decimal is ordinary).
 
 **Unresolved shapes (the `why` of `unresolved_shape`).** `too_many_digits`, `leading_zero` (`007`), `middot` (`12·4` on
 a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
 `ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
+`detached_decimal`, `bracketed_multiplier`, `citation_list`,
 `glued_letters` (`150mg`, `24h`, `1.73m2`, `1O5`, `12З`), `glued_symbol` (`8:00`, `12/24`, `65+`, `12=`), `bad_start`
 (`.05`), `bare_superscript_power`. A unit glued to the digits is rejected whatever the letters: a list of allowed unit
 letters would be a fourth list, and it would re-admit `10mL` read as `1OmL`.
 
-**Reviewer sentences** (`verify_messages.py`, fixed templates; the code point is named with `unicodedata.name`, the one
-use of `unicodedata` outside the locator, to label a character for a human, never to classify one). Context: "the cited
+**Reviewer sentences** (`verify_messages.py`, fixed templates; the code point is named with `unicodedata.name`, a display-only
+use to label a character for a human, never to classify one). Context: "the cited
 number '12.5' touches U+200B ZERO WIDTH SPACE (one word before), a character outside the allowed number alphabet; the
 text layer cannot be read as a number here. Compare the value with the page image."; `where` is one of `inside the number`,
-`glued before the digits`, `glued after the digits`, `one word before`, `one word after`, `elsewhere on the same line`;
+`glued before the digits`, `glued after the digits`, `one word before`, `one word after`, `elsewhere on the same line`, and for a
+table cell `in the previous cell` / `in the next cell`;
 the marker is named "an unmapped glyph marker (cid:3)". Shape: "the cited number '12 3/4' is written in a form the
 reader does not accept (a mixed number); read it on the page image." The `verify_fail` flag message is
 `<field>: verification failed (<reason>): <sentence>`, carried from the verifier to the flag in the in-memory
@@ -539,19 +571,48 @@ reader does not accept (a mixed number); read it on the page image." The `verify
 **What is read where.** `verify.py` reads the value and the snippet in `claim` mode only to find WHICH token the value
 cites; every pass or fail is decided on the page text, column or cell, with its real neighbours and its real line, by
 the token at the located offsets. Raw offsets are unchanged (the equivalents are 1:1, the thin-space rewrite is 1:1), so
-`locator.span`, `locator.token`, highlights and the page-image regions need no change.
+`locator.span`, `locator.token`, highlights and the page-image regions need no change. A claim equals a page number only
+when their canonical decimals are EQUAL (`3.2e-13` is never `0`, a changed last digit of a 13-digit integer is never the same
+number): there is no tolerance, and a proposal whose own reading differs from the page token (`1.234` on a page that prints
+`1,234`) is stored as the page literal. For a TABLE cell the cells right before and after it in its row are the words one
+separator away: a character outside the alphabet (or a `(cid:N)` marker) in either leaves the number unresolved ("in the
+previous cell" / "in the next cell"), a qualifier, a lone `-` or `~`, or `to` in the previous cell flags `censored_value`,
+and a multiplier or thousands word in either flags `scaled_header` (a LINE character in a neighbouring cell, `AUC0–∞`
+beside its value, is allowed).
+
+**Style evidence.** `infer_decimal_style` and the document's evidence count the RESOLVED numbers of the page reading by the
+decimal mark they use (`numgrammar/style.py`: a point decimal, a comma decimal, the mantissa of a power); thousands
+groups, versions, dates, reference pairs and every number the reader cannot read (a non-ASCII digit, a look-alike dot, a
+line with a character outside the alphabet) vote for nothing, so padding a page with such digits can never flip `3,412` to
+`3.412`. Linear in the text (the old patterns were quadratic in a run of digit groups).
+
+**Locator (`normalize.py`).** Finds the snippet in the page; it yields no value. Pipeline: NFKC per character, the
+equivalents table, casefold, de-hyphenation, whitespace collapse. NFKC is applied to a character only when neither the
+character nor its result is in the numeric alphabet (so `⁰`, `₂`, `１`, `½`, `ⓔ` and `．` are never the ASCII digit or sign
+they look like, in the page or in the snippet, even in a text field) and the result is at most four characters (U+FDFA
+stays one character: it expanded to 18). The normalised page and its offset map are cached for ONE request
+(`read_cache.py`: `check_proposals` opens it, a bare `verify()` call caches nothing, the cache is bounded by characters),
+so the many records of a table page read the page text once. A table page of 120 rows (720 records) verifies in 0.17 s
+(6.6 s before).
 
 **How to extend it.** Nothing is added by a special case. (a) A character an honest page prints next to numbers: admit it
 by the corpus rule, one hit on a digit-bearing line in ordinary prose and never a mis-mapped glyph, as a literal
 code point in `alphabet.py` (CONTEXT to allow it within one word of a number, LINE to allow it only elsewhere on the
-line) and in `tests/evidence_r6_pins.py`, update the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
+line; a letter that DRAWS like an INSIDE character, such as `χ` for `x`, is LINE) and in `tests/evidence_r6_pins.py`, update
+the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
 `tests/evidence_r6_golden.json` (the class-representative behaviours) and write the code point and its corpus evidence in
 the docstring. (b) A look-alike that is really one of the approved characters: one entry in `EQUIV` (target a character
 already in the alphabet), the same two test copies, and corpus evidence. (c) A new multi-word form: a rule in
 `numgrammar/tokenizer.py` with a test in `tests/test_evidence_r6_grammar.py`. Then run the exhaustive tier
-(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py`, about 9 minutes on 12 workers: every code
-point at every boundary of 291 (expression, boundary) pairs), the verify oracle (`tests/test_evidence_r6_verify_oracle.py`) and the corpus
-comparison. Stored rows: `verify_records` re-verifies proposed rows under the grammar (expect more failures: glued
+(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 15
+minutes on 12 workers: every code point at every boundary of 291 (expression, boundary) pairs through `tokens()`, and
+through the paths around it, `tests/evidence_r6_layer_b.py`: the label reader `scale_shapes`, the style evidence, the parse
+placeholder `protect_thin_spaces` / `restore` and the text-field locator), the verify oracle
+(`tests/test_evidence_r6_verify_oracle.py`) and the corpus comparison. The run records `git rev-parse HEAD` and the dirty
+files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit first, then run. The scope test
+(`tests/test_evidence_r6_scope.py`) walks EVERY module of `app/evidence` for `unicodedata`, `str.is*`, `\d \w \s \b` classes
+and hand-typed non-ASCII lists; each use that remains is named in it with its reason (the locator, the unit vocabulary, a
+group label, a header key, a message), and an exception that no longer applies fails the test. Stored rows: `verify_records` re-verifies proposed rows under the grammar (expect more failures: glued
 units, `2 x 10 mg`, lines with `(cid:N)`); approved rows are immutable and keep their reasons, the legacy
 `non_ascii_digits` included.
 

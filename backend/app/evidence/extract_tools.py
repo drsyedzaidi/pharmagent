@@ -11,30 +11,24 @@ on the cited page; the reviewer still decides each row.
 """
 from __future__ import annotations
 
-import math
-import re
 from collections import Counter
 from dataclasses import asdict
 from typing import Any
 
 from app.core.pharmstate import PharmState
 from app.evidence import ingest
-from app.evidence import models as M
 from app.evidence.config_tools import summarise
-from app.evidence.earlier_decisions import decided_records, earlier_flags
+from app.evidence.earlier_decisions import decided_records
 from app.evidence.extract_llm import MAX_PAGE_CHARS, llm_extract, llm_flags
-from app.evidence.extract_rules import field_index, norm_key, rule_extract, value_number
+from app.evidence.extract_rules import rule_extract
 from app.evidence.inclusion import current_screens, exclusion_reason, included_sources
 from app.evidence.llm_access import current_llm, llm_available
 from app.evidence.models import DECISIONS, Record, Source, now_iso
-from app.evidence.normalize import normalise, numbers_in
-from app.evidence.qc_flags import merge_llm_flags, same_value, scripted_flags, slot_key
-from app.evidence.record_checks import page_checks
+from app.evidence.proposal_check import check_proposals
+from app.evidence.qc_flags import merge_llm_flags, same_value, slot_key
 from app.evidence.screen_tools import _select_sources
 from app.evidence.store import EvidenceStore, get_store
 from app.evidence.supersede import carried, claim_ids, run_marks
-from app.evidence.value_checks import cell_numbers, document_evidence
-from app.evidence.verify import verify
 from app.tools.base import Tool, ToolContext, ToolResult
 
 __all__ = ["MAX_PAGE_CHARS", "check_proposals", "extract_evidence", "verify_records", "decide_records", "TOOLS"]
@@ -43,93 +37,6 @@ AGENT = "evidence"
 MAX_REASON = 500
 NOTE_LLM_INVALID = "llm_invalid"
 _DECISION_STATUS = {"approve": "approved", "reject": "rejected"}
-_INSTRUCTION_RE = re.compile(
-    r"\b(ignore|disregard|override|forget)\b[^.\n]{0,60}\b(instructions?|rules?|prompts?|guidelines?)\b"
-    r"|\bapprove (everything|all|every)\b|\bsystem prompt\b|\b(you are an? |as an ai\b|automated readers?)",
-    re.IGNORECASE)
-
-
-# ---------------------------------------------------------------- checking ---
-
-def _suspicious(p: dict[str, Any]) -> list[dict[str, Any]]:
-    text = f"{p.get('value') or ''} {p['locator'].get('snippet') or ''}"
-    if not _INSTRUCTION_RE.search(text):
-        return []
-    return [{"code": M.FLAG_SUSPICIOUS_INSTRUCTION, "severity": "warn",
-             "message": f"{p['field']}: the value or its snippet reads like an instruction to an automated "
-                        "reader; it is document text, not a finding", "field": p["field"],
-             "group": p.get("group_label") or "", "origin": "script"}]
-
-
-def _composite(p: dict[str, Any], ftype: str, doc: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """A numeric table cell holding more than one number ('3,412 (812)'), counted in the CITED CELL
-    (the snippet may quote one of them): the reviewer must confirm which number it is."""
-    loc = p["locator"]
-    if ftype == "text" or loc.get("kind") != "table" or any(f["code"] == M.FLAG_COMPOSITE_CELL for f in p["flags"]):
-        return []
-    count = cell_numbers(p, doc)
-    if (len(numbers_in(str(loc.get("snippet") or ""), loc.get("decimal_style") or ".")) if count is None
-            else count) <= 1:
-        return []
-    return [{"code": M.FLAG_COMPOSITE_CELL, "severity": "warn",
-             "message": f"{p['field']}: cell {loc.get('snippet')!r} holds more than one number; "
-                        f"{p['value']!r} was read as the estimate", "field": p["field"],
-             "group": p.get("group_label") or "", "origin": "script"}]
-
-
-def _field_type(p: dict[str, Any], index: dict[str, dict[str, Any]]) -> str:
-    spec = index.get(norm_key(p.get("field")))
-    if spec is not None:
-        return str(spec.get("type") or "number")
-    return "text" if p.get("value_num") is None else "number"
-
-
-def _page_reading(p: dict[str, Any], number: float | None, literal: str | None) -> dict[str, Any]:
-    """value_num := the matched page token's value (never an independent re-parse of the proposal);
-    a proposal whose own reading disagrees ('1,234' on a decimal-comma page that prints 1234) takes
-    the page literal as its value, so value and value_num always describe the same printed number."""
-    if number is None:
-        return p
-    style = (p.get("locator") or {}).get("decimal_style") or "."
-    own = value_number(str(p.get("value") or ""), style)
-    if own is None or not math.isclose(own, number, rel_tol=1e-9, abs_tol=1e-12):
-        return {**p, "value": literal or p.get("value"), "value_num": number}
-    return {**p, "value_num": number}
-
-
-def _verify_one(p: dict[str, Any], doc: dict[str, Any], ftype: str) -> dict[str, Any]:
-    res = verify(p, doc, field_type=ftype)
-    status, reason, loc = res.status, res.reason, dict(res.locator or p["locator"])
-    if status == "pass" and ftype == "text" and normalise(str(p.get("value") or ""))[0] not in normalise(
-            str(loc.get("snippet") or ""))[0]:
-        status, reason, loc = "fail", M.REASON_TEXT_NOT_IN_SNIPPET, {**loc, "span": None, "literal": None}
-    base = _page_reading(p, res.number, res.literal) if status == "pass" else p
-    if ftype == "text":                          # a text field never carries a number of its own
-        base = {**base, "value_num": None}
-    return {**base, "locator": loc, "verify_status": status, "verify_reason": reason, "verify_detail": res.detail}
-
-
-def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None, template: dict[str, Any],
-                    approved: list[Any] | None = None, live: list[Any] | None = None,
-                    decided: list[Any] | None = None, template_hash: str = "") -> list[dict[str, Any]]:
-    """Pure: literal verification of every proposal (all fail 'source_changed' when *doc* is None),
-    then scripted QC flags (conflicts against *approved* and the *live* proposals of earlier runs), the
-    instruction-text flag and the 'decided_earlier' flag (a claim already approved / rejected under another
-    template hash, from *decided*). Returns new dicts; inputs are untouched."""
-    index = field_index(template)
-    if doc is None:
-        checked = [{**p, "locator": {**p["locator"], "span": None, "literal": None}, "verify_status": "fail",
-                    "verify_reason": M.REASON_SOURCE_CHANGED} for p in proposals]
-    else:
-        checked = [_verify_one(p, doc, _field_type(p, index)) for p in proposals]
-    flags = scripted_flags(checked, template, list(approved or []), list(live or []))
-    counted = {**doc, "decimal_evidence": document_evidence(doc)} if doc is not None else None
-    earlier = earlier_flags(checked, list(decided or []), template, template_hash)
-    out = [{**p, "flags": fl + _suspicious(p) + page_checks(p, counted, index.get(norm_key(p.get("field")))) + ea}
-           for p, fl, ea in zip(checked, flags, earlier, strict=True)]
-    return [{**p, "flags": p["flags"] + _composite(p, _field_type(p, index), doc)} for p in out]
-
-
 # ----------------------------------------------------------------- extract ---
 
 def _propose(llm: Any, template: dict[str, Any], src: Source, doc: dict[str, Any]) -> dict[str, Any]:

@@ -14,9 +14,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 
-from app.evidence.numgrammar import GAP, find_dose, find_n_lead, parse_claim, tokens
+from app.evidence.numgrammar import GAP, claim_decimal, find_dose, find_n_lead, parse_claim, tokens
+from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, char_class
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
 VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
@@ -26,7 +28,11 @@ DISPERSION_HEADERS = frozenset({"sd", "se", "sem", "rse", "cv", "cv%", "%cv", "r
                                 "90%ci", "range", "iqr", "min", "max", "p", "pvalue", "n", "shrinkage", "iiv"})
 _KEY_STRIP = re.compile(r"[\s_\-,.]+")
 _PAREN_UNIT_RE = re.compile(r"^(?P<label>.*?)\s*[(\[](?P<unit>[^()\[\]]{1,40})[)\]]\s*$")
-_TRAIL_UNIT_RE = re.compile(r"^\s*(?P<unit>[A-Za-z%µμ][\w%/·^.*\-]{0,24})\s*$")
+_SPACE = char_class(GAP, negate=False)
+_UNIT_HEAD = char_class(ASCII_LETTERS | GREEK | frozenset("%\u00b5"), negate=False)
+_UNIT_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_%\u00b5"), negate=False)
+_UNIT_BODY = "(?:" + _UNIT_WORD + "|[/\u00b7^.*\\-]){0,24}"
+_TRAIL_UNIT_RE = re.compile("^" + _SPACE + "*(?P<unit>" + _UNIT_HEAD + _UNIT_BODY + ")" + _SPACE + "*$")
 _DOSE_CTX = re.compile(r"\bdos(?:e|es|ed|ing|age)\b|\badminist", re.IGNORECASE)
 
 
@@ -95,6 +101,13 @@ def value_number(value: str, style: str) -> float | None:
     """Numeric reading of a proposed value in the page's style, else point-decimal, else None."""
     num = parse_claim(value, style)
     return num if num is not None or style == "." else parse_claim(value, ".")
+
+
+def value_decimal(value: str, style: str) -> Decimal | None:
+    """The exact decimal of a proposed value in the page's style, else point-decimal, else None (value_number's twin:
+    the verifier compares decimals, never floats within a tolerance)."""
+    num = claim_decimal(value, style)
+    return num if num is not None or style == "." else claim_decimal(value, ".")
 
 
 def leading_number(cell: str, style: str) -> tuple[str, float, str] | None:

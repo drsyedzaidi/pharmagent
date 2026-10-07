@@ -61,7 +61,7 @@ def test_a_character_is_in_exactly_one_class_and_an_equivalent_source_is_in_none
 def test_the_context_set_holds_the_48_ascii_letters_that_are_not_inside():
     assert len(A.CONTEXT_LETTERS) == 48 and not (A.CONTEXT_LETTERS & set("eExX"))
     assert A.ASCII_LETTERS == frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
-    assert len(A.GREEK) == 17
+    assert len(A.GREEK) == 16 and "\u03c7" not in A.GREEK and "\u03c7" in A.LINE
 
 
 def test_print_the_exact_contents_of_every_class(capsys):
@@ -81,6 +81,14 @@ def test_the_equivalence_table_is_one_to_one_and_total():
     assert EQ.fold("−–\u2010\u2011") == "----"
     assert EQ.fold("24’60") == "24'60" and EQ.fold("µ") == "μ"
     assert EQ.fold("∼") == "~" and EQ.fold("◦") == "°"
+
+
+def test_the_thin_space_sources_are_the_ones_the_table_maps_to_a_thin_space():
+    from app.evidence import parse_guard as G
+    assert EQ.THIN_SOURCES == frozenset({"\u2009", "\u202f", "\u00a0"}) == G.THIN_SPACES
+    assert EQ.THIN_SOURCES == {EQ.THIN} | {k for k, v in EQ.EQUIV.items() if v == EQ.THIN}
+    for other in ("\u2007", "\u2008", "\u200a", "\u2003", "\u3000"):
+        assert other not in EQ.THIN_SOURCES and A.cls(other) == "outside"
 
 
 def test_a_thin_space_groups_digits_only_between_two_digits():
@@ -112,8 +120,8 @@ def test_cls_agrees_with_the_independent_copy_on_every_code_point():
             wrong.append((f"{cp:04X}", A.cls(chr(cp)), want))
     assert wrong == []
     # an equivalent classifies as its target: 8 of the 10 become inside (- x4, ' x1, thin space x2, ~ x1), 2 context
-    assert counts["inside"] == 45 + 8 and counts["context"] == 74 + 2
-    assert counts["gap"] == 4 and counts["line"] == 76
+    assert counts["inside"] == 45 + 8 and counts["context"] == 73 + 2
+    assert counts["gap"] == 4 and counts["line"] == 77
     assert sum(counts.values()) == 0x110000
 
 

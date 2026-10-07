@@ -28,8 +28,8 @@ class Tok(NamedTuple):
     value: float | None
     shape: str
     parts: tuple[float, ...] = ()
-    qualified: bool = False      # a qualifier (< > <= >= ~ ~=) touches the token or ends the word before it
-    ranged: bool = False         # a range dash joins it to another number
+    qualified: bool = False      # a qualifier stands before it through a run of operators (<, <=, ~=, <(, < =)
+    ranged: bool = False         # a range dash joins it to another number (12-15, 12 -15, 5.0- 12.4, 12 ~ 15)
     canonical: str = ""
     decimal: str = ""
     detail: str = ""
