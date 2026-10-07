@@ -426,12 +426,14 @@ must pass the literal-match verifier before it can be approved.
 
 ### Verifier reason codes (`models.REASON_CODES`)
 
-`''` (pass), `empty_snippet`, `snippet_too_long`, `page_out_of_range`, `non_ascii_digits`, `no_number`,
+`''` (pass), `empty_snippet`, `snippet_too_long`, `page_out_of_range`, `no_number`,
 `number_mismatch`, `integer_expected`, `snippet_not_on_page`, `table_cell_mismatch`, `source_changed`,
-`text_not_in_snippet`, `partial_number`, `crosses_columns`, `unresolved_context`, `unresolved_shape`.
+`text_not_in_snippet`, `partial_number`, `crosses_columns`, `unresolved_context`, `unresolved_shape` (15 codes).
 
-`non_ascii_digits` stays in the tuple for rows stored by the old reader and is never emitted again: a digit that
-is not ASCII is one character outside the allowed alphabet (`unresolved_context`). `unresolved_context` means a
+`non_ascii_digits` was the code of the old reader and is gone from the code (round 2): a digit that is not ASCII is one
+character outside the allowed alphabet (`unresolved_context`). A row stored by the old reader keeps the string in its
+`verify_reason`: nothing validates a stored reason against the tuple (the store keeps it, the API returns it, the
+`verify_fail` flag quotes it, and the frontend still labels it `non-ASCII digits`). `unresolved_context` means a
 character outside the allowed number alphabet touches the cited number, sits one word away or lies elsewhere on its
 line (or a pdfminer `(cid:N)` marker does); `unresolved_shape` means allowed characters stand in an order the grammar
 rejects (`1.2 × 103`, `12 3/4`, `150mg`). `partial_number` keeps its meaning (the cited number is only part of a longer
@@ -453,7 +455,14 @@ The unit is read on the page right after the verified `token` (never re-found in
 the `5` of `15 mg/kg`): the rest of the token's own word (`%`, `°C`) and up to three whole words after it. No
 printed unit, or one the next token may continue (`100 mg kg-1`), gives the warning `unit_unverified`. The mega / milli
 prefix is compared case-sensitively (`MIU` vs `mIU`, `Mg` vs `mg`: `unit_source_mismatch`), except that an all-capitals
-printed unit (`MG/ML`) only gives the warning; `‰` is a unit of its own (never `%`) and `‱` is outside the alphabet.
+printed unit (`MG/ML`) only gives the warning; `‰` is a unit of its own (never `%`) and `‱` is outside the alphabet (the
+unit reader builds its percent class from `alphabet.PERCENTS`, so it cannot hold a sign the alphabet rejects). A unit is
+folded through the reader's own table (`fold()`: `µ` is `μ`, a minus or en dash is `-`) and the alphabet, nothing else
+(`unit_norm.py`; it used NFKC): a unit with a character outside INSIDE, CONTEXT and GAP (`㎎`, a fullwidth `ｍｇ`, a
+Cyrillic `г`, a zero-width character, `½`, `_`) is UNRESOLVED. Its comparison form is the unit behind a marker, so it
+equals no other unit (not even another case of itself), no printed unit is recognised in it (`unit_unverified` warning)
+and it gets no mega / milli verdict. Superscript digits and signs of a unit (`mg·kg⁻¹`, `m²`) are spelled with ASCII
+through the alphabet's own table.
 There is no folding of look-alike slashes and dots: a number next to `mg⁄kg`, `mg∕kg` or `mg⋅kg−1` is unresolved and
 the record fails verification before any unit is read; a next token made of `/ · * × ^`, or `(per`, continues the unit.
 Value checks (`value_checks.py`, errors) read the words around the verified token, never characters:
@@ -485,8 +494,8 @@ expression, or within one visual separator of it, makes the expression unresolve
 fails, the record is flagged and the reviewer compares the value with the page image. There is no list of bad
 characters anywhere in the reader: no Unicode category, no code-point blocklist, no `str.isdigit`. The only lists are the
 allowed alphabet, the context sets, the gap set and the equivalents table. (The snippet locator, `normalize.py`, finds
-text and never yields a value; it keeps NFKC per character EXCEPT into or out of the numeric alphabet or into more than
-four characters, and applies exactly the equivalents table; see "Locator" below.)
+text and never yields a value; since round 2 it folds through the equivalents table plus three explicit tables of its own
+and has no NFKC; see "Locator" below.)
 
 **Alphabet.** Five classes; a character is in exactly one (`numgrammar/alphabet.py`, written a second time as bare
 code points in `tests/evidence_r6_pins.py`; the two copies are compared entry by entry):
@@ -504,6 +513,16 @@ are `-`; `’` U+2019 is `'`; U+202F and U+00A0 are U+2009; `µ` U+00B5 is `μ`;
 corpus evidence (see the comment of `equivalents.py`). U+2009 groups digits only between two digits and is a plain gap
 elsewhere. Rejected as equivalents: `⋅ ∙` (OUTSIDE: a look-alike multiplier would be fail-open), `—` (a LINE character: a
 list dash, or "not available" in a table), `‒`, `ʼ`, fullwidth and small-form signs (OUTSIDE), `′` (LINE).
+
+**Three more explicit tables, around the reader (`numgrammar/equivalents.py`, round 2).** The reader reads `EQUIV` only. The
+snippet locator, the unit comparison and the header key used to fold with NFKC and Unicode case folding of their own, which
+equated characters the reader keeps apart (`㎎` with `mg`, `²` with `2`, a Kelvin sign with `k`). They now fold through
+`fold()` (the equivalents) plus: `LIGATURES` (locator only, 1 to n letters: `ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ`; ASCII letters only, so it cannot
+make a number readable; no hit in the 449 parse caches, kept as the commonest honest drift of a snippet, and deletable
+by the owner: a page that prints a ligature then fails `snippet_not_on_page`), `HEADER_SPELLINGS` (header keys only: the
+infinity sign is `inf`; 2 corpus headers, aliases are written either way) and `CASE_PAIRS` (the 34 capitals of the letters
+the alphabet lists and their lower case, 1:1, explicit pairs rather than `str.casefold`). A character none of them lists
+stays as it is.
 
 **Grammar.** `token = [sign] (bare_power | body [exponent])`, `body = digits {sep digits}`, `exponent = e-notation
 (1.2e-3) | multiplier power (1.2 × 10^3, 1.2 x 10⁻³, across one gap run)`, `bare_power = 10^6` (caret only), suffixes `%`,
@@ -586,11 +605,19 @@ groups, versions, dates, reference pairs and every number the reader cannot read
 line with a character outside the alphabet) vote for nothing, so padding a page with such digits can never flip `3,412` to
 `3.412`. Linear in the text (the old patterns were quadratic in a run of digit groups).
 
-**Locator (`normalize.py`).** Finds the snippet in the page; it yields no value. Pipeline: NFKC per character, the
-equivalents table, casefold, de-hyphenation, whitespace collapse. NFKC is applied to a character only when neither the
-character nor its result is in the numeric alphabet (so `⁰`, `₂`, `１`, `½`, `ⓔ` and `．` are never the ASCII digit or sign
-they look like, in the page or in the snippet, even in a text field) and the result is at most four characters (U+FDFA
-stays one character: it expanded to 18). The normalised page and its offset map are cached for ONE request
+**Locator (`normalize.py`).** Finds the snippet in the page; it yields no value, and since round 2 it has no normalisation
+table of its own. Pipeline: `fold()` (the reader's approved equivalents, 1:1: a minus sign or en dash is `-`, a no-break
+space a thin space, `µ` is `μ`), the lower case of the letters the alphabet lists (`CASE_PAIRS`, 1:1), the seven ligature
+spellings (`LIGATURES`, 1 to n: the index map repeats the ligature's offset), de-hyphenation of `letter - line break
+letter` (a letter is one the alphabet lists, so `0-\n24`, a Cyrillic or a mathematical letter is never joined), and the
+collapse of runs of the GAP set and the thin space. Every other character is kept as it is, so a compatibility form
+(`㎎`, `™`, `№`, a fullwidth or mathematical letter, a superscript, a Kelvin sign, a figure or em space, `ﷺ`) is never the
+character it looks like, in the page or in the snippet, even in a text field: two texts locate each other only when the
+reader would read them the same way, apart from case, spacing and the seven ligatures. (Round 1 applied NFKC to every
+character that did not touch the numeric alphabet, capped at four characters of expansion because U+FDFA expands to 18,
+and used Unicode `\s`, `str.isalpha`, `str.isspace` and `str.casefold`: a second table beside `EQUIV`.) The snippet itself
+still has to be readable: a snippet that holds a character outside the alphabet fails `unresolved_context` before it is
+located, whatever the page holds. The normalised page and its offset map are cached for ONE request
 (`read_cache.py`: `check_proposals` opens it, a bare `verify()` call caches nothing, the cache is bounded by characters),
 so the many records of a table page read the page text once. A table page of 120 rows (720 records) verifies in 0.17 s
 (6.6 s before).
@@ -603,18 +630,33 @@ the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
 `tests/evidence_r6_golden.json` (the class-representative behaviours) and write the code point and its corpus evidence in
 the docstring. (b) A look-alike that is really one of the approved characters: one entry in `EQUIV` (target a character
 already in the alphabet), the same two test copies, and corpus evidence. (c) A new multi-word form: a rule in
-`numgrammar/tokenizer.py` with a test in `tests/test_evidence_r6_grammar.py`. Then run the exhaustive tier
-(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 15
+`numgrammar/tokenizer.py` with a test in `tests/test_evidence_r6_grammar.py`. (d) A spelling around the reader (a ligature
+of the locator, the infinity sign of a header key, a case pair): one entry in `LIGATURES`, `HEADER_SPELLINGS` or `CASE_PAIRS`
+(`numgrammar/equivalents.py`), the second copy in `tests/evidence_r6_round2_spec.py`, and corpus evidence; a unit or a header
+with any other character stays unresolved or unmatched. Then run the exhaustive tier
+(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 16
 minutes on 12 workers: every code point at every boundary of 291 (expression, boundary) pairs through `tokens()`, and
 through the paths around it, `tests/evidence_r6_layer_b.py`: the label reader `scale_shapes`, the style evidence, the parse
-placeholder `protect_thin_spaces` / `restore` and the text-field locator), the verify oracle
+placeholder `protect_thin_spaces` / `restore`, the text-field locator, and, since round 2, `normalise` against its
+specification, the unit comparison with the printed-unit reader, and the header key), the verify oracle
 (`tests/test_evidence_r6_verify_oracle.py`) and the corpus comparison. The run records `git rev-parse HEAD` and the dirty
-files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit first, then run. The scope test
+files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit first, then run.
+
+**The exhaustive tier is gated.** Each passing full run on a clean tree writes its summary into the committed
+`tests/evidence_r6_attestation.json` together with a digest of every file the runs execute (`app/evidence`, the
+`tests/evidence_r6_*` modules and golden file, the two exhaustive test modules; `tests/evidence_r6_attest.py`).
+`tests/test_evidence_r6_attestation.py` is part of the normal gate and recomputes the digest: **any change to `app/evidence`
+or to the oracle fails it until both full runs are made again** (commit the code, run both, commit the attestation).
+The digest needs no git history (a shallow checkout verifies it); the recorded commit must be an ancestor of HEAD when git
+can tell. Keep the logs of a run as `exhaustive_<head>.log` next to the other work files. The scope test
 (`tests/test_evidence_r6_scope.py`) walks EVERY module of `app/evidence` for `unicodedata`, `str.is*`, `\d \w \s \b` classes
-and hand-typed non-ASCII lists; each use that remains is named in it with its reason (the locator, the unit vocabulary, a
-group label, a header key, a message), and an exception that no longer applies fails the test. Stored rows: `verify_records` re-verifies proposed rows under the grammar (expect more failures: glued
-units, `2 x 10 mg`, lines with `(cid:N)`); approved rows are immutable and keep their reasons, the legacy
-`non_ascii_digits` included.
+and hand-typed non-ASCII lists; each use that remains is named in it with its reason (prose patterns, the group-label key
+`qc_flags.group_key`, which only ever merges labels, a message that names a code point for a human, the dose rule's unit
+words), and an exception that no longer applies fails the test. The locator, the unit comparison, the header key and the
+ink pairing have none. A test also fails for a name a package re-exports without a caller in `app/`, and for a module
+constant referenced nowhere (`tests/test_evidence_r6_round2_hygiene.py`). Stored rows: `verify_records` re-verifies proposed
+rows under the grammar (expect more failures: glued units, `2 x 10 mg`, lines with `(cid:N)`); approved rows are immutable
+and keep their reasons, the legacy `non_ascii_digits` included.
 
 ### QC flags (`models.FLAG_CODES`)
 

@@ -37,8 +37,6 @@ from app.evidence.parse_guard import ParseLimitError
 from app.evidence.parse_sandbox import ParseAbortedError, ParseBusyError
 from app.evidence.path_guard import OutsideDataDirError
 
-STATUSES = ("ready", "missing", "text_changed", "unreadable")
-OUTCOMES = ("rebuilt", "unchanged", "text_changed", "unreadable")
 MAX_BULK = 10                         # sources rebuilt per bulk call (each is a full parse)
 STATUS_LRU = 4096                     # >= a session's 200-source cap for many sessions (tuples of a few bytes)
 REASON_MISSING = "Page positions were not stored when this source was parsed."

@@ -13,15 +13,25 @@ parse placeholder, the label reader, the style evidence and the text-field locat
             included, comes out of ``ThinSpaces.restore`` as it went in
   text      a text-field record whose page or snippet holds ANY inserted character inside a number never passes against
             the clean one (no normalisation equates a character with another or drops it)
+  locator   (round 2) ``normalise`` rewrites a character exactly as the specification says (``evidence_r6_round2_spec``):
+            the approved equivalents, seven ligatures, the lower case of the listed capitals, the GAP spaces collapsed;
+            every other code point comes out as itself, so no compatibility form is ever another character
+  unit      (round 2) a unit holding a character outside INSIDE / CONTEXT / GAP is unresolved: it equals no unit and is
+            recognised as none
+  key       (round 2) a header key drops exactly the spaces and ``_ - , .`` and keeps every other character
 """
 from __future__ import annotations
 
-from app.evidence.normalize import decimal_evidence
+from app.evidence.extract_rules import norm_key
+from app.evidence.normalize import decimal_evidence, normalise
 from app.evidence.numgrammar import scale_shapes
 from app.evidence.numgrammar.equivalents import EQUIV, THIN
 from app.evidence.parse_guard import THIN_SPACES, ParseLimitError, protect_thin_spaces
+from app.evidence.record_checks import _UNIT_TOKEN_RE, recognised_unit
+from app.evidence.unit_norm import canonical_unit, same_unit, unit_resolved
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
+from tests import evidence_r6_round2_spec as S
 from tests.evidence_r6_round1_support import run
 
 SCALE_LABELS = ("AUC (x1000)", "AUC (×10^3)", "AUC × 10³", "Cmax (thousands)", "AUC x 1000", "Dose (millions)",
@@ -133,7 +143,62 @@ def sweep_text(cps: list[int]) -> list[str]:
     return bad
 
 
-SWEEPS = {"scale": sweep_scale, "style": sweep_style, "thin": sweep_thin, "text": sweep_text}
+def sweep_locator(cps: list[int]) -> list[str]:
+    """``normalise('a' + c + 'b')`` is the specification's text for c, and the index map points every output character of c
+    at c's own offset."""
+    bad = []
+    for cp in cps:
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        norm, m = normalise("a" + chr(cp) + "b")
+        want = "a" + S.spec_locator(chr(cp)) + "b"
+        if norm != want:
+            bad.append(f"U+{cp:04X}: normalise gives {norm!r}, the specification {want!r}")
+        elif not (len(m) == len(norm) and m[0] == 0 and m[-1] == 2 and set(m[1:-1]) == {1}):
+            bad.append(f"U+{cp:04X}: the index map {m} does not point at the character")
+        if len(bad) >= 20:
+            break
+    return bad
+
+
+def sweep_unit(cps: list[int]) -> list[str]:
+    """A unit ``mg`` + c is resolved exactly when c is an alphabet character (INSIDE, CONTEXT, GAP or an equivalent's
+    source); with any other c it equals no unit, ``mg`` included, and no unit is recognised in it. The printed-unit
+    reader starts a unit with a percent sign of the alphabet or a letter of the alphabet and with nothing else (round
+    1 accepted U+2031, which the alphabet puts outside)."""
+    bad = []
+    for cp in cps:
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        if (_UNIT_TOKEN_RE.match(chr(cp)) is not None) != S.spec_unit_token(chr(cp)):
+            bad.append(f"U+{cp:04X}: the printed-unit reader starts a unit with it: {S.spec_unit_token(chr(cp))} expected")
+        unit, resolved = "mg" + chr(cp), S.spec_unit_resolved(chr(cp))
+        if unit_resolved(unit) != resolved:
+            bad.append(f"U+{cp:04X}: the unit is {'resolved' if not resolved else 'unresolved'}")
+        elif not resolved and (same_unit(unit, "mg") or canonical_unit(unit) == "mg" or recognised_unit(unit) is not None):
+            bad.append(f"U+{cp:04X}: a unit with this character equals or is read as mg")
+        if len(bad) >= 20:
+            break
+    return bad
+
+
+def sweep_key(cps: list[int]) -> list[str]:
+    """The header key of ``C`` + c + ``max`` is ``cmax`` exactly when c is a space or one of ``_ - , .`` (or a hyphen's
+    equivalent); every other character stays in the key, so such a header matches no field."""
+    bad = []
+    for cp in cps:
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        c = chr(cp)
+        if (norm_key("C" + c + "max") == "cmax") != (c in S.KEY_STRIP_PIN):
+            bad.append(f"U+{cp:04X}: the key is {norm_key('C' + c + 'max')!r}")
+        if len(bad) >= 20:
+            break
+    return bad
+
+
+SWEEPS = {"scale": sweep_scale, "style": sweep_style, "thin": sweep_thin, "text": sweep_text,
+          "locator": sweep_locator, "unit": sweep_unit, "key": sweep_key}
 
 
 # ------------------------------------------------------------------------ the process pool ---

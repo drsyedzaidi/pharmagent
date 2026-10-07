@@ -20,7 +20,7 @@ from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
 from app.evidence.numgrammar import GAP, words_after
-from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, MULTIPLIERS, char_class
+from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, MULTIPLIERS, PERCENTS, char_class
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.unit_norm import canonical_unit, normalise_unit, prefix_conflict
 from app.evidence.value_checks import token_context, value_flags
@@ -31,14 +31,15 @@ _SPACE = char_class(GAP, negate=False)
 _LETTER = char_class(ASCII_LETTERS | GREEK, negate=False)
 _WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_"), negate=False)
 _UNIT_CHARS = "(?:" + _WORD + "|[/\u00b7*.^\\-])*"
-_UNIT_TOKEN_RE = re.compile("^" + _SPACE + "*([%\u2030\u2031]|" + _LETTER + _UNIT_CHARS + "(?:" + _SPACE + "+" + _LETTER
+_UNIT_TOKEN_RE = re.compile("^" + _SPACE + "*(" + char_class(PERCENTS, negate=False) + "|" + _LETTER + _UNIT_CHARS
+                            + "(?:" + _SPACE + "+" + _LETTER
                             + "{1,3}(?:/(?:" + _WORD + "|[.^\\-])+)+)?)")
 _NEXT_TOKEN_RE = re.compile("^" + _SPACE + "*(/|per(?!" + _WORD + ")|" + char_class(GAP, negate=True) + "+)")
 _NOT_CONTINUATIONS = {"x", "fold", "%"}
 UNIT_WORDS = 3          # whole words after the token a printed unit may span ('mg kg-1 h-1', 'ng h/mL')
 _JOINERS = frozenset("/^") | (MULTIPLIERS - frozenset("xX"))   # a next token made only of these continues a unit
 _BASES = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
-          "h", "min", "s", "d", "wk", "iu", "miu", "u", "%", "‰", "‱", "kda", "m2", "cells", "cell", "10^6", "10^9",
+          "h", "min", "s", "d", "wk", "iu", "miu", "u", *sorted(PERCENTS), "kda", "m2", "cells", "cell", "10^6", "10^9",
           "bpm", "mmhg", "x", "fold")
 
 

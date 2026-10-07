@@ -60,12 +60,6 @@ def find_snippet_in_page(snippet: str, page_text: str) -> list[int] | None:
     return None if hit is None else _raw_span(*hit)
 
 
-def find_number_in_snippet(value: str, snippet: str, decimal_style: str, integer: bool) -> str | None:
-    """The literal token in *snippet* equal to *value* (parsed with *decimal_style*), else None. (Test-only.)"""
-    span, reason, _ = _number_check(value, snippet, decimal_style, integer)
-    return snippet[span[0]:span[1]] if span is not None and reason == M.REASON_OK else None
-
-
 def _targets(value: str, style: str) -> tuple[list[Decimal], str, str]:
     """(the exact decimals the proposal names, reason, detail): exactly ONE resolved number, in the page's style and
     (proposed values usually arrive in canonical point-decimal form: '18.2' for a page that prints '18,2') in point

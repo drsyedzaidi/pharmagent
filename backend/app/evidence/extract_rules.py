@@ -12,13 +12,13 @@ so the user can add aliases to the template instead of guessing.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
 from app.evidence.numgrammar import GAP, claim_decimal, find_dose, find_n_lead, parse_claim, tokens
 from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, char_class
+from app.evidence.numgrammar.equivalents import HEADER_SPELLINGS, THIN, casefold_letters, fold
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
 VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
@@ -26,7 +26,8 @@ VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "
 UNIT_HEADERS = frozenset({"unit", "units"})
 DISPERSION_HEADERS = frozenset({"sd", "se", "sem", "rse", "cv", "cv%", "%cv", "rse%", "%rse", "ci", "95%ci",
                                 "90%ci", "range", "iqr", "min", "max", "p", "pvalue", "n", "shrinkage", "iiv"})
-_KEY_STRIP = re.compile(r"[\s_\-,.]+")
+_KEY_STRIP = re.compile(char_class(GAP | frozenset({THIN, "_", "-", ",", "."}), negate=False) + "+")
+_HEADER_TABLE = str.maketrans(HEADER_SPELLINGS)
 _PAREN_UNIT_RE = re.compile(r"^(?P<label>.*?)\s*[(\[](?P<unit>[^()\[\]]{1,40})[)\]]\s*$")
 _SPACE = char_class(GAP, negate=False)
 _UNIT_HEAD = char_class(ASCII_LETTERS | GREEK | frozenset("%\u00b5"), negate=False)
@@ -61,8 +62,11 @@ TEXT_RULES = (("n", _n_hits, None), ("dose", _dose_hits, _DOSE_CTX))
 # ----------------------------------------------------------------- matching ---
 
 def norm_key(text: Any) -> str:
-    """Comparison key for headers, row labels and field names/aliases."""
-    t = unicodedata.normalize("NFKC", str(text or "")).replace("∞", "inf").replace("µ", "μ").casefold()
+    """Comparison key for headers, row labels and field names/aliases: the reader's equivalents (``fold``: µ is μ,
+    a minus or en dash is a hyphen), the infinity sign as ``inf``, the lower case of the alphabet's letters, then
+    spaces and ``_ - , .`` dropped. A character none of them lists stays in the key, so a header with an invisible
+    or look-alike character matches no field."""
+    t = casefold_letters(fold(str(text or ""))).translate(_HEADER_TABLE)
     return _KEY_STRIP.sub("", t)
 
 

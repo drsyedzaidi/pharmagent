@@ -2,29 +2,32 @@
 the number reader. This module never yields a value: numbers are read by ``numgrammar`` only (an explicit allowed
 alphabet, one approved-equivalents table, every other character in or next to a number makes it unresolved).
 
-Every transform returns (text, idx_map) with idx_map[i] = offset of text[i] in the ORIGINAL string, so a match
-found in normalised text maps back to raw page offsets. Pipeline: per-char NFKC (see ``nfkc_char``: never into or out
-of the numeric alphabet) -> the approved equivalents (``numgrammar.EQUIV``, 1:1) -> casefold -> de-hyphenate line
-wraps -> collapse whitespace. A character that renders as nothing is NOT dropped: the page and the snippet must both
-hold it, or the snippet is not on the page. ``normalise`` is cached for the length of one request (read_cache).
+The locator has no normalisation table of its own. Pipeline: ``fold`` (the reader's approved equivalents, 1:1) -> the
+lower case of the letters the alphabet lists (1:1) -> seven explicit ligature spellings (1 -> n) -> de-hyphenate line
+wraps between two letters of the alphabet -> collapse runs of the GAP set and the thin space. Every other character is
+kept as it is, so two texts locate each other only when the reader would read them the same way. A character that
+renders as nothing is NOT dropped: the page and the snippet must both hold it, or the snippet is not on the page.
+
+Every transform returns (text, idx_map) with idx_map[i] = offset of text[i] in the ORIGINAL string, so a match found in
+normalised text maps back to raw page offsets. ``normalise`` is cached for the length of one request (read_cache).
 """
 from __future__ import annotations
 
 import re
-import unicodedata
-from collections.abc import Callable
 
-from app.evidence.numgrammar import EQUIV, number_spans, numbers_in
-from app.evidence.numgrammar.alphabet import NUMBER_CHARS
+from app.evidence.numgrammar import number_spans, numbers_in
+from app.evidence.numgrammar.alphabet import ALL_LETTERS, GAP, char_class
+from app.evidence.numgrammar.equivalents import CASE_PAIRS, LIGATURES, THIN, casefold_letters, fold
 from app.evidence.numgrammar.style import style_evidence
 from app.evidence.read_cache import cached
 
 IdxMap = list[int]
 
-MAX_NFKC_EXPANSION = 4          # NFKC of one character longer than this stays as it is (U+FDFA expands to 18)
-_NON_ASCII = re.compile("[^\x00-\x7f]")
+_SPACES = GAP | frozenset({THIN})       # the spaces the locator collapses (the thin space: target of NBSP in ``fold``)
+_SPACE_RUN = re.compile(char_class(_SPACES, negate=False) + "+")
+_WRAP_LETTERS = ALL_LETTERS | frozenset(CASE_PAIRS.values())      # a letter, before or after the lower-casing
 _HYPHEN_BREAK = re.compile("-\n")
-_SPACE_RUN = re.compile("\\s+")
+_LIGATURE = re.compile(char_class(frozenset(LIGATURES), negate=False))
 
 
 def decimal_evidence(text: str) -> tuple[int, int]:
@@ -45,67 +48,43 @@ def _identity(text: str, idx_map: IdxMap | None) -> IdxMap:
     return list(range(len(text))) if idx_map is None else idx_map
 
 
-def _rewrite(text: str, idx_map: IdxMap | None, char_fn: Callable[[str], str],
-             run_fn: Callable[[str], str] | None = None) -> tuple[str, IdxMap]:
-    """Rewrite every non-ASCII character with char_fn(ch) -> str (each output character maps to the input one); the
-    ASCII runs between them are copied (through run_fn when it is not the identity: it must keep their length)."""
+def ligature_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
+    """Each ligature of ``LIGATURES`` spelled with its letters (every letter maps to the ligature's offset)."""
     src = _identity(text, idx_map)
+    if _LIGATURE.search(text) is None:
+        return text, src
     out: list[str] = []
     out_map: IdxMap = []
     last = 0
-    for m in _NON_ASCII.finditer(text):
+    for m in _LIGATURE.finditer(text):
         a = m.start()
-        if a > last:
-            out.append(text[last:a] if run_fn is None else run_fn(text[last:a]))
-            out_map.extend(src[last:a])
-        rep = char_fn(m.group())
-        out.append(rep)
+        rep = LIGATURES[m.group()]
+        out.append(text[last:a] + rep)
+        out_map.extend(src[last:a])
         out_map.extend([src[a]] * len(rep))
         last = a + 1
-    if last < len(text):
-        out.append(text[last:] if run_fn is None else run_fn(text[last:]))
-        out_map.extend(src[last:])
+    out.append(text[last:])
+    out_map.extend(src[last:])
     return "".join(out), out_map
 
 
-def nfkc_char(ch: str) -> str:
-    """NFKC of one character, applied only when it does not touch the numeric alphabet and does not balloon: a
-    superscript or fullwidth digit, a fullwidth sign, a circled letter ``ⓔ`` or ``½`` never becomes the ASCII character
-    the reader reads (it would equate two different characters of a number), and a character whose NFKC is longer than
-    MAX_NFKC_EXPANSION characters (``ﷺ``: 18) stays as it is."""
-    nf = unicodedata.normalize("NFKC", ch)
-    if nf == ch or len(nf) > MAX_NFKC_EXPANSION or ch in NUMBER_CHARS or not NUMBER_CHARS.isdisjoint(nf):
-        return ch
-    return nf
-
-
-def nfkc_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    return _rewrite(text, idx_map, nfkc_char)
-
-
-def equiv_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    """The approved equivalents (numgrammar.EQUIV), one character for one character."""
-    return _rewrite(text, idx_map, lambda ch: EQUIV.get(ch, ch))
-
-
-def casefold_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    return _rewrite(text, idx_map, str.casefold, str.casefold)
-
-
 def dehyphenate_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    """Join words wrapped at a hyphen: letter '-' newline [ws] letter -> the hyphen and break are dropped."""
+    """Join words wrapped at a hyphen: letter '-' newline [space] letter -> the hyphen and break are dropped. A letter
+    is one the alphabet lists (a digit, a Cyrillic or a mathematical letter before the hyphen is a range or a code)."""
     src = _identity(text, idx_map)
+    if "-\n" not in text:
+        return text, src
     out: list[str] = []
     out_map: IdxMap = []
     last, n = 0, len(text)
     for m in _HYPHEN_BREAK.finditer(text):
         i = m.start()
-        if i == 0 or not text[i - 1].isalpha():
+        if i == 0 or text[i - 1] not in _WRAP_LETTERS:
             continue
         j = i + 1
-        while j < n and text[j].isspace():
+        while j < n and text[j] in _SPACES:
             j += 1
-        if j < n and text[j].isalpha():
+        if j < n and text[j] in _WRAP_LETTERS:
             out.append(text[last:i])
             out_map.extend(src[last:i])
             last = j
@@ -115,7 +94,8 @@ def dehyphenate_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str,
 
 
 def strip_ws_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, IdxMap]:
-    """Collapse whitespace runs to one space and trim both ends; the space maps to the run's first char."""
+    """Collapse runs of the GAP set and the thin space to one space and trim both ends; the space maps to the run's
+    first char."""
     src = _identity(text, idx_map)
     out: list[str] = []
     out_map: IdxMap = []
@@ -136,9 +116,8 @@ def strip_ws_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, Id
 
 
 def _normalise(text: str) -> tuple[str, IdxMap]:
-    norm, m = nfkc_with_map(text)
-    norm, m = equiv_with_map(norm, m)
-    norm, m = casefold_with_map(norm, m)
+    norm = casefold_letters(fold(text))                     # both 1:1: the offsets are still the page's own
+    norm, m = ligature_with_map(norm)
     norm, m = dehyphenate_with_map(norm, m)
     return strip_ws_with_map(norm, m)
 
@@ -149,6 +128,5 @@ def normalise(text: str) -> tuple[str, IdxMap]:
     return cached(("normalise", text), lambda: _normalise(text), len(text))
 
 
-__all__ = ["IdxMap", "casefold_with_map", "decimal_evidence", "dehyphenate_with_map", "equiv_with_map",
-           "infer_decimal_style", "nfkc_char", "nfkc_with_map", "normalise", "number_spans", "numbers_in",
-           "strip_ws_with_map"]
+__all__ = ["IdxMap", "decimal_evidence", "dehyphenate_with_map", "infer_decimal_style", "ligature_with_map",
+           "normalise", "number_spans", "numbers_in", "strip_ws_with_map"]

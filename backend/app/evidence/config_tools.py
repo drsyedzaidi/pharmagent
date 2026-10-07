@@ -30,8 +30,6 @@ FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 #: Keys of a source row exposed to clients (server paths stay server-side).
 SOURCE_PUBLIC_KEYS = ("id", "session_id", "sha256", "filename", "pages", "title", "metadata", "text_chars",
                       "parse_status", "decimal_style", "licence_note", "uploaded_by", "uploaded_at")
-#: Added by ``source_row`` from the files on disk (relayout.layout_info), not stored in the ledger.
-LAYOUT_KEYS = ("layout_status", "layout_reason")
 
 
 def source_row(src: Source) -> dict[str, Any]:

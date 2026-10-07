@@ -10,12 +10,12 @@ from app.evidence.numgrammar import (
     claim_decimal,
     digit_group,
     digits_of,
-    is_digit_run,
     loose_in,
     tokens,
 )
 from app.evidence.numgrammar import alphabet as A
 from app.evidence.numgrammar import words as W
+from app.evidence.numgrammar.api import is_digit_run
 
 
 def vals(text: str, style: str = ".", mode: str = "page") -> list[float | None]:

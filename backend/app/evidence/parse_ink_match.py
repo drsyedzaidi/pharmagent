@@ -7,7 +7,6 @@ respelled with pdfium's text, so '-20' never reads as '20'.
 """
 from __future__ import annotations
 
-import unicodedata
 from typing import Any
 
 import numpy as np
@@ -21,10 +20,6 @@ EXACT_PT = 0.05                    # origins of one glyph agree to ~1e-4 pt betw
 MAX_UNMATCHED = 0.2
 DRIFT_PT = 3.0                     # a run's origins may drift this far apart (Standard-14 widths)
 MISMATCH, INK_MISMATCH = "glyph_text_mismatch", "glyph_ink_mismatch"
-
-
-def _norm(text: str) -> str:
-    return unicodedata.normalize("NFKC", text)
 
 
 def _pdfminer_ctm(page: Any) -> np.ndarray:
@@ -75,15 +70,15 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
     for k, (x, y) in enumerate(origins):
         grid.setdefault((int(x // 2), int(y // 2)), []).append(k)
     inv = np.linalg.inv(_pdfminer_ctm(page))
-    norm = [_norm(t) for t in texts]
+    norm = [fold(t) for t in texts]
     hidden, unmatched, judged, prev = set(), 0, 0, None
     flags: dict[str, set[str]] = {MISMATCH: set(), INK_MISMATCH: set()}
     spaces: dict[int, list[int]] = {}             # whitespace char -> visible number glyphs at its origin
     claimed: set[int] = set()
     found: dict[int, tuple[float, ...]] = {}
     for c in chars:
-        raw = str(c.get("text", ""))          # identity is judged on the raw text; the NFKC text only pairs glyphs
-        text = _norm(raw)
+        raw = str(c.get("text", ""))          # both texts are read through the approved equivalents, nothing else
+        text = fold(raw)
         ux, uy, _ = inv @ np.array([float(c["matrix"][4]), float(c["matrix"][5]), 1.0])
         near = [k for i in (-1, 0, 1) for j in (-1, 0, 1) for k in grid.get((int(ux // 2) + i, int(uy // 2) + j), [])]
         near = [(float(np.hypot(origins[k, 0] - ux, origins[k, 1] - uy)), k) for k in near]

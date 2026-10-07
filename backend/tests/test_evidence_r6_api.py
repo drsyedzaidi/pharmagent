@@ -1,21 +1,21 @@
-"""r6 numeric grammar: the helpers the callers will use (number_spans, token_at, words_around, scale_shapes ...)."""
+"""r6 numeric grammar: the helpers the callers will use (number_spans, words_after, scale_shapes ...). ``token_at``,
+``words_around`` and ``find_n`` had no caller in the application (r6 round-2 audit): they are test helpers now
+(``tests/evidence_r6_helpers.py``) and are exercised here through it."""
 from __future__ import annotations
 
 import pytest
 
 from app.evidence.numgrammar import (
     find_dose,
-    find_n,
     is_data_cell,
     number_spans,
     numbers_in,
     parse_claim,
     scale_shapes,
-    token_at,
     tokens,
     words_after,
-    words_around,
 )
+from tests.evidence_r6_helpers import find_n, token_at, words_around
 
 T = "\u2009"
 
@@ -113,7 +113,9 @@ def test_parse_claim_is_the_one_token_reading_of_a_proposed_value():
 def test_every_export_resolves_and_the_package_surface_is_complete():
     import app.evidence.numgrammar as NG
     for name in ("INSIDE", "CONTEXT", "LINE", "GAP", "EQUIV", "CID_MARKER", "cls", "Tok", "tokens", "parse_claim",
-                 "number_spans", "numbers_in", "words_around", "words_after", "token_at", "scale_shapes",
-                 "is_data_cell", "find_n", "find_dose"):
+                 "number_spans", "numbers_in", "words_after", "words_before", "scale_shapes", "is_data_cell",
+                 "find_n_lead", "find_dose"):
         assert hasattr(NG, name), name
+    for gone in ("words_around", "token_at", "find_n", "is_digit_run"):          # no caller in app/: test helpers now
+        assert not hasattr(NG, gone) and gone not in NG.__all__, gone
     assert tokens("1") and NG.cls("a") == "context"

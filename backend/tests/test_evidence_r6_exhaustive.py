@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from app.evidence.numgrammar import taint, tokens
+from tests import evidence_r6_attest as attest
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
 
@@ -180,3 +181,6 @@ def test_every_code_point_at_every_boundary_on_a_process_pool():
         "the log is evidence of a dirty tree, not of the commit: commit first or set R6_ALLOW_DIRTY=1", result["dirty"])
     assert result["pairs"] == len(O.PAIRS)
     assert result["variants"] == len(O.PAIRS) * 1_112_064
+    if not result["dirty"]:                       # a clean full run is the attestation the normal gate checks
+        attest.record("tokens", {k: result[k] for k in ("pairs", "variants", "errors", "wall_seconds", "workers", "head",
+                                                        "dirty")})

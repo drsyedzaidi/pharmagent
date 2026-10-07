@@ -21,7 +21,7 @@ CONFIG_KINDS, DECIMAL_STYLES, LOCATOR_KINDS = ("criteria", "template"), (".", ",
 # Verifier reason codes (verify_reason column). REASON_OK (empty string) = verified.
 REASON_OK = ""
 REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG = "empty_snippet", "snippet_too_long"
-REASON_PAGE_OUT_OF_RANGE, REASON_NON_ASCII_DIGITS = "page_out_of_range", "non_ascii_digits"
+REASON_PAGE_OUT_OF_RANGE = "page_out_of_range"
 REASON_NO_NUMBER, REASON_NUMBER_MISMATCH = "no_number", "number_mismatch"
 REASON_INTEGER_EXPECTED, REASON_SNIPPET_NOT_ON_PAGE = "integer_expected", "snippet_not_on_page"
 REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "source_changed"
@@ -31,9 +31,12 @@ REASON_CROSSES_COLUMNS = "crosses_columns"                # snippet only exists 
 # numeric grammar (numgrammar/): a character outside the allowed alphabet touches the cited number, sits one word
 # away or lies elsewhere on its line / the allowed characters stand in an order the grammar rejects
 REASON_UNRESOLVED_CONTEXT, REASON_UNRESOLVED_SHAPE = "unresolved_context", "unresolved_shape"
-# REASON_NON_ASCII_DIGITS stays in the tuple for rows stored by the old reader; it is never emitted again
+# Every reason the verifier can emit. A row stored by a reader before r6 may carry ``non_ascii_digits``: nothing
+# validates a stored reason against this tuple (the store keeps the string, the flags quote it, the frontend labels
+# it), so the code is not kept here; it is never emitted again (a digit that is not ASCII is outside the alphabet:
+# unresolved_context).
 REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
-                REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
+                REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
                 REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED,
                 REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER, REASON_CROSSES_COLUMNS,
                 REASON_UNRESOLVED_CONTEXT, REASON_UNRESOLVED_SHAPE)

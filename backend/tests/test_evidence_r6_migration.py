@@ -137,10 +137,10 @@ def test_find_n_lead_gives_the_phrase_and_the_integer_spans():
 
 # -------------------------------------------- reason codes and reviewer text ---
 
-def test_the_two_new_codes_join_the_tuple_and_the_legacy_code_stays():
+def test_the_two_new_codes_join_the_tuple_and_the_legacy_code_is_gone_from_the_code():
     assert M.REASON_UNRESOLVED_CONTEXT in M.REASON_CODES and M.REASON_UNRESOLVED_SHAPE in M.REASON_CODES
-    assert M.REASON_NON_ASCII_DIGITS in M.REASON_CODES                # stored rows keep their reason
-    assert len(set(M.REASON_CODES)) == len(M.REASON_CODES) == 16
+    assert not hasattr(M, "REASON_NON_ASCII_DIGITS") and "non_ascii_digits" not in M.REASON_CODES   # round 2: a stored row
+    assert len(set(M.REASON_CODES)) == len(M.REASON_CODES) == 15      # keeps the string (test_evidence_r6_round2_hygiene)
 
 
 def test_the_sentences_are_fixed_templates_naming_the_code_point():
@@ -299,7 +299,8 @@ def test_the_old_reader_names_are_gone_from_the_normalizer():
     assert not hasattr(V, "bare_ten_unresolved") and not hasattr(V, "has_non_ascii_digits")
 
 
-READER = ("verify.py", "value_checks.py", "record_checks.py", "extract_rules.py", "normalize.py",
+READER = ("verify.py", "value_checks.py", "record_checks.py", "extract_rules.py", "normalize.py", "unit_norm.py",
+          "parse_ink_match.py",
           "numgrammar/alphabet.py", "numgrammar/api.py", "numgrammar/body.py", "numgrammar/equivalents.py",
           "numgrammar/scan.py", "numgrammar/taint.py", "numgrammar/tok.py", "numgrammar/tokenizer.py",
           "numgrammar/words.py")
@@ -321,12 +322,12 @@ def _calls(path: Path) -> list[tuple[str, int]]:
 
 def test_no_category_or_unicode_property_test_is_left_in_the_reader():
     """The only list in the reader is the alphabet, the context sets, the gap set and the equivalents table: no
-    unicodedata.category / name / numeric / decimal, no str.isdigit / isalpha / isnumeric in any reader module. The
-    locator (normalize.py) keeps NFKC and the matching-only str.isalpha / str.isspace of de-hyphenation."""
+    unicodedata.category / name / numeric / decimal, no str.isdigit / isalpha / isnumeric in any reader module. Round 2:
+    the locator (normalize.py) has no exception any more (it was NFKC and the matching-only str.isalpha / isspace),
+    and the unit comparison, the header key and the ink pairing are listed with it."""
     bad = {f: _calls(EVIDENCE / f) for f in READER}
-    allowed = {"normalize.py": {"str.isalpha"}}
     for f, hits in bad.items():
-        assert [h for h in hits if h[0] not in allowed.get(f, set())] == [], f
+        assert hits == [], f
 
 
 def test_the_reader_keeps_no_codepoint_blocklist_by_name():

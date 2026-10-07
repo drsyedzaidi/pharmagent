@@ -23,7 +23,6 @@ from app.evidence.numgrammar.alphabet import (
     char_class,
 )
 from app.evidence.numgrammar.equivalents import THIN, fold
-from app.evidence.numgrammar.tok import Tok
 from app.evidence.numgrammar.tokenizer import tokens
 
 _TRAIL_STRIP = ".,;:)"
@@ -50,11 +49,6 @@ def number_spans(text: str, style: str = ".", *, strict: bool = False) -> list[t
 def numbers_in(text: str, style: str = ".") -> list[tuple[str, float]]:
     """(literal as written, value) of every resolved number of a snippet or proposed value."""
     return [(text[s:e], v) for s, e, v in number_spans(text, style)]
-
-
-def token_at(text: str, a: int, b: int, style: str = ".", *, mode: str = "page") -> Tok | None:
-    """The token or unresolved expression whose span is exactly text[a:b], else None. (Test-only: no caller in app/.)"""
-    return next((t for t in tokens(text, style, mode=mode) if (t.start, t.end) == (a, b)), None)
 
 
 # ------------------------------------------------------------------ words ---
@@ -90,17 +84,6 @@ def _prev_word(t: str, i: int) -> tuple[int, int] | None:
     while j > 0 and t[j - 1] not in GAP:
         j -= 1
     return j, i
-
-
-def words_around(text: str, start: int, end: int) -> tuple[str, str]:
-    """(W-, W+): the whole words one gap run before and after the word that holds text[start:end] ('' at an edge).
-    A run of gap characters of any length and mix is ONE separator, so padding never widens the window.
-    (Test-only: no caller in app/.)"""
-    t = fold(text)
-    a, _ = _word_bounds(t, start)
-    _, b = _word_bounds(t, max(end - 1, start))
-    prev, nxt = _prev_word(t, a), _next_word(t, b)
-    return (t[prev[0]:prev[1]] if prev else "", t[nxt[0]:nxt[1]] if nxt else "")
 
 
 def words_after(text: str, end: int, n: int) -> list[str]:
@@ -256,12 +239,6 @@ def find_n_lead(text: str) -> list[tuple[int, int, int, int]]:
     return out
 
 
-def find_n(text: str) -> list[tuple[int, int, int]]:
-    """(start, end, n) of every ``n = <integer of 1-6 digits>``: ``n = 12``, ``n=12``, ``(n=12)``, ``N=12``.
-    (Test-only: the keyless rule calls ``find_n_lead``.)"""
-    return [(s, e, n) for _, s, e, n in find_n_lead(text)]
-
-
 def find_dose(text: str) -> list[tuple[int, int, float, str]]:
     """(start, end, value, unit word) of every number of at most 5 integer digits and 3 decimals followed by a unit
     word of an extraction rule (mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is unresolved, so it
@@ -320,6 +297,5 @@ def claim_decimal(value: str, style: str = ".") -> Decimal | None:
     return toks[0].decimal_value if len(toks) == 1 else None
 
 
-__all__ = ["claim_decimal", "digit_group", "digits_of", "find_dose", "find_n", "find_n_lead", "is_data_cell",
-           "is_digit_run", "loose_in", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at",
-           "unreadable", "words_after", "words_around", "words_before"]
+__all__ = ["claim_decimal", "digit_group", "digits_of", "find_dose", "find_n_lead", "is_data_cell", "loose_in",
+           "number_spans", "numbers_in", "parse_claim", "scale_shapes", "unreadable", "words_after", "words_before"]

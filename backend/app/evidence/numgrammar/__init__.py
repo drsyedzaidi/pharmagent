@@ -9,19 +9,15 @@ from app.evidence.numgrammar.api import (
     digit_group,
     digits_of,
     find_dose,
-    find_n,
     find_n_lead,
     is_data_cell,
-    is_digit_run,
     loose_in,
     number_spans,
     numbers_in,
     parse_claim,
     scale_shapes,
-    token_at,
     unreadable,
     words_after,
-    words_around,
     words_before,
 )
 from app.evidence.numgrammar.equivalents import EQUIV
@@ -29,6 +25,5 @@ from app.evidence.numgrammar.tok import Tok
 from app.evidence.numgrammar.tokenizer import tokens
 
 __all__ = ["CID_MARKER", "CONTEXT", "EQUIV", "GAP", "INSIDE", "LINE", "NUMBER_CHARS", "Tok", "claim_decimal", "cls",
-           "digit_group", "digits_of", "find_dose", "find_n", "find_n_lead", "is_data_cell", "is_digit_run",
-           "loose_in", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at", "tokens",
-           "unreadable", "words_after", "words_around", "words_before"]
+           "digit_group", "digits_of", "find_dose", "find_n_lead", "is_data_cell", "loose_in", "number_spans",
+           "numbers_in", "parse_claim", "scale_shapes", "tokens", "unreadable", "words_after", "words_before"]

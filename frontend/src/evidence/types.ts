@@ -7,7 +7,7 @@ import type { PharmState } from '../types';
 
 // ── vocabularies (backend app/evidence/models.py) ────────────────────────────
 export type ParseStatus = 'parsed' | 'no_text' | 'failed';
-/** Whether a source has the layout sidecar the page image needs (backend relayout.STATUSES). */
+/** Whether a source has the layout sidecar the page image needs (backend relayout.layout_info). */
 export type LayoutStatus = 'ready' | 'missing' | 'text_changed' | 'unreadable';
 export type RelayoutOutcome = 'rebuilt' | 'unchanged' | 'text_changed' | 'unreadable';
 export type Verdict = 'include' | 'exclude' | 'unsure';

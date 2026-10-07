@@ -90,6 +90,12 @@ LINE = frozenset().union(LINE_ASCII, LINE_TYPOGRAPHIC, LINE_SUBSCRIPTS, LINE_KAP
 # ------------------------------------------------------------------ role sets used by the reader ---
 LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") | GREEK   # a word led by one is a label
 ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+ASCII_UPPER = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+GREEK_UPPER = frozenset("\u0394\u03a9\u03a3")                  # the capitals of GREEK (the others are lower case)
+# every letter the alphabet lists, in any class: the letters whose case the locator, a unit and a header key fold, and
+# between which a hyphen at a line break joins a wrapped word
+ALL_LETTERS = ASCII_LETTERS | GREEK | LINE_KAPPA | LINE_CHI | LINE_ACCENTED
+UPPER_LETTERS = ASCII_UPPER | GREEK_UPPER | frozenset("\u00c1\u00c5\u00d6\u00d8\u00c7")   # the capitals of ALL_LETTERS
 STARTERS = frozenset("([<>\u2264\u2265~\u2248=\u00b1")  # a token may start right after one of these in a word
 OPERATORS = QUALIFIERS | frozenset("=([:;*+-")           # a run of these before a token qualifies it when it holds one
 RANGE_WORDS = frozenset("-~")                            # a lone word of one of these between two numbers is a range

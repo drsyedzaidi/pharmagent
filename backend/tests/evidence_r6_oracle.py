@@ -31,6 +31,7 @@ from typing import NamedTuple
 
 from app.evidence.numgrammar import Tok, tokens
 from tests import evidence_r6_pins as P
+from tests.evidence_r6_attest import ATTESTATION
 from tests.evidence_r6_expressions import (  # noqa: F401  (re-exported: the tests read everything through ``O``)
     CID_PANEL,
     EXPRESSIONS,
@@ -64,7 +65,7 @@ _GREEK = frozenset(chr(c) for c in (0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x
 def repo_state() -> dict:
     """{"head": the commit the code under test is at, "dirty": the files that differ from it (git status --porcelain)}.
     A log of a run on a dirty tree is evidence of the tree, not of the commit: the run records both, and the pytest
-    wrapper refuses a dirty tree unless R6_ALLOW_DIRTY=1."""
+    wrapper refuses a dirty tree unless R6_ALLOW_DIRTY=1. The attestation file the runs write is not counted."""
     root = Path(__file__).resolve().parents[1]
 
     def git(*args: str) -> str:
@@ -72,7 +73,9 @@ def repo_state() -> dict:
             return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=30).stdout
         except (OSError, subprocess.SubprocessError):
             return ""
-    return {"head": git("rev-parse", "HEAD").strip(), "dirty": git("status", "--porcelain").splitlines()}
+    own = f"tests/{ATTESTATION.name}"           # the record of a passing run is written by the run itself: not a change
+    return {"head": git("rev-parse", "HEAD").strip(),
+            "dirty": [line for line in git("status", "--porcelain").splitlines() if not line.endswith(own)]}
 
 
 # ------------------------------------------------------------------ class machinery ---

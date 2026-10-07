@@ -23,8 +23,6 @@ from app.evidence.parse_layout import sha256_text
 
 Box = tuple[float, float, float, float]
 MAX_VALUE_BOXES = 12
-REASONS = ("layout_unavailable", "layout_stale", "span_stale", "no_span", "no_boxes", "word_unmapped",
-           "cell_unmapped", "page_too_large_for_crop")
 
 
 @dataclass(frozen=True)

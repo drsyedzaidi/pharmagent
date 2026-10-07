@@ -4,6 +4,11 @@ exceptions below; (2) layer B, every code point at the boundaries of the paths a
 (1) The reader's AST guard used to cover six modules; the parse, glyph, label, style and unit modules hid the same kinds
 of lists (round-1 audit). It now walks EVERY module of app/evidence. A use is allowed only when it is named here with
 its reason, and an entry that no longer matches any use fails the test, so the list cannot rot.
+
+Round 2 removed the entries of the snippet locator (``normalize.py``), the unit comparison (``unit_norm.py``), the header
+key (``extract_rules.norm_key``) and the ink pairing (``parse_ink_match.py``): they fold through ``fold()`` and the
+alphabet's explicit tables now. What remains are prose patterns, the group-label key (a duplicate detector that merges
+labels, never splits them), the message that names a code point for a human, and the unit WORDS of the dose rule.
 """
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from tests import evidence_r6_attest as attest
 from tests import evidence_r6_layer_b as B
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
@@ -26,14 +32,9 @@ LIST_FILES = {"numgrammar/alphabet.py", "numgrammar/equivalents.py"}          # 
 
 # (module, kind) -> why it is allowed: none of them reads a number out of text, and none can make a number readable
 ALLOWED = {
-    ("extract_rules.py", "unicodedata"): "norm_key: the comparison key of a template header or alias (not a value)",
     ("extract_rules.py", "regex-shorthand"): "header-key stripping, a bracketed unit and the dose-context prose pattern",
     ("extract_rules.py", "nonascii-list"): "the micro sign as the first character of a trailing unit word",
-    ("normalize.py", "unicodedata"): "nfkc_char: the snippet locator's NFKC, never into or out of the numeric alphabet",
-    ("normalize.py", "str-is"): "the locator's de-hyphenation and whitespace collapse (matching only)",
-    ("normalize.py", "regex-shorthand"): "the locator's whitespace-run pattern",
     ("numgrammar/api.py", "nonascii-list"): "the unit WORDS of the keyless dose rule (mg, μg, mg/kg ...)",
-    ("parse_ink_match.py", "unicodedata"): "NFKC pairs a ligature glyph with its letters; identity is judged by fold()",
     ("parse_layout.py", "str-is"): "maps word texts onto page-text offsets (whitespace skipping)",
     ("parse_tables.py", "regex-shorthand"): "the 'Table N' caption pattern",
     ("prompts.py", "regex-shorthand"): "parsing of model output",
@@ -41,9 +42,6 @@ ALLOWED = {
     ("qc_flags.py", "unicodedata"): "group_key: the comparison form of a group label (format characters dropped)",
     ("qc_flags.py", "regex-shorthand"): "group_key whitespace collapse",
     ("screen_rules.py", "regex-shorthand"): "keyword tokenisation of the screening criteria",
-    ("unit_norm.py", "unicodedata"): "the unit vocabulary: compatibility spellings of a unit (㎎, ⁻¹) fold to its symbol",
-    ("unit_norm.py", "str-is"): "unit prefix case (MIU vs mIU)",
-    ("unit_norm.py", "regex-shorthand"): "unit synonym and separator patterns",
     ("verify_messages.py", "unicodedata"): "names a code point for a human; never classifies one",
 }
 
@@ -153,8 +151,33 @@ def test_layer_b_catches_nfkc_equating_a_superscript_digit(monkeypatch):
     import unicodedata
 
     from app.evidence import normalize as N
-    monkeypatch.setattr(N, "nfkc_char", lambda ch: unicodedata.normalize("NFKC", ch))
+    monkeypatch.setattr(N, "casefold_letters", lambda text: unicodedata.normalize("NFKC", text))
     assert any("U+2070" in m or "U+00B9" in m for m in B.sweep_text([0x2070, 0x00B9]))
+    assert any("U+2070" in m for m in B.sweep_locator([0x2070]))
+
+
+def test_layer_b_catches_a_locator_that_drops_or_equates_a_character(monkeypatch):
+    from app.evidence import normalize as N
+    monkeypatch.setattr(N, "fold", lambda text, claim=False: text.replace("\u200b", ""))
+    assert any("U+200B" in m for m in B.sweep_locator([0x200B]))
+
+
+def test_layer_b_catches_a_unit_that_reads_a_character_outside_the_alphabet(monkeypatch):
+    from app.evidence import unit_norm as UN
+    monkeypatch.setattr(UN, "WORD_TIER_RE", re.compile("[\u0000]"))
+    assert any("U+3398" in m or "U+338E" in m for m in B.sweep_unit([0x338E, 0x3398]))
+
+
+def test_layer_b_catches_a_unit_reader_that_accepts_the_per_ten_thousand_sign(monkeypatch):
+    unit_token = re.compile(B._UNIT_TOKEN_RE.pattern.replace("[%", "[%\u2031", 1))          # the round-1 class
+    monkeypatch.setattr(B, "_UNIT_TOKEN_RE", unit_token)
+    assert any("U+2031" in m for m in B.sweep_unit([0x2031]))
+
+
+def test_layer_b_catches_a_header_key_that_drops_an_invisible_character(monkeypatch):
+    from app.evidence import extract_rules as ER
+    monkeypatch.setattr(ER, "fold", lambda text, claim=False: text.replace("\u200b", ""))
+    assert any("U+200B" in m for m in B.sweep_key([0x200B]))
 
 
 def test_layer_b_catches_a_decoy_digit_that_votes(monkeypatch):
@@ -173,3 +196,5 @@ def test_layer_b_every_code_point_on_a_process_pool():
     assert set(result["code_points"].values()) == {0x110000 - 2048}          # every scalar value, surrogates excluded
     assert result["dirty"] == [] or os.environ.get("R6_ALLOW_DIRTY") == "1", (
         "the run is evidence of a dirty tree, not of the commit: commit first or set R6_ALLOW_DIRTY=1", result["dirty"])
+    if not result["dirty"]:                       # a clean full run is the attestation the normal gate checks
+        attest.record("layer_b", {k: result[k] for k in ("code_points", "errors", "wall_seconds", "head", "dirty")})

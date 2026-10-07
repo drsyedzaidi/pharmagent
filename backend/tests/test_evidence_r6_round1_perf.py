@@ -134,8 +134,12 @@ def test_a_character_that_expands_eighteen_times_does_not_balloon_the_locator():
     assert time.perf_counter() - t0 < limit(6.0)                        # 3 s and 470 MB for ONE record before
 
 
-def test_nfkc_keeps_the_numeric_alphabet_apart_and_still_folds_ligatures():
-    for ch in ("⁰", "¹", "₂", "１", "½", "ⓔ", "．", "Ⅹ"):
-        assert N.nfkc_char(ch) == ch, hex(ord(ch))
-    assert N.nfkc_char("ﬁ") == "fi" and N.nfkc_char("™") == "TM" and N.nfkc_char("ﷺ") == "ﷺ"
-    assert N.nfkc_char(" ") == " "                             # an equivalent: the table handles it
+def test_the_locator_keeps_the_numeric_alphabet_apart_and_only_spells_the_listed_ligatures():
+    """Replaces test_nfkc_keeps_the_numeric_alphabet_apart_and_still_folds_ligatures (r6 round 2: the locator has no
+    NFKC). Old assertion: nfkc_char left these eight characters alone, turned ﬁ into fi, ™ into TM, kept ﷺ whole and
+    left a no-break space to the equivalents table. New: NOTHING but the equivalents, the seven ligatures and the
+    lower case of the alphabet's letters is rewritten, so ™ and every other compatibility form stays itself too."""
+    for ch in ("⁰", "¹", "₂", "１", "½", "ⓔ", "．", "Ⅹ", "™", "ﷺ", "㎎", "№", "ℓ"):
+        assert N.normalise(f"a{ch}b")[0] == f"a{ch}b", hex(ord(ch))
+    assert N.normalise("ﬁ")[0] == "fi" and N.normalise("ﬃ")[0] == "ffi"
+    assert N.normalise("a\u00a0b")[0] == "a b"                     # an equivalent: the table handles it

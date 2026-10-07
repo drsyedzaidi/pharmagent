@@ -170,17 +170,48 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   audit found: a 120-row table page (720 records) 6.6 s -> 0.17 s (the page is normalised and tokenised once per request, the
   header rows of a table once), a 100 000-number dose page 14 s -> 0.7 s, two columns with 2 000 occurrences of the snippet
   238 s -> 0.07 s, the style evidence of a 128 KB run of digit groups 40 s -> linear, one 200 000-glyph page of `ﷺ` 3 s and
-  470 MB -> bounded (NFKC never expands a glyph past four characters).
-- **What round 1 leaves, by design.** (a) The unit vocabulary (`unit_norm.py`), the group-label key (`qc_flags.group_key`), the
-  template header key (`extract_rules.norm_key`) and the snippet locator keep NFKC / `str.is*` / a Unicode category: none reads
-  a number, and each is named with its reason in `tests/test_evidence_r6_scope.py`, which fails for any other use in
-  `app/evidence`. The locator's NFKC no longer crosses the numeric alphabet. (b) Space characters other than the three the
+  470 MB -> bounded (round 1: NFKC capped at four characters of expansion; round 2: the locator has no NFKC, so a glyph
+  never expands at all).
+- **What round 1 leaves, by design.** (a) The group-label key (`qc_flags.group_key`) keeps NFKC and drops format characters (a
+  Unicode category): it is a duplicate detector that only ever MERGES labels (`Healthy` and `Healthy<U+200B>` are one group), so
+  a finer key would let an inserted zero-width character dodge the `duplicate` flag; the message that names a code point for a
+  human (`verify_messages.py`) uses `unicodedata.name`. Both are named with their reason in `tests/test_evidence_r6_scope.py`,
+  which fails for any other use in `app/evidence`. (Round 2 removed the other exceptions: the snippet locator, the unit
+  comparison, the template header key and the ink pairing fold through `fold()` and explicit tables, with no NFKC and no
+  `str.is*`; see "Round-2 changes" below.) (b) Space characters other than the three the
   equivalents table maps to a thin space are word breaks (pdfplumber's own rule), not OUTSIDE characters: `1<U+2007>234` reads
   as `1` and `234`, each flagged `composite_cell`. (c) Parse caches written before round 1 keep their text (the parser version
   is unchanged: the output differs only for a PDF with a private-use character or U+2007 / U+2008 / U+200A in a number); parse
   the PDF again in a new session. (d) `(4,6)` in parentheses is read as a decimal. (e) A legitimate negative list written
   `−11.8 −14.2` in running text flags both values as range ends (`censored_value`): the shape `12 -15` is the documented range.
   (f) `<-` (R assignment) qualifies the value after it.
+
+- **Round-2 changes (the corpus's parse caches, 449 distinct files today where the bullets above counted 448, and 605 PDFs;
+  2026-10-07).** (1) The snippet locator folds through `fold()` and
+  explicit tables only (no NFKC, no Unicode `\s`, no `str.is*`, no `str.casefold`; see "Locator"). Census of its inputs, 7,924,403
+  characters of page text, columns and cells: the old NFKC step rewrote 837 non-ASCII characters, all of them mathematical italic
+  letters of equations (the `𝐶 𝐿 𝑡 𝜃` family) and `¨ ´ ª ™`; U+FB00..U+FB06 occur 0 times, no Unicode space beyond the four GAP
+  characters and the thin-space family occurs, and 1 of 2,728 hyphen line breaks joined a letter the alphabet does not list
+  (`ð`). Every one of those characters is OUTSIDE or LINE, so a number on their line was already unresolved; what changes is that
+  a text field cited on such a line no longer locates through a plain-letter snippet (`snippet_not_on_page`). (2) The ink pairing
+  of the parse reads both glyph texts through `fold()`: a text layer that says `²` over a glyph that draws `2` (or the reverse)
+  is now `glyph_text_mismatch` instead of paired. Re-parsing the 605 PDFs (602 parse; 1,218 pages) gives the same text hash,
+  hidden characters, ink check and glyph check on every page as before. (3) Units and header keys: a unit with a character
+  outside INSIDE, CONTEXT and GAP is unresolved (it was NFKC-folded: `㎎` was `mg`); only 2 bracketed-unit cells of the corpus hold
+  one (`C₂ > C₁`, not a unit). Of 88 header or row-label cells with a non-ASCII character, `µ` (13) is unchanged and the en
+  dash (25) and non-breaking hyphen (1) are now the hyphen they equal in `fold()` (`AUC0–∞` matches the alias `AUC0-inf`; the
+  NFKC key kept the dash and matched only an alias that wrote it). (4) End to end, the 181,225 records the old reader passed:
+  163,918 still pass, 17,307 do not, 0 value disagreements, and the table of every record that no longer passes is byte-identical
+  to round 1 (the corpus snippets are page lines, so the locator change cannot move them). (5) Dead code removed: the
+  test-only `verify.find_number_in_snippet` and `numgrammar.find_n` / `token_at` / `words_around` (now in
+  `tests/evidence_r6_helpers.py`), `is_digit_run` as an export, the unused constants `config_tools.LAYOUT_KEYS`,
+  `regions.REASONS`, `relayout.STATUSES` / `OUTCOMES` and `models.REASON_NON_ASCII_DIGITS` (a stored row keeps the string; see
+  "Verifier reason codes"). (6) The unit reader's percent class comes from `alphabet.PERCENTS`: U+2031 (`‱`) and its unit entry
+  are gone. (7) The exhaustive tier is gated (see "The exhaustive tier is gated" in evidence-pipeline.md): the full runs of
+  this round covered 291 (expression, boundary) pairs x 1,112,064 code points = 323,610,624 variants and, in layer B, seven
+  sweeps (scale, style, thin, text, locator, unit, key) x 1,112,064 code points, with 0 errors; the record is
+  `backend/tests/evidence_r6_attestation.json`. (8) Coverage (`scripts/evidence_coverage.py`, four chunks merged, 85 % per module):
+  every module at or above 87.2 %, 96.5 % overall.
 
 ## Later phases
 

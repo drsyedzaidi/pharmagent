@@ -23,6 +23,25 @@ U+25E6 WHITE BULLET                   U+00B0 LaTeX papers print the degree sign 
 Rejected candidates stay OUTSIDE (alphabet.py): U+22C5 / U+2219 (look-alike multipliers: every near-digit hit is
 an attack fixture or a lecture equation, and as a multiplier they would be fail-open), U+2014 EM DASH (a list
 dash or "not available" in tables), U+2012 FIGURE DASH, U+02BC, U+2032 and the other look-alikes.
+
+Round 2: the three explicit tables AROUND the reader. The reader itself (``tokens``) reads ONLY ``fold`` / ``EQUIV``.
+The snippet locator (``normalize.py``), the unit comparison (``unit_norm.py``) and the header key
+(``extract_rules.norm_key``) used to carry NFKC and Unicode case folding of their own, which equated characters the
+reader keeps apart. They now fold through ``fold`` plus these tables, and a character none of them lists stays as it is
+(so it equals nothing else and, in a unit, makes the unit unresolved):
+
+``LIGATURES``        locator only, 1 -> n letters: the seven Latin presentation forms U+FB00..U+FB06. NO hit in the 449
+                     parse caches (pdfminer spells them out through the font's ToUnicode map). Kept because a snippet
+                     typed with the letters for a page that prints the ligature is the commonest honest drift, and
+                     because the expansion is ASCII letters only: it cannot make a number readable, so the locator
+                     stays a finder. The owner may delete the table: a ligature page then fails
+                     ``snippet_not_on_page`` (fail closed).
+``HEADER_SPELLINGS`` header keys only: the infinity sign (U+221E) is the word ``inf`` (``AUC0-<infinity>`` is
+                     ``AUC0-inf``; 2 corpus headers; template aliases are written either way).
+``CASE_PAIRS``       the 34 capitals of the letters the alphabet lists (ASCII A-Z, Greek Delta Omega Sigma, five
+                     accented Latin capitals) and their lower case, 1:1. Explicit pairs, not ``str.casefold``: the
+                     Kelvin sign, the long s and the other characters Unicode folds into ASCII letters are not
+                     equated with them.
 """
 from __future__ import annotations
 
@@ -76,3 +95,29 @@ def fold(text: str, *, claim: bool = False) -> str:
     if claim and " " in out:
         out = _claim_group().sub("\\1" + THIN, out)
     return out
+
+
+# ------------------------------------------------------- the tables around the reader (round 2) ---
+# locator only: a presentation-form ligature is its letters (one character -> several: the locator's index map repeats
+# the offset). U+FB05 is the long-s ligature and is spelled with a plain s.
+LIGATURES: dict[str, str] = {
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi", "\ufb04": "ffl", "\ufb05": "st", "\ufb06": "st",
+}
+
+# header keys only (extract_rules.norm_key): the infinity sign of AUC0-inf / AUC0-infinity
+HEADER_SPELLINGS: dict[str, str] = {"\u221e": "inf"}
+
+# capital -> lower case, 1:1, for the letters of the alphabet that have a case (ASCII, three Greek, five accented Latin)
+CASE_PAIRS: dict[str, str] = {
+    **{chr(c): chr(c + 32) for c in range(0x41, 0x5B)},                   # A-Z -> a-z
+    "\u0394": "\u03b4", "\u03a9": "\u03c9", "\u03a3": "\u03c3",         # Delta Omega Sigma
+    "\u00c1": "\u00e1", "\u00c5": "\u00e5", "\u00d6": "\u00f6",         # A-acute A-ring O-diaeresis
+    "\u00d8": "\u00f8", "\u00c7": "\u00e7",                             # O-stroke C-cedilla
+}
+_CASE_TABLE = str.maketrans(CASE_PAIRS)
+
+
+def casefold_letters(text: str) -> str:
+    """*text* with the capitals of ``CASE_PAIRS`` in lower case; every other character (a Kelvin sign, a fullwidth or
+    mathematical letter, a Cyrillic capital) is unchanged. Same length: offsets are native."""
+    return text.translate(_CASE_TABLE)

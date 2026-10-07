@@ -6,8 +6,9 @@ import pytest
 from app.evidence import models as M
 from app.evidence.normalize import normalise
 from app.evidence.parse import parse_pdf
-from app.evidence.verify import MAX_SNIPPET_CHARS, find_number_in_snippet, find_snippet_in_page, verify
+from app.evidence.verify import MAX_SNIPPET_CHARS, find_snippet_in_page, verify
 from tests import evidence_fixtures as fx
+from tests.evidence_r6_helpers import find_number_in_snippet
 
 needs_unicode = pytest.mark.skipif(not fx.UNICODE_FONT, reason="no Unicode TTF found; ASCII variant built")
 

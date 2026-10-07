@@ -143,7 +143,7 @@ def test_strip_ws_with_map():
     assert strip_ws_with_map("") == ("", [])
 
 
-def test_normalise_composes_maps_through_nfkc_expansion():
+def test_normalise_composes_maps_through_a_ligature_expansion():
     raw = "ﬁne 1"
     norm, m = normalise(raw)
     assert norm == "fine 1" and m == [0, 0, 1, 2, 3, 4]
