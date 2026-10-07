@@ -106,7 +106,7 @@ def _verify_one(p: dict[str, Any], doc: dict[str, Any], ftype: str) -> dict[str,
     base = _page_reading(p, res.number, res.literal) if status == "pass" else p
     if ftype == "text":                          # a text field never carries a number of its own
         base = {**base, "value_num": None}
-    return {**base, "locator": loc, "verify_status": status, "verify_reason": reason}
+    return {**base, "locator": loc, "verify_status": status, "verify_reason": reason, "verify_detail": res.detail}
 
 
 def check_proposals(proposals: list[dict[str, Any]], doc: dict[str, Any] | None, template: dict[str, Any],

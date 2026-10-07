@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from typing import Any
 
-from app.evidence.normalize import number_tokens, parse_number
+from app.evidence.numgrammar import GAP, find_dose, find_n_lead, parse_claim, tokens
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
 VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
@@ -26,11 +27,29 @@ DISPERSION_HEADERS = frozenset({"sd", "se", "sem", "rse", "cv", "cv%", "%cv", "r
 _KEY_STRIP = re.compile(r"[\s_\-,.]+")
 _PAREN_UNIT_RE = re.compile(r"^(?P<label>.*?)\s*[(\[](?P<unit>[^()\[\]]{1,40})[)\]]\s*$")
 _TRAIL_UNIT_RE = re.compile(r"^\s*(?P<unit>[A-Za-z%µμ][\w%/·^.*\-]{0,24})\s*$")
-_N_RE = re.compile(r"(?<![A-Za-z])n\s*=\s*(?P<num>\d{1,6})(?!\d)", re.IGNORECASE)
-_DOSE_RE = re.compile(r"(?<![\w.,])(?P<num>\d{1,5}(?:[.,]\d{1,3})?)\s*(?P<unit>mg/kg|µg/kg|μg/kg|mg|µg|μg|ug|g)"
-                      r"(?![\w/⁄∕／⧸÷⋅∙•·*])", re.IGNORECASE)
 _DOSE_CTX = re.compile(r"\bdos(?:e|es|ed|ing|age)\b|\badminist", re.IGNORECASE)
-TEXT_RULES = (("n", _N_RE, None), ("dose", _DOSE_RE, _DOSE_CTX))
+
+
+def _n_hits(text: str) -> list[tuple]:
+    """'n = 12': the snippet window starts at the ``n``."""
+    return [(s, e, n, None, lead, e) for lead, s, e, n in find_n_lead(text)]
+
+
+def _dose_hits(text: str) -> list[tuple]:
+    """'150 mg': the snippet window runs from the number to the end of its unit word."""
+    out = []
+    for s, e, value, unit in find_dose(text):
+        j = e
+        while j < len(text) and text[j] in GAP:
+            j += 1
+        out.append((s, e, value, unit, s, j + len(unit)))
+    return out
+
+
+# (field, finder of (start, end, value, unit, window start, window end) over a text, context the snippet must
+# match): numbers are read by numgrammar (find_n_lead: 'n = 12'; find_dose: a number followed by a dose unit word),
+# never by a pattern here
+TEXT_RULES = (("n", _n_hits, None), ("dose", _dose_hits, _DOSE_CTX))
 
 
 # ----------------------------------------------------------------- matching ---
@@ -74,17 +93,16 @@ def decimal_style(spec: dict[str, Any] | None, doc: dict[str, Any]) -> str:
 
 def value_number(value: str, style: str) -> float | None:
     """Numeric reading of a proposed value in the page's style, else point-decimal, else None."""
-    num = parse_number(value, style)
-    return num if num is not None or style == "." else parse_number(value, ".")
+    num = parse_claim(value, style)
+    return num if num is not None or style == "." else parse_claim(value, ".")
 
 
 def leading_number(cell: str, style: str) -> tuple[str, float, str] | None:
     """(literal as printed, value, remainder) for the first number in a cell, else None."""
-    tokens = number_tokens(cell, style)
-    if not tokens or tokens[0].value is None:            # '4.5 x 10' (exponent lost): never a later number
+    first = tokens(cell, style, mode="claim")[:1]
+    if not first or first[0].value is None:              # '4.5 x 10' (exponent lost): never a later number
         return None
-    start, end, value, _ = tokens[0]
-    return cell[start:end], value, cell[end:]
+    return cell[first[0].start:first[0].end], first[0].value, cell[first[0].end:]
 
 
 def trailing_unit(rest: str) -> str | None:
@@ -221,19 +239,17 @@ def text_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str) 
     """First 'n = <int>' and first '<number> mg ... dose' per source, when the template names them."""
     index = field_index(template)
     out = []
-    for key, regex, context in TEXT_RULES:
+    for key, finder, context in TEXT_RULES:
         spec = index.get(key)
         if spec is None:
             continue
-        hit = _first_text_hit(doc, regex, context)
+        hit = _first_text_hit(doc, finder, context)
         if hit is None:
             continue
-        page_n, column, m, snippet = hit
+        page_n, column, num, unit, snippet = hit
         style = decimal_style(spec, doc)
-        unit = m.groupdict().get("unit")
         p = _proposal(spec, source_id=source_id, page=page_n, kind="text", snippet=snippet,
-                      value=m.group("num"), value_num=value_number(m.group("num"), style),
-                      unit=unit, group="", style=style)
+                      value=num, value_num=value_number(num, style), unit=unit, group="", style=style)
         out.append({**p, "locator": {**p["locator"], "column": column}})
     return out
 
@@ -245,13 +261,14 @@ def _reading_texts(page: dict[str, Any]) -> list[tuple[int | None, str]]:
     return list(enumerate(columns)) + [(None, page.get("text") or "")]
 
 
-def _first_text_hit(doc: dict[str, Any], regex: re.Pattern[str], context: re.Pattern[str] | None):
+def _first_text_hit(doc: dict[str, Any], finder: Callable[[str], list[tuple]], context: re.Pattern[str] | None):
+    """(page, column, literal, unit word or None, snippet) of the first hit of *finder* whose line passes *context*."""
     for page in doc.get("pages") or []:
         for column, text in _reading_texts(page):
-            for m in regex.finditer(text):
-                snippet = _window(text, m.start(), m.end())
+            for start, end, _value, unit, w0, w1 in finder(text):
+                snippet = _window(text, w0, w1)
                 if context is None or context.search(snippet):
-                    return int(page["n"]), column, m, snippet
+                    return int(page["n"]), column, text[start:end], unit, snippet
     return None
 
 

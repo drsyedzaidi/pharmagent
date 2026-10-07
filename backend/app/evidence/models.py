@@ -28,10 +28,15 @@ REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED = "table_cell_mismatch", "sour
 REASON_TEXT_NOT_IN_SNIPPET = "text_not_in_snippet"        # text field: value absent from its own snippet
 REASON_PARTIAL_NUMBER = "partial_number"                  # cited number is part of a longer page number
 REASON_CROSSES_COLUMNS = "crosses_columns"                # snippet only exists across a two-column gap
+# numeric grammar (numgrammar/): a character outside the allowed alphabet touches the cited number, sits one word
+# away or lies elsewhere on its line / the allowed characters stand in an order the grammar rejects
+REASON_UNRESOLVED_CONTEXT, REASON_UNRESOLVED_SHAPE = "unresolved_context", "unresolved_shape"
+# REASON_NON_ASCII_DIGITS stays in the tuple for rows stored by the old reader; it is never emitted again
 REASON_CODES = (REASON_OK, REASON_EMPTY_SNIPPET, REASON_SNIPPET_TOO_LONG, REASON_PAGE_OUT_OF_RANGE,
                 REASON_NON_ASCII_DIGITS, REASON_NO_NUMBER, REASON_NUMBER_MISMATCH, REASON_INTEGER_EXPECTED,
                 REASON_SNIPPET_NOT_ON_PAGE, REASON_TABLE_CELL_MISMATCH, REASON_SOURCE_CHANGED,
-                REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER, REASON_CROSSES_COLUMNS)
+                REASON_TEXT_NOT_IN_SNIPPET, REASON_PARTIAL_NUMBER, REASON_CROSSES_COLUMNS,
+                REASON_UNRESOLVED_CONTEXT, REASON_UNRESOLVED_SHAPE)
 # QC flag codes (flags_json entries: {code, severity warn|error, message, field, group, origin script|llm}).
 FLAG_REQUIRED_MISSING, FLAG_OUT_OF_RANGE, FLAG_NON_INTEGER_N = "required_missing", "out_of_range", "non_integer_n"
 FLAG_DUPLICATE, FLAG_UNIT_MISMATCH, FLAG_UNIT_MISSING = "duplicate", "unit_mismatch", "unit_missing"
@@ -128,6 +133,7 @@ class VerifyResult:
     literal: str | None = None
     span: list[int] | None = None
     number: float | None = None     # value of the matched WHOLE page/cell token (page decimal style)
+    detail: str = ""                # fixed server-written reviewer sentence of a numeric-grammar failure ('' else)
 
 
 @dataclass(frozen=True)

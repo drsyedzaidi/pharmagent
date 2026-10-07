@@ -48,8 +48,10 @@ _TRANSLATE = str.maketrans(EQUIV)
 # a thin space groups digits only BETWEEN two digits; anywhere else it is a plain gap (1:1 rewrite)
 _THIN_GAP = re.compile("(?<![0-9])" + THIN + "|" + THIN + "(?![0-9])")
 # claim mode only (a snippet or value a model typed with plain spaces): an ASCII space between a 1-3 digit head
-# and a 3-digit group reads as a thin space ('18 900', '1 234 567'); '12 1500' and '0.123 4' stay two tokens
-_CLAIM_GROUP = re.compile("(?<![0-9])([0-9]{1,3}) (?=[0-9]{3}(?![0-9]))")
+# and a 3-digit group reads as a thin space ('18 900', '1 234 567'); '12 1500' and '0.123 4' stay two tokens. The head
+# must itself start a number: it follows the start of the text, a gap, an opener, a qualifier or a sign, never a digit,
+# a separator or a letter ('229.64 233.64' are two decimals, 'CYP2B6 125.0' is a label and a number)
+_CLAIM_GROUP = re.compile("(?<![^ \t\n\r(\\[=<>\u2264\u2265~\u2248\u00b1+\\-])([0-9]{1,3}) (?=[0-9]{3}(?![0-9]))")
 
 
 def fold(text: str, *, claim: bool = False) -> str:

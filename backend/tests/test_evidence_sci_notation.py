@@ -8,7 +8,7 @@ import pytest
 from app.evidence import models as M
 from app.evidence.extract_rules import leading_number, value_number
 from app.evidence.extract_tools import check_proposals
-from app.evidence.normalize import parse_number
+from app.evidence.numgrammar import parse_claim
 from app.evidence.verify import verify
 
 TEMPLATE = {"fields": [{"name": "Km", "type": "number"}, {"name": "dose", "type": "number"}]}
@@ -31,12 +31,12 @@ def _prop(value: str, snippet: str, field: str = "Km", style: str = ".") -> dict
     ("10^6", ".", 1e6), ("1,2e-3", ",", 0.0012), ("-3.1e2", ".", -310.0), ("1.2 × 10⁻³", ".", 0.0012),
 ])
 def test_full_scientific_literal_parses_with_its_exponent(tok, style, expected):
-    assert parse_number(tok, style) == pytest.approx(expected, rel=1e-12)
+    assert parse_claim(tok, style) == pytest.approx(expected, rel=1e-12)
 
 
 @pytest.mark.parametrize("tok", ["4.5 x 10", "1.2e999"])
 def test_scientific_literal_without_a_readable_exponent_has_no_value(tok):
-    assert parse_number(tok, ".") is None
+    assert parse_claim(tok, ".") is None
 
 
 @pytest.mark.parametrize("page, value, snippet, small", [
@@ -75,11 +75,13 @@ def test_full_literal_proposal_passes_with_the_exponent(page, value, snippet, li
     assert out["verify_status"] == "pass" and out["value_num"] == pytest.approx(number, rel=1e-12)
 
 
-def test_bare_times_ten_is_plain_multiplication_only_without_small_digits():
+def test_bare_times_ten_is_never_plain_multiplication_whatever_the_small_glyphs_say():
+    """Was test_bare_times_ten_is_plain_multiplication_only_without_small_digits (a pass without small glyphs): the
+    small_text plumbing is gone, a bare ten after a multiplier is unresolved on every page."""
     page = "Patients took 2 x 10 mg tablets daily."
-    assert verify(_prop("10", "2 x 10 mg", "dose"), _doc(page)).status == "pass"
-    res = verify(_prop("10", "2 x 10 mg", "dose"), _doc(page, small="3"))
-    assert res.status == "fail"
+    for small in ("", "3"):
+        res = verify(_prop("10", "2 x 10 mg", "dose"), _doc(page, small=small))
+        assert (res.status, res.reason) == ("fail", M.REASON_PARTIAL_NUMBER), (small, res)
 
 
 def test_rule_reader_never_takes_a_mantissa_or_skips_to_a_later_number():

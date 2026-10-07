@@ -156,8 +156,10 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
                   batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flags: list[dict[str, Any]] = []
     if rec.get("verify_status") == "fail":
-        flags.append(_flag(M.FLAG_VERIFY_FAIL, "error",
-                           f"{field}: verification failed ({rec.get('verify_reason') or 'unknown'})", field, group))
+        detail = str(rec.get("verify_detail") or "")        # the server-written sentence of a numeric-grammar failure
+        flags.append(_flag(M.FLAG_VERIFY_FAIL, "error", f"{field}: verification failed "
+                           f"({rec.get('verify_reason') or 'unknown'})" + (f": {detail}" if detail else ""),
+                           field, group))
     spec = index.get(str(rec.get("field") or "").casefold())
     if spec:
         flags.extend(_field_flags(rec, spec, field, group))

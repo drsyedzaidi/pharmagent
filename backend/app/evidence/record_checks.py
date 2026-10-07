@@ -19,16 +19,14 @@ from typing import Any
 from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
+from app.evidence.numgrammar import GAP, words_after
 from app.evidence.unit_norm import canonical_unit, normalise_unit, prefix_conflict
 from app.evidence.value_checks import token_context, value_flags
-from app.evidence.visible_window import ignorable
 
 _UNIT_TOKEN_RE = re.compile(r"^\s*([%‰‱]|[^\W\d_][\w/·*.^\-]*(?:\s+[^\W\d_]{1,3}(?:/[\w.^\-]+)+)?)")
 _NEXT_TOKEN_RE = re.compile(r"^\s*(/|per\b|\S+)")
 _NOT_CONTINUATIONS = {"x", "fold", "%"}
-CONTINUATION_CHARS = 60
-# slashes and product dots a unit is written with: folded before the unit is read ('mg⁄kg' is mg/kg)
-UNIT_FOLD = str.maketrans({"⁄": "/", "∕": "/", "／": "/", "⧸": "/", "÷": "/", "⋅": "·", "∙": "·", "•": "·"})
+UNIT_WORDS = 3          # whole words after the token a printed unit may span ('mg kg-1 h-1', 'ng h/mL')
 _JOINERS = frozenset("/·*×^")         # a next token made only of these continues the unit ('mg · kg-1')
 _BASES = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
           "h", "min", "s", "d", "wk", "iu", "miu", "u", "%", "‰", "‱", "kda", "m2", "cells", "cell", "10^6", "10^9",
@@ -68,18 +66,22 @@ Printed = tuple[str | None, bool, str | None]      # (normalised unit, decided, 
 
 def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> Printed:
     """(unit printed right after the VERIFIED token on the page / in the cell, decided, raw). Read from
-    the page, never re-found in the snippet: '5' is not the '5' inside '15 mg/kg'. Undecided when the
-    next token may continue the unit, or the window ends right after it."""
+    the page, never re-found in the snippet: '5' is not the '5' inside '15 mg/kg'. The text read is the glued rest of
+    the token's own word ('%', '°C') and up to UNIT_WORDS whole words after it; unit matching only, a value is never
+    read here (a record whose number touches a character outside the allowed alphabet has already failed
+    verification). Undecided when the next token may continue the unit, or more words follow the last one read."""
     ctx = token_context(loc, page)
     if ctx is None:
         return None, True, None
     text, _, end = ctx
-    window = text[end:end + CONTINUATION_CHARS]
-    window = text[end:end + CONTINUATION_CHARS + min(sum(map(ignorable, window)), 4 * CONTINUATION_CHARS)]
-    raw = window.translate(UNIT_FOLD)
+    stop = end
+    while stop < len(text) and text[stop] not in GAP:
+        stop += 1
+    words = words_after(text, end, UNIT_WORDS + 1)
+    raw = text[end:stop] + "".join(" " + w for w in words[:UNIT_WORDS])
     norm, idx = normalise(raw)
     lead = " " if raw[:1].isspace() else ""
-    rest = lead + norm.translate(UNIT_FOLD)
+    rest = lead + norm
     m = _UNIT_TOKEN_RE.match(rest)
     unit = recognised_unit(m.group(1)) if m else None
     if m is None or unit is None:
@@ -88,7 +90,7 @@ def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> Printed:
     printed = raw[idx[a]:idx[b - 1] + 1] if 0 <= a < b <= len(idx) else None
     tail = rest[m.end():]
     if not tail.strip():
-        return unit, end + len(window) >= len(text), printed
+        return unit, len(words) <= UNIT_WORDS, printed
     return unit, not _continues(tail), printed
 
 

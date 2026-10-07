@@ -1,10 +1,9 @@
-"""r6 numeric grammar: the verify() path oracle (prepared; the migration writer enables it).
+"""r6 numeric grammar: the verify() path oracle (enabled by the r6 migration).
 
-``R6_VERIFY_ORACLE=1 pytest tests/test_evidence_r6_verify_oracle.py`` runs the stratified sample against the verify() of the
-day (about 195 000 records, ~1 minute on one core: run it on a pool when it joins the normal gate). While the callers still
-use the old reader it reports the defects the grammar exists to close (a pass where the clean record fails, an outside
-character that passes), so only the harness checks run by default. ``R6_VERIFY_STRONG=1`` adds the rule that an OUTSIDE
-code point is never a pass.
+The stratified sample (about 195 000 verify() calls, ~45 s on one core) runs on every full pass of this file: the callers
+read numbers with numgrammar only, so a pass where the clean record fails, a pass with another value, and any OUTSIDE code
+point in the page or the snippet that passes are all defects. ``R6_VERIFY_ORACLE=0`` skips the long samples (the harness
+checks always run); ``R6_VERIFY_CPS`` sets the number of code points (default 150).
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import pytest
 
 from tests import evidence_r6_verify_oracle as V
 
-ENABLED = os.environ.get("R6_VERIFY_ORACLE") == "1"
+ENABLED = os.environ.get("R6_VERIFY_ORACLE") != "0"
 
 
 def test_the_harness_runs_against_the_current_verify_and_classifies_every_outcome():
@@ -42,14 +41,19 @@ def test_the_sample_holds_listed_and_outside_code_points():
     assert V.describe(0x200B).startswith("U+200B")
 
 
-@pytest.mark.skipif(not ENABLED, reason="enabled by the migration writer: R6_VERIFY_ORACLE=1")
-def test_verify_never_passes_where_the_clean_record_fails_or_with_another_value():
-    count, bad = V.run_sample(None, int(os.environ.get("R6_VERIFY_CPS", "150")), strong=False)
+@pytest.fixture(scope="module")
+def sample():
+    """ONE run of the stratified sample (~195 000 verify() calls) with the strong rule; both tests read it."""
+    return V.run_sample(None, int(os.environ.get("R6_VERIFY_CPS", "150")), strong=True)
+
+
+@pytest.mark.skipif(not ENABLED, reason="the long verify() sample is off: R6_VERIFY_ORACLE=0")
+def test_verify_never_passes_where_the_clean_record_fails_or_with_another_value(sample):
+    count, bad = sample
     assert count > 100_000
-    assert bad[:10] == []
+    assert [v for v in bad if "outside" not in v.message][:10] == []
 
 
-@pytest.mark.skipif(os.environ.get("R6_VERIFY_STRONG") != "1", reason="strong rule: R6_VERIFY_STRONG=1")
-def test_an_outside_code_point_in_the_page_or_the_snippet_is_never_a_pass():
-    count, bad = V.run_sample(None, int(os.environ.get("R6_VERIFY_CPS", "150")), strong=True)
-    assert bad[:10] == []
+@pytest.mark.skipif(not ENABLED, reason="the long verify() sample is off: R6_VERIFY_ORACLE=0")
+def test_an_outside_code_point_in_the_page_or_the_snippet_is_never_a_pass(sample):
+    assert [v for v in sample[1] if "outside" in v.message][:10] == []

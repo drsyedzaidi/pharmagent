@@ -19,7 +19,7 @@ import pytest
 from app.evidence import models as M
 from app.evidence.extract_rules import rule_extract, value_number
 from app.evidence.extract_tools import check_proposals
-from app.evidence.normalize import number_tokens
+from app.evidence.numgrammar import tokens
 
 STRONG = "Clearance 12.4 L/h, volume 45.6 L, half-life 3.5 h, ka 1.25 /h. "
 CMAX = {"fields": [{"name": "Cmax", "type": "number", "unit": "ng/mL"}]}
@@ -58,14 +58,20 @@ def _codes(rec: dict) -> set[str]:
 
 @pytest.mark.parametrize("text", ["23l", "23I", "4б", "12З", "1O5", "б12"])
 def test_letter_glued_to_digits_makes_the_token_unreadable(text):
-    toks = number_tokens(text, strict=True)
+    toks = tokens(text, ".", mode="page")
     assert toks and all(t.value is None for t in toks), toks
 
 
-@pytest.mark.parametrize("text,value", [("150mg", 150.0), ("24h", 24.0), ("1.73m2", 1.73), ("100µg", 100.0),
-                                        ("3MIU", 3.0), ("2x daily", 2.0), ("10mL", 10.0)])
-def test_a_glued_unit_still_reads(text, value):
-    assert number_tokens(text, strict=True)[0].value == value
+@pytest.mark.parametrize("text,shape", [
+    ("150mg", "unresolved_shape:glued_letters"), ("24h", "unresolved_shape:glued_letters"),
+    ("1.73m2", "unresolved_shape:glued_letters"), ("100µg", "unresolved_shape:glued_letters"),
+    ("3MIU", "unresolved_shape:glued_letters"), ("10mL", "unresolved_shape:glued_letters"),
+    ("2x daily", "unresolved_shape:multiplier_operand")])
+def test_a_glued_unit_is_unresolved(text, shape):
+    """Was test_a_glued_unit_still_reads (150mg -> 150, '2x daily' -> 2): a letter glued to the digits is a shape the
+    grammar rejects, whatever the letter (a fourth list of 'allowed unit letters' would re-admit '10mL' read as 1OmL);
+    the reviewer reads the page image. '2x daily' is the multiplier without a number, like '2 × daily'."""
+    assert [(t.value, t.shape) for t in tokens(text, ".", mode="page")] == [(None, shape)]
 
 
 @pytest.mark.parametrize("cell,value", [("12З", "12"), ("1O5", "1"), ("23l", "23")])
@@ -189,9 +195,17 @@ def test_all_caps_page_unit_is_not_a_clean_milli_match():
     assert _codes(rec) & {M.FLAG_UNIT_UNVERIFIED, M.FLAG_UNIT_SOURCE_MISMATCH}, rec["flags"]
 
 
-@pytest.mark.parametrize("sign", ["‰", "‱"])
-def test_per_mille_is_not_percent(sign):
+def test_per_mille_is_not_percent():
     template = {"fields": [{"name": "fe", "type": "number", "unit": "%"}]}
-    page = STRONG + f"Urinary recovery was 4.5{sign} of the dose."
-    rec = _one(_doc(page), template, _prop("fe", "4.5", f"Urinary recovery was 4.5{sign}", unit="%"))
+    page = STRONG + "Urinary recovery was 4.5\u2030 of the dose."
+    rec = _one(_doc(page), template, _prop("fe", "4.5", "Urinary recovery was 4.5\u2030", unit="%"))
     assert M.FLAG_UNIT_SOURCE_MISMATCH in _codes(rec), rec["flags"]
+
+
+def test_a_per_ten_thousand_sign_is_outside_the_alphabet_and_never_a_percent():
+    """Was test_per_mille_is_not_percent[U+2031] (passed + unit_source_mismatch): U+2031 is not in the allowed
+    alphabet, so the cited number touches an unreadable character: verification fails closed."""
+    template = {"fields": [{"name": "fe", "type": "number", "unit": "%"}]}
+    page = STRONG + "Urinary recovery was 4.5\u2031 of the dose."
+    rec = _one(_doc(page), template, _prop("fe", "4.5", "Urinary recovery was 4.5\u2031", unit="%"))
+    assert rec["verify_status"] == "fail" and rec["verify_reason"] == M.REASON_UNRESOLVED_CONTEXT, rec

@@ -188,9 +188,13 @@ def test_fail_snippet_too_long(papers):
     _assert_fail(verify(_rec("2.31", 1, long), papers["paper_d"]), M.REASON_SNIPPET_TOO_LONG)
 
 
-def test_fail_non_ascii_digits_checked_before_matching(papers):
-    _assert_fail(verify(_rec("2.31", 1, "was ٢.٣١ L/h"), papers["paper_d"]), M.REASON_NON_ASCII_DIGITS)
-    _assert_fail(verify(_rec("２.３１", 1, "was 2.31 L/h"), papers["paper_d"]), M.REASON_NON_ASCII_DIGITS)
+def test_fail_unreadable_characters_checked_before_matching(papers):
+    """Was test_fail_non_ascii_digits_checked_before_matching (reason non_ascii_digits, which is never emitted again
+    and stays in REASON_CODES for stored rows): a digit that is not ASCII is simply outside the allowed alphabet."""
+    _assert_fail(verify(_rec("2.31", 1, "was ٢.٣١ L/h"), papers["paper_d"]), M.REASON_UNRESOLVED_CONTEXT)
+    _assert_fail(verify(_rec("２.３１", 1, "was 2.31 L/h"), papers["paper_d"]), M.REASON_UNRESOLVED_CONTEXT)
+    res = verify(_rec("2.31", 1, "was ٢.٣١ L/h"), papers["paper_d"])
+    assert "ARABIC-INDIC DIGIT" in res.detail and "snippet" in res.detail and res.reason in M.REASON_CODES
 
 
 def test_fail_table_locator_pointing_at_different_cell(papers):
@@ -212,11 +216,11 @@ def test_fail_empty_snippet(papers):
     _assert_fail(verify(_rec("2.31", 1, "   \n"), papers["paper_d"]), M.REASON_EMPTY_SNIPPET)
 
 
-def test_fail_order_empty_before_page_before_digits_before_number(papers):
+def test_fail_order_empty_before_page_before_readability_before_number(papers):
     doc = papers["paper_d"]
     _assert_fail(verify(_rec("2.41", 99, ""), doc), M.REASON_EMPTY_SNIPPET)
     _assert_fail(verify(_rec("2.41", 99, "١"), doc), M.REASON_PAGE_OUT_OF_RANGE)
-    _assert_fail(verify(_rec("2.41", 1, "١ 2.31"), doc), M.REASON_NON_ASCII_DIGITS)
+    _assert_fail(verify(_rec("2.41", 1, "١ 2.31"), doc), M.REASON_UNRESOLVED_CONTEXT)       # was non_ascii_digits
     _assert_fail(verify(_rec("2.41", 1, "nowhere 2.31"), doc), M.REASON_NUMBER_MISMATCH)
 
 

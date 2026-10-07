@@ -7,19 +7,22 @@ from app.evidence.numgrammar.alphabet import CID_MARKER, CONTEXT, GAP, INSIDE, L
 from app.evidence.numgrammar.api import (
     find_dose,
     find_n,
+    find_n_lead,
     is_data_cell,
     number_spans,
     numbers_in,
     parse_claim,
     scale_shapes,
     token_at,
+    unreadable,
     words_after,
     words_around,
+    words_before,
 )
 from app.evidence.numgrammar.equivalents import EQUIV
 from app.evidence.numgrammar.tok import Tok
 from app.evidence.numgrammar.tokenizer import tokens
 
 __all__ = ["CID_MARKER", "CONTEXT", "EQUIV", "GAP", "INSIDE", "LINE", "Tok", "cls", "find_dose", "find_n",
-           "is_data_cell", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at", "tokens",
-           "words_after", "words_around"]
+           "find_n_lead", "is_data_cell", "number_spans", "numbers_in", "parse_claim", "scale_shapes", "token_at",
+           "tokens", "unreadable", "words_after", "words_around", "words_before"]

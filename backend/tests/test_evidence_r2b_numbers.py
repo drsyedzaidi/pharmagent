@@ -57,15 +57,27 @@ def _clean(rec: dict) -> bool:
 
 # ------------------------------------------------------------ unit continuation ---
 
-@pytest.mark.parametrize("unit_text", ["mg⁄kg", "mg∕kg", "mg／kg", "mg⋅kg−1", "mg∙kg−1", "mg•kg−1",
-                                       "mg · kg−1", "mg (per kg)"])
-def test_unit_continued_by_a_non_ascii_slash_or_dot_is_not_mg(unit_text):
+@pytest.mark.parametrize("unit_text", ["mg · kg−1", "mg (per kg)"])
+def test_unit_continued_by_a_dot_or_per_is_not_mg(unit_text):
     doc = _doc(STRONG + f"Subjects were dosed at 5 {unit_text} intravenously.")
     rec = _one(doc, DOSE, _prop("dose", "5", f"dosed at 5 {unit_text}", unit="mg"))
     assert rec["verify_status"] == "pass"
     assert _codes(rec) & {M.FLAG_UNIT_SOURCE_MISMATCH, M.FLAG_UNIT_UNVERIFIED}, rec["flags"]
     for kr in _keyless(doc, DOSE):
         assert kr["unit"] != "mg" or _codes(kr) & {M.FLAG_UNIT_SOURCE_MISMATCH, M.FLAG_UNIT_UNVERIFIED}
+
+
+@pytest.mark.parametrize("unit_text", ["mg⁄kg", "mg∕kg", "mg／kg", "mg⋅kg−1", "mg∙kg−1", "mg•kg−1"])
+def test_unit_continued_by_a_non_ascii_slash_or_dot_fails_verification(unit_text):
+    """Was test_unit_continued_by_a_non_ascii_slash_or_dot_is_not_mg (pass + a unit flag, the slash and dot look-alikes
+    were folded to '/' and a dot). They are not in the allowed alphabet (the bullet is a LINE character, which may not
+    touch the number's neighbour word), so the number next to the unit is unresolved_context: verification fails."""
+    doc = _doc(STRONG + f"Subjects were dosed at 5 {unit_text} intravenously.")
+    rec = _one(doc, DOSE, _prop("dose", "5", f"dosed at 5 {unit_text}", unit="mg"))
+    assert rec["verify_status"] == "fail" and rec["verify_reason"] == M.REASON_UNRESOLVED_CONTEXT, rec
+    for kr in _keyless(doc, DOSE):
+        assert kr["unit"] != "mg" or kr["verify_status"] == "fail" or _codes(kr) & {M.FLAG_UNIT_SOURCE_MISMATCH,
+                                                                                    M.FLAG_UNIT_UNVERIFIED}
 
 
 def test_plain_mg_dose_stays_decided():

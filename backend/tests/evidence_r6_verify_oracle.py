@@ -5,14 +5,18 @@ The tokenizer oracle (evidence_r6_oracle.py) proves what the reader does with ev
 record (the expression inside a sentence) and as a table-cell record (the expression is the cell), with c in the page
 only, in the snippet only and in both, and the outcome is judged against the clean outcome:
 
-- never a pass where the clean record fails;
+- never a pass where the clean record fails, EXCEPT that a character of the inside / context / gap class may change what
+  an expression is (``12 3/4`` is a mixed number, ``12% 3/4`` is a percentage and a fraction; ``150mg`` + TAB is
+  ``150 mg``): such a pass must equal the pass of the same record with c replaced by its class representative
+  (``rep_of``; U+0020 for a gap), so the verify() path follows the class argument of the tokenizer oracle. A character
+  of the line or outside class never turns a failing record into a pass;
 - a pass carries the clean number and the clean literal (c removed when it sits inside the literal's span);
 - a fail carries a reason from ``models.REASON_CODES``;
 - (strong) a code point of the OUTSIDE class anywhere in the page or the snippet is never a pass: the readability
   pre-check refuses the snippet and the tokenizer taints the page line.
 
-Until the callers are switched the old reader fails the strong rule (that is the defect), so the strong rule is off by
-default and ``R6_VERIFY_STRONG=1`` turns it on; the weak rules and the harness itself run today.
+The callers are switched (r6 migration): the strong rule holds and the sample runs in the normal gate
+(``R6_VERIFY_STRONG=1`` stays as the switch of the stricter rule for the long run).
 """
 from __future__ import annotations
 
@@ -76,6 +80,19 @@ def cases(names: list[str] | None = None, cps: list[int] | None = None) -> Itera
                         yield Case(name, b, cp, where, mode)
 
 
+def _follows_representative(case: Case, e: O.Expr, value: str, got: M.VerifyResult) -> bool:
+    """A pass where the clean record fails is allowed only for an inside / context / gap character, and only when
+    the same record with the class representative in its place passes with the same number."""
+    kind = P.expected_class(case.cp)
+    if kind not in ("inside", "context", "gap"):
+        return False
+    rep = " " if kind == "gap" else O.rep_of(chr(case.cp))
+    inserted = O.variants(e, case.boundary, rep)
+    ref = _run(value, inserted if case.where in ("snippet", "both") else e.text,
+               inserted if case.where in ("page", "both") else e.text, case.mode)
+    return ref.status == "pass" and round(ref.number, 12) == round(got.number, 12)
+
+
 def judge(case: Case, strong: bool) -> list[Violation]:
     e = _expr(case.name)
     value = CITES[case.name]
@@ -92,7 +109,8 @@ def judge(case: Case, strong: bool) -> list[Violation]:
         out.append(f"reason {got.reason!r} is not a known code")
     if got.status == "pass":
         if clean.status != "pass":
-            out.append("passed where the clean record fails")
+            if not _follows_representative(case, e, value, got):
+                out.append("passed where the clean record fails")
         else:
             if round(got.number, 12) != round(clean.number, 12):
                 out.append(f"passed with another value: {got.number} != {clean.number}")

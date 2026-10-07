@@ -84,12 +84,75 @@ Companion to [evidence-pipeline.md](evidence-pipeline.md).
 - **Every 429 / 503 carries `Retry-After`** (uploads included, `busy.py`): the 429 gives the seconds until the oldest
   request leaves the window, the saturation 503 a fixed 5 s.
 - **The coverage gate runs under a line tracer.** `scripts/evidence_coverage.py` needs every `app/evidence` module at
-  80 % or more of its executable lines (`--min`; `--data FILE` merges chunked runs). Wall-clock assertions use
+  80 % or more of its executable lines (`--min`, default 80; the r6 merge gate runs it with `--min 85`; `--data FILE` merges
+  chunked runs). Wall-clock assertions use
   `tests/evidence_timing.limit()`, strict normally and scaled x4 only while a tracer is installed.
 - **Error headers come from a deny-list.** The global handler forwards the headers of any raised
   `HTTPException` whose name is an RFC 9110 token and whose value is latin-1 without control characters (anything
   else is dropped, never a 500), except a fixed unsafe set (`app/response_headers.py`); a route that needs a header in that
   set (a cookie, a CORS header) cannot set it through an exception and must build its own response.
+
+## What the number reader leaves unresolved by design (r6)
+
+The reader (`numgrammar/`, see "Number reader" in [evidence-pipeline.md](evidence-pipeline.md)) reads a number only when
+it matches a small explicit grammar made of an explicit allowed alphabet; everything else is unresolved (value None,
+verification fails, the record is flagged, the reviewer compares with the page image). These are losses by design, not
+defects; each one is listed so a reviewer is not surprised, and none can pass as another number:
+
+- **Mixed numbers.** `12 3/4`, `12 1/2`, `12 ½` (`½` is a LINE character: it taints a number beside it). A lone fraction or
+  ratio (`3/4`, `140/90 mmHg`, `6/10`, `0.1/0.2/0.4 mg/kg`) is unresolved too, so a blood pressure or a dose ratio is never
+  read as two exact values.
+- **Raised exponents without an explicit marker.** `1.2 × 103` and `1.2 x 10 3` (an exponent set at full size but raised: the
+  text layer cannot say 10^3 from 103), a bare `× 10` (`7.23 ×10 *`), `2 x 10 mg`, `n = 12 x 10`, the Lancet `0·10`, `12·105`;
+  a raised ten without a multiplier (`10³`, `per 10⁶ cells`), a detached exponent (`10 ^ 3`, `10 ³`), a spaced exponent
+  (`3.4 E-03`), a star run before a power (`12* 10^3`). A multiplier without a number (`2 × daily`, `dosed 2x`, `2×` meaning
+  "twice", `1.2 ×` at a line end, `1.2 × l0³`) is unresolved. The legitimate case fails closed with the illegitimate one.
+- **Non-ASCII digits.** Arabic-Indic, fullwidth, circled, Roman, vulgar fractions and every other non-ASCII digit are outside
+  the alphabet; a snippet or a proposed value that holds one (a text field's too) fails verification
+  (`unresolved_context`). The superscript digits are readable only after a multiplier (`1.2 × 10⁻³`).
+- **Look-alike symbols.** Dashes (`‒ ― ﹘ ﹣ － ˗ ➖ ⁃ ⸺`), pluses, dots (`‧ ˙ ٫ ․`), multipliers (`⋅ ∙ ⨯ ✕ ✖ ∗ х Х`), comparisons
+  (`≦ ≧ ⩽ ⩾ ≲ ≳ ≠`), `÷`, `‱`, fullwidth and small-form signs, Cyrillic and math letters are not in the alphabet and not in the
+  equivalents table (ten entries: `− – ‐ ‑ ’` U+202F U+00A0 `µ ∼ ◦`). A number next to one is unresolved: a look-alike multiplier
+  would be fail-open, so there is no folding. The em dash (`—`) is a LINE character: it may stand on a number's line but not
+  next to it, so `Azithromycin — 0.66–1.8y` and `AUCR ≈ 2.3 — a moderate interaction` lose their numbers.
+- **Bullets, footnote marks and symbols next to numbers.** `• 150 mg`, `Adalat® 30 mg`, `partner§ 33 574`, `cm‖ 33.3`, `312†`,
+  `t½ 11.4 h`, `$18`, `£150 mg`, an arrow or a quote glued to a number, and `_ | ? " # & @` beside it (R code, markdown
+  tables, file names): LINE characters taint the number's own word and the words before and after it. Letters beyond
+  the 29 accented Latin letters and the 17 Greek letters of the alphabet (`É Š ž ō`, `δ φ ψ ν`) taint the same way until
+  admitted by the corpus rule.
+- **Units glued to digits.** `150mg`, `24h`, `1.73m2`, `3MIU`, `10mL`, `100µg`: a letter glued to the digits is rejected
+  whatever the letter (a list of allowed unit letters would be a fourth list and would re-admit `10mL` read as `1OmL`). The
+  honest cost is mostly text layers that lost every space; per-document counts are in `corpus_after.tsv`.
+- **Digits inside label words and lost-space text layers.** `CYP3A4*20`, `AUC0-24`, `t1/2`, `mL/min/1.73m2`, DOIs and
+  reference shapes (`2019;13(2):93–103`, `10.1080/14622416`), and any number glued to a word by a text layer without spaces
+  (`window(25–100ng/mL)isindicated`) form no token. Leading zeros (`007`, `05`), digit groups that are not groups of three
+  (`1,23,456`, `0.123 4`), `A.BBB` with the wrong decimal style (`21741,229`) and more than 40 digits are unresolved.
+- **Lines with a character outside the alphabet.** A pdfminer `(cid:N)` marker (a glyph the text layer lost: a lost `≥ ± × ° µ −`),
+  a soft hyphen, a Symbol-font glyph read as another character (`¥` for `×`, `£` for `≤`, `Þ ð þ ¼ ª`) or any OUTSIDE character
+  anywhere on a line makes every number on that line unresolved: the printed meaning is lost in the text layer. About 0.2% of
+  the corpus numbers.
+- **Not recovered.** A snippet that omits an invisible character the page holds fails `snippet_not_on_page` (the locator no
+  longer drops zero-width characters). A `·` between digits is a decimal point only on a point-decimal page (`12·4`); in a
+  document with 3 or more point decimals it also raises `decimal_style_ambiguous` (more likely a product).
+- **Stored ledgers.** Rows stored by the old reader keep their `verify_reason` (including `non_ascii_digits`) and their
+  token offsets; approved rows are immutable. `verify_records` re-verifies proposed rows under the grammar: expect more
+  failures (glued units, `2 x 10 mg`, lines with `(cid:N)`, `140/90`).
+- **Measured cost (end-to-end corpus run, 2026-10-07).** Every number the old reader resolved in 448 parse caches became a
+  record (a text record on the line holding it, a table record on the cell): 183,274 candidates, 181,225 passed the old
+  `verify()`. Under the grammar 164,036 still pass with identical values (0 disagreements) and 17,189 (9.5 %) no longer do:
+  135 of 137,153 (0.10 %) in the fixtures, attack PDFs and lecture notes (the 200-digit runs, `_`, look-alike glyphs they
+  plant), and 17,054 of 44,072 (38.7 %) in 60 pharmacometrics papers, almost all of them reference lists, DOIs, page ranges,
+  dates, ratios, digits inside label words and `(cid:N)` markers, none of which a record cites. The records a reviewer
+  could cite (a unit, `±` or qualifier beside the number, or a table cell) lose 1,588 of 44,072 (3.6 % of all records,
+  19 % of the value-like ones): a LINE or OUTSIDE character beside the number (`_ — " $ → # §`, R code and lecture notes)
+  411, digits glued into words by text layers without spaces 401, glued units 373, ratio and reference shapes
+  (`140/90`, `2019;13(2):93`) 179, `(cid:N)` markers 160, the rest (`2×`, leading zeros, old sign bugs) 64. This is above the 1.5 %
+  the owner set for ordinary numbers; the alphabet was not tuned to reach it. Every case is listed with its cause in
+  `corpus_after.tsv` of the r6 work directory. A number whose own word, neighbouring words and line hold only allowed characters,
+  and that is none of the shapes above, resolves exactly as before; one beside an ASCII LINE character (`_ " $ # & ? @ |`: R code,
+  file names, markdown tables) does not, by the owner's design.
+- **Speed.** Page text reads at about 0.6 times the cost of the old reader; a hostile 1 MB page of separate one-digit
+  tokens (`1 ` repeated) costs about 2 s, realistic dense pages at most about 1 s.
 
 ## Later phases
 

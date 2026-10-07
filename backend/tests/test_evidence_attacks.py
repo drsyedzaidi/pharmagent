@@ -53,17 +53,20 @@ def _reason(doc: dict, prop: dict) -> str:
 
 @pytest.mark.parametrize("snippet", ["Cmax was ٣٬٤١٢ ng/mL", "Cmax was ３４１２ ng/mL", "Cmax was 3,412 ng/mL٣"])
 def test_non_ascii_digits_in_snippet_are_refused(docs, snippet):
-    assert _reason(docs["paper_a"], _prop("cmax", "3412", 1, snippet)) == M.REASON_NON_ASCII_DIGITS
+    # was REASON_NON_ASCII_DIGITS: a digit that is not ASCII is outside the allowed alphabet (r6)
+    assert _reason(docs["paper_a"], _prop("cmax", "3412", 1, snippet)) == M.REASON_UNRESOLVED_CONTEXT
 
 
 def test_non_ascii_digits_in_value_are_refused(docs):
-    assert _reason(docs["paper_a"], _prop("cmax", "３４１２", 1, "3,412 (812)")) == M.REASON_NON_ASCII_DIGITS
+    assert _reason(docs["paper_a"], _prop("cmax", "３４１２", 1, "3,412 (812)")) == M.REASON_UNRESOLVED_CONTEXT
 
 
 def test_superscript_is_not_folded_into_a_number(docs):
     doc = {**docs["paper_c"], "pages": [{**docs["paper_c"]["pages"][1], "text": "cells per 10³ cells 18,2"}]}
-    assert _reason(doc, _prop("fu", "103", 1, "per 10³ cells")) == M.REASON_NON_ASCII_DIGITS
-    assert _reason(doc, _prop("fu", "10³", 1, "per 10³ cells")) == M.REASON_NON_ASCII_DIGITS
+    # was non_ascii_digits for both: the superscript three is INSIDE the alphabet but a bare power of ten (no
+    # multiplier) is unresolved_shape, and 103 is no number of that snippet
+    assert _reason(doc, _prop("fu", "103", 1, "per 10³ cells")) == M.REASON_NUMBER_MISMATCH
+    assert _reason(doc, _prop("fu", "10³", 1, "per 10³ cells")) == M.REASON_UNRESOLVED_SHAPE
     # the real paper_c page keeps '10^6' as ASCII text and sup/sub glyphs out of page text
     assert "10^6" in docs["paper_c"]["pages"][1]["text"]
 

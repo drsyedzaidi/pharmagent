@@ -19,34 +19,32 @@ of the token checks; every extraction and re-verification stores one.
 from __future__ import annotations
 
 import re
-import unicodedata
+from functools import lru_cache
 from typing import Any
 
 from app.evidence import models as M
-from app.evidence.invisible import strip_invisible
-from app.evidence.normalize import MIDDOTS, decimal_evidence, number_spans
+from app.evidence.normalize import decimal_evidence
+from app.evidence.numgrammar import (
+    GAP,
+    Tok,
+    is_data_cell,
+    scale_shapes,
+    tokens,
+    words_after,
+    words_before,
+)
 from app.evidence.qc_flags import is_interval_field
-from app.evidence.visible_window import visible_after, visible_before
 
-QUALIFIER_CHARS = 24
-_QUALIFIER_RE = re.compile(r"(?:<=|>=|=<|=>|[<>≤≥≦≧⩽⩾~≈∼≃≲≳≮≯≰≱≁≉]|\b(?:below|above|less than|more than|greater than|"
-                           r"up to|at least|at most|approximately|approx\.?|about|circa|ca\.?|blq|bloq|"
-                           r"lloq|uloq))\s*$", re.IGNORECASE)
-# a multiplier of the printed number: 'x10^3', '×10³', 'x 10' (exponent lost), '10³ ng·h/mL', 'e3',
-# 'x1000', '/1000' after a label, '(thousands)'. A power after '/' or 'per' is part of the unit
-# ('µL/min/10^6 cells') and is skipped.
-_SCALE_RE = re.compile(r"(?<![A-Za-z])[×xX*]\s*10(?![.,]?\d)|(?<![\d.,])10\s*(?:\^\s*[-−+]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)"
-                       r"|\be[-−+]?\d+\b|(?<![A-Za-z])[×xX*]\s*1[ ,.']?000\b|/\s*1[ ,.']?000\b"
-                       r"|\b(?:thousands?|millions?|billions?)\b", re.IGNORECASE)
-_DENOMINATOR_RE = re.compile(r"(?:/|\bper)\s*$", re.IGNORECASE)
-_STYLE_DEPENDENT = re.compile(r"^[-+]?\d{1,3}[.,]\d{3}$")
-_RANGE_BEFORE = re.compile(r"\d\s*(?:[-‐‑‒–—]|\bto\b)\s*$", re.IGNORECASE)
-_RANGE_AFTER = re.compile(r"^\s*(?:[-‐‑‒–—]|to\b)\s*[-+]?\d", re.IGNORECASE)
-# a data cell: digits with number punctuation only (a header cell such as 'Day 1' has words)
-_DATA_CELL = re.compile(r"[\s\d.,·'()±%\-–−+<>≤≥~×/]*\d[\s\d.,·'()±%\-–−+<>≤≥~×/eE]*")
-# digit groups joined only by a space or by comma groups: '12 145', '1,23,456' (one grouped number?)
-_GROUP_RUN = re.compile(r"(?<![\w.,])\d{1,3}(?:[ ,]\d{2,3})+(?:[.,]\d+)?(?!\w)")
+# a word BEFORE the token that makes it a bound or an approximation ('below 12.4', 'BLQ 12.4', 'approx. 12.4')
+_QUALIFIER_WORDS = frozenset({"below", "above", "under", "over", "approximately", "approx", "about", "circa", "ca",
+                              "blq", "bloq", "lloq", "uloq"})
+# the only two-word look-back: 'less than', 'more than', 'greater than', 'up to', 'at least', 'at most'
+_BOUND_WORDS = frozenset({"than", "to", "least", "most"})
+_BOUND_LEADS = frozenset({"less", "more", "greater", "up", "at"})
+_TRAIL = ".,;:"
 DECISIVE_MIN, DECISIVE_RATIO = 3, 3
+_DIGITS = re.compile("[0-9]+")
+_DIGITS_SET = frozenset("0123456789")
 
 
 def _flag(code: str, severity: str, message: str, p: dict[str, Any]) -> dict[str, Any]:
@@ -74,41 +72,81 @@ def token_context(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str, int, 
     return (text, a, b) if 0 <= a < b <= len(text) else None
 
 
-def _fold(text: str) -> str:
-    """NFKC after invisible characters are dropped ('<' + ZWJ is still '<'; '<' + U+0338 composes to '≮');
-    any combining mark left is then removed, so a marked qualifier is still a qualifier."""
-    return strip_invisible(unicodedata.normalize("NFKC", strip_invisible(text)), marks=True)
+@lru_cache(maxsize=16)
+def _read(text: str, style: str, mode: str) -> tuple[Tok, ...]:
+    """tokens() of a page text or cell, kept for the next check of a record on the same page (a record is read by
+    four checks and a page holds many records)."""
+    return tuple(tokens(text, style, mode=mode))
+
+
+def _mode(loc: dict[str, Any]) -> str:
+    """How the verified token's text is read: a table cell is one line, page text splits at line feeds."""
+    return "cell" if loc.get("kind") == "table" else "page"
+
+
+def verified_token(loc: dict[str, Any], page: dict[str, Any]) -> tuple[str, int, int, Tok | None] | None:
+    """(text, start, end, the token the verifier matched there or None) from the locator's stored token."""
+    ctx = token_context(loc, page)
+    if ctx is None:
+        return None
+    text, a, b = ctx
+    style = loc.get("decimal_style") or "."
+    return text, a, b, next((t for t in _read(text, style, _mode(loc)) if (t.start, t.end) == (a, b)), None)
+
+
+def _numeric_word(word: str, style: str) -> bool:
+    """A word that starts with a resolved number ('15', '15.4', '(15'): the other end of 'to'."""
+    toks = tokens(word.rstrip(_TRAIL + ")"), style, mode="cell")
+    return bool(toks) and toks[0].start <= 1 and toks[0].value is not None
+
+
+def _own_prefix(text: str, a: int) -> str:
+    """The characters of the token's own word before the token ('<' of '<0.5')."""
+    k = a
+    while k > 0 and text[k - 1] not in GAP:
+        k -= 1
+    return text[k:a]
+
+
+def _qualifier(tok: Tok, text: str, a: int, prev: list[str]) -> str:
+    """What stands before the token and makes it a bound or an approximation ('<', 'below', 'less than'), '' when
+    nothing does. *prev* holds the two whole words before the token's word, in reading order."""
+    w1 = prev[-1].rstrip(_TRAIL).casefold() if prev else ""
+    w2 = prev[0].casefold() if len(prev) == 2 else ""
+    if tok.qualified:
+        return _own_prefix(text, a) or (prev[-1] if prev else "")
+    if w1 in _BOUND_WORDS and w2 in _BOUND_LEADS:
+        return " ".join(prev)
+    return prev[-1] if w1 in _QUALIFIER_WORDS else ""
 
 
 def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
-    ctx = token_context(p.get("locator") or {}, page)
-    if ctx is None:
+    loc = p.get("locator") or {}
+    got = verified_token(loc, page)
+    if got is None:
         return []
-    text, a, b = ctx
-    literal = (p.get("locator") or {}).get("literal")
-    # the windows hold VISIBLE characters: padding with marks, invisible or unreadable characters or long
-    # whitespace cannot push a qualifier or a range bound out of them
-    prefix, capped_before = visible_before(text, a, QUALIFIER_CHARS)
-    suffix, capped_after = visible_after(text, b, QUALIFIER_CHARS)
-    before, after = _fold(prefix), _fold(suffix)
-    m = _QUALIFIER_RE.search(before)
-    if m is not None:
-        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: the page prints {m.group(0).strip()!r} before "
-                      f"{literal!r}; a bound or approximation is not an exact value", p)]
-    if capped_before or capped_after:
-        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: too many unreadable or invisible characters "
-                      f"lie next to {literal!r} to rule out a qualifier or a range bound; read the value on the PDF",
-                      p)]
-    if is_interval_field(str(p.get("field") or "")) or not (_RANGE_BEFORE.search(before) or _RANGE_AFTER.match(after)):
+    text, a, b, tok = got
+    literal, field = loc.get("literal"), p["field"]
+    if tok is None or tok.value is None:         # the stored token is not one readable number any more
+        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: {literal!r} is not one readable number next to "
+                      "its neighbours, so a qualifier or a range bound cannot be ruled out; read the value on the "
+                      "PDF", p)]
+    style = loc.get("decimal_style") or "."
+    prev, nxt = words_before(text, a, 2), words_after(text, b, 2)
+    q = _qualifier(tok, text, a, prev)
+    if q:
+        return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: the page prints {q!r} before {literal!r}; a bound "
+                      "or approximation is not an exact value", p)]
+    w1 = prev[-1].rstrip(_TRAIL).casefold() if prev else ""
+    to_before = w1 == "to" and len(prev) == 2 and _numeric_word(prev[0], style)
+    to_after = bool(nxt) and nxt[0].rstrip(_TRAIL).casefold() == "to" and len(nxt) == 2 and _numeric_word(nxt[1], style)
+    # a dash that touches only ONE of the two numbers is a range as well ('12.5 -15.0', '5.0- 12.4')
+    dash = bool(nxt) and len(nxt[0]) > 1 and nxt[0][0] == "-" and nxt[0][1] in _DIGITS_SET \
+        or bool(prev) and len(prev[-1]) > 1 and prev[-1][-1] == "-" and prev[-1][-2] in _DIGITS_SET
+    if is_interval_field(str(field or "")) or not (tok.ranged or to_before or to_after or dash):
         return []
-    return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{p['field']}: {literal!r} is one end of a printed range; a "
+    return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: {literal!r} is one end of a printed range; a "
                   "range bound is not an exact value (use an interval field for it)", p)]
-
-
-def _scaled(label: str) -> bool:
-    label = strip_invisible(label, marks=True)         # 'x' + ZWJ + '10^3' and a struck-through 'x' still scale
-    return any(not (_DENOMINATOR_RE.search(label[:m.start()]) and not m.group(0).startswith("/"))
-               for m in _SCALE_RE.finditer(label))
 
 
 def scaled_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,14 +157,14 @@ def scaled_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]
         try:
             rows = (page.get("tables") or [])[cell["table"]]["rows"]
             header, row, col = rows[0], rows[cell["row"]], cell["col"]
-            block = [h for h in rows[:cell["row"]] if not any(_DATA_CELL.fullmatch(str(x or "").strip())
+            block = [h for h in rows[:cell["row"]] if not any(is_data_cell(str(x or "").strip())
                                                               for x in h[1:])] or [header]
             labels += [str(h[col] or "") for h in block if col < len(h)] + [str(row[0] or "") if row else ""]
             labels += [str(row[i] or "") for i, h in enumerate(header)
                        if i < len(row) and str(h or "").strip().casefold() in ("unit", "units")]
         except (KeyError, IndexError, TypeError):
             pass
-    hit = next((lab for lab in labels if _scaled(lab)), None)      # raw: NFKC turns '10³' into '103'
+    hit = next((lab for lab in labels if scale_shapes(lab)), None)
     if hit is None:
         return []
     return [_flag(M.FLAG_SCALED_HEADER, "error", f"{p['field']}: {hit!r} carries a multiplier; the printed "
@@ -139,54 +177,62 @@ def document_evidence(doc: dict[str, Any]) -> tuple[int, int]:
     return decimal_evidence("\n".join(str(pg.get("text") or "") for pg in doc.get("pages") or []))
 
 
-def _against_style(literal: str, style: str) -> bool:
-    """True when the literal's decimal separator is not the page's ('1,2' or '0,412' on a '.' page)."""
-    body = re.split(r"[eE×xX*^]", literal.lstrip("+-−"))[0].replace(" ", "").replace("'", "").replace("\u2009", "")
-    seps = [c for c in body if c in ".,"]
-    if not seps or any(d in body for d in MIDDOTS) or seps[-1] == style or seps.count(seps[-1]) > 1:
-        return False
-    whole, tail = body.rsplit(seps[-1], 1)
-    return len(tail) != 3 or whole in ("0", "")
+def _bare_group(word: str, lo: int, hi: int) -> bool:
+    """A word of nothing but lo..hi ASCII digits: a digit group a text layer may have split off a number."""
+    return lo <= len(word) <= hi and _DIGITS.fullmatch(word) is not None
 
 
 def grouped_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
-    """Error when the token is one piece of digit groups the strict reading splits ('12' of '12 145',
-    '456' of '1,23,456'): the source may print ONE grouped number."""
-    ctx = token_context(p.get("locator") or {}, page)
-    if ctx is None:
+    """Error when the token is one piece of digit groups the reader splits ('12' of '12 145'): the source may
+    print ONE grouped number. The token and the word beside it are bare digit runs ('145' after '12', '12' before
+    '145'); a decimal, a bracket or a sign beside it never makes a group."""
+    loc = p.get("locator") or {}
+    got = verified_token(loc, page)
+    if got is None or got[3] is None:
         return []
-    text, a, b = ctx
-    style = (p.get("locator") or {}).get("decimal_style") or "."
-    for m in _GROUP_RUN.finditer(text):
-        if m.start() < b and a < m.end() and len(number_spans(m.group(0), style, strict=True)) > 1:
-            return [_flag(M.FLAG_COMPOSITE_CELL, "error", f"{p['field']}: {m.group(0)!r} may be one number grouped "
-                          "by a space or comma; read the value on the PDF", p)]
-    return []
+    text, a, b, _ = got
+    own, before, after = text[a:b], words_before(text, a, 1), words_after(text, b, 1)
+    head = bool(after) and _bare_group(own, 1, 3) and _bare_group(after[0], 2, 3)
+    tail = bool(before) and _bare_group(own, 2, 3) and _bare_group(before[0], 1, 3)
+    if not (head or tail):
+        return []
+    shown = f"{own} {after[0]}" if head else f"{before[0]} {own}"
+    return [_flag(M.FLAG_COMPOSITE_CELL, "error", f"{p['field']}: {shown!r} may be one number grouped by a space; "
+                  "read the value on the PDF", p)]
 
 
 def cell_numbers(p: dict[str, Any], doc: dict[str, Any] | None) -> int | None:
-    """How many numbers the cited cell / text holds (strict reading), None without a token."""
-    pages, n = (doc or {}).get("pages") or [], (p.get("locator") or {}).get("page")
+    """How many numbers the cited cell / text holds (resolved tokens), None without a token."""
+    pages, loc = (doc or {}).get("pages") or [], p.get("locator") or {}
+    n = loc.get("page")
     if not (isinstance(n, int) and 1 <= n <= len(pages)):
         return None
-    ctx = token_context(p.get("locator") or {}, pages[n - 1])
-    style = (p.get("locator") or {}).get("decimal_style") or "."
-    return None if ctx is None else len(number_spans(ctx[0], style, strict=True))
+    ctx = token_context(loc, pages[n - 1])
+    style = loc.get("decimal_style") or "."
+    return None if ctx is None else sum(1 for t in _read(ctx[0], style, _mode(loc)) if t.value is not None)
 
 
-def decimal_flags(p: dict[str, Any], doc: dict[str, Any], spec: dict[str, Any] | None) -> list[dict[str, Any]]:
-    literal = str((p.get("locator") or {}).get("literal") or "")
-    evidence = doc.get("decimal_evidence")
-    style = (p.get("locator") or {}).get("decimal_style") or "."
+def decimal_flags(p: dict[str, Any], page: dict[str, Any], doc: dict[str, Any],
+                  spec: dict[str, Any] | None) -> list[dict[str, Any]]:
+    loc = p.get("locator") or {}
+    literal, style = str(loc.get("literal") or ""), loc.get("decimal_style") or "."
     if (spec or {}).get("decimal") in (".", ","):
         return []
-    if _against_style(literal, style):
+    got = verified_token(loc, page)
+    shape = got[3].shape if got is not None and got[3] is not None and got[3].value is not None else ""
+    evidence = doc.get("decimal_evidence")
+    comma, point = evidence if isinstance(evidence, tuple) else document_evidence(doc)
+    if shape == "foreign_decimal":
         return [_flag(M.FLAG_DECIMAL_STYLE_AMBIGUOUS, "error", f"{p['field']}: {literal!r} uses the other decimal "
                       f"separator than this document ({style!r}): a list or a foreign decimal; set the field's "
                       "decimal style in the template or read the value on the PDF", p)]
-    if not _STYLE_DEPENDENT.match(literal):
+    if shape == "middot" and point >= DECISIVE_MIN:
+        return [_flag(M.FLAG_DECIMAL_STYLE_AMBIGUOUS, "error", f"{p['field']}: {literal!r} puts a raised dot "
+                      f"between digits in a document that prints its decimals with a point ({point} of them): it may "
+                      "be a product, not a decimal; set the field's decimal style in the template or read the "
+                      "value on the PDF", p)]
+    if shape != "style_dependent":
         return []
-    comma, point = evidence if isinstance(evidence, tuple) else document_evidence(doc)
     win, lose = (comma, point) if style == "," else (point, comma)
     if win >= DECISIVE_MIN and DECISIVE_RATIO * lose <= win:
         return []
@@ -227,6 +273,6 @@ def value_flags(p: dict[str, Any], page: dict[str, Any], doc: dict[str, Any],
     numeric = p.get("value_num") is not None
     out = glyph_flags(p, page)
     if numeric:
-        out = (censored_flags(p, page) + scaled_flags(p, page) + decimal_flags(p, doc, spec)
+        out = (censored_flags(p, page) + scaled_flags(p, page) + decimal_flags(p, page, doc, spec)
                + grouped_flags(p, page) + out)
     return out

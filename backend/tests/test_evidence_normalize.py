@@ -1,22 +1,22 @@
-"""normalize: index-mapped normaliser, ASCII-only NUM_RE, parse_number, numbers_in, non-ASCII digit guard."""
+"""normalize: the index-mapped locator, the decimal-style inference, and the number reader's surface (parse_claim,
+numbers_in) and its alphabet classifier (r6: numgrammar)."""
 from __future__ import annotations
 
 import pytest
 
 from app.evidence.normalize import (
-    NUM_RE,
     dehyphenate_with_map,
-    has_non_ascii_digits,
     infer_decimal_style,
     normalise,
     numbers_in,
-    parse_number,
     strip_ws_with_map,
 )
+from app.evidence.numgrammar import cls, parse_claim, tokens
 from app.evidence.parse import parse_pdf
 from tests import evidence_fixtures as fx
+from tests import evidence_r6_pins as pins
 
-# ----------------------------------------------------------- parse_number ---
+# ------------------------------------------------------------ parse_claim ---
 
 
 @pytest.mark.parametrize("tok, style, expected", [
@@ -39,13 +39,13 @@ from tests import evidence_fixtures as fx
     ("1.234.567,89", ",", 1234567.89),
     ("18,200", ",", 18.2),
 ])
-def test_parse_number(tok, style, expected):
-    assert parse_number(tok, style) == pytest.approx(expected)
+def test_parse_claim(tok, style, expected):
+    assert parse_claim(tok, style) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("tok", ["", "abc", "n/a", "−", "ng/mL"])
-def test_parse_number_returns_none_without_a_number(tok):
-    assert parse_number(tok, ".") is None
+def test_parse_claim_returns_none_without_a_number(tok):
+    assert parse_claim(tok, ".") is None
 
 
 # ------------------------------------------------------------- numbers_in ---
@@ -80,23 +80,29 @@ def test_numbers_in_comma_mode():
     assert _values("18,2 ± 3,4", ",") == pytest.approx([18.2, 3.4])
 
 
-# ------------------------------------------------------ non-ASCII digits ---
+# ------------------------------------------------------- the alphabet ---
 
-@pytest.mark.parametrize("text, expected", [
-    ("Cmax 3,412", False),
-    ("١٢", True),            # Arabic-Indic
-    ("１２", True),                     # fullwidth
-    ("10²", True),                      # superscript (would NFKC-fold into '102')
-    ("", False),
-])
-def test_has_non_ascii_digits(text, expected):
-    assert has_non_ascii_digits(text) is expected
+@pytest.mark.parametrize("text", ["١٢", "１２", "10²", "①", "Ⅻ", "¾", "𝟏𝟐", "٣٬٤١٢"])
+def test_a_digit_that_is_not_ascii_is_outside_the_alphabet_and_never_a_value(text):
+    """Was test_has_non_ascii_digits / test_num_re_is_ascii_only: the digit blocklist is gone; every non-ASCII digit
+    is simply not in the allowed alphabet, so a number it touches is unresolved (the superscript digits are the one
+    INSIDE exception, readable only after a multiplier)."""
+    if text == "10²":
+        assert [(t.value, t.shape) for t in tokens(text)] == [(None, "unresolved_shape:bare_superscript_power")]
+        return
+    assert all(cls(c) == "outside" for c in text)
+    assert [t.value for t in tokens("12 " + text)] == [None]
 
 
-def test_num_re_is_ascii_only():
-    assert NUM_RE.search("١٢٣") is None
-    assert NUM_RE.search("１２") is None
-    assert NUM_RE.search("x 12 y").group(0) == "12"
+def test_the_classifier_agrees_with_the_second_copy_of_the_sets_on_every_listed_character():
+    for cp in (*pins.INSIDE_CPS, *pins.GAP_CPS, *pins.CONTEXT_CPS, *pins.LINE_CPS):
+        assert cls(chr(cp)) == pins.expected_class(cp)
+    assert cls("x") == "inside" and cls("\u2212") == "inside" and cls("\u200b") == "outside"
+
+
+def test_a_numeric_token_is_ascii_only():
+    assert tokens("١٢٣") == [] and [t.value for t in tokens("１２")] == []
+    assert [t.value for t in tokens("x 12 y")] == [12.0]
 
 
 # -------------------------------------------------------------- normalise ---

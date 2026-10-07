@@ -275,7 +275,10 @@ def scan_word(w: str, off: int, style: str) -> Scan:
         qualified = pre in QUALIFIERS or (i >= 2 and w[i - 2:i] in _DOUBLE_QUAL)
         if ranged and toks:
             toks[-1] = toks[-1]._replace(ranged=True)
-        toks.append(Tok(off + i, off + end, value, shape, (), qualified, ranged, canon, mark))
+        # a scientific token remembers its mantissa (``1.2`` of ``1.2e-3``), a bare power its ten: citing only that
+        # is a partial number, never the number
+        part = (to_float(canon.partition("e")[0]),) if shape == "sci" else ((10.0,) if shape == "bare_power" else ())
+        toks.append(Tok(off + i, off + end, value, shape, part, qualified, ranged, canon, mark))
         parts.append(value)
         i = prev_end = end
         tail = TAIL_NONE

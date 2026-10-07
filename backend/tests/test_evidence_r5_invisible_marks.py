@@ -1,14 +1,21 @@
-"""r5: invisible characters and combining marks around a number fail closed.
+"""r5, rewritten for the r6 numeric grammar: invisible characters and combining marks around a number fail closed.
+
+Before r6 an allow-list-less reader folded invisible characters out (Cf, Default_Ignorable) and kept a positional
+bidi state, so a ZWJ around a multiplier "read like the clean text". Now a character that is not in the allowed
+alphabet inside a numeric expression, in its word, one word away or elsewhere on its line makes the expression
+unresolved, whatever the character is: a number never reads through an invisible one.
 
 Two layers:
 1. Targeted regressions: a ZWJ / variation selector / combining mark around the multiplier of
-   '1.2 x 10 3' (raised exponent) must not turn the token into a plain 1.2; bidi controls and
-   marks leave a token unresolved; offsets still map back to the raw page.
+   '1.2 x 10 3' (raised exponent) must not turn the token into a plain 1.2; invisible characters, bidi controls
+   and marks leave a token unresolved (unresolved_context); clean text still reads, locates and round-trips.
 2. A DIFFERENTIAL FUZZ: for ~30 numeric expressions, every sampled character (all relevant Unicode
    categories + the full variation-selector ranges) is inserted at every gap kind (before the
    number, inside it, around the multiplier, around the exponent, after it) of the page, of the
    snippet, and of both. The verify() outcome must equal the clean outcome (status and value) or be
-   a fail: never a pass with a different value, never a pass where the clean text fails.
+   a fail: never a pass with a different value, never a pass where the clean text fails. (The exhaustive tier,
+   tests/test_evidence_r6_exhaustive.py, sweeps every code point at every boundary of the tokenizer and a
+   stratified sample of verify(); this file keeps the r5 expression set and its gap kinds.)
 """
 from __future__ import annotations
 
@@ -19,8 +26,8 @@ import pytest
 
 from app.evidence import models as M
 from app.evidence.extract_rules import value_number
-from app.evidence.invisible import HARD, MARK, SOFT, kind, strip_invisible
-from app.evidence.normalize import normalise, number_tokens, parse_number
+from app.evidence.normalize import normalise
+from app.evidence.numgrammar import cls, parse_claim, tokens
 from app.evidence.value_checks import censored_flags, scaled_flags
 from app.evidence.verify import verify
 from tests.evidence_timing import limit
@@ -57,19 +64,27 @@ def test_mark_around_multiplier_never_turns_raised_exponent_into_its_mantissa(ra
         assert res.status == "fail", (hex(ord(mark)), i, res)
 
 
-def test_zero_width_joiner_is_read_like_the_clean_text():
+def test_zero_width_joiner_makes_every_token_unresolved_context():
+    """Was test_zero_width_joiner_is_read_like_the_clean_text (the ZWJ read like the clean text, value None with the
+    mantissa 1.2): the clean text is unresolved_shape (a raised exponent), the ZWJ text is unresolved_context."""
     for clean_text in ("Cmax 1.2 x 10 3 pg", "Cmax 1.2 × 103 pg"):
         folded = clean_text.replace(" 10", ZWJ + "10", 1)
-        a = number_tokens(folded, strict=True)[0]
-        b = number_tokens(clean_text, strict=True)[0]
-        assert (a.value, a.mantissa) == (b.value, b.mantissa) == (None, 1.2)
+        a, b = tokens(folded, ".")[0], tokens(clean_text, ".")[0]
+        assert (a.value, a.reason) == (None, "unresolved_context")
+        assert (b.value, b.reason, b.parts[0]) == (None, "unresolved_shape", 1.2)
         assert folded[a.start:a.end].startswith("1.2")
 
 
-def test_zero_width_joiner_in_a_readable_exponent_still_passes_with_clean_value():
+def test_zero_width_joiner_in_a_readable_exponent_fails_and_the_clean_exponent_passes():
+    """Was test_zero_width_joiner_in_a_readable_exponent_still_passes_with_clean_value ('1.2 ×<ZWJ>10^3' passed
+    with 1200.0): a ZWJ is outside the alphabet, so the power is unresolved_context."""
+    clean_page = "Cmax 1.2 × 10^3 pg"
+    res = verify(_prop("1.2 x 10^3", "Cmax 1.2 × 10^3"), _doc(clean_page))
+    assert res.status == "pass" and res.number == pytest.approx(1200.0)
     page = "Cmax 1.2 ×" + ZWJ + "10^3 pg"
     res = verify(_prop("1.2 x 10^3", "Cmax 1.2 ×" + ZWJ + "10^3"), _doc(page))
-    assert res.status == "pass" and res.number == pytest.approx(1200.0)
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), res
+    assert "U+200D ZERO WIDTH JOINER" in res.detail
 
 
 @pytest.mark.parametrize("mark", [STRIKE, ENCLOSE, "́", "⃝", "ः"])
@@ -78,17 +93,21 @@ def test_zero_width_joiner_in_a_readable_exponent_still_passes_with_clean_value(
                                           ("1.2e-3", 3), ("1.2e-3", 5)])
 def test_mark_on_a_digit_point_sign_or_multiplier_makes_the_token_unresolved(mark, text, mark_at):
     marked = text[:mark_at + 1] + mark + text[mark_at + 1:]
-    toks = number_tokens(marked, strict=True)
+    toks = tokens(marked, ".")
     assert toks and all(t.value is None for t in toks), (marked, toks)
-    assert parse_number(marked) is None
+    assert parse_claim(marked) is None
 
 
-def test_mark_keeps_the_mantissa_so_citing_it_is_a_partial_number():
+def test_mark_on_the_multiplier_makes_citing_the_mantissa_unresolved_context():
+    """Was test_mark_keeps_the_mantissa_so_citing_it_is_a_partial_number (reason partial_number): the 1.2 is a part of
+    an expression that touches a combining mark, and the verifier now names that cause (unresolved_context, with the
+    code point in the reviewer sentence) instead of calling it a partial number."""
     page = "Cmax 1.2 ×" + STRIKE + " 10^3 pg"
     res = verify(_prop("1.2", "Cmax 1.2"), _doc(page))
-    assert (res.status, res.reason) == ("fail", M.REASON_PARTIAL_NUMBER)
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT)
+    assert "U+0338 COMBINING LONG SOLIDUS OVERLAY" in res.detail
     res = verify(_prop("1.2 x 10^3", "Cmax 1.2 ×" + STRIKE + " 10^3"), _doc(page))
-    assert res.status == "fail"
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT)
 
 
 @pytest.mark.parametrize("bidi", [RLM, "‎", RLE, "‭", LRI, "⁩", ALM])
@@ -97,59 +116,79 @@ def test_bidi_control_inside_or_next_to_a_number_leaves_it_unresolved(bidi, text
     a = text.index("1")
     b = text.index(" pg")
     for i in range(a, b + 1):
-        toks = number_tokens(text[:i] + bidi + text[i:], strict=True)
+        toks = tokens(text[:i] + bidi + text[i:], ".")
         assert toks and all(t.value is None for t in toks), (hex(ord(bidi)), i, toks)
 
 
-def test_bidi_control_far_from_a_number_does_not_touch_it():
-    toks = number_tokens(RLM + "Cmax " + "12.5 pg", strict=True)
-    assert [t.value for t in toks] == [12.5]
+def test_bidi_control_on_the_numbers_line_makes_it_unresolved_even_far_away():
+    """Was test_bidi_control_far_from_a_number_does_not_touch_it ([12.5]): the control is two words away on the
+    number's line, and an outside character anywhere on the line makes its numbers unresolved (the line tier: the
+    allow-list needs no bidi state machine). On another line (not the adjacent word) it is harmless."""
+    assert [t.value for t in tokens(RLM + "Cmax " + "12.5 pg", ".")] == [None]
+    assert [t.value for t in tokens(RLM + "Cmax\nAUC 12.5 pg", ".")] == [12.5]      # a control on another line
 
 
 @pytest.mark.parametrize("text, i", [("Cmax 12.5 pg", 5), ("Cmax -12.5 pg", 5), ("Cmax 1.2e-3 pg", 5)])
 def test_invisible_character_directly_before_a_number_leaves_it_unresolved(text, i):
-    assert number_tokens(text[:i] + SHY + text[i:], strict=True)[0].value is None
+    assert tokens(text[:i] + SHY + text[i:], ".")[0].value is None
 
 
 @pytest.mark.parametrize("text", ["Cmax 1.2e-3 pg", "Cmax 1.2 x 10^-3 pg", "Cmax 1.2e3 pg"])
 def test_invisible_character_before_an_exponent_sign_or_digits_is_unresolved(text):
     i = text.index("e") + 1 if "e" in text.split()[1] else text.index("^") + 1
     folded = text[:i] + SHY + text[i:]
-    assert number_tokens(folded, strict=True)[0].value is None
+    assert tokens(folded, ".")[0].value is None
 
 
 def test_invisible_character_between_digits_is_unresolved():
-    assert number_tokens("Cmax 12" + ZWSP + "145 pg", strict=True)[0].value is None
+    assert tokens("Cmax 12" + ZWSP + "145 pg", ".")[0].value is None
 
 
-def test_offsets_map_back_to_the_raw_text():
+def test_offsets_are_native_and_an_invisible_character_is_never_dropped():
+    """Was test_offsets_map_back_to_the_raw_text (a ZWJ inside the power was folded out and the token read 1500):
+    offsets index the raw string and nothing is cleaned, so the same text now gives one UNRESOLVED expression that
+    spans the ZWJ; the locator keeps the ZWJ too (it is no longer dropped by normalise)."""
     raw = ZWJ + "Cmax " + "1.5 \u00d7" + ZWJ + "10^3 pg" + ZWJ
-    toks = number_tokens(raw, strict=True)
-    assert len(toks) == 1 and toks[0].value == pytest.approx(1500.0)
+    toks = tokens(raw, ".")
+    assert len(toks) == 1 and toks[0].value is None and toks[0].reason == "unresolved_context"
     t = toks[0]
-    assert raw[t.start:t.end] == "1.5 \u00d7" + ZWJ + "10^3"
+    assert raw[t.start:t.end].startswith("1.5") and ZWJ in raw[t.start:t.end]
     norm, idx = normalise(raw)
-    assert norm == "cmax 1.5 \u00d710^3 pg" and all(raw[j] != ZWJ for j in idx)
+    assert ZWJ in norm and len(norm) == len(idx)
+    clean = "Cmax 1.5 \u00d710^3 pg"
+    assert [(clean[x.start:x.end], x.value) for x in tokens(clean, ".")] == [("1.5 \u00d710^3", pytest.approx(1500.0))]
 
 
-def test_passing_record_locator_round_trips_with_invisible_characters_around_the_literal():
-    page = "Cmax" + ZWJ + " was 1.5" + ZWSP + " ng/mL"
-    snippet = "Cmax was 1.5"
-    res = verify(_prop("1.5", snippet), _doc(page))
+def test_clean_locator_round_trips_and_an_invisible_character_after_the_literal_fails():
+    """Was test_passing_record_locator_round_trips_with_invisible_characters_around_the_literal (ZWJ and ZWSP around
+    the literal passed): clean text still round-trips; with the invisible characters the cited number is
+    unresolved_context (they sit on its line, one of them glued after it)."""
+    clean_page = "Cmax was 1.5 ng/mL"
+    res = verify(_prop("1.5", "Cmax was 1.5"), _doc(clean_page))
     assert res.status == "pass" and res.number == 1.5
     a, b = res.locator["token"]
-    assert page[a:b] == "1.5"
-    assert strip_invisible(page[res.span[0]:res.span[1]]) == "Cmax was 1.5"
+    assert clean_page[a:b] == "1.5" and clean_page[res.span[0]:res.span[1]] == "Cmax was 1.5"
+    page = "Cmax" + ZWJ + " was 1.5" + ZWSP + " ng/mL"
+    res = verify(_prop("1.5", "Cmax was 1.5"), _doc(page))
+    assert res.status == "fail" and res.reason in (M.REASON_SNIPPET_NOT_ON_PAGE, M.REASON_UNRESOLVED_CONTEXT)
+    res = verify(_prop("1.5", "Cmax" + ZWJ + " was 1.5"), _doc(page))
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), res
 
 
-def test_censored_qualifier_survives_invisible_characters_and_marks():
-    for before in ("<", "< ", "<" + ZWJ, "<" + ZWSP + " ", "≤" + RLM + " ", "<" + STRIKE, "BL" + ZWJ + "Q "):
+def test_censored_qualifier_is_flagged_when_clean_and_the_record_fails_when_marked():
+    """Was test_censored_qualifier_survives_invisible_characters_and_marks (pass + censored flag for every spelling:
+    a vacuous loop that skipped any failing one). Clean spellings pass and are flagged; a spelling with an invisible
+    character or mark between the qualifier and the number fails unresolved_context."""
+    for before in ("<", "< ", "BLQ "):
         page = f"conc {before}0.5 ng/mL"
         res = verify(_prop("0.5", f"conc {before}0.5"), _doc(page))
-        if res.status != "pass":
-            continue
+        assert res.status == "pass", before
         p = {"field": "Cmax", "locator": res.locator, "verify_status": "pass"}
         assert censored_flags(p, _doc(page)["pages"][0]), repr(before)
+    for before in ("<" + ZWJ, "<" + ZWSP + " ", "≤" + RLM + " ", "<" + STRIKE, "BL" + ZWJ + "Q "):
+        page = f"conc {before}0.5 ng/mL"
+        res = verify(_prop("0.5", f"conc {before}0.5"), _doc(page))
+        assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), (before, res)
 
 
 def test_scaled_header_survives_invisible_characters_and_marks():
@@ -252,7 +291,7 @@ def _check(clean_res: M.VerifyResult, res: M.VerifyResult, ctx: tuple) -> None:
     if res.status == "fail":
         return
     assert clean_res.status == "pass" and _outcome(res) == _outcome(clean_res), (ctx, clean_res, res)
-    assert res.literal is not None and strip_invisible(res.literal) == strip_invisible(clean_res.literal or ""), ctx
+    assert res.literal is not None and res.literal == (clean_res.literal or ""), ctx
 
 
 def _modes(page: str, snippet: str, g: int, ch: str) -> list[tuple[str, str, str]]:
@@ -282,10 +321,10 @@ def _run(name, page, snippet, value, style, chars, per_kind=None):
 
 def test_sample_covers_every_relevant_category():
     assert len(SAMPLE) >= 80 and len(VARIATION_SELECTORS) == 256
-    assert {kind(c) for c in SAMPLE} == {SOFT, HARD, MARK}
     cats = {unicodedata.category(c) for c in SAMPLE}
     assert {"Cf", "Mn", "Me", "Mc", "Lo"} <= cats
-    assert all(kind(c) == SOFT for c in VARIATION_SELECTORS)
+    # whatever its category, every sampled character is simply not in the allowed alphabet
+    assert all(cls(c) == "outside" for c in SAMPLE + VARIATION_SELECTORS)
     for block in ((0x0300, 0x036F), (0x20D0, 0x20FF), (0x180B, 0x180F), (0xE0000, 0xE007F), (0x202A, 0x202E),
                   (0x2066, 0x2069), (0xFFF9, 0xFFFB), (0x3164, 0x3164), (0x200B, 0x200F), (0x2060, 0x2064)):
         assert any(block[0] <= ord(c) <= block[1] for c in SAMPLE), block

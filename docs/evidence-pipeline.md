@@ -29,7 +29,9 @@ not from the plan.
     before version 7 (see "Layout rebuild").
   - `regions.py` / `render_child.py` / `render.py` / `render_cache.py` / `render_limits.py` /
     `image_routes.py`: the page image of a record's cited value (see "Page image").
-  - `normalize.py` + `verify.py`: the literal-match verifier, deterministic with no model involved.
+  - `numgrammar/` (the number reader: alphabet, equivalents, grammar, taint rule; see "Number reader"),
+    `normalize.py` (the snippet locator and the page's decimal style) + `verify.py` + `verify_messages.py`: the
+    literal-match verifier, deterministic with no model involved.
   - `record_checks.py` / `value_checks.py` / `supersede.py` / `inclusion.py`: unit, hidden-text, qualifier,
     scale, style and glyph checks; the current proposal of a slot; which sources are currently included.
   - `qc_flags.py`: scripted QC flags. A model may add flags but never remove them.
@@ -416,83 +418,142 @@ must pass the literal-match verifier before it can be approved.
 
 `''` (pass), `empty_snippet`, `snippet_too_long`, `page_out_of_range`, `non_ascii_digits`, `no_number`,
 `number_mismatch`, `integer_expected`, `snippet_not_on_page`, `table_cell_mismatch`, `source_changed`,
-`text_not_in_snippet`, `partial_number`, `crosses_columns`.
+`text_not_in_snippet`, `partial_number`, `crosses_columns`, `unresolved_context`, `unresolved_shape`.
+
+`non_ascii_digits` stays in the tuple for rows stored by the old reader and is never emitted again: a digit that
+is not ASCII is one character outside the allowed alphabet (`unresolved_context`). `unresolved_context` means a
+character outside the allowed number alphabet touches the cited number, sits one word away or lies elsewhere on its
+line (or a pdfminer `(cid:N)` marker does); `unresolved_shape` means allowed characters stand in an order the grammar
+rejects (`1.2 × 103`, `12 3/4`, `150mg`). `partial_number` keeps its meaning (the cited number is only part of a longer
+number or of an expression the reader cannot resolve: the `1.2` of `1.2 × 103`, the `12` of `12 3/4`, the `10` of
+`2 x 10 mg`). Both new codes come with a fixed server-written sentence for the reviewer (see "Number reader").
+
+Verifier order: `empty_snippet`, `snippet_too_long`, `page_out_of_range`, readability (a character outside the
+alphabet, or a `(cid:N)` marker, in the snippet or the value: `unresolved_context`), the value (it must hold exactly ONE
+number, resolved: else `no_number` / `unresolved_*`; `integer_expected`), the number in the snippet (a resolved token
+equal to the value, else `unresolved_context` / `partial_number` / `no_number` / `number_mismatch`), then the location
+on the page (`snippet_not_on_page`, `table_cell_mismatch`, `crosses_columns`; the page's token at the cited literal must
+be resolved: `unresolved_context` / `unresolved_shape`, or `partial_number` when the literal is only a part of a longer
+token).
 
 Unit check (`record_checks.py`): the unit printed next to the number (or in the table header / Unit
 column) must EQUAL the proposed unit after normalisation and a small equivalence table (mcg = µg = ug,
 mL = ml, hr = h), else the error flag `unit_source_mismatch`; a printed `mg` never vouches for `mg/kg`.
 The unit is read on the page right after the verified `token` (never re-found in the snippet: `5` is not
-the `5` of `15 mg/kg`). No printed unit, or one the next token may continue (`100 mg kg-1`), gives the
-warning `unit_unverified`. The mega / milli prefix is compared case-sensitively (`MIU` vs `mIU`, `Mg` vs
-`mg`: `unit_source_mismatch`), except that an all-capitals printed unit (`MG/ML`) only gives the warning;
-`‰` and `‱` are units of their own (never `%`). Slashes and product dots are folded first (`mg⁄kg`, `mg∕kg` = mg/kg; `⋅ ∙ •`
-= `·`), and a next token made of them, or `(per`, continues the unit. Value checks (`value_checks.py`,
-errors): `censored_value` (`<0.5`, `≤1.0`, `~2`, `below 0.5` before the token, or one end of a range
-`12–15` / `12 to 15` unless the field names an interval or range), `scaled_header` (a multiplier in any
-header row above the cell, row label, unit column or unit: `AUC ×10³ (ng·h/mL)`, `x1000`, `E+03`; a
-power after `/` or `per` is part of the unit), `decimal_style_ambiguous` (a decimal separator other than
-the page's: `1,2` or `0,412` on a point page; or `3,412` on weak style evidence: < 3 decimals of the
-winning style or the other style ≥ a third of them, unless the template fixes the field's decimal),
-`composite_cell` as an error when the token is one piece of digit groups the strict reading splits
-(`12` of `12 145`, `456` of `1,23,456`). The warning `composite_cell` counts the numbers in the cited
-cell, not in the snippet.
+the `5` of `15 mg/kg`): the rest of the token's own word (`%`, `°C`) and up to three whole words after it. No
+printed unit, or one the next token may continue (`100 mg kg-1`), gives the warning `unit_unverified`. The mega / milli
+prefix is compared case-sensitively (`MIU` vs `mIU`, `Mg` vs `mg`: `unit_source_mismatch`), except that an all-capitals
+printed unit (`MG/ML`) only gives the warning; `‰` is a unit of its own (never `%`) and `‱` is outside the alphabet.
+There is no folding of look-alike slashes and dots: a number next to `mg⁄kg`, `mg∕kg` or `mg⋅kg−1` is unresolved and
+the record fails verification before any unit is read; a next token made of `/ · * × ^`, or `(per`, continues the unit.
+Value checks (`value_checks.py`, errors) read the words around the verified token, never characters:
+`censored_value` (the token is qualified, `<0.5`, `≤1.0`, `~2`, `∼45%`; the word before it is `below`, `above`, `under`,
+`over`, `approximately`, `approx`, `about`, `circa`, `ca`, `BLQ`, `LLOQ` or one of `less than`, `more than`,
+`greater than`, `up to`, `at least`, `at most`; or it is one end of a range, `12–15`, `12 - 15`, `12 -15`, `12 to 15`,
+unless the field names an interval or range), `scaled_header` (a multiplier in any header row above the cell, row label,
+unit column or unit: `AUC ×10³ (ng·h/mL)`, `x1000`, `E+03`, `thousands`; a power after `/` or `per` is part of the
+unit; a word that starts with a letter, `AUC0–∞`, never counts), `decimal_style_ambiguous` (the token's shape is a
+decimal separator other than the page's: `1,2` or `0,412` on a point page; a one-separator shape that depends on the
+style (`3,412`) on weak style evidence: < 3 decimals of the winning style or the other style ≥ a third of them; or a raised
+dot between digits (`12·4`) in a document with 3 or more point decimals, which is more likely a product; none of these when
+the template fixes the field's decimal), `composite_cell` as an error when the token and the word beside it are bare digit
+groups the reader splits (`12` of `12 145`). The warning `composite_cell` counts the resolved numbers in the cited cell,
+not in the snippet.
 
-How numbers are matched:
+### Number reader (`numgrammar/`)
 
-- The value has to equal a standalone number token in the snippet. A digit run inside a longer token
-  does not count, so `24` does not match `245.6`.
-- Tokens are parsed with the page's decimal style: `3,412` is 3412 on a point-decimal page, and `18,2` is
-  18.2 on a comma-decimal page. A lone `0` before the separator never groups thousands (`0,412` = 0.412).
-- A table cell whose page-text row prints its literal only inside a longer number (`2` of a row line
-  reading `281`) fails `partial_number`.
-- Non-ASCII digits (Arabic-Indic, fullwidth, superscript) are refused outright; one glued to an ASCII
-  number on the page (`１2.5`) makes that token unreadable.
-- A character a reader may take as part of the number makes the token unreadable (`number_glue.py`):
-  a letter glued to the digits (`12З`, `1O5`, `23l`; a unit such as `150mg`, `24h`, `1.73m2` is
-  allowed), a non-ASCII character or backtick between digits (`12․4`, `24‘560`; `±` separates), a
-  minus / plus / hyphen look-alike or invisible format character in sign position (`˗20`, a soft
-  hyphen), a vulgar fraction glued after it (`12½`), and in page text a thin-space group that is not
-  three digits (`0.123 4`). `˗ ➖ ⁃ ⸺ ⸻` fold to `-` and `﹢ ＋` to `+`.
-- Invisible and combining characters (`invisible.py`). Characters that render as nothing (category Cf,
-  Default_Ignorable: soft hyphen, zero-width space / joiners, word joiner, variation selectors, tag
-  characters, Mongolian free variation selectors, Hangul fillers) are folded out of the number
-  reading with an offset map back to the raw text, so `1.2 x<ZWJ>10 3` reads exactly like
-  `1.2 x 10 3` (the raised-exponent shape: unresolved). The token stays unresolved when such a
-  character could stand for a sign or a digit-group break: directly before a number, between its
-  digits, or right before an exponent sign or digits. A combining or enclosing mark (U+0300, U+20D0
-  blocks, ...) on a digit, decimal point, sign, multiplier or `e` of the token or on the character
-  next to it, and a bidi control, interlinear annotation mark or drawn Cf character (Arabic number
-  sign) inside or adjacent to it, make it unresolved. A mantissa-only, `10`-only or exponent-only
-  citation of such a token fails `partial_number` as for clean text. The censored-value and
-  scaled-header checks read the page around the token with the same characters removed.
-  Bidi state is positional: an embedding, override or isolate (`LRE RLE LRO RLO LRI RLI FSI`) stays open
-  until its `PDF` / `PDI` or the end of the paragraph, and every token inside an open run is unresolved
-  (`RLO AUC 12.5 mg/L` is drawn `L/gm 5.21 CUA`). ASCII control characters (C0 except tab and line breaks,
-  DEL) draw nothing and are folded out like the Cf characters (`1<DEL>2` is one number with a gap inside:
-  unresolved). An unreadable character (private use, noncharacter or unassigned, lone surrogate, U+FFFC,
-  U+FFFD, C1 control: what a text layer emits for an unmapped glyph) touching a token, or one gap away, makes
-  it unresolved, and so does a mixed number (`12 ½`, `12 1/2`, `12 1⁄2`).
-  The qualifier and range-bound windows count VISIBLE characters (invisible, combining and unreadable
-  characters skipped, whitespace runs counted once, at most 2048 raw characters walked: more is flagged
-  `censored_value`), so padding cannot push a `<` or a range dash out of them.
-- A mid dot between digits is a decimal point (`12·4` = 12.4, never `12` or `4`) unless it multiplies a
-  power of ten (`2.5·10^4`); `’` / `ʼ` / `′` group digits like `'` (`24’560`). Citation lists (`[1,2]`)
-  are not decimal-comma evidence.
-- Scientific notation is one token: `1.2e-3`, `1.2E+03`, `3.4 E-03`, `1.2 x 10^3`, `1.2 × 10⁻³` and `10^6`;
-  the multiplier is `x X *` or a real multiplication sign (`× · ⋅ ∙ • ⨯ ⨉ ✕ ✖ ∗ ⋆ ⁎ ＊ х`); any other symbol,
-  junk, look-alike ten (`１０`, `⑩`, `l0`, `1O`, `І0`) or exponent outside the grammar (`10₃`, `10 ^ 3`,
-  `10**3`, `10^³`, `10ⁿ`) leaves the whole token unresolved whatever the page's small glyphs say.
-  Line and paragraph separators, NEL, the Ogham space and the Braille blank are gaps, not multipliers.
-  Citing
-  only the mantissa (`1.2`) or the `10` fails `partial_number`; a full-literal proposal is stored with
-  the exponent applied. `4.5 x 10` with no readable exponent (it may have gone to `small_text`) or
-  `x 10-3` has no value and never passes; a bare `2 x 10 mg` is read as plain numbers only when the
-  page's `small_text` holds no digits. A number, a multiplier (`x × · *`) and `10` followed by digits with no
-  caret, superscript or e-notation (`1.2 × 103`, `1.2 x 10 3`) is the shape of a power of ten whose exponent
-  was drawn at full size but raised: the text layer cannot say 10^3 from 103, so the whole token is unresolved
-  (no value: citing the mantissa or the digits fails `partial_number`, citing the `10` or the whole literal fails too; the parse JSON carries no
-  per-character raise, so the legitimate case also fails closed and the reviewer reads the page). A tail that
-  starts with 0 (`2 x 100 mg`, `3 x 1000 mg`) stays a plain dose product.
+**The rule (owner decision).** A number is readable only when it matches a small explicit grammar made of an explicit
+allowed alphabet. Approved equivalents are normalised through ONE table. EVERY other character inside a numeric
+expression, or within one visual separator of it, makes the expression unresolved: its value is None, verification
+fails, the record is flagged and the reviewer compares the value with the page image. There is no list of bad
+characters anywhere in the reader: no Unicode category, no code-point blocklist, no `str.isdigit`. The only lists are the
+allowed alphabet, the context sets, the gap set and the equivalents table. (The snippet locator, `normalize.py`, finds
+text and never yields a value; it keeps NFKC per character and applies exactly the equivalents table.)
+
+**Alphabet.** Five classes; a character is in exactly one (`numgrammar/alphabet.py`, written a second time as bare
+code points in `tests/evidence_r6_pins.py`; the two copies are compared entry by entry):
+
+| Class | Members |
+|---|---|
+| INSIDE (45) | may stand inside a numeric token: digits `0-9`; signs `+ -`; separators `. , '` U+2009 THIN SPACE, U+00B7 `·`; exponent marker `e E`; multipliers `x X * ×` (and `·`); `^`; superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and signs `⁺⁻`; `% ‰`; `±`; qualifiers `< > ≤ ≥ ~ ≈` |
+| GAP (4) | space, tab, line feed, carriage return: one visual separator (a run of any length and mix is ONE) |
+| CONTEXT (74) | allowed in a word within one separator of a token: the other 48 ASCII letters, 17 Greek letters (`μ ω β α τ λ η θ ε γ σ χ ρ π Δ Ω Σ`), `( ) [ ] ; : / = °` |
+| LINE (76) | allowed anywhere on the token's line but not in its word nor in the word before or after it: the printable ASCII `! " # $ & ? @ \ _ { } \|` and the backtick, typographic `‘ “ ” — … • © ® ™ † ‡ § ¶ ‖ ′ → ← ↑ ↓ ∞ ½`, subscripts `₀-₉ ₊ ₋`, `κ`, 29 accented Latin letters seen in author names |
+| OUTSIDE | everything else (about 1.11 million code points) and the pdfminer marker `(cid:N)` (the text layer's U+FFFD, treated as one character): controls except tab and line breaks, every format character (soft hyphen, zero-width, bidi), combining marks, private use, unassigned, every non-ASCII digit, look-alike dashes, dots, multipliers and comparisons, fullwidth forms, Cyrillic, math letters, `‱`, `€`, ligatures |
+
+**Equivalents (the only normalisation, 1:1 so offsets never move).** `−` U+2212, `–` U+2013, `‐` U+2010 and `‑` U+2011
+are `-`; `’` U+2019 is `'`; U+202F and U+00A0 are U+2009; `µ` U+00B5 is `μ`; `∼` U+223C is `~`; `◦` U+25E6 is `°`. Each has
+corpus evidence (see the comment of `equivalents.py`). U+2009 groups digits only between two digits and is a plain gap
+elsewhere. Rejected as equivalents: `⋅ ∙` (OUTSIDE: a look-alike multiplier would be fail-open), `—` (a LINE character: a
+list dash, or "not available" in a table), `‒`, `ʼ`, fullwidth and small-form signs (OUTSIDE), `′` (LINE).
+
+**Grammar.** `token = [sign] (bare_power | body [exponent])`, `body = digits {sep digits}`, `exponent = e-notation
+(1.2e-3) | multiplier power (1.2 × 10^3, 1.2 x 10⁻³, across one gap run)`, `bare_power = 10^6` (caret only), suffixes `%`,
+`‰` and star runs (`-14.2***`) stay outside the literal. A digit run is a token only at the start of a word, after
+`( [ = < > ≤ ≥ ~ ≈ ±`, or after a joiner (`- ± x X * × ·`) that directly follows another token (`12-15`, `36.6±4.3`,
+`45%–55%`). A word led by a letter is a label (`AUC0-24`, `t1/2`, `CYP2B6`, `mL/min/1.73m2`): its digits never form tokens.
+A number-led word whose digit run cannot start a token, or whose token fails its post-boundary, is rejected as a whole.
+Separators follow the page's decimal style only where the text cannot decide (`3,412`, `1.250`): one separator once with
+a group other than three digits is a decimal (`18,2`, `0,412`), a repeated or apostrophe / thin-space separator groups
+thousands (`1.250.000`, `24'560`, `18 900`), `A.BBB` with `A` longer than three digits and the wrong style is
+`ambiguous_tail`, two kinds read as thousands plus one decimal (`1,234,567.89`), up to 40 digits and `|e| ≤ 300`.
+Three reading modes: `page` (page text and columns: a line feed ends a line; an ASCII space never groups digits),
+`cell` (a table cell is one line) and `claim` (a snippet or a proposed value: one line, and a space in thousands
+position reads as a thin space, so `18 900` is 18900).
+
+**Gap and context rule.** A word is a maximal run of non-gap characters; `W-` and `W+` are the words one gap run away.
+Three allow-list tiers decide whether an expression is tainted (`numgrammar/taint.py`):
+(1) a character that is not INSIDE or CONTEXT in the expression's own word makes the whole word one unresolved
+expression; (2) the same character in the word before or after (or the right operand behind a multiplier word) makes
+every token of the word unresolved, so `Adalat® 30 mg`, `AUC0–∞ 1234`, `$18 years`, `t½ 11.4 h`, `• 150 mg` and
+`<⠀12` (U+2800 between a qualifier and its number) are all unresolved; (3) a character OUTSIDE anywhere on the token's
+line (a table cell, snippet or value: the whole string) makes every token on that line unresolved, which is why an
+unmapped `(cid:3)` or a soft hyphen poisons its line. LINE characters are allowed on the line but not within one separator.
+Padding never widens a window: 5000 spaces are one separator. Hidden-qualifier attacks are impossible by construction:
+to separate a visible `<` from its number something must be inserted, and everything that can be inserted is either
+a gap (one separator), an allowed word (then the qualifier is visibly two words away) or a tainting character.
+
+**Multi-word forms** (across exactly one gap run, line breaks included). Accepted: `1.2 × 10^3`, `1.2 ×10⁻³`,
+`1.2× 10^3`. Unresolved shapes: `ten_after_multiplier` (`2 x 10 mg`, `1.2 × 103`, `1.2 x 10 3`: a ten with no readable power,
+possibly a raised exponent the text layer lost), `multiplier_operand` (`2 × daily`, `1.2 ×` at a line end, `1.2 × l0³`),
+`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (`3/4`),
+`bare_superscript_power` (`10³` without a multiplier). `2 x 100 mg` is two plain numbers.
+
+**Unresolved shapes (the `why` of `unresolved_shape`).** `too_many_digits`, `leading_zero` (`007`), `middot` (`12·4` on
+a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
+`ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
+`glued_letters` (`150mg`, `24h`, `1.73m2`, `1O5`, `12З`), `glued_symbol` (`8:00`, `12/24`, `65+`, `12=`), `bad_start`
+(`.05`), `bare_superscript_power`. A unit glued to the digits is rejected whatever the letters: a list of allowed unit
+letters would be a fourth list, and it would re-admit `10mL` read as `1OmL`.
+
+**Reviewer sentences** (`verify_messages.py`, fixed templates; the code point is named with `unicodedata.name`, the one
+use of `unicodedata` outside the locator, to label a character for a human, never to classify one). Context: "the cited
+number '12.5' touches U+200B ZERO WIDTH SPACE (one word before), a character outside the allowed number alphabet; the
+text layer cannot be read as a number here. Compare the value with the page image."; `where` is one of `inside the number`,
+`glued before the digits`, `glued after the digits`, `one word before`, `one word after`, `elsewhere on the same line`;
+the marker is named "an unmapped glyph marker (cid:3)". Shape: "the cited number '12 3/4' is written in a form the
+reader does not accept (a mixed number); read it on the page image." The `verify_fail` flag message is
+`<field>: verification failed (<reason>): <sentence>`, carried from the verifier to the flag in the in-memory
+`verify_detail` of a checked proposal (`VerifyResult.detail`); no new column and no new locator field.
+
+**What is read where.** `verify.py` reads the value and the snippet in `claim` mode only to find WHICH token the value
+cites; every pass or fail is decided on the page text, column or cell, with its real neighbours and its real line, by
+the token at the located offsets. Raw offsets are unchanged (the equivalents are 1:1, the thin-space rewrite is 1:1), so
+`locator.span`, `locator.token`, highlights and the page-image regions need no change.
+
+**How to extend it.** Nothing is added by a special case. (a) A character an honest page prints next to numbers: admit it
+by the corpus rule, one hit on a digit-bearing line in ordinary prose and never a mis-mapped glyph, as a literal
+code point in `alphabet.py` (CONTEXT to allow it within one word of a number, LINE to allow it only elsewhere on the
+line) and in `tests/evidence_r6_pins.py`, update the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
+`tests/evidence_r6_golden.json` (the class-representative behaviours) and write the code point and its corpus evidence in
+the docstring. (b) A look-alike that is really one of the approved characters: one entry in `EQUIV` (target a character
+already in the alphabet), the same two test copies, and corpus evidence. (c) A new multi-word form: a rule in
+`numgrammar/tokenizer.py` with a test in `tests/test_evidence_r6_grammar.py`. Then run the exhaustive tier
+(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py`, about 9 minutes on 12 workers: every code
+point at every boundary of 291 (expression, boundary) pairs), the verify oracle (`tests/test_evidence_r6_verify_oracle.py`) and the corpus
+comparison. Stored rows: `verify_records` re-verifies proposed rows under the grammar (expect more failures: glued
+units, `2 x 10 mg`, lines with `(cid:N)`); approved rows are immutable and keep their reasons, the legacy
+`non_ascii_digits` included.
 
 ### QC flags (`models.FLAG_CODES`)
 

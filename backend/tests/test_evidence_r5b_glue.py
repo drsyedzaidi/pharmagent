@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.evidence.normalize import number_tokens
+from app.evidence import models as M
+from app.evidence.numgrammar import tokens
 from tests.evidence_r5b_support import check
 
 RLO, LRO, RLE, LRE, PDF = "\u202e", "\u202d", "\u202b", "\u202a", "\u202c"
@@ -41,11 +42,15 @@ def test_the_override_from_the_report_does_not_verify():
     _fails("12.5", "12.5", f"{RLO}AUC 12.5 mg/L{PDF}")
 
 
-def test_a_bidi_run_closed_before_the_number_or_on_an_earlier_line_is_harmless():
-    _passes("12.5", "12.5", f"{RLO}abc{PDF} AUC 12.5 mg/L")
-    _passes("12.5", "12.5", f"{RLI}abc{PDI} AUC 12.5 mg/L")
+def test_a_bidi_run_on_an_earlier_line_is_harmless_but_one_on_the_same_line_is_not():
+    """Was test_a_bidi_run_closed_before_the_number_or_on_an_earlier_line_is_harmless: a run closed before the number
+    on the SAME line passed. A control is outside the alphabet and the line tier is an allow-list (no bidi state
+    machine): any one on the number's line makes it unresolved_context; only a control on ANOTHER line is harmless.
+    U+2029 is outside the alphabet, not a line break."""
     _passes("12.5", "12.5", f"{RLO}abc\nAUC 12.5 mg/L")
-    _passes("12.5", "12.5", f"{RLO}abc\u2029AUC 12.5 mg/L")
+    for page in (f"{RLO}abc{PDF} AUC 12.5 mg/L", f"{RLI}abc{PDI} AUC 12.5 mg/L", f"{RLO}abc\u2029AUC 12.5 mg/L"):
+        res = check("12.5", "12.5", page)
+        assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), (page, res)
 
 
 def test_an_isolate_stays_open_when_only_an_embedding_closer_follows():
@@ -53,13 +58,16 @@ def test_an_isolate_stays_open_when_only_an_embedding_closer_follows():
     _fails("12.5", "12.5", f"{RLO}abc{PDI} AUC 12.5 mg/L")
 
 
-def test_a_number_before_the_override_is_read_normally():
-    _passes("12.5", "12.5", f"AUC 12.5 mg/L {RLO}abc{PDF}")
+def test_a_number_before_the_override_on_the_same_line_is_unresolved():
+    """Was test_a_number_before_the_override_is_read_normally (a pass): the control is on the number's line."""
+    res = check("12.5", "12.5", f"AUC 12.5 mg/L {RLO}abc{PDF}")
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), res
 
 
-def test_bidi_state_is_positional_in_number_tokens():
-    toks = number_tokens(f"1 {RLO} 2 {PDF} 3\n4 {LRO} 5", strict=True)
-    assert [t.value for t in toks] == [1.0, None, 3.0, 4.0, None]
+def test_bidi_controls_taint_the_whole_line_in_tokens():
+    """Was [1.0, None, 3.0, 4.0, None] (positional bidi state): both lines hold a control, so every token is None."""
+    toks = tokens(f"1 {RLO} 2 {PDF} 3\n4 {LRO} 5", ".")
+    assert [t.value for t in toks] == [None, None, None, None, None]
 
 
 # ---------------------------------------------- unreadable characters ---
@@ -87,9 +95,13 @@ def test_every_private_use_code_point_is_glue():
         _fails("12", "12", f"AUC {chr(cp)}12 mg/L")
 
 
-def test_unreadable_character_two_words_away_does_not_matter():
-    _passes("12", "12", "AUC 12 mg/L \ue000")
-    _passes("12", "12", "\ufffd AUC 12 mg/L")
+def test_unreadable_character_two_words_away_still_taints_the_line():
+    """Was test_unreadable_character_two_words_away_does_not_matter (both passed): an OUTSIDE character anywhere on
+    the number's line makes it unresolved_context; the same character on another line does not."""
+    for page in ("AUC 12 mg/L \ue000", "\ufffd AUC 12 mg/L"):
+        res = check("12", "12", page)
+        assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT), (page, res)
+    _passes("12", "12", "\ufffd\nAUC 12 mg/L")
 
 
 # ------------------------------------------------------ control chars ---
@@ -108,7 +120,7 @@ def test_an_ascii_control_before_a_number_may_be_its_sign(ctl):
 
 def test_tabs_and_line_breaks_are_still_ordinary_gaps():
     _passes("12", "12", "AUC\t12\nmg/L")
-    toks = number_tokens("AUC 1\x7f2 mg/L")
+    toks = tokens("AUC 1\x7f2 mg/L", ".")
     assert len(toks) == 1 and toks[0].value is None
     assert toks[0].start == 4 and toks[0].end == 7          # offsets map back to the raw text
 

@@ -7,10 +7,12 @@ import re
 
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
+    CID_MARKER,
     DIGITS,
     GAP,
     INSIDE,
     LETTERS,
+    LINE_TIER_RE,
     MULTIPLIERS,
     STARTERS,
     WORD_RE,
@@ -108,6 +110,28 @@ def words_after(text: str, end: int, n: int) -> list[str]:
     return out
 
 
+def words_before(text: str, start: int, n: int) -> list[str]:
+    """The *n* whole words before the word that holds the offset *start*, in reading order (fewer at the start)."""
+    t = fold(text)
+    a, _ = _word_bounds(t, start)
+    out: list[str] = []
+    while len(out) < n and (prev := _prev_word(t, a)) is not None:
+        out.insert(0, t[prev[0]:prev[1]])
+        a = prev[0]
+    return out
+
+
+def unreadable(text: str) -> tuple[int, str] | None:
+    """(offset, 'U+200B' or '(cid:3)') of the first character of *text* outside the readable alphabet (INSIDE,
+    CONTEXT, LINE, GAP and the equivalents) or the first pdfminer unmapped-glyph marker; None when the whole string
+    is readable. Offsets index *text* itself: the fold is 1:1."""
+    t = fold(text)
+    ch, cid = LINE_TIER_RE.search(t), CID_MARKER.search(t)
+    if ch is not None and (cid is None or ch.start() < cid.start()):
+        return ch.start(), f"U+{ord(t[ch.start()]):04X}"
+    return None if cid is None else (cid.start(), cid.group())
+
+
 # ------------------------------------------------------------ labels, cells ---
 
 def _scale_word(core: str, prev: str, nxt: str) -> bool:
@@ -166,16 +190,22 @@ def _before_equals(t: str, i: int) -> int | None:
     return None if k > 0 and t[k - 1] in LETTERS else k
 
 
-def find_n(text: str) -> list[tuple[int, int, int]]:
-    """(start, end, n) of every ``n = <integer of 1-6 digits>``: ``n = 12``, ``n=12``, ``(n=12)``, ``N=12``."""
+def find_n_lead(text: str) -> list[tuple[int, int, int, int]]:
+    """(offset of the ``n``, start, end, n) of every ``n = <integer of 1-6 digits>``; the span of the integer is
+    text[start:end], the span of the whole phrase text[lead:end]."""
     t = fold(text)
-    out: list[tuple[int, int, int]] = []
+    out: list[tuple[int, int, int, int]] = []
     for tok in tokens(text, ".", mode="page"):
         digits = tok.canonical
-        if tok.shape == "int" and 1 <= len(digits) <= 6 and all(c in DIGITS for c in digits) \
-                and _before_equals(t, tok.start) is not None:
-            out.append((tok.start, tok.end, round(tok.value)))
+        lead = _before_equals(t, tok.start) if tok.shape == "int" and 1 <= len(digits) <= 6 else None
+        if lead is not None and all(c in DIGITS for c in digits):
+            out.append((lead, tok.start, tok.end, round(tok.value)))
     return out
+
+
+def find_n(text: str) -> list[tuple[int, int, int]]:
+    """(start, end, n) of every ``n = <integer of 1-6 digits>``: ``n = 12``, ``n=12``, ``(n=12)``, ``N=12``."""
+    return [(s, e, n) for _, s, e, n in find_n_lead(text)]
 
 
 def find_dose(text: str) -> list[tuple[int, int, float, str]]:
@@ -195,5 +225,5 @@ def find_dose(text: str) -> list[tuple[int, int, float, str]]:
     return out
 
 
-__all__ = ["find_dose", "find_n", "is_data_cell", "number_spans", "numbers_in", "parse_claim", "scale_shapes",
-           "token_at", "words_after", "words_around"]
+__all__ = ["find_dose", "find_n", "find_n_lead", "is_data_cell", "number_spans", "numbers_in", "parse_claim",
+           "scale_shapes", "token_at", "unreadable", "words_after", "words_around", "words_before"]
