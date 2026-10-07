@@ -41,7 +41,7 @@ def _collect(pytest_args: list[str]) -> tuple[int, dict[Path, set[int]]]:
     """Run pytest with a tracer that records line events only in app/evidence/*.py frames."""
     import pytest
 
-    targets = {str(p.resolve()) for p in EVIDENCE.glob("*.py")} | {str(p) for p in EVIDENCE.glob("*.py")}
+    targets = {str(p.resolve()) for p in EVIDENCE.rglob("*.py")} | {str(p) for p in EVIDENCE.rglob("*.py")}
     hit: dict[str, set[int]] = {}
 
     def local(frame, event, _arg):
@@ -96,14 +96,15 @@ def run(pytest_args: list[str], minimum: float, data: Path | None = None) -> int
     rc, hit = _collect(pytest_args)
     hit = _merge_data(hit, data)
     rows, below = [], []
-    for mod in sorted(EVIDENCE.glob("*.py")):
+    for mod in sorted(EVIDENCE.rglob("*.py")):                 # sub-packages (numgrammar/) are modules too
         total = _executable_lines(mod)
         done = hit.get(mod.resolve(), set()) & total
         pct = 100.0 * len(done) / len(total) if total else 100.0
-        rows.append((mod.name, len(done), len(total), pct))
+        name = mod.relative_to(EVIDENCE).as_posix()
+        rows.append((name, len(done), len(total), pct))
         if pct < minimum:
-            below.append(mod.name)
-            print(f"{mod.name} lines not executed: {_missing(total - done)}")
+            below.append(name)
+            print(f"{name} lines not executed: {_missing(total - done)}")
     width = max(len(r[0]) for r in rows)
     print(f"\n{'module':<{width}}  executed/total  statements")
     for name, done, total, pct in rows:
