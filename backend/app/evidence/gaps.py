@@ -19,7 +19,7 @@ from app.evidence.numgrammar.equivalents import THIN_SOURCES
 
 _GAP_RUN = re.compile(char_class(GAP, negate=False) + "+")
 _GAPS = "".join(sorted(GAP))
-_BLANK = GAP | THIN_SOURCES
+_BLANK = "".join(sorted(GAP | THIN_SOURCES))
 
 
 def split(text: str) -> list[str]:
@@ -38,8 +38,9 @@ def collapse(text: str) -> str:
 
 
 def blank(text: str) -> bool:
-    """*text* holds only GAP characters and thin spaces (or nothing)."""
-    return all(c in _BLANK for c in text)
+    """*text* holds only GAP characters and thin spaces (or nothing): ``str.strip`` with exactly those characters, at C
+    speed (it runs once per glyph of a page)."""
+    return not text.strip(_BLANK)
 
 
 __all__ = ["blank", "collapse", "split", "strip"]
