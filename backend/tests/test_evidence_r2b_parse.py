@@ -20,6 +20,7 @@ from app.evidence.extract_rules import rule_extract, value_number
 from app.evidence.extract_tools import check_proposals
 from app.evidence.parse import parse_pdf
 from tests import evidence_trickpdf2 as T2
+from tests.evidence_timing import limit
 
 TEMPLATE = {"fields": [{"name": "cmax", "type": "number", "unit": "ng/mL", "aliases": ["Cmax"]},
                        {"name": "auc", "type": "number", "aliases": ["AUC"]}]}
@@ -100,4 +101,4 @@ def test_glyph_dense_page_is_unverified_within_a_bounded_time(tmp_path):
     elapsed = time.monotonic() - t0
     page = doc["pages"][0]
     assert page["ink_check"] == "unverified"
-    assert elapsed < 20.0, elapsed
+    assert elapsed < limit(20.0), elapsed            # r7 round 3: 20 s strict; scaled only under a line tracer

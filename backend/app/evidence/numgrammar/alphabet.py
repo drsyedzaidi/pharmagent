@@ -144,6 +144,19 @@ JOINERS = (SIGNS & frozenset("-")) | {PLUS_MINUS} | MULTIPLIERS  # a token may s
 REF_SEPARATORS = (DECIMAL_MARKS & frozenset(",")) | (SIGNS & frozenset("-"))   # between the references of a citation
 NAME_LETTER = "q"                                        # the CONTEXT letter a label digit reads as (decision 3)
 LIST_MARKS = (DECIMAL_MARKS & frozenset(",")) | (CONTEXT_PUNCT & frozenset(";"))   # end a list item ('1/2, 3/4')
+# r7 round 3: the single terminals the grammar compares against, each one member of a list (no module of the reader
+# types a one-character literal: tests/test_evidence_r7_round3_hygiene.py)
+(POINT,) = DECIMAL_MARKS - LIST_MARKS                     # the decimal point (a page style, a unit separator)
+(COMMA,) = DECIMAL_MARKS & LIST_MARKS                     # the decimal comma (a page style, a list mark)
+(ZERO,) = DIGITS & frozenset("0")                         # a leading zero; the zeros of a written-out power of ten
+(SQUARE_OPEN,) = OPENERS_BR & frozenset("[")              # the opener of a citation group
+(LF,) = GAP & frozenset("\n")                     # a line break: a word wrapped at a hyphen continues past it
+APOSTROPHE = SEPARATORS & frozenset("'")                 # the apostrophe that groups thousands ('24'560')
+THIN_GROUP = GROUP_ONLY - APOSTROPHE                     # the thin space: groups digits only between two digits
+(SUP_TWO,) = SUP_DIGITS & frozenset("\u00b2")             # the superscript two of a square and of chi-square
+# the chi-square form's letter (owner decision 8): grammar data of the production in productions.py, NOT a member of
+# any list (chi is outside; the form masks it 1:1, every other chi stays outside)
+CHI = "\u03c7"                                           # GREEK SMALL LETTER CHI
 SUP_TO_ASCII = str.maketrans("\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b",
                              "0123456789+-")
 

@@ -9,6 +9,7 @@ import json
 import logging
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence.extract_rules import decimal_style, field_index, match_field, norm_key, value_number
 from app.evidence.models import Source
 from app.evidence.normalize import normalise
@@ -68,7 +69,7 @@ def find_cell(page: dict[str, Any], snippet: str) -> dict[str, Any] | None:
         for ri, row in enumerate(rows):
             for ci, cell in enumerate(row):
                 text = str(cell or "")
-                if text.strip() and ns in normalise(text)[0]:
+                if gaps.strip(text) and ns in normalise(text)[0]:
                     header = str(rows[0][ci]) if rows and ci < len(rows[0]) else ""
                     return {"table": int(table.get("index") or 0), "row": ri, "col": ci, "header": header,
                             "row_label": str(row[0] or "") if row else ""}
@@ -89,8 +90,8 @@ def _to_proposal(rec: dict[str, Any], index: dict[str, dict[str, Any]], doc: dic
         cell = find_cell(page, snippet) if page is not None else None
         kind = "table" if cell is not None else "text"
     style = decimal_style(spec, doc)
-    value = str(rec["value"]).strip()[:MAX_VALUE]
-    unit = str(rec.get("unit") or "").strip()[:MAX_UNIT] or None
+    value = gaps.strip(str(rec["value"]))[:MAX_VALUE]        # the GAP set only: an OUTSIDE character stays (r7 round 3)
+    unit = gaps.strip(str(rec.get("unit") or ""))[:MAX_UNIT] or None
     locator = {"page": page_n, "kind": kind, "snippet": snippet, "span": None, "literal": None, "cell": cell,
                "column": None, "decimal_style": style}
     return {"source_id": source_id, "field": str(spec["name"]), "group_label": str(rec.get("group") or "")[:MAX_GROUP],
@@ -116,7 +117,7 @@ def llm_extract(llm: Any, template: dict[str, Any], source: Source, doc: dict[st
     dropped = 0
     for page in pages_tables_first(pages):
         text = page.get("text") or ""
-        if not text.strip():
+        if not gaps.strip(text):
             continue
         title = f"{source.title or source.filename} (page {page['n']} of {len(pages)})"
         user = wrap_document(text, _TASK.format(page=page["n"], total=len(pages), fields=fields),

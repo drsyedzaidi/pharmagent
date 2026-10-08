@@ -26,6 +26,7 @@ IdxMap = list[int]
 
 _SPACES = GAP | frozenset({THIN})       # the spaces the locator collapses (the thin space: target of NBSP in ``fold``)
 _SPACE_RUN = re.compile(char_class(_SPACES, negate=False) + "+")
+COLLAPSED = " "                          # the one space a run of _SPACES becomes (the word break of a normalised text)
 _WRAP_LETTERS = LETTERS | frozenset(CASE_PAIRS.values())      # a letter, before or after the lower-casing
 _HYPHEN_BREAK = re.compile("-\n")
 _LIGATURE = re.compile(char_class(frozenset(LIGATURES), negate=False))
@@ -107,7 +108,7 @@ def strip_ws_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str, Id
             out.append(text[last:a])
             out_map.extend(src[last:a])
         if out and b < n:
-            out.append(" ")
+            out.append(COLLAPSED)
             out_map.append(src[a])
         last = b
     if last < n:

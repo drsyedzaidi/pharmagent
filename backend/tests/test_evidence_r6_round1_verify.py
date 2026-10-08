@@ -91,8 +91,14 @@ def test_a_character_outside_the_alphabet_in_a_neighbouring_cell_leaves_the_numb
 
 @pytest.mark.parametrize("neighbour", ["×10^3", "x1000", "(thousands)", "x10³"])
 def test_a_multiplier_in_a_neighbouring_cell_raises_the_scale_flag(neighbour):
+    """r7 round 3: was 'ok(got) and scaled_header in got.flags' for every neighbour. The cells one separator away are
+    the number's window (verify_table.window_fault): a multiplier or power word there refuses the number as it does in
+    text ('x1000 12.5'), so the record fails; a scale WORD beside it is prose and still raises the flag."""
     got = cell([HEAD, ["Cmax", neighbour, "12.5"]], 1, 2, "12.5")
-    assert ok(got) and M.FLAG_SCALED_HEADER in got.flags, (neighbour, got)
+    if neighbour == "(thousands)":
+        assert ok(got) and M.FLAG_SCALED_HEADER in got.flags, (neighbour, got)
+    else:
+        assert got.status == "fail" and got.reason == M.REASON_UNRESOLVED_SHAPE, (neighbour, got)
 
 
 def test_a_clean_neighbour_cell_and_a_row_label_with_a_line_character_change_nothing():
@@ -223,10 +229,16 @@ def test_a_label_that_scales_the_number_is_never_read_as_unscaled(label):
     assert scale_shapes(label) is True, label
 
 
-@pytest.mark.parametrize("label", ["AUC0–∞ (ng·h/mL)", "Cmax (ng/mL)", "CLint (µL/min/10^6 cells)", "Dose (mg) x 2",
+@pytest.mark.parametrize("label", ["AUC0–∞ (ng·h/mL)", "Cmax (ng/mL)", "CLint (µL/min/10^6 cells)",
                                    "Day 1", "AUC0-24", "t1/2 (h)", "Cmax,ss †", "Visit"])
 def test_an_ordinary_label_is_not_a_scale(label):
     assert scale_shapes(label) is False, label
+
+
+def test_a_lone_multiplier_in_a_label_is_a_scale():
+    """r7 round 3: was a row of test_an_ordinary_label_is_not_a_scale ('Dose (mg) x 2' is False). scale_shapes is an
+    allow-list (numgrammar/scale.py): a lone multiplier word is no inert production, and '× 2' does scale the value."""
+    assert scale_shapes("Dose (mg) x 2") is True
 
 
 def test_the_unit_next_to_a_number_separated_by_a_thin_or_no_break_space_is_read_once():

@@ -9,17 +9,18 @@ as thousands (``3,412``) and every grouped number is no evidence.
 """
 from __future__ import annotations
 
+from app.evidence.numgrammar.alphabet import COMMA, POINT
 from app.evidence.numgrammar.tokenizer import tokens
 
 
 def style_evidence(text: str) -> tuple[int, int]:
     """(decimal-comma, decimal-point) evidence counts in *text* (page reading: an ASCII space never groups)."""
     comma = point = 0
-    for tok in tokens(text, ".", mode="page"):
+    for tok in tokens(text, POINT, mode="page"):
         if tok.value is None:
             continue
-        if tok.decimal == ".":
+        if tok.decimal == POINT:
             point += 1
-        elif tok.decimal == ",":
+        elif tok.decimal == COMMA:
             comma += 1
     return comma, point

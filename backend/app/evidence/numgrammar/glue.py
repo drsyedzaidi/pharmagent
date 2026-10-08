@@ -146,15 +146,24 @@ def prose(w: str) -> bool:
     return True
 
 
+def _bracketed_operator(w: str, start: int) -> bool:
+    """r7 round 3: a lone operator letter right after an opener or a closer inside *w* (from *start*), judged on the
+    PRINTED text, not with the label digits read as letters: 'Count(E3)', 'AUC(x1000)', 'Cmax)x10^3' hold one, so a
+    scale glued to a label after its bracket is never a name ('CYP2E1', 'AUC(0-24)' hold none)."""
+    bounds, brackets = core(w), OPENERS_BR | CLOSERS_BR
+    return any(w[j] in OP_LETTERS and w[j - 1] in brackets and operator_letter(w, j, bounds)
+               for j in range(start + 1, len(w)))
+
+
 def label(w: str) -> bool:
     """*w* is a LABEL: led by a letter after a run of openers or starters, that letter is not a lone operator letter
-    ('E-3', 'x10^3', 'e3,', '(x10^3', 'E2' are none), and with its digits read as the letters of a name (decision 3:
-    label digits never act by themselves) it is prose ('AUC0-24', 'CYP2D6*4', 't1/2', 'h-1', 'L·h⁻¹',
-    '(AUC0-inf'; never 'AUC0^-24')."""
+    ('E-3', 'x10^3', 'e3,', '(x10^3', 'E2' are none), no lone operator letter follows a bracket inside it ('Count(E3)',
+    'AUC(x1000)': r7 round 3), and with its digits read as the letters of a name (decision 3: label digits never act by
+    themselves) it is prose ('AUC0-24', 'CYP2D6*4', 't1/2', 'h-1', 'L·h⁻¹', '(AUC0-inf'; never 'AUC0^-24')."""
     i = 0
     while i < len(w) and (w[i] in OPENERS_BR or w[i] in STARTERS):
         i += 1
-    if i >= len(w) or w[i] not in LETTERS or operator_letter(w, i):
+    if i >= len(w) or w[i] not in LETTERS or operator_letter(w, i) or _bracketed_operator(w, i):
         return False
     return prose(w[i:].translate(_AS_LETTER))
 
@@ -191,16 +200,22 @@ def glue(run: str) -> bool:
     while b > a and run[b - 1] in PUNCT:
         b -= 1
     mid = run[a:b]
+    if mid and (operator_letter(mid, 0) or _bracketed_operator(mid, 0)):
+        return False                                      # r7 round 3: judged on the printed text ('(x10^3)', '(E3)')
     return prose(mid.translate(_AS_LETTER))               # label digits are letters of a name (decision 3)
 
 
 def variable(w: str) -> bool:
-    """*w* (an equals sign follows it) is a variable name: led by a letter after openers, any letters ('E', 'x', 'E0',
-    '(E', 'AUC0-24'): the assignment production 'E = 0.9', 'x=12', 'E0 = 0'."""
+    """*w* (an equals sign follows it) is a variable name: ONE letter after openers ('E', 'x', '(E') or a LABEL whose
+    powers follow unit symbols ('Emax', 'AUC0-24', 'k12'): the assignment production 'E = 0.9', 'x=12', 'Emax = 8'. r7
+    round 3: an operator letter before digits, a sign or a power is a scale, never a name ('x10^3', '(E3)', 'e3',
+    'x1000', 'E0')."""
     i = 0
     while i < len(w) and w[i] in OPENERS_BR:
         i += 1
-    return i < len(w) and w[i] in LETTERS
+    if i >= len(w) or w[i] not in LETTERS:
+        return False
+    return i + 1 == len(w) or (label(w) and unit_powers(w))
 
 
 def prefix(run: str) -> bool:

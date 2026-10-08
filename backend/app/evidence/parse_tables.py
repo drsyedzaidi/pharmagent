@@ -12,12 +12,14 @@ import re
 from typing import Any
 
 from app.evidence import gaps
+from app.evidence.numgrammar.alphabet import DIGITS, GAP, char_class
 from app.evidence.parse_guard import _is_white, tables_affordable
 
 CELL_GAP_FACTOR = 2.0           # horizontal gap (x modal size) that separates layout-table cells
 LINE_Y_TOLERANCE = 3.0
-CAPTION_RE = re.compile(r"^Table\s+[0-9]+")
-STOP_RE = re.compile(r"^(Table|Figure|Fig\.)\s+[0-9]+")
+_GAPS, _DIGITS = char_class(GAP, negate=False) + "+", char_class(DIGITS, negate=False) + "+"   # r7 round 3: the lists
+CAPTION_RE = re.compile("^Table" + _GAPS + _DIGITS)
+STOP_RE = re.compile("^(Table|Figure|Fig\\.)" + _GAPS + _DIGITS)
 MAX_LAYOUT_ROWS = 80
 
 

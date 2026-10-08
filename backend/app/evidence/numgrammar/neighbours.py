@@ -43,6 +43,7 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar import glue as G
+from app.evidence.numgrammar import product as P
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
@@ -66,6 +67,7 @@ from app.evidence.numgrammar.alphabet import (
     TRAILING,
     char_class,
 )
+from app.evidence.numgrammar.product_window import ProductWindow
 from app.evidence.numgrammar.scan import TAIL_MULT, TAIL_STAR
 from app.evidence.numgrammar.units import ATOM_RE, unit_led
 
@@ -136,7 +138,7 @@ def _why(w: str, opened: bool) -> str:
     return FRACTION if lead in RATIO_MARKS else NEIGHBOUR
 
 
-class Window:
+class Window(ProductWindow):
     """The window rule; ``Reader`` provides ``n``, ``t``, ``starts``, ``ends``, ``words``, ``text``, ``has_digit``,
     ``scan``, ``clean``, ``mult_word``, ``number_end``, ``marks`` and ``target`` (the tokens being judged)."""
     __slots__ = ()
@@ -152,32 +154,32 @@ class Window:
         if not self.has_digit(k) or lead_letter(w) or w[0] in RATIO_MARKS:
             return False                                  # ':4', '/15': the second part of a ratio, never a number
         sc = self.scan(k)
-        return sc.kind == "numeric" and sc.tail != TAIL_MULT
+        return sc.kind == "numeric" and sc.tail != TAIL_MULT and not sc.need_unit   # r7 round 3: "2x100" needs a unit
 
     def _shapes(self, k: int) -> set[str]:
         return {t.shape for t in self.scan(k).toks} if self.has_digit(k) else set()
 
-    def ten_behind_mult(self, k: int) -> bool:
-        return k >= 1 and self.mult_word(k - 1) and W.ten_shape(self.text(k))
-
     def plain_number(self, k: int) -> bool:
-        """A number word that is no ratio, no bare power and no ten behind a multiplier: an infix operand."""
+        """A number word that is no ratio, no bare power and no refused amount behind a multiplier: an infix operand."""
         return self.number_word(k) and "ratio" not in self._shapes(k) and not self.bare_power_word(k) \
-            and not self.ten_behind_mult(k)
+            and not self.refused_amount(k)
 
     def bare_power_word(self, k: int) -> bool:
         """Word *k* starts with a power of ten that has no mantissa ('10^3', '(10^-4)', '10^9,', '10^6/L')."""
         sc = self.scan(k) if 0 <= k < self.n and self.has_digit(k) else None
         return sc is not None and sc.kind == "numeric" and sc.toks[0].shape == "bare_power"
 
-    def number_fault(self, k: int, side: int, listed: bool, kind: set[str], tight: bool = True) -> str:
+    def number_fault(self, k: int, side: int, listed: bool, kind: set[str], tight: bool = True,
+                     adjacent: bool = True) -> str:
         """'' when the number word *k* may stand on *side* of the target, else why not."""
+        if k in self.power_words and not kind & {"ratio", "power"}:
+            return ""                                     # a scientific token's power word: a number ('4.5 x 10^9 3.2')
         if not self.number_word(k):
             if "ratio" in kind and side == LEFT and self.number_end(k) and not listed:
                 return MIXED                              # '1O5 3/4': a rejected whole part is still a whole part
             return _why(self.text(k), False)
-        if self.ten_behind_mult(k):
-            return TEN                                    # '1.2 x 10 3': the 3 beside the ten of a scale
+        if adjacent and (refused := self.refused_amount(k)):
+            return refused                                # '1.2 x 10 3': the 3 beside a refused product's amount
         if listed:
             return ""
         toks = self.scan(k).toks
@@ -193,9 +195,12 @@ class Window:
         """'' when the word beyond the infix word *k* is a plain number, or a prose word (a unit) then a plain
         number."""
         j, mult = k + side, W.is_mult_word(self.text(k))
+        if mult:                                          # the product production: count MULT amount (product.py)
+            if side == RIGHT:
+                return self.product_fault(self.target[-1] if self.target else None, self.amount_of(j), j)
+            why = self.product_fault(self.count_before(j), self.target[0] if self.target else None, k + 1)
+            return NEIGHBOUR if why == OPERAND else why   # before the number: the reviewer's name of r7 writer 3
         if 0 <= j < self.n:
-            if mult and W.ten_shape(self.text(j)):
-                return TEN                                # '2 x 10 mg', '1.2 x 10 3': a ten with its power lost
             if self.plain_number(j):
                 return ""
             if not (mult and side == RIGHT) and not self.has_digit(j) and not punct_only(self.text(j)) \
@@ -214,12 +219,11 @@ class Window:
         lo, hi = G.core(w)
         if side == RIGHT:
             tail = self.scan(lw).tail
-            if tail == TAIL_MULT:                         # '2x 5': a glued multiplier needs a plain number after it
-                if not adjacent:
-                    return OPERAND
-                return TEN if W.ten_shape(w) else ("" if self.plain_number(k) else OPERAND)
-            if tail == TAIL_STAR and W.ten_shape(w):
-                return OPERAND                            # '12* 10^3': the star may be a multiplier before a ten
+            if tail == TAIL_MULT:                         # '2x 5': a glued multiplier is the product's
+                return self.product_fault(self.target[-1], self.amount_of(k), k) if adjacent else OPERAND
+            amount = self.amount_of(k) if tail == TAIL_STAR and adjacent else None
+            if amount is not None and P.scale(amount):    # '12* 10', '12* 1000': the star may multiply a scale
+                return P.name(amount.canonical)
             if adjacent and w[:1] in MULTIPLIERS and not W.is_mult_word(w):
                 return _why(w, False)                     # '12 xenon', '12 x3/4', '12 x103': its operand is this word
             if "ratio" in kind and (unit_led(w[lo:hi]) or w[lo:lo + 1] in MULTIPLIERS):
@@ -228,7 +232,7 @@ class Window:
                 return SPACED_EXPONENT                    # '1.2 é-3', '1.2 ε-03'
         tight = side == LEFT or self.t[self.ends[lw] - 1] in DIGITS
         if _PLAIN.fullmatch(w) is not None:
-            return NEIGHBOUR if split else self.number_fault(k, side, listed, kind, tight)
+            return NEIGHBOUR if split else self.number_fault(k, side, listed, kind, tight, adjacent)
         if side == LEFT and assigned and G.variable(w):
             return ""
         if self.has_digit(k):
@@ -239,7 +243,7 @@ class Window:
                 if not (numeric or G.label(w)):
                     return _why(w, False)
                 return "" if numeric or G.unit_powers(w) else DETACHED
-            return NEIGHBOUR if split else self.number_fault(k, side, listed, kind, tight)
+            return NEIGHBOUR if split else self.number_fault(k, side, listed, kind, tight, adjacent)
         if G.prose(w):
             return "" if G.unit_powers(w) else DETACHED  # 'm²' reads; 'lO³' is a look-alike of a detached power
         return self._operator_fault(k, w, lo, hi, side, adjacent, kind)
@@ -253,8 +257,8 @@ class Window:
         if side == LEFT and qualifier_word(w):
             return ""
         mult = W.is_mult_word(w)
-        if mult and ("ratio" in kind or (side == LEFT and W.ten_shape(self.text(k + 1)))):
-            return OPERAND if "ratio" in kind else TEN    # a ratio is never an operand; 'x 10^3' is a scale
+        if mult and "ratio" in kind:
+            return OPERAND                                # a ratio is never an operand
         infix = w in RANGE_WORDS or mult or (side == RIGHT and all(c in QUALIFIERS for c in w))
         if infix and adjacent:
             return self.far_fault(k, side)
@@ -285,10 +289,14 @@ class Window:
         kind = {t.shape for t in self.target}
         if len(self.target) == 1 and "bare_power" in kind:
             kind.add("power")                             # the target is a power of ten standing alone
+        if self.scan(lw).need_unit and not (lw + 1 < self.n and unit_led(self.text(lw + 1))):
+            return RIGHT, lw, P.name(self.target[-1].canonical)   # '2x100': a power-of-ten amount needs its unit
+        if (split := self.detached_decimal(fw, lw)) is not None:
+            return split
         plain = not kind & {"ratio", "power"} and not self.scan(lw).tail
         for side, k0 in ((LEFT, fw - 1), (RIGHT, lw + 1)):
             if plain and 0 <= k0 < self.n and (_SIMPLE.fullmatch(self.words[k0]) is not None or (
-                    _PLAIN.fullmatch(self.words[k0]) is not None and not (side == LEFT and self.ten_behind_mult(k0)))):
+                    _PLAIN.fullmatch(self.words[k0]) is not None and not (side == LEFT and self.refused_amount(k0)))):
                 continue                                  # a common neighbour: 'mg', 'ng/mL', '(CV', 'after', '12'
             k, split, opened, assigned, ratio_mark, listed = k0, False, False, False, False, False
             edge = self.t[self.starts[fw]] if side == LEFT else self.t[self.ends[lw] - 1]
@@ -304,6 +312,22 @@ class Window:
             fault = self._side_fault(k, k0, side, fw, lw, dash, (split, opened, assigned, ratio_mark, listed), kind)
             if fault is not None:
                 return fault
+        return None
+
+    def detached_decimal(self, fw: int, lw: int) -> tuple[int, int, str] | None:
+        """r7 round 3: a number without a decimal mark whose word ENDS in the page's decimal mark right after it, then a
+        word that starts with a digit ('0. 5', '12.\n5', '1,234. 5'), is one number the text layer split, refused like
+        '12 .5' (a comma on a point page is a list mark, a point on a comma page a sentence end, '12.5. 15' and
+        '35. [35]' a sentence end)."""
+        t, last, first = self.t, self.target[-1], self.target[0]
+        if lw + 1 < self.n and t[self.ends[lw] - 1] == self.style and last.end == self.ends[lw] - 1 \
+                and not last.decimal and t[self.starts[lw + 1]] in DIGITS:
+            return RIGHT, lw + 1, FRAGMENT
+        if fw >= 1 and t[self.starts[fw]] in DIGITS and first.start == self.starts[fw] \
+                and t[self.ends[fw - 1] - 1] == self.style and self.number_end(fw - 1, 1):
+            before = self.scan(fw - 1).toks
+            if before and not before[-1].decimal:
+                return LEFT, fw - 1, FRAGMENT
         return None
 
     def _side_fault(self, k: int, k0: int, side: int, fw: int, lw: int, dash: bool, flags: tuple[bool, ...],

@@ -61,10 +61,6 @@ UNIT_PREFIX_PIN = _terms((0x6D,), (0x3BC,), (0x6E,), (0x6B,), (0x63,))          
 UNIT_BASE_PIN = _terms((0x67,), (0x68,), (0x4C,), (0x79,), (0x4D,), (0x6D, 0x69, 0x6E), (0x6D,), (0x77,),
                        (0x6D, 0x6D, 0x48, 0x67), (0x48, 0x7A), (0x49, 0x55))        # g h L y M min m w mmHg Hz IU
 UNIT_PREFIXED_BASE_PIN = _terms((0x6C,))                                              # l (only after a prefix: ml)
-# the 42 characters of the deleted LINE list that are CONTEXT since r7 (the layer-B sweeps keep checking them as they did)
-FOLDED_FROM_LINE = frozenset((0x3BA, 0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3, 0xE6, 0xC5, 0xE4, 0xF6, 0xD6, 0xFC, 0xED,
-                              0xEF, 0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107, 0x10D, 0x11F, 0x142,
-                              0x15B, 0x26, 0x40, 0x201C, 0x201D, 0xA9, 0xAE, 0x2122, 0x221E, 0xA7, 0xB6, 0x2020, 0x2021))
 
 
 def expected_class(cp: int) -> str:
@@ -81,3 +77,8 @@ def expected_class(cp: int) -> str:
 
 INSIDE_SET, GAP_SET = frozenset(INSIDE_CPS), frozenset(GAP_CPS)
 CONTEXT_SET = frozenset(CONTEXT_CPS)
+# r7 round 3: the CONTEXT characters the glued-word style sweep checks, DERIVED from this copy of the lists (the hand-
+# written FOLDED_FROM_LINE copy of the deleted LINE list is gone): every CONTEXT code point that is not an ASCII letter
+# (A-Z, a-z) and not an opener ('(' '[': a token may start right after one, so '3,4(5,6' legitimately holds two numbers).
+# It holds every character LINE gave CONTEXT in r7 (the 40 non-ASCII ones and '&' '@') and the other CONTEXT marks.
+GLUE_SWEPT = frozenset(cp for cp in CONTEXT_SET if not (0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A) and cp not in (0x28, 0x5B))

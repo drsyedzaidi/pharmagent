@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence import models as M
 from app.evidence.letter_tables import casefold_letters
 from app.evidence.normalize import numbers_in
@@ -183,9 +184,8 @@ def _record_flags(rec: dict[str, Any], field: str, group: str, index: dict[str, 
         flags.extend(_field_flags(rec, spec, field, group))
     prior = approved.get((rec.get("source_id") or "", field.casefold(), group_key(group)))
     if prior is not None and not same_value(prior, rec):
-        flags.append(_flag(M.FLAG_DUPLICATE, "warn",
-                           f"{field}: an approved record already holds {prior.get('value')!r}"
-                           f" {prior.get('unit') or ''}".rstrip() + f" (proposed {rec.get('value')!r})", field, group))
+        held = gaps.strip(f"{field}: an approved record already holds {prior.get('value')!r} {prior.get('unit') or ''}")
+        flags.append(_flag(M.FLAG_DUPLICATE, "warn", held + f" (proposed {rec.get('value')!r})", field, group))
     rivals = [o for o in batch if o is not rec and not same_value(o, rec)]
     if rivals:
         flags.append(_flag(M.FLAG_DUPLICATE, "warn",
@@ -210,7 +210,7 @@ def same_value(a: dict[str, Any], b: dict[str, Any]) -> bool:
         return False
     if a.get("value_num") is not None and b.get("value_num") is not None:
         return float(a["value_num"]) == float(b["value_num"])
-    return str(a.get("value") or "").strip() == str(b.get("value") or "").strip()
+    return gaps.strip(str(a.get("value") or "")) == gaps.strip(str(b.get("value") or ""))
 
 
 def slot_key(rec: Any, template: dict[str, Any]) -> tuple[str, str, str]:
@@ -256,8 +256,8 @@ def merge_llm_flags(existing: list[dict[str, Any]] | None, proposed: list[Any] |
     for p in proposed or []:
         if not isinstance(p, dict):
             continue
-        code = str(p.get("code") or "").strip()[:MAX_CODE_CHARS]
-        message = str(p.get("message") or "").strip()[:MAX_MESSAGE_CHARS]
+        code = gaps.strip(str(p.get("code") or ""))[:MAX_CODE_CHARS]
+        message = gaps.strip(str(p.get("message") or ""))[:MAX_MESSAGE_CHARS]
         severity = p.get("severity")
         if not _CODE_RE.fullmatch(code) or not message or severity not in M.FLAG_SEVERITIES:
             continue

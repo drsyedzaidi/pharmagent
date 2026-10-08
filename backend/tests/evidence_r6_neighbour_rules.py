@@ -9,6 +9,7 @@ import re
 from app.evidence.numgrammar import tokens
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
+from tests import evidence_r6_product_spec as X
 
 DIG = frozenset("0123456789")
 LET = O._ASCII_LETTERS | O._GREEK | O._ACCENTED
@@ -133,9 +134,15 @@ def lead_letter(w: str) -> bool:
     return _lead(w) < len(w) and w[_lead(w)] in LET
 
 
+def _bracket_op(w: str, start: int) -> bool:
+    """r7 round 3: a lone operator letter right after a bracket inside the word, judged on the printed text."""
+    return any(w[j] in OPL and w[j - 1] in OPEN | CLOSE and lone_op(w, j) for j in range(start + 1, len(w)))
+
+
 def label(w: str) -> bool:
     i = _lead(w)
-    return i < len(w) and w[i] in LET and not lone_op(w, i) and prose("".join("q" if c in DIG else c for c in w[i:]))
+    return i < len(w) and w[i] in LET and not lone_op(w, i) and not _bracket_op(w, i) and prose(
+        "".join("q" if c in DIG else c for c in w[i:]))
 
 
 def glue(run: str) -> bool:
@@ -146,7 +153,10 @@ def glue(run: str) -> bool:
         a += 1
     while b > a and run[b - 1] in PUNCT:
         b -= 1
-    return prose("".join("q" if c in DIG else c for c in run[a:b]))
+    mid = run[a:b]
+    if mid and (lone_op(mid, 0) or _bracket_op(mid, 0)):
+        return False                                       # r7 round 3: '(x10^3)', '(E3)' on the printed text
+    return prose("".join("q" if c in DIG else c for c in mid))
 
 
 def number(w: str) -> bool:
@@ -161,19 +171,10 @@ def _has_tokens(w: str) -> bool:
     return any(t.value is not None for t in tokens(w[:-1] if w.endswith("-") else w, mode="cell"))
 
 
-def _ten(w: str) -> bool:
-    i = 1 if w[:1] in "+-" else 0
-    return w[i:i + 2] == "10" and w[i + 2:i + 3] != "0"
-
-
 def _bare_power(w: str) -> bool:
     """The word starts with a power of ten that has no mantissa ('10^3', '(10^-4)', '10^6/L')."""
     got = tokens(w, mode="cell")
     return bool(got) and got[0].value is not None and got[0].shape == "bare_power"
-
-
-def _ten_behind_mult(words: list[str], k: int) -> bool:
-    return k >= 1 and words[k - 1] in MULT and len(words[k - 1]) == 1 and _ten(words[k])
 
 
 def _ratio_led(w: str) -> bool:
@@ -197,15 +198,18 @@ def _number_end(w: str) -> bool:
 def plain_number(words: list[str], k: int) -> bool:
     return 0 <= k < len(words) and number(words[k]) and not any(
         t.shape == "ratio" for t in tokens(words[k], mode="cell")) and not _bare_power(words[k]) \
-        and not _ten_behind_mult(words, k)
+        and not X.refused_amount(words, k, prose)
 
 
-def _number_ok(words: list[str], k: int, side: int, listed: bool, kind: set[str], tight: bool = True) -> bool:
+def _number_ok(words: list[str], k: int, side: int, listed: bool, kind: set[str], tight: bool = True,
+               adjacent: bool = True) -> bool:
     w = words[k]
+    if X.power_word(words, k) and not set(kind) & {"ratio", "power"}:
+        return True                                        # r7 round 3: a scientific number's power word is a number
     if not number(w):
         return False
-    if _ten_behind_mult(words, k):
-        return False
+    if adjacent and X.refused_amount(words, k, prose):
+        return False                                       # r7 round 3: beside a refused product's amount
     if listed:
         return True
     if _bare_power(w) or "power" in kind or ("ratio" in kind and side < 0):
@@ -216,7 +220,9 @@ def _number_ok(words: list[str], k: int, side: int, listed: bool, kind: set[str]
 def _infix_ok(words: list[str], k: int, side: int) -> bool:
     j = k + side
     mult = words[k] in MULT and len(words[k]) == 1
-    if not 0 <= j < len(words) or (mult and _ten(words[j])):
+    if mult:                                               # r7 round 3: the product production (evidence_r6_product_spec)
+        return X.product_ok(words, k - 1, j) if side > 0 else X.product_ok(words, X.count_index(words, j, prose), k + 1)
+    if not 0 <= j < len(words):
         return False
     if plain_number(words, j):
         return True
@@ -236,8 +242,8 @@ def _word_ok(words: list[str], k: int, side: int, adjacent: bool, split: bool, a
         if spaced_exp(w):
             return False
     if re.fullmatch("0|[1-9][0-9]{0,39}", w):
-        return not split and _number_ok(words, k, side, listed, kind, tight)
-    if side < 0 and (assigned or w.endswith("=")) and _lead_open_letter(w):
+        return not split and _number_ok(words, k, side, listed, kind, tight, adjacent)
+    if side < 0 and (assigned or w.endswith("=")) and _variable(w):
         return True
     if any(c in DIG for c in w):
         if lead_letter(w):
@@ -246,7 +252,7 @@ def _word_ok(words: list[str], k: int, side: int, adjacent: bool, split: bool, a
             return _has_tokens(w) or (label(w) and unit_powers(w))
         if re.fullmatch(r"\[[1-9][0-9]?,[0-9]{1,2}\]", w):
             return True                                    # a bracket list: masked, a label
-        return not split and _number_ok(words, k, side, listed, kind, tight)
+        return not split and _number_ok(words, k, side, listed, kind, tight, adjacent)
     if prose(w):
         return unit_powers(w)
     if w[lo:hi] == "±":
@@ -256,17 +262,18 @@ def _word_ok(words: list[str], k: int, side: int, adjacent: bool, split: bool, a
     if side < 0 and _qualifier(w):
         return True
     mult = len(w) == 1 and w in "xX*×·"
-    if mult and ("ratio" in kind or (side < 0 and re.match("[+-]?10(?!0)", words[k + 1]))):
-        return False                                       # a ratio is never an operand; 'x 10^3' is a scale
+    if mult and "ratio" in kind:
+        return False                                       # a ratio is never an operand
     infix = w in ("-", "~") or mult or (side > 0 and all(c in QUAL for c in w))
     return infix and adjacent and _infix_ok(words, k, side)
 
 
-def _lead_open_letter(w: str) -> bool:
+def _variable(w: str) -> bool:
+    """r7 round 3: a name before '=': one letter after openers, or a label whose powers follow unit symbols."""
     i = 0
     while i < len(w) and w[i] in OPEN:
         i += 1
-    return i < len(w) and w[i] in LET
+    return i < len(w) and w[i] in LET and (i + 1 == len(w) or (label(w) and unit_powers(w)))
 
 
 def _qualifier(w: str) -> bool:
@@ -299,18 +306,35 @@ def _masked(words: list[str]) -> list[str]:
     list (with a comma) is masked with letters (productions.py: a non-value token, a label to its neighbours)."""
     out = list(words)
     for i, w in enumerate(words):
-        m = _GROUP.match(w)
-        if m is None or (m.end() < len(w) and w[m.end()] in DIG):
-            continue
-        prev = words[i - 1].rstrip(")],;:.'") if i else ""
-        if "," in m.group() or (prev and prev[-1] in LET and prev not in ("x", "X", "e", "E")):
-            out[i] = "c" * m.end() + w[m.end():]
+        for m in _GROUP.finditer(w):
+            if m.end() < len(w) and w[m.end()] in DIG:
+                continue
+            s0, prev = m.start(), (words[i - 1].rstrip(")],;:.'") if i else "")
+            glued = s0 > 0 and (w[s0 - 1] in LET or (w[s0 - 1] in TRAIL and s0 > 1 and w[s0 - 2] in LET))
+            if glued or (s0 == 0 and ("," in m.group() or (prev and prev[-1] in LET and prev not in ("x", "X", "e", "E")))):
+                out[i] = out[i][:s0] + "[" + "c" * (m.end() - s0 - 1) + out[i][m.end():]   # r7 round 3: the opener stays
     return out
+
+
+def _mark_free(w: str) -> bool:
+    """*w* ends in a number (closers aside) whose last token holds no decimal mark: the integer part of a split decimal."""
+    got = [t for t in tokens(w, mode="cell") if t.value is not None]
+    return _number_end(w) and bool(got) and not got[-1].decimal
+
+
+def _split_decimal(words: list[str], first: int, last: int) -> bool:
+    """r7 round 3: a mark-free number whose word ends in the decimal point, then a word that starts with a digit."""
+    after = last + 1 < len(words) and words[last].endswith(".") and _mark_free(words[last][:-1]) \
+        and words[last + 1][:1] in DIG
+    return after or (first >= 1 and words[first][:1] in DIG and words[first - 1].endswith(".")
+                     and _mark_free(words[first - 1][:-1]))
 
 
 def spec_inert(text: str, first: int, last: int, kind: set[str] = frozenset()) -> bool:
     """The window of the number over words first..last of *text* (folded) is inert."""
     words = _masked([m.group() for m in GAPS.finditer(text)])
+    if _split_decimal(words, first, last):
+        return False
     dash = words[last].endswith("-") and words[last][-2:-1] in DIG | {"%", "‰"}   # T's own word: '5.0-' only
     for side, k0 in ((-1, first - 1), (1, last + 1)):
         k, split, assigned, ratio_mark, listed = k0, False, False, False, False

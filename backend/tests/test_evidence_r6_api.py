@@ -70,7 +70,11 @@ def test_words_after_lists_the_following_words():
     ("AUC0–∞ (ng·h/mL)", False), ("AUC0-inf", False), ("Cmax (ng/mL)", False), ("Day 1", False),
     ("CLint (µL/min/10^6 cells)", False), ("mL/10^6 cells", False), ("per 10^6 cells", False),
     ("cells / 10^6", False), ("Dose (mg)", False), ("t1/2 (h)", False), ("", False), ("ng.h/mL", False),
-    ("Group 10", False), ("150 mg", False), ("e", False), ("Test", False), ("AUC\u202eabc", False),
+    ("150 mg", False), ("e", False), ("Test", False),
+    # r7 round 3: were ("Group 10", False) and ("AUC\u202eabc", False). scale_shapes is an allow-list
+    # (numgrammar/scale.py): a written-out power of ten in a label may be a scale, and a word the reader cannot read
+    # (U+202E) raises the flag: the reviewer compares with the page image
+    ("Group 10", True), ("AUC\u202eabc", True),
 ])
 def test_scale_shapes_flags_a_multiplier_and_ignores_unit_denominators_and_labels(label, expected):
     assert scale_shapes(label) is expected, label

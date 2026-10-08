@@ -25,12 +25,12 @@ from typing import Any
 
 from app.evidence import gaps
 from app.evidence import models as M
+from app.evidence import verify_table as VT
 from app.evidence.normalize import IdxMap, normalise
 from app.evidence.numgrammar import Tok, claim_decimal, digits_of, tokens, unreadable
-from app.evidence.numgrammar.neighbours import punct_only
 from app.evidence.read_cache import read
 from app.evidence.verify_columns import ColumnLines
-from app.evidence.verify_messages import context_sentence, label_sentence, tok_sentence, unreadable_sentence
+from app.evidence.verify_messages import label_sentence, tok_sentence, unreadable_sentence
 
 MAX_SNIPPET_CHARS = 300
 
@@ -218,78 +218,9 @@ def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: t
     return _fail(loc, M.REASON_PARTIAL_NUMBER if seen_any else M.REASON_SNIPPET_NOT_ON_PAGE)
 
 
-def _cell_text(cell: Any, page: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """(cell text, table) for a well-formed in-range cell locator, else None."""
-    if not isinstance(cell, dict):
-        return None
-    idx = [cell.get(k) for k in ("table", "row", "col")]
-    if any(not isinstance(i, int) or isinstance(i, bool) or i < 0 for i in idx):
-        return None
-    t, r, c = idx
-    tables = page.get("tables") or []
-    if t >= len(tables):
-        return None
-    rows = tables[t].get("rows") or []
-    if r >= len(rows) or c >= len(rows[r]):
-        return None
-    return str(rows[r][c] or ""), tables[t]
-
-
-def _row_span(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
-              anchors: list[str], row_head: str) -> list[int] | None:
-    """Page-text span of the cited cell: the occurrence whose text line holds the most OTHER cells of
-    the same table row (at least one), a line starting with the row's first cell winning a tie
-    (prose can repeat a row's label and unit); first wins any remaining tie. None (highlight the
-    rendered cell only) when no line holds one -- never the first match elsewhere on the page."""
-    keys = [k for k in (normalise(a)[0] for a in anchors) if k]
-    lead = normalise(row_head)[0]
-    best: tuple[tuple[int, bool], list[int] | None] = ((0, False), None)
-    for span, *_ in (_hits(snippet, lit, text, style)[0] if keys else []):
-        ls = text.rfind("\n", 0, span[0]) + 1
-        le = text.find("\n", span[1])
-        line = normalise(text[ls:len(text) if le < 0 else le])[0]
-        score = (sum(1 for k in keys if k in line), bool(lead) and line.startswith(lead))
-        if score[0] and score > best[0]:
-            best = (score, span)
-    return best[1]
-
-
-def _row_fragment(literal: str, text: str, anchors: list[str], style: str) -> bool:
-    """True when a page-text line holding another cell of the row prints the cell's literal only as
-    PART of a longer number ('2' of a row line reading '281'): a ruling split the number."""
-    want = normalise(literal)[0]
-    keys = [k for k in (normalise(a)[0] for a in anchors) if k]
-    for line in text.split("\n"):
-        if not any(k in normalise(line)[0] for k in keys):
-            continue
-        toks = [normalise(line[t.start:t.end])[0] for t in tokens(line, style, mode="page")]
-        if want not in toks and any(want in t and digits_of(want) != digits_of(t) for t in toks):
-            return True
-    return False
-
-
-def _neighbour_offence(row: list[Any], col: int, literal: str) -> str:
-    """The reviewer sentence when a neighbouring cell of the cited one holds a character outside the allowed alphabet or
-    a ``(cid:N)`` marker (a qualifier, a sign or a multiplier the reader cannot read), else ''. A cell is one line; its
-    neighbours are the words one separator away, and like the window of a page line (r7 round 2) the walk on each side
-    goes past the cells that hold no word the allow-list judges (empty, blank or punctuation-only: a spanned cell, a
-    lone
-    bracket) to the first cell that does: each cell walked is read."""
-    for side, where in ((-1, "in the previous cell"), (1, "in the next cell")):
-        k = col + side
-        while 0 <= k < len(row):
-            text = str(row[k] or "")
-            if (bad := unreadable(text)) is not None:
-                return context_sentence(literal, bad[1], where)
-            if not (gaps.blank(text) or punct_only(gaps.strip(text))):
-                break
-            k += side
-    return ""
-
-
 def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: tuple[int, int] | None,
                   style: str) -> M.VerifyResult:
-    found = _cell_text(loc.get("cell"), page)
+    found = VT.cell_text(loc.get("cell"), page)
     if found is None:
         return _fail(loc, M.REASON_TABLE_CELL_MISMATCH)
     cell_text, table = found
@@ -302,11 +233,14 @@ def _verify_table(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: 
     cell = {**loc["cell"], "strategy": table.get("strategy")}
     r, c = loc["cell"]["row"], loc["cell"]["col"]
     row = (table.get("rows") or [])[r]
-    if literal and (offence := _neighbour_offence(row, c, literal)):
+    if literal and (offence := VT.neighbour_offence(row, c, literal)):
         return _fail(loc, M.REASON_UNRESOLVED_CONTEXT, offence)
-    anchors = [str(x or "") for i, x in enumerate(row) if i != c]
-    span = _row_span(snippet, lit, page.get("text") or "", style, anchors, str(row[0] or "") if row else "")
-    if span is None and literal and _row_fragment(literal, page.get("text") or "", anchors, style):
+    if literal and token is not None and (fault := VT.window_fault(row, c, token, style)) is not None:
+        return _fail(loc, *fault)               # r7 round 3: the cells one separator away are the number's window
+    text = page.get("text") or ""
+    others = any(i != c and str(x or "") for i, x in enumerate(row))
+    span = VT.row_span([h[0] for h in _hits(snippet, lit, text, style)[0]], text, row, c) if others else None
+    if span is None and literal and others and VT.row_fragment(literal, text, row, c, style):
         return _fail(loc, M.REASON_PARTIAL_NUMBER)
     return _pass({**loc, "cell": cell}, span, literal, number, token)
 

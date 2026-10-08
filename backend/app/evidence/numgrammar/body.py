@@ -10,7 +10,7 @@ Shapes (``Tok.shape``): ``int`` ``decimal`` ``foreign_decimal`` ``style_dependen
 """
 from __future__ import annotations
 
-from app.evidence.numgrammar.alphabet import DECIMAL_MARKS, GROUP_ONLY, MIDDOT
+from app.evidence.numgrammar.alphabet import DECIMAL_MARKS, GROUP_ONLY, HYPHEN, MIDDOT, POINT, ZERO
 
 MAX_DIGITS = 40          # digits of one number (a 200-digit run is not a measurement)
 MAX_EXPONENT = 300       # |e| of a power of ten
@@ -32,14 +32,14 @@ def exp_int(digits: str, negative: bool) -> int | None:
 
 def valid_groups(groups: list[str], seps: list[str]) -> bool:
     """One separator kind, a head of 1-3 digits without a leading zero, every other group exactly 3 digits."""
-    return (len(set(seps)) == 1 and 1 <= len(groups[0]) <= 3 and groups[0][0] != "0"
+    return (len(set(seps)) == 1 and 1 <= len(groups[0]) <= 3 and groups[0][0] != ZERO
             and all(len(g) == 3 for g in groups[1:]))
 
 
 def _single(groups: list[str], sep: str, style: str) -> tuple[str, str, str] | str:
     """One separator kind used once: ``A S B``."""
     head, tail = groups
-    if len(tail) != 3 or head == "0":                       # '0,412', '18,2', '1234,5': a decimal
+    if len(tail) != 3 or head == ZERO:                       # '0,412', '18,2', '1234,5': a decimal
         return head + "." + tail, ("decimal" if sep == style else "foreign_decimal"), sep
     if len(head) <= 3:                                      # '3,412': thousands or decimal, by the page style
         return (head + "." + tail, "style_dependent", sep) if sep == style else (head + tail, "style_dependent", "")
@@ -48,7 +48,7 @@ def _single(groups: list[str], sep: str, style: str) -> tuple[str, str, str] | s
 
 def _middot(groups: list[str], seps: list[str], style: str) -> tuple[str, str, str] | str:
     """A raised dot between digits is a decimal point on a point-decimal page only ('12·4' = 12.4)."""
-    if style != "." or seps[-1] != MIDDOT or seps.count(MIDDOT) != 1:
+    if style != POINT or seps[-1] != MIDDOT or seps.count(MIDDOT) != 1:
         return "middot"
     if len(seps) > 1 and not valid_groups(groups[:-1], seps[:-1]):
         return "groups"
@@ -60,7 +60,7 @@ def read_body(groups: list[str], seps: list[str], style: str) -> tuple[str, str,
     (``too_many_digits`` ``leading_zero`` ``middot`` ``groups`` ``ambiguous_tail`` ``separators``)."""
     if sum(len(g) for g in groups) > MAX_DIGITS:
         return "too_many_digits"
-    if len(groups[0]) > 1 and groups[0][0] == "0":
+    if len(groups[0]) > 1 and groups[0][0] == ZERO:
         return "leading_zero"                                # '007', '05', '00.5'
     if not seps:
         return groups[0], "int", ""
@@ -90,7 +90,7 @@ def mantissa(groups: list[str], seps: list[str], style: str) -> tuple[str, str, 
     head, tail = groups
     if len(head) + len(tail) > MAX_DIGITS:
         return "too_many_digits"
-    if len(head) > 1 and head[0] == "0":
+    if len(head) > 1 and head[0] == ZERO:
         return "leading_zero"
     return head + "." + tail, ("decimal" if seps[0] == style else "foreign_decimal"), seps[0]
 
@@ -98,7 +98,7 @@ def mantissa(groups: list[str], seps: list[str], style: str) -> tuple[str, str, 
 def decimal_mantissa(literal: str) -> tuple[str, str]:
     """(canonical, mark) of a one-separator literal read as a decimal (``1,234`` -> ``1.234``): the mantissa of a power
     form whose number the page style read as thousands."""
-    sign = "-" if literal[:1] == "-" else ""
+    sign = "-" if literal[:1] in HYPHEN else ""
     body = literal[len(sign):]
     mark = next(c for c in body if c in DECIMAL_MARKS)
     head, _, tail = body.partition(mark)

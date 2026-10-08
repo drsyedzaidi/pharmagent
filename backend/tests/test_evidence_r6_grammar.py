@@ -47,10 +47,14 @@ PLAIN = [
     ("37°C and 37 °C and 37◦C", ".", [37.0, 37.0, 37.0]),
     ("CL 12.4 L h-1 and 90 mL/min/1.73m2", ".", [12.4, 90.0]),
     ("n = 12.", ".", [12.0]), ("12-fold and 24-h", ".", [12.0, 24.0]), ("12.)", ".", [12.0]),
-    ("(gsd - 1) × 100 = 41%", ".", [None, 100.0, 41.0]),   # r7 writer 3: the 1 of 'gsd - 1' is subtracted, no range
+    # r7 writer 3: the 1 of 'gsd - 1' is subtracted, no range; r7 round 3: '× 100' with no unit after it is no product
+    # (a written-out power of ten behind a multiplier is a scale: product.py), so the 100 is unresolved too
+    ("(gsd - 1) × 100 = 41%", ".", [None, None, 41.0]),
     ("Table 1.", ".", [1.0]), ("2.1) 404/9696 (4.2)", ".", [2.1, None, 4.2]),
     ("12.4 (n = 10)", ".", [12.4, 10.0]), ("150 mg/kg", ".", [150.0]), ("ratio 1:2", ".", [None]),
-    ("df=3,P=0.08", ".", [3.0, 0.08]),
+    # r7 round 3: was [3.0, 0.08]; after a decimal or group separator only a closer, the word end or a unit may follow
+    # (scan.post: '1,OOO' and '0.OS' are look-alike groups), so the lost-space label word is inert and reads nothing
+    ("df=3,P=0.08", ".", []),
 ]
 
 
@@ -359,6 +363,9 @@ def test_a_label_word_is_never_the_numeric_operand_of_a_multiplier(text):
 
 
 @pytest.mark.parametrize("text, want", [("2 x 5 mg", [2.0, 5.0]), ("2 x -3", [2.0, -3.0]), ("4.6\u00d7150 mm", [4.6, 150.0]),
-                                        ("2 x 100", [2.0, 100.0]), ("3 x 1000", [3.0, 1000.0])])
+                                        ("2 x 100 mg", [2.0, 100.0]), ("3 x 1000 mg", [3.0, 1000.0]),
+                                        ("2 x 100", [None]), ("3 x 1000", [None])])
 def test_a_numeric_word_after_a_multiplier_is_a_product_not_a_scale(text, want):
+    """r7 round 3: a written-out power of ten after a multiplier is a product only after an integer count and before a
+    unit production ('2 x 100 mg'); bare, it may be a scale ('2 x 100' was [2.0, 100.0]): product.py."""
     assert V(text) == want

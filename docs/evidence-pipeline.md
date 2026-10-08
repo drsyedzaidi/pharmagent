@@ -472,7 +472,12 @@ through the alphabet's own table.
 There is no folding of look-alike slashes and dots: a number next to `mg⁄kg`, `mg∕kg` or `mg⋅kg−1` is unresolved and
 the record fails verification before any unit is read; a next token made of `/ · * × ^`, or `(per`, continues the unit.
 Value checks (`value_checks.py`, errors) read the words around the verified token, never characters:
-`censored_value` (the token is qualified, `<0.5`, `≤(1.0)`, `~=2`, `∼45%`; the word before it is `below`, `above`, `under`,
+`censored_value` (`value_bounds.py` since r7 round 3; the token is qualified, `<0.5`, `≤(1.0)`, `~=2`, `∼45%`, or since r7 round 3
+`< or = 0.5` / `> or = 18` (the MEDLINE spelling), a comparative before `than` (`fewer than`, `lower than`), a bound AFTER the
+number (`0.5 or less`, `18 or older`, `12 and above`: `word_lists.AFTER_BOUNDS`), `between 12 and 24` (both ends), the
+words `around`, `roughly`, `nearly`, `within`, `NMT`, `NLT`, a qualifier word broken at a line-end hyphen
+(`approxi-` + line break + `mately`, a soft hyphen too), and a range whose left end carries a unit or a percent before the
+range word (`20 mg – 40 mg`, `20 mg to 40 mg`, `45 % – 55 %`, `20 mg–40 mg`); the word before it is `below`, `above`, `under`,
 `over`, `approximately`, `approx`, `about`, `circa`, `ca`, `BLQ`, `LLOQ` or one of `less than`, `more than`,
 `greater than`, `up to`, `at least`, `at most`, `less than or equal to`; or it is one end of a range, `12–15`, `12 - 15`,
 `12 -15`, `5.0- 12.4`, `12.5 ∼ 15.0`, `12 to 15`, unless the field names an interval or range; every word list is matched with
@@ -480,7 +485,13 @@ Value checks (`value_checks.py`, errors) read the words around the verified toke
 the reader cannot read; no `str.isascii`) stands for any one character or for none: `αbove`, `τo` and a zero-width character
 inside `above` flag like the plain words; the qualifier is read through the window's walk too, r7 round 2: `< , 12`), a
 number after a word led by a letter that ends in a hyphen or a slash (`AUC0-\n24`) is one end of a range,
-`scaled_header` (a multiplier in any header row above the cell, row label,
+`scaled_header` (`value_scale.py`; since r7 round 3 the label reading is an ALLOW-LIST, `numgrammar/scale.py`: a label is
+scale-free only when every part of every word, split at brackets and slashes, is punctuation, prose, a label whose powers
+follow unit symbols, a unit denominator `cells/10^6` / `per 10^6`, a sample size `n = 45`, a percentage, or a plain number that
+is no power of ten; a multiplier (`x 2`, `AUC(x1000)`), an exponent letter before digits (`E3`), a written-out power of ten
+(`1000`, `Group 10`), a scale word (a look-alike spelling and digits inside it too: `th0usands`, `mi11ions`) or any character
+the reader cannot read raises it; a data cell beside the number reads its resolved numbers as data; before r7 round 3: a
+multiplier in any header row above the cell, row label,
 unit column, unit or a cell right beside it: `AUC ×10³ (ng·h/mL)`, `x1000`, `x 1000`, `E+03`, `thousands`; a power after `/` or
 `per` is part of the unit; a word that starts with a letter, `AUC0–∞`, never counts. Nothing is dropped from the label: it is
 read as it stands and with every character the reader cannot read removed (`OUTSIDE_RE`; r7 round 2, it removed every
@@ -513,7 +524,11 @@ other module of the package types a character set (an AST guard: no `frozenset("
 checks and the dose rule (qualifier, bound and scale words, dose units) in `word_lists.py`, outside the package. The modules
 whose text reaches the reader, a unit or a glyph check split and strip only the GAP set (`gaps.py`: a no-argument
 `str.split()` / `str.strip()` erased an OUTSIDE space, so a header `Dose (mg<EM SPACE>/kg)` became the readable unit
-`mg /kg`; an AST guard forbids them there), and a table cell keeps its thin-space groups (`evidence-parse 8`). (The snippet locator, `normalize.py`, finds
+`mg /kg`; an AST guard forbids them there; since r7 round 3 also the model's value and unit in `extract_llm.py`, the layout
+word mapping, the column lines and the QC value comparison: a value `12.5<U+3000>` keeps its OUTSIDE space and fails
+`unresolved_context`), and a table cell keeps its thin-space groups (`evidence-parse 8`). A digit class in a regex outside
+the grammar module is an explicit, named exemption (file names, flag codes, PDF bytes, screening tokens, field names); the
+caption patterns of `parse_tables.py` are built from GAP and DIGITS (r7 round 3). (The snippet locator, `normalize.py`, finds
 text and never yields a value; since round 2 it folds through the equivalents table plus three explicit tables of its own
 and has no NFKC; see "Locator" below.)
 
@@ -619,7 +634,8 @@ the canonical `n/d`, `Tok.key`): never its quotient (`0.8`), never a reduced rat
 `efflux [12, 13]`, `[1, 2, 3]`, `[ 12 ]`, belong to it; a gap is never masked, so a line break inside stays one), when it is
 unmistakable: glued to a word (after a letter, or after a
 trailing closer that follows a letter: `studies[47–49]`, `al.[1]`, `(ADC)[4]`), continuing a citation (`[1][2]`,
-`[27] [28]`, `[21]–[23]`), or after a word that ends in a letter (`efflux [46].`). It is masked 1:1 before the words are
+`[27] [28]`, `[21]–[23]`), or after a word that ends in a letter (`efflux [46].`). It is masked 1:1 (r7 round 3: its opening
+bracket kept, so a unit glued before it ends at an opener, `12mg[3]` reads 12 mg) before the words are
 read, so it never taints a number, never ends a range and is never an operand, and it is emitted as one unresolved
 expression (`unresolved_shape:citation`, parts = the reference numbers): a record citing a number inside it fails with the
 sentence "a bracketed reference citation, which is not a value". After a number (`89 [46]`, the range of a median
@@ -635,7 +651,8 @@ of another, `(cid:3)` is `≥` in `or(cid:3)85%` and `×` in `2.0 (cid:3) 50 mm`
 `(1|Subject)` and a running-header separator; `_` code and LaTeX subscripts; `?` a question mark and a lost glyph (`?3231`).
 **Chi-square (r7, owner decision 8).** Greek chi is outside except in
 `chi ("²" | "2") ["(" ["df" [gap] "=" [gap]] digit{1,3} ")"] [gap] "=" [gap]` followed by a digit (`χ² = 3.84`,
-`χ²(1) = 6.63`, `χ2(df=2) = 7.1`): that chi is masked 1:1 as a label letter and the degrees of freedom and the number read as
+`χ²(1) = 6.63`, `χ2(df=2) = 7.1`): that chi and its square are masked 1:1 as two label letters (r7 round 3: the statistic is a
+variable name before its `=`) and the degrees of freedom and the number read as
 usual. Every other chi (`1.2 χ 10^3`, `(χ² df=1, p<0.01)`, `χ² threshold`) and every look-alike (capital chi, Cyrillic
 `х`, a Latin `x`) is what the alphabet says it is: chi taints its line. The corpus holds chi on 3 lines of 2 papers, none in
 the form.
@@ -674,7 +691,8 @@ possibly a raised exponent the text layer lost), `multiplier_operand` (`2 × dai
 `bracketed_multiplier`. The refused word and the number are one expression when a joining character ties them (a word that
 starts with a separator, caret, superscript, ratio mark or multiplier, or the refused word before that ends in one:
 `12 .5`, `12/ 15`, `10^ 3`); a rejected word with no such tie keeps its own expression (`12 +3/4`). `bare_superscript_power`
-(`10³` without a multiplier) is the word's own rejection. `2 x 100 mg` is two plain numbers. A comma list of reference-like
+(`10³` without a multiplier) is the word's own rejection. `2 x 100 mg` is the PRODUCT production (r7 round 3, below). A comma
+list of reference-like
 integers in square brackets after a number or alone (`12 [1,2]`, a cell `[1, 5]`) is the `bracket_list` production of
 `productions.py` (r7 round 2; it replaces the scan's detector of the one shape `[n,m]`), never a decimal; after a word it
 is a `citation`; `(4,6)` stays a decimal (in decimal-comma papers a parenthesised decimal is ordinary).
@@ -690,10 +708,11 @@ letter beside it, that touches a modifier, a digit, `=` or (on its right) an ope
 letter and never prose), LABEL (led by a letter that is no lone operator letter, prose with its digits read as letters:
 `AUC0-24`, `CYP2D6*4`, `h-1`; never `E-3`, `x10^3`, `E2`), NUMBER (not led by a letter, read as resolved numbers, no
 dangling multiplier, not across a lone separator word: `12 . 5` is one number split in two), a reference pair `[26,27]`,
-VARIABLE (any letter-led word behind `=`: `E = 0.9`, `x = 12`), QUALIFIER (before the number: `<`, `<=`, `≤(`, `p<`, `<-`),
+VARIABLE (behind `=`, since r7 round 3 one letter or a LABEL whose powers follow unit symbols: `E = 0.9`, `x = 12`,
+`Emax = 8`; never `x10^3`, `(E3)`, `x1000` or `E0`), QUALIFIER (before the number: `<`, `<=`, `≤(`, `p<`, `<-`),
 DISPERSION (`±`), PERCENT (`45 %`, and `16.9 %, 13.1`: the number before owns it), INFIX (a lone `- ~ x X * × ·`, or after the
 number a qualifier, directly beside it with a number, or a unit then a number, on its far side: `12 - 15`, `20 mg – 40 mg`,
-`2 x 3 mg`, `1.25 > 1.0`; a lone multiplier before a ten is a scale, never a product) and RANGE END (a word ending in a dash
+`2 x 3 mg`, `1.25 > 1.0`; a lone multiplier is the PRODUCT production of r7 round 3) and RANGE END (a word ending in a dash
 after its number is completed only by a number directly after it, `0.5-\n1.5`, or a prose word, a compound the text layer
 split: `10- fold`, `150- and 300-mg`). Since r7 round 2 (the review's findings, each stated as a production, never as a
 detector of a bad shape): a NUMBER neighbour is a plain number word, never a bare power (`1.2 10^3`, `1.2\n10^9`: a detached
@@ -724,6 +743,36 @@ word the specification accepts, and never yields a different value or literal (t
 accepted change: `12.5 x10^3` parsed into the number, and `5x 10^6` into the power). An inert window may still leave the number
 unresolved when a form takes it (`150 1/5`, `12 xenon`): fail closed, counted, never an error.
 
+**Round 3 of r7 (the round-3 audit, 2026-10-08): accepting productions for the shapes still read wrong.** Each is a
+production stated in the reader, never a detector of the bad shape (`numgrammar/product.py`, `product_window.py`, `read.py`,
+`flags.py`, `scale.py`; the flag checks in `value_bounds.py`, `value_scale.py`, `value_context.py`; the table path in
+`verify_table.py`):
+* PRODUCT (replaces the refusal of one `ten` operand shape, which let `1.2 × 10000`, `2.5 × 1e6`, `1.2 × 1,000,000` and
+  `3.1 · 1000` pass): `count MULT amount`, spaced or glued; both plain numbers (an int or a decimal, never grouped,
+  scientific, a power or a ratio; the count unsigned, and the count's unit word may stand between: `8 weeks × 3`); the amount
+  no raised ten (`10`, `103`); a written-out power of ten as the amount (`100`, `1000`, `0.1`; never `1`) only after an
+  integer count of one or two digits and before a unit production (`2 x 100 mg`, `2x100mg`; `2 x 100` alone, `2 × 10000 cells`
+  and `2.0 × 100 mm` are refused). A middle dot glued between digits is the separator production, so `0·100` and `12·105`
+  are no product. A footnote star run after a number before a scale (`12* 10`, `12* 1000`) may be a multiplier: refused.
+  A power word consumed by a multiplier-power token is a NUMBER to the next number (`4.5 x 10^9/L 3.2 x 10^9/L` reads both);
+  an unconsumed bare power stays a detached exponent.
+* A power of ten never stands as a value beside another number of its own word: `1.2(10^3)`, `12(10^9/L)`, `1.2(1e3)`,
+  `10^3-10^6` are one unresolved `detached_exponent`.
+* Letters after a decimal or group mark of a number without a decimal mark are no glue unless a unit production
+  (`1,OOO`, `0.OS`, `12.l`, `1'OOO`, `1,ØØØ` refused; `0.28,respectively` and `150mg,` read); a number's dash joins a compound
+  only as a unit production or a word of three letters or more (`10-fold`, `24-h`, `3-day`; `12-lS`, `5-FU`, `4-OH` refused).
+  A three-letter group after a GROUPING space (thin, narrow or no-break: `1 OOO`) flags `composite_cell`.
+* DETACHED DECIMAL, symmetric: a number without a decimal mark whose word ends in the page's decimal mark, then a word that
+  starts with a digit (`0. 5`, `12.\n5`, `GA<0. 6`), is one unresolved `detached_decimal` like `12 .5`; a comma on a point
+  page is a list mark (`12, 15`), and `12.5. 15` or `35. [35]` is a sentence end.
+* VARIABLE is a label or one letter (above); a lone operator letter right after a bracket inside a label word is judged on the
+  printed text, so a scale glued after a label's bracket is no name (`Count(E3) 250`, `Count(x1000) 250` refused;
+  `CYP2E1`, `AUC(0-24)` read). A multiplier letter glued inside a letter run is a letter of the label (`AUCx1000` reads as a
+  label, decision 3: the limits document).
+* Every one-character terminal of the reader (caret, hyphen, star, slash, equals, point, comma, zero, square opener, the
+  chi-square letter and square) is defined once in `alphabet.py` (an AST guard: no Compare against a one-character string,
+  no `startswith` / `endswith` of one, no set display of characters, in the reader and its flag, unit and table modules).
+
 **Unresolved shapes (the `why` of `unresolved_shape`).** `too_many_digits`, `leading_zero` (`007`), `middot` (`12·4` on
 a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
 `ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
@@ -751,7 +800,14 @@ the token at the located offsets. Raw offsets are unchanged (the equivalents are
 `locator.span`, `locator.token`, highlights and the page-image regions need no change. A claim equals a page number only
 when their canonical decimals are EQUAL (`3.2e-13` is never `0`, a changed last digit of a 13-digit integer is never the same
 number): there is no tolerance, and a proposal whose own reading differs from the page token (`1.234` on a page that prints
-`1,234`) is stored as the page literal. For a TABLE cell the cells right before and after it in its row are the words one
+`1,234`) is stored as the page literal. For a TABLE cell (r7 round 3, `verify_table.py`) the number is read again over the
+cell and the cells one separator away (`value_context.cell_context`: past empty, blank and punctuation-only cells; a cell of one
+lone range word, `-` or `~`, is a marker cell the bound check flags, never a word of the window) and must be the same resolved
+token there: a sign or opener in the previous cell (`(-` | `12)`), a decimal tail (`12` | `.5`, `0.` | `5`), a power
+(`12` | `^3`), a slash (`12` | `/15`) or an operator letter (`1.2 e` | `-3`, `x` | `10^3`) refuses it as in running text; a cell
+boundary stays structure for a list of signed numbers (decision 9: `−11.8` | `−14.2` are two values). The page-text span of
+a table record is the cited cell on its row: the row's cells are matched to a line as whole normalised words in order (the
+first line of a wrapped cell), the line aligning the most other cells wins, a tie is no span. The cells right before and after it in its row are the words one
 separator away: a character outside the alphabet (or a `(cid:N)` marker) in either leaves the number unresolved ("in the
 previous cell" / "in the next cell"; since r7 round 2 the walk on each side goes past the cells that hold no word, empty,
 blank or punctuation-only like a spanned cell or a lone bracket, to the first cell that does, reading every cell walked), a qualifier, a lone `-` or `~`, or `to` in the previous cell flags `censored_value`,

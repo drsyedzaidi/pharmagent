@@ -21,7 +21,8 @@ from __future__ import annotations
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import MULTIPLIERS, SLASH
 from app.evidence.numgrammar.body import decimal_mantissa, to_float
-from app.evidence.numgrammar.scan import RATIO_INT, TAIL_MULT, Scan, lead_power, ratio_parts, read_power
+from app.evidence.numgrammar.read import read_power
+from app.evidence.numgrammar.scan import RATIO_INT, TAIL_MULT, Scan, lead_power, ratio_parts
 from app.evidence.numgrammar.tok import Tok
 
 # a mantissa is one plain number: never a ratio, a power, a scientific token or a thousands-grouped number
@@ -74,6 +75,7 @@ class Forms:
             return self.expr(out, a, last, t.start, end, "exponent_range", (t.value,))
         tok = Tok(t.start, self.starts[last] + pw[1], value, "sci", (to_float(mant),), t.qualified, t.ranged,
                   f"{mant}e{pw[0]}", mark)
+        self.power_words.add(last)          # r7 round 3: the power word belongs to this token (a number beside)
         return self.put(out, a, last, self.flagged((tok,), a, last))
 
     def spaced_ratio(self, a: int, sc: Scan, last: int) -> Tok | None:

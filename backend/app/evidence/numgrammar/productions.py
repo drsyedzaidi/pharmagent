@@ -18,18 +18,23 @@ It is unmistakable when it is glued to a word (after a letter, or after a traili
 last digits are no token (``CYP2D6 [12]``, ``AUC0-24[3]``) counts as such a word (decision 3). After a number
 (``89 [46]``, the range of a median ``9[4-9]``), after a lone multiplier or exponent letter, or with no word before it
 (a cell ``[62]``) a bracket keeps its ordinary reading. A citation is masked 1:1 with ``MASK_LETTER`` (a CONTEXT letter)
-before the words are read, so the words around it see one more label: it never taints a number, never ends a range and
-is never an operand. The reader then emits it as one unresolved expression (``unresolved_shape:citation``, parts = the
-reference numbers): citing a number inside it fails, with a sentence that says it is a citation.
+before the words are read, its opening bracket kept (r7 round 3: a unit glued before it ends at that opener, '12mg[3]'),
+so the words around it see one more label: it never taints a number, never ends a range and is never an operand. The
+reader then emits it as one unresolved expression (``unresolved_shape:citation``, parts = the reference numbers):
+citing a number inside it fails, with a sentence that says it is a citation.
 
 CHI-SQUARE (decision 8). Greek chi (U+03C7) is outside except in the explicit statistical form::
 
-    chi_square = chi ("\u00b2" | "2") ["(" ["df" [gap] "=" [gap]] digit{1,3} ")"] [gap] "=" [gap]  followed by a digit
+    chi_square = CHI (SUP_TWO | "2") ["(" ["df" [gap] "=" [gap]] digit{1,3} ")"] [gap] "=" [gap]  followed by a digit
 
-Each chi of the form is masked 1:1 with ``MASK_LETTER``: the statistic reads as a label, its degrees of freedom and the
-number after ``=`` read as usual. Every other chi, and every look-alike (a capital chi, a Cyrillic ha, a Latin x), is
-left as it is: outside, or what the alphabet says it is. Corpus (449 parse caches): chi occurs on 3 lines of 2 papers,
-none of them in this form (``(\u03c7\u00b2 df=1, p<0.01)``, ``\u03c7\u00b2 threshold``), so they stay unresolved.
+(``CHI`` and ``SUP_TWO`` are grammar data of alphabet.py since r7 round 3: Greek small chi, the superscript two.)
+
+Each chi of the form and its square are masked 1:1 with ``MASK_LETTER``: the statistic reads as a label (a variable
+name before its '=': r7 round 3, a variable is a label or one letter, never a letter before a power), its degrees of
+freedom and the number after ``=`` read as usual. Every other chi, and every look-alike (a capital chi, a Cyrillic ha,
+a Latin x), is left as it is: outside, or what the alphabet says it is. Corpus (449 parse caches): chi occurs on 3
+lines of 2 papers, none of them in this form (chi-square ``df=1, p<0.01`` in brackets, chi-square ``threshold``), so
+they stay unresolved.
 
 All classes come from the alphabet's lists and role sets (``LETTERS``, ``GAP``, ``TRAILING``, ``MULTIPLIERS``,
 ``EXP_MARKERS``) and the literal terminals of the two forms; nothing here blocks a character. Letters are never told
@@ -42,25 +47,27 @@ from bisect import bisect_left
 from typing import NamedTuple
 
 from app.evidence.numgrammar.alphabet import (
+    CHI,
     DECIMAL_MARKS,
     DIGITS,
     EXP_MARKERS,
     GAP,
+    HYPHEN,
     INSIDE,
     LETTERS,
     MULTIPLIERS,
     REF_SEPARATORS,
     STARTERS,
+    SUP_TWO,
     TRAILING,
     char_class,
 )
 from app.evidence.numgrammar.body import to_float
 
 MASK_LETTER = "c"                                 # a CONTEXT letter: a masked citation or statistic reads as a label
-CHI = "\u03c7"                                     # GREEK SMALL LETTER CHI: a terminal of the chi-square form only
 _GAPS = char_class(GAP, negate=False) + "*"
-_CHI_SQUARE = re.compile(CHI + "(?=(?:\u00b2|2)(?:\\((?:df" + _GAPS + "=" + _GAPS + ")?[0-9]{1,3}\\))?" + _GAPS + "="
-                         + _GAPS + "[0-9])")
+_CHI_SQUARE = re.compile(CHI + "(?:" + SUP_TWO + "|2)(?=(?:\\((?:df" + _GAPS + "=" + _GAPS + ")?[0-9]{1,3}\\))?"
+                         + _GAPS + "=" + _GAPS + "[0-9])")
 _REF_SEP = char_class(REF_SEPARATORS, negate=False)
 _GROUP = re.compile("\\[" + _GAPS + "[1-9][0-9]{0,2}(?:" + _GAPS + _REF_SEP + _GAPS + "[1-9][0-9]{0,2})*" + _GAPS
                     + "\\](?![0-9])")
@@ -97,7 +104,7 @@ def _continues(t: str, s: int, chain: int) -> bool:
     k = s
     while k > 0 and t[k - 1] in GAP:
         k -= 1
-    if k > 0 and t[k - 1] == "-":
+    if k > 0 and t[k - 1] in HYPHEN:
         k -= 1
         while k > 0 and t[k - 1] in GAP:
             k -= 1
@@ -178,22 +185,24 @@ def citations(t: str) -> list[Cite]:
 
 
 def mask_citations(t: str, cites: list[Cite]) -> str:
-    """*t* with every character of every citation but its gaps replaced 1:1 by ``MASK_LETTER``: offsets never move and a
-    line break inside a spaced list stays a line break."""
+    """*t* with every character of every citation but its opening bracket and its gaps replaced 1:1 by ``MASK_LETTER``:
+    offsets never move and a line break inside a spaced list stays a line break. r7 round 3: the opener stays, so a
+    citation glued to a unit ('12mg[3]') ends the unit production at an opener like any bracket (it read 'mgccc')."""
     if not cites:
         return t
     parts, at = [], 0
     for c in cites:
-        parts += [t[at:c.start], _NON_GAP_RE.sub(MASK_LETTER, t[c.start:c.end])]
+        parts += [t[at:c.start], t[c.start], _NON_GAP_RE.sub(MASK_LETTER, t[c.start + 1:c.end])]
         at = c.end
     return "".join(parts) + t[at:]
 
 
 
 def mask_chi_square(t: str) -> str:
-    """*t* with the chi of every chi-square form replaced 1:1 by ``MASK_LETTER`` (offsets never move); every other chi
-    stays, and is outside."""
-    return _CHI_SQUARE.sub(MASK_LETTER, t) if CHI in t else t
+    """*t* with the chi and the square of every chi-square form replaced 1:1 by ``MASK_LETTER`` (offsets never move: the
+    statistic reads as a two-letter label, a variable name before its '=', r7 round 3); every other chi stays, and is
+    outside."""
+    return _CHI_SQUARE.sub(MASK_LETTER * 2, t) if CHI in t else t
 
 
 __all__ = ["CHI", "MASK_LETTER", "Cite", "citations", "mask_chi_square", "mask_citations"]

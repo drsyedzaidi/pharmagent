@@ -314,6 +314,39 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   ten layer-B sweeps x 1,112,064 code points, 0 errors each; coverage (four chunks merged, 85 % per module) every module at
   or above 87.2 %, 96.7 % overall.
 
+- **r7 round 3: accepting productions for the shapes still read wrong (2026-10-08; `r7/corpus_progress.tsv`, rows
+  `r3_*`).** The round-3 audit found powers of ten after a multiplier passing as clean values (`1.2 × 10000`, `2.5 × 1e6`),
+  scale shapes missing from a list of scale shapes (`×10−3`, `x100`, `(hundreds)`, a scale glued after a label's bracket
+  `AUC(x1000)`, look-alike spellings `×1OOO`, `th0usands`, `1.5 mi11ion`), digit look-alike letters after a separator
+  (`1,OOO` read as 1), a detached decimal with the mark before the gap (`0. 5` read as 5), a power glued after a number
+  (`1.2(10^3)`), a scale word taken for a variable name (`(x10^3) = 250`), table cells whose neighbours were never judged by
+  the word allow-list, hidden qualifiers (`bel0w`, `approxi-` + line break + `mately`, `< or =`, `fewer than`, `or less`,
+  `between 12 and 24`), a range whose left end carries a unit (`20 mg – 40 mg`), a table span on the wrong row or column, a
+  quadratic verify cost on a long merged line, a hash-seed-dependent column split, and hygiene items. Each is fixed through a
+  production or the four lists (see "Round 3 of r7" in evidence-pipeline.md). U after the round: 4.36 % -> 4.43 % (1,923 ->
+  1,952 of 44,072; 5 records newly pass, each read as printed; 0 value disagreements). What it refuses on the corpus: 484
+  detached decimals (7 value-like: `=4. 6h` and `=3. 0h` of a broken layer that read 6 and 0 for 4.6 h and 3.0 h; 477
+  reference-list line ends), 58 letters after a separator or a dash (13 value-like: the locant `49-OH-bupropion`, reference
+  numbers `26.Poliwoda`, `5-FU`), 7 products (`(1500 · 0.10 · 3600)`, `× 100 iterations`), `E0 = 0` (no variable name), and
+  10 table cells whose neighbour cell the window refuses as running text would (`455` beside `1O5`, `1890` beside
+  `3.4 E+03`). The 1.5 % target is NOT met and cannot be met by these rules: the residual causes are lost-space and label
+  words 283 (`no_expression`), words beside a refused word 180, the em dash 167, `(cid:N)` 163, glued letters 155, `_` 102
+  (the em dash, `(cid:N)` and `_` are kept fail-closed by owner decisions 4 and 5: 432 records), glued symbols 100,
+  resolved-but-failed 92, bad starts 81 and fractions 75.
+  Left by design or for the owner: (1) a multiplier letter glued inside a letter run is a letter of the label (`AUCx1000`,
+  decision 3), so only a bracketed or spaced scale is read; (2) a look-alike digit group after a PLAIN space (`1 OOO`) reads
+  1 with no flag (only a grouping space, thin, narrow or no-break, flags `composite_cell`: a three-letter word after a number
+  and a plain space is ordinary prose); (3) decision 8 asymmetry (owner call): the Latin `x2` / `x²` stays an ordinary label
+  on its line (its numbers keep their reading, except `x² = 3.84`, where `x²` is no variable name and 3.84 is unresolved),
+  while a chi outside the strict form taints its whole line; (4) the after-number scale check is a word list with the
+  measured spellings added (`mln`, `mil`, `bil`, `bln`, `hundred`, `lac`, `B`, `MM`; 0 corpus uses each), not an allow-list of
+  every short word after a number: that list would flag 1,129 records of the 60 papers (`to` 216, `a` 187, `of` 66, `in`
+  39 ...); (5) the scale allow-list flags a power of ten in any header or row label (`Group 10`, a dose level `100 mg`) and a
+  label with a character the reader cannot read: the reviewer compares; (6) a lone `+` cell beside a number refuses it like
+  `12 +` in text, while a lone `-` or `~` cell is a marker cell (pinned since r6 round 1: `censored_value`), and a cell boundary
+  is structure for a list of signed numbers (decision 9: `12` | `-15` passes with no flag); (7) a table row span that two
+  lines align equally is no span (`row not located` on the page image).
+
 ## Later phases
 
 - **Phase 2 — figure digitiser.** Plot regions with axes calibrated from tick labels; digitised points are

@@ -76,13 +76,14 @@ def sweep_scale(cps: list[int]) -> list[str]:
 
 def sweep_style(cps: list[int]) -> list[str]:
     """A character outside the alphabet anywhere in a line taints every number of it, so the line casts no vote; a
-    character of the deleted LINE list folded into CONTEXT (r7) glued between two numbers rejects the word, so a line made
-    of one glued word casts none either.
+    CONTEXT character that is no letter and no opener (``P.GLUE_SWEPT``, derived: r7 round 3 replaced the hand-written
+    copy of the deleted LINE list) glued between two numbers rejects the word, so a line made of one glued word casts
+    none either.
     The lines are independent (the reader works line by line): one appended line is checked against the base text, the
     others on their own."""
     bad, base = [], decimal_evidence(STYLE_BASE)
     for cp in cps:
-        if 0xD800 <= cp <= 0xDFFF or not (P.expected_class(cp) == "outside" or cp in P.FOLDED_FROM_LINE):
+        if 0xD800 <= cp <= 0xDFFF or not (P.expected_class(cp) == "outside" or cp in P.GLUE_SWEPT):
             continue
         c = chr(cp)
         for line in STYLE_LINES:

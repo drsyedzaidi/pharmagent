@@ -20,27 +20,27 @@ from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
     CARET,
     CID_MARKER,
+    COMMA,
     DIGITS,
     EXP_MARKERS,
-    HYPHEN,
     INSIDE_ONLY_RE,
     LETTERS,
     MULT_LETTERS,
     MULTIPLIERS,
     NUMBER_CLOSERS,
-    OPERATORS,
-    RANGE_WORDS,
+    POINT,
     RATIO_MARKS,
     SEPARATORS,
     SLASH,
+    SQUARE_OPEN,
     SUP_CHARS,
     WORD_RE,
 )
 from app.evidence.numgrammar.body import MAX_DIGITS, to_float
 from app.evidence.numgrammar.equivalents import fold
+from app.evidence.numgrammar.flags import Flags
 from app.evidence.numgrammar.forms import Forms
-from app.evidence.numgrammar.glue import PUNCT
-from app.evidence.numgrammar.neighbours import LEFT, NEIGHBOUR, Window, lead_letter, punct_only, qualifier_word
+from app.evidence.numgrammar.neighbours import LEFT, NEIGHBOUR, Window
 from app.evidence.numgrammar.productions import Cite, citations, mask_chi_square, mask_citations
 from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
@@ -57,8 +57,6 @@ _SPECIAL_LEADS = EXP_MARKERS | MULTIPLIERS
 # a word that ends in one of these continues into the next word ('12/ 15', '10^ 3'), one that starts with one of these
 # continues the word before ('12 .5', '10 ^3', '12 /15', '12 x3'): the refused words and the number are one expression
 _JOIN_ENDS = RATIO_MARKS | {CARET} | SUP_CHARS
-_QUALIFY_ENDS = OPERATORS | PUNCT              # a word before a qualified number ends in one of these
-_JOINER_END = HYPHEN | SLASH                  # a word led by a letter that ends in one of these may continue over a gap
 _JOIN_STARTS = _JOIN_ENDS | SEPARATORS | MULTIPLIERS
 MASK = "\ufffd"          # stands for a (cid:N) marker, character for character: offsets never move
 _DIGIT_RUN = re.compile("[0-9]+")
@@ -80,9 +78,9 @@ def _demote(tok: Tok, detail: str) -> Tok:
     return Tok(tok.start, tok.end, None, REASON_CONTEXT, parts, tok.qualified, tok.ranged, "", "", detail)
 
 
-class Reader(Forms, Window):
+class Reader(Forms, Flags, Window):
     """The words of one folded text and the forms that read them. One instance per ``tokens`` call."""
-    __slots__ = ("t", "style", "starts", "ends", "words", "n", "marks", "cache", "anchors", "target")
+    __slots__ = ("t", "style", "starts", "ends", "words", "n", "marks", "cache", "anchors", "target", "power_words")
 
     def __init__(self, folded: str, style: str, whole_line: bool, cid: dict[int, str]) -> None:
         self.t, self.style = folded, style
@@ -98,6 +96,7 @@ class Reader(Forms, Window):
         self.cache: dict[int, Scan] = {}
         self.anchors = self._anchors()
         self.target: tuple[Tok, ...] = ()           # the tokens the window is judging (neighbours.Window)
+        self.power_words: set[int] = set()          # r7 round 3: the power words that scientific tokens consumed
 
     # ------------------------------------------------------------------ words ---
     def _anchors(self) -> list[int]:
@@ -246,7 +245,7 @@ class Reader(Forms, Window):
             out.append(Tok(s0, e0, None, REASON_CONTEXT, (), detail=marks.detail(a, a, s0, e0)))
             return a
         c = w[0]
-        if c in _SPECIAL_LEADS or (c in DIGITS and "/" in w):
+        if c in _SPECIAL_LEADS or (c in DIGITS and not SLASH.isdisjoint(w)):
             sp = W.special(w)
             if sp == W.E_WORD or sp == W.MULT_POWER:
                 return a
@@ -326,46 +325,6 @@ class Reader(Forms, Window):
                            if m.end() - m.start() <= MAX_DIGITS), MAX_PARTS)
             extra.append(Tok(lo, hi, None, f"{REASON_SHAPE}:label", tuple(runs), detail="label"))
 
-    def continued(self, a: int, first: Tok) -> bool:
-        """r7 round 2: a word led by a letter that ends in '-' or '/' ('AUC0-\\n24', 't1/\\n2', and 'docu-\\n2' alike:
-        decision 3) may continue over the gap into the number that starts word *a*: a range end, never a clean pass."""
-        prev = self.text(a - 1)
-        return prev[-1] in _JOINER_END and first.start == self.starts[a] and lead_letter(prev)
-
-    def qualified_before(self, a: int) -> bool:
-        """A qualifier stands right before word *a*: up to three words back through operator words (``words.qualifies``:
-        '< = 5'), or as the first word past the punctuation words the window skips (r7 round 2: '< , 12', '< ) 12',
-        '<\n.\n12', 'LLOQ < ( ( ( 0.5' are qualified like '< 12'; the walk is the window's own)."""
-        if a == 0 or self.t[self.ends[a - 1] - 1] not in _QUALIFY_ENDS:
-            return False                                   # the word before ends in no operator or punctuation
-        if W.qualifies([self.text(k) for k in range(max(0, a - 3), a)]):
-            return True
-        k = a - 1
-        while k >= 0 and self.t[self.ends[k] - 1] in PUNCT and punct_only(self.text(k)):
-            k -= 1
-        return 0 <= k < a - 1 and qualifier_word(self.text(k))
-
-    def flagged(self, toks: tuple[Tok, ...], a: int, b: int | None = None) -> tuple[Tok, ...]:
-        """Tokens of the words a..b with the qualifier and range flags the neighbouring words add. A lone range word
-        (``-`` ``~``) before or after marks every token; a dash glued to the word edge marks the one token it joins to
-        the next word: the right end of ``12 -15`` and ``12- 15``, the left end of ``12 -15`` and ``5.0- 12.4``."""
-        b = a if b is None else b
-        prev = self.text(a - 1) if a else ""
-        nxt = self.text(b + 1) if b + 1 < self.n else ""
-        last = self.text(b)
-        q = self.qualified_before(a)
-        lone = prev in RANGE_WORDS or nxt in RANGE_WORDS
-        left = bool(nxt) and ((nxt[0] == "-" and W.signed_digits(nxt) and W.ends_with_number(last))
-                              or (last.endswith("-") and W.digit_led(nxt)))
-        right = bool(prev) and ((self.t[toks[0].start] == "-" and self.number_end(a - 1))
-                                or (prev.endswith("-") and self.number_end(a - 1, 1) and W.digit_led(self.text(a)))
-                                or self.continued(a, toks[0]))
-        if not (q or lone or left or right):
-            return toks
-        end = len(toks) - 1
-        return tuple(t._replace(qualified=t.qualified or q, ranged=t.ranged or lone or (left and k == end)
-                                or (right and k == 0)) for k, t in enumerate(toks))
-
 
 def tokens(text: str, style: str = ".", *, mode: str = "page", labels: bool = False) -> list[Tok]:
     """Every numeric expression of *text*, in order; ``value`` None marks an unresolved one.
@@ -383,8 +342,8 @@ def tokens(text: str, style: str = ".", *, mode: str = "page", labels: bool = Fa
     if "(cid:" in folded:                      # the pdfminer marker is ONE outside character: mask it 1:1
         cid = {m.start(): m.group() for m in CID_MARKER.finditer(folded)}
         folded = CID_MARKER.sub(_mask, folded)
-    cites = citations(folded) if "[" in folded else []     # r7: an unmistakable citation is masked, then emitted
-    reader = Reader(mask_citations(folded, cites), "," if style == "," else ".", mode != "page", cid)
+    cites = citations(folded) if SQUARE_OPEN in folded else []    # r7: an unmistakable citation is masked, then emitted
+    reader = Reader(mask_citations(folded, cites), COMMA if style == COMMA else POINT, mode != "page", cid)
     out = reader.with_citations(reader.run(), cites) if cites else reader.run()
     return reader.with_labels(out) if labels else out
 

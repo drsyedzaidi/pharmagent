@@ -24,6 +24,7 @@ import hashlib
 import math
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence.parse_guard import ThinSpaces
 
 MAX_PAGE_WORDS = 6000
@@ -47,7 +48,7 @@ def word_box(word: dict[str, Any], char_boxes: dict[int, Box], thin: ThinSpaces 
     """Union of the glyph boxes of the word's characters; None when a non-space char has none."""
     boxes: list[Box] = []
     for c in word.get("chars") or ():
-        if not str(c.get("text", "")).strip() or (thin.mark and c.get("text") == thin.mark):
+        if gaps.blank(str(c.get("text", ""))) or (thin.mark and c.get("text") == thin.mark):
             continue                          # spacing (a protected thin space draws nothing)
         box = char_boxes.get(id(c))
         if box is None:
@@ -72,13 +73,13 @@ def map_words(text: str, words: list[dict[str, Any]], thin: ThinSpaces = NO_THIN
         wt = _word_text(w, thin)
         if not wt:
             return None
-        while cur < len(text) and text[cur].isspace() and not text.startswith(wt, cur):
+        while cur < len(text) and gaps.blank(text[cur]) and not text.startswith(wt, cur):
             cur += 1
         if not text.startswith(wt, cur):
             return None
         out.append((cur, cur + len(wt)))
         cur += len(wt)
-    if any(not ch.isspace() for ch in text[cur:]):
+    if not gaps.blank(text[cur:]):
         return None
     return out
 

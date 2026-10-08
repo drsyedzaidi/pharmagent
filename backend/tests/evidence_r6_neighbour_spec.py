@@ -60,6 +60,8 @@ TARGETS = (
     Target("range 5.0- 12.4 mg", "5.0"), Target("conc <0.5 ng/mL", "0.5"), Target("response 45% of", "45"),
     Target("ratio 12/15 of", "12/15"), Target("12.5 (3.1)", "12.5", "cell"),
     Target("count 10^6 cells/mL", "10^6"), Target("ka 0.12 h-1 rate", "0.12"),       # r7 round 2: a power, a unit
+    Target("dose 2 x 100 mg daily", "2"), Target("dose 2 x 100 mg daily", "100"),    # r7 round 3: the product
+    Target("count 3.1 x 7 cells", "7"),
 )
 ALPHABET = "+-*×·^²⁻<~±%015eExXq([)].,;:/='"
 SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL", "%CV", "L/h", "°C", "μg", "daily", "once-daily",
@@ -68,7 +70,10 @@ SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL",
            "n=12", "2x", "12.5", "(3.1)", "-15", "3/4", "10^3", "1.2e3", "x10", "E-3.", "e3,",
            # r7 round 2: look-alikes of an exponent or a power, unit exponents, scale words, a label that continues
            "é-3", "è+03", "ε-03", "l0³", "lO³", "h⁻¹", "s⁻¹", "day⁻¹", "L-1", "M", "million", "AUC0-", "t1/", "mg/",
-           "[12,13]", "(10^3)", "1/2,", "Cmax:12")
+           "[12,13]", "(10^3)", "1/2,", "Cmax:12",
+           # r7 round 3: product amounts and scales, look-alike groups, split decimals, scale words glued to a label
+           "1e6", "10000", "1,000,000", "100", "1000", "x1000", "(E3)", "Count(E3)", "0.", "12.", "1,OOO",
+           "OOO", "lS", ".OS", "mg[3]", "h[12]", "2.5", "-3")
 
 
 def vocabulary(max_len: int = 3) -> list[str]:
@@ -122,6 +127,12 @@ def sci_join(t: Target, at: int, word: str) -> tuple[float, int, int] | None:
     if p is not None and b is not None and at == s:
         exp = t.literal[2:].lstrip("^").translate(_SUP_ASCII)
         return float(b.group(2)) * 10.0 ** int(exp), s + 1 + len(b.group(1)), e + len(word) + 2
+    # r7 round 3: T, then a lone multiplier word, then the inserted power ('2 x' + '10^3'): one scientific number
+    after = t.text[e:]
+    q = _POWER.fullmatch(fold(word).rstrip(")],;:.'"))
+    if q is not None and re.match(" [xX*×·] ", after) and at == e + 2 and re.fullmatch("[0-9]+(?:\\.[0-9]+)?", t.literal):
+        exp = fold(word).rstrip(")],;:.'")[2:].lstrip("^").translate(_SUP_ASCII)
+        return float(t.literal) * 10.0 ** int(exp), s, e + 3 + len(q.group())
     return None
 
 

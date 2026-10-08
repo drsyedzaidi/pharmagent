@@ -35,8 +35,6 @@ LIST_FILES = {"numgrammar/alphabet.py", "numgrammar/equivalents.py"}          # 
 ALLOWED = {
     ("extract_rules.py", "regex-shorthand"): "header-key stripping, a bracketed unit and the dose-context prose pattern",
     ("word_lists.py", "nonascii-list"): "the unit WORDS of the keyless dose rule (mg, μg, mg/kg ...)",
-    ("parse_layout.py", "str-is"): "maps word texts onto page-text offsets (whitespace skipping)",
-    ("parse_tables.py", "regex-shorthand"): "the 'Table N' caption pattern",
     ("prompts.py", "regex-shorthand"): "parsing of model output",
     ("proposal_check.py", "regex-shorthand"): "the instruction-text detector (prompt injection), prose only",
     ("qc_flags.py", "regex-shorthand"): "the bound / interval field-name patterns (prose field names, never a number)",
@@ -138,10 +136,12 @@ def test_layer_b_catches_a_widened_thin_space_set(monkeypatch):
 
 
 def test_layer_b_catches_the_deleted_multiplier(monkeypatch):
-    from app.evidence.numgrammar import api
-    clean = api._scale_view
-    monkeypatch.setattr(api, "scale_shapes", lambda label: clean(api.fold("".join(c for c in label if c.isascii()))))
-    monkeypatch.setattr(B, "scale_shapes", api.scale_shapes)
+    """r7 round 3: the scale reading moved to numgrammar/scale.py (an allow-list that raises the flag for any word it
+    cannot read); was ``clean = api._scale_view`` read on the label with its non-ASCII characters dropped, which no
+    longer hides a scale. A reading that a look-alike multiplier (U+2715) silences is still caught by the sweep."""
+    from app.evidence.numgrammar import scale
+    clean = scale.scale_shapes
+    monkeypatch.setattr(B, "scale_shapes", lambda label: clean(label) and label.isascii())
     assert B.sweep_scale([0x2715])
 
 

@@ -14,28 +14,34 @@ from __future__ import annotations
 
 import re
 
-from app.evidence.letter_tables import UPPER_LETTERS, casefold_letters
+from app.evidence.letter_tables import CASE_PAIRS, UPPER_LETTERS, casefold_letters
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
+    DECIMAL_MARKS,
     DIGITS,
     GAP,
     GREEK,
     LETTERS,
+    LIST_MARKS,
+    MULT_LETTERS,
     MULTIPLIERS,
     OUTSIDE_RE,
     PERCENTS,
     SUP_TO_ASCII,
+    THIN_GROUP,
+    UNIT_BASES,
+    UNIT_PREFIXES,
     char_class,
 )
-from app.evidence.numgrammar.equivalents import THIN, fold
+from app.evidence.numgrammar.equivalents import fold
 
 UNRESOLVED = "\x00"            # starts the comparison form of a unit that holds a character outside the alphabet
-_MICRO = "\u03bc"              # GREEK SMALL LETTER MU: the target of the approved MICRO SIGN equivalent
+(_MICRO,) = UNIT_PREFIXES & GREEK  # GREEK SMALL LETTER MU: the micro prefix (and the MICRO SIGN equivalent's target)
 _WORD = char_class(ASCII_LETTERS | GREEK | DIGITS, negate=False)
 _WHOLE = ("(?<!" + _WORD + ")", "(?!" + _WORD + ")")         # a whole word: no word character right before or after it
 _UNIT_SYNONYMS = tuple((re.compile(_WHOLE[0] + pattern + _WHOLE[1]), rep) for pattern, rep in (
     ("(hrs?|hours?)", "h"), ("(liters?|litres?)", "l"), ("mcg", "ug"), ("(seconds?|sec)", "s")))
-_STRIP = GAP | frozenset({THIN, "."}) | (MULTIPLIERS - frozenset("xX"))   # a unit separator: space . * times dot
+_STRIP = GAP | THIN_GROUP | (DECIMAL_MARKS - LIST_MARKS) | (MULTIPLIERS - MULT_LETTERS)   # space . * times dot
 _UNIT_STRIP = re.compile(char_class(_STRIP, negate=False) + "+")
 _EQUIV = {"mcg": "ug", "cc": "ml", "hr": "h", "hrs": "h", "mins": "min", "sec": "s", "lit": "l"}
 # the printed-unit symbols a comparison form may be segmented into (record_checks.recognised_unit: 'ngh' = 'ng' + 'h')
@@ -45,8 +51,11 @@ _EQUIV = {"mcg": "ug", "cc": "ml", "hr": "h", "hrs": "h", "mins": "min", "sec": 
 UNIT_SYMBOLS = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
                 "h", "min", "s", "d", "wk", "iu", "miu", "u", *sorted(PERCENTS), "kda", "m2", "cells", "cell", "10^6",
                 "10^9", "bpm", "mmhg", "x", "fold")
-NOT_CONTINUATIONS = frozenset({"x", "fold", *PERCENTS})
-_CASE_PREFIXES = frozenset("Mm")           # mega / milli: the only prefix pair told apart by case alone
+NOT_CONTINUATIONS = frozenset({casefold_letters(c) for c in MULT_LETTERS} | {"fold"} | PERCENTS)
+# mega / milli: the terminals that are a prefix in one case and a unit base in the other (m vs M), derived from the
+# unit production's terminals and the case pairs (r7 round 3: never typed)
+_CASE_PREFIXES = frozenset(c for cap, low in CASE_PAIRS.items() if low in UNIT_PREFIXES and cap in UNIT_BASES
+                           for c in (cap, low))
 
 
 def _spell(unit: str | None) -> str | None:

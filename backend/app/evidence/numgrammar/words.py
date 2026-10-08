@@ -15,18 +15,19 @@ from app.evidence.numgrammar.alphabet import (
     QUALIFIERS,
     RATIO_MARKS,
     SIGNS,
+    SLASH,
     STARTERS,
     SUP_CHARS,
     SUP_DIGITS,
     SUP_SIGNS,
     TRAILING,
+    ZERO,
     char_class,
 )
 
 _MULT = char_class(MULTIPLIERS, negate=False)
 _POWER = ("(?:\\^" + char_class(SIGNS, negate=False) + "?[0-9]{1,4}|" + char_class(SUP_SIGNS, negate=False) + "?"
           + char_class(SUP_DIGITS, negate=False) + "{1,4})")
-BARE_POWER_RE = re.compile("10" + _POWER)               # '10^3', '10⁻³': a ten with a power, no mantissa
 MULT_POWER_RE = re.compile(_MULT + "10" + _POWER)       # '×10^3', 'x10³': a multiplier glued to a power of ten
 MULT_TEN_RE = re.compile(_MULT + "10(?!0)[0-9]*")       # 'x103', '×10': a multiplier glued to a ten, no power
 E_WORD_RE = re.compile(char_class(EXP_MARKERS, negate=False) + char_class(SIGNS, negate=False)
@@ -45,7 +46,7 @@ def special(w: str) -> str:
     if c in EXP_MARKERS:
         return E_WORD if E_WORD_RE.fullmatch(w) else ""
     if c in DIGITS:
-        return FRACTION if "/" in w and FRACTION_RE.fullmatch(w) else ""
+        return FRACTION if not SLASH.isdisjoint(w) and FRACTION_RE.fullmatch(w) else ""
     if c in MULTIPLIERS:
         if MULT_POWER_RE.fullmatch(w):
             return MULT_POWER
@@ -63,21 +64,13 @@ def ten_shape(w: str) -> bool:
     """``10`` not followed by ``0`` at the start of the word (after one sign): a ten whose exponent may have been
     raised (``10``, ``103``, ``10(3)``, ``10mg``); ``100`` and ``1000`` are ordinary numbers."""
     i = 1 if w[0] in SIGNS else 0
-    return w[i:i + 2] == "10" and w[i + 2:i + 3] != "0"
+    return w[i:i + 2] == "10" and w[i + 2:i + 3] != ZERO
 
 
 def letter_led(w: str) -> bool:
     """The first character after at most one opener is a letter: a LABEL word."""
     i = 1 if w[0] in STARTERS else 0
     return i < len(w) and w[i] in LETTERS
-
-
-def exp_like(w: str) -> bool:
-    """A non-letter-led word that is ``^``, starts with ``^``, is made of superscripts, or holds ``^`` or a
-    superscript without being an accepted power or multiplier power: an exponent detached from its number."""
-    if letter_led(w) or CARET_OR_SUP_RE.search(w) is None:
-        return False
-    return BARE_POWER_RE.fullmatch(w) is None and MULT_POWER_RE.fullmatch(w) is None
 
 
 RATIO_CHARS = RATIO_MARKS                                # a lone word of one of these between two numbers is a ratio

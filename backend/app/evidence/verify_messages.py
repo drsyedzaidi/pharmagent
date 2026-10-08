@@ -10,9 +10,9 @@ from __future__ import annotations
 import unicodedata
 
 from app.evidence.numgrammar import Tok
-from app.evidence.numgrammar.alphabet import CLOSERS_BR, TRAILING
+from app.evidence.numgrammar.alphabet import CLOSERS_BR, GROUP_ONLY, TRAILING
 
-_GLUE_MARKS = TRAILING - CLOSERS_BR - {"'"}         # , . ; : glued between a name and its digits ('Cmax:12')
+_GLUE_MARKS = TRAILING - CLOSERS_BR - GROUP_ONLY    # , . ; : glued between a name and its digits ('Cmax:12')
 
 COMPARE = "Compare the value with the page image."
 SHAPE_WHY = {

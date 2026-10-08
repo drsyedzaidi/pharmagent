@@ -49,9 +49,13 @@ def test_chi_anywhere_else_and_every_look_alike_leave_the_line_unresolved(text):
 
 
 def test_a_latin_x_squared_is_never_read_as_chi():
-    (t,) = tokens("x\u00b2 = 3.84")                            # the plain number after '=': x is no chi
-    assert (t.value, t.shape) == (3.84, "decimal")
-    assert not any(t.value is not None and t.start == 0 for t in tokens("x\u00b2 = 3.84"))
+    """r7 round 3: was '(t,) = tokens("x\u00b2 = 3.84"); (t.value, t.shape) == (3.84, "decimal")'. A variable name before
+    '=' is a label or one letter (glue.variable): 'x\u00b2' is an operator letter before a power, so the number after
+    it is unresolved, never a chi-square reading (decision 8: a Latin x is never chi) and never a clean 3.84."""
+    (t,) = tokens("x\u00b2 = 3.84")
+    assert t.value is None and t.reason == "unresolved_shape" and "3.84" in "x\u00b2 = 3.84"[t.start:t.end]
+    assert not any(t.value is not None for t in tokens("x\u00b2 = 3.84"))
+    assert [x.value for x in tokens("x = 3.84")] == [3.84]           # one letter is still a variable name
 
 
 def test_verify_reads_a_chi_square_record_and_refuses_one_outside_the_form():
