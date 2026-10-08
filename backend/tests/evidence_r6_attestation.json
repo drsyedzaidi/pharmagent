@@ -1,5 +1,5 @@
 {
- "digest": "1d3e7438dc9fe2fdb6a77e7a1b698734ffc4a5e448a391aa76fade0b8993696f",
+ "digest": "00c89d2ea2186144a74a95b43ddb11808c9f179df31f9b620659efdbacd1ea7f",
  "layer_b": {
   "code_points": {
    "key": 1112064,
@@ -15,25 +15,25 @@
   },
   "dirty": [],
   "errors": 0,
-  "head": "ac19921d5654e2a8f16a1067efb0590f58ea4e58",
-  "wall_seconds": 1663.0
+  "head": "7342dc55b73c7509142b683971075bc07da9f964",
+  "wall_seconds": 1082.8
  },
  "neighbours": {
   "dirty": [],
   "errors": 0,
-  "head": "ac19921d5654e2a8f16a1067efb0590f58ea4e58",
-  "strict": 7864,
-  "variants": 2159150,
-  "wall_seconds": 71.4,
-  "words": 30845
+  "head": "7342dc55b73c7509142b683971075bc07da9f964",
+  "strict": 9113,
+  "variants": 2530602,
+  "wall_seconds": 60.0,
+  "words": 30861
  },
  "tokens": {
   "dirty": [],
   "errors": 0,
-  "head": "ac19921d5654e2a8f16a1067efb0590f58ea4e58",
+  "head": "7342dc55b73c7509142b683971075bc07da9f964",
   "pairs": 401,
   "variants": 445937664,
-  "wall_seconds": 2054.6,
+  "wall_seconds": 1824.9,
   "workers": 12
  }
 }
