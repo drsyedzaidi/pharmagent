@@ -113,6 +113,17 @@ def test_the_glue_of_a_number_inside_its_own_word_is_an_accepted_production(word
     assert (bool(got) and all(got)) is ok, (word, tokens(word))
 
 
+@pytest.mark.parametrize("text, want", [
+    ("Cmax 5.0-", [None]), ("Cmax 45%-", [None]), ("37°C-", [37.0]), ("(Table 1).Threatenedcomplica-", [1.0]),
+    ("n=97)metaboliser-", [97.0]), ("5.0- 12.4 mg", [5.0, 12.4]), ("45%- 55%", [45.0, 55.0]),
+    ("Hypertension.2011;58(1):63-", [1.0]), ("ActaPaediatr.2006;95(10):1224-", [10.0]),
+])
+def test_a_word_final_dash_is_a_range_dash_only_right_after_the_number(text, want):
+    """A dash that ends the word right after the number or its percent is a range dash and needs its right end; a dash
+    after letters is the hyphen of a word the line broke ('complica-'), which the number's own glue already judged."""
+    assert V(text) == want
+
+
 def test_the_character_productions_read_the_owner_examples():
     assert prose("ng·h/mL") and prose("once-daily") and prose("-fold") and prose("e.g.") and prose("%CV")
     assert not prose("e") and not prose("(x") and not prose("-") and not prose("*") and not prose("^") and not prose("<")

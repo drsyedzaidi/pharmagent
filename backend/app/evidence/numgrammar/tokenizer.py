@@ -172,7 +172,9 @@ class Reader(Forms, Window):
             out.extend(_demote(x, d) for x in toks)
             return lw
         last = toks[-1]
-        fault = self.window_fault(fw, lw, self.t[self.ends[lw] - 1] == "-")    # a word that ends in a range dash
+        # a range dash ends the word right after its last number or that number's suffix ('5.0-', '45%-'); a dash after
+        # letters is the hyphen of a word the line broke ('...complica-'), judged with the rest of the word's glue
+        fault = self.window_fault(fw, lw, self.scan(lw).dash)
         if fault is None:
             out.extend(toks)
             return lw

@@ -195,7 +195,7 @@ def _qualifier(w: str) -> bool:
 def spec_inert(text: str, first: int, last: int) -> bool:
     """The window of the number over words first..last of *text* (folded) is inert."""
     words = [m.group() for m in GAPS.finditer(text)]
-    dash = words[last].endswith("-")
+    dash = words[last].endswith("-") and words[last][-2:-1] in DIG | {"%", "\u2030"}   # T's own word: '5.0-' only
     for side, k0 in ((-1, first - 1), (1, last + 1)):
         k, split, assigned = k0, False, False
         edge = words[first][0] if side < 0 else words[last][-1]

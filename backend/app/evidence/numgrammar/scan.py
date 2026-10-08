@@ -77,6 +77,7 @@ class Scan(NamedTuple):
     why: str = ""
     parts: tuple[float, ...] = ()
     unit: str = ""                 # a glued unit that ends the word ('mg' of '150mg'): the next word may split it
+    dash: bool = False             # r7 writer 3: a range dash ends the word right after its last number ('5.0-')
 
 
 LABEL = Scan("label")
@@ -358,7 +359,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     rest = w[glue_from:]                                    # r7 writer 3: '12-x', '12(e)', '5/x'; a lone '-' is a range
     if rest and tail != TAIL_MULT and rest != "-" and not glue(rest):
         return _rejected("glued_symbol", parts) if numeric_led else LABEL
-    return Scan("numeric", tuple(toks), tail, unit=unit)
+    return Scan("numeric", tuple(toks), tail, unit=unit, dash=rest == "-")
 
 
 __all__ = ["LABEL", "RATIO_INT", "Scan", "post", "ratio_parts", "read_power", "read_token", "scan_word", "REASON_SHAPE"]
