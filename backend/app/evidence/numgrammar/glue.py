@@ -5,7 +5,8 @@ Every class is built from the alphabet's lists and role sets; nothing here names
 next to a number only inside one of these productions::
 
     prose   = a word without a digit whose MODIFIER characters are all joined to a letter (below)
-    label   = a word led by a letter (after openers) whose first letter run is not a lone operator letter
+    label   = a word led by a letter (after openers) whose first letter run is not a lone operator letter and that holds
+              no times sign or middle dot right before a digit (a multiplier: 'AUC×1000'; r7 round 3)
     glue    = [PUNCT*] [prose | label] [PUNCT*]                         the text between the tokens of one word
     prefix  = glue [starter run]                                        before the first token of a word
 
@@ -155,17 +156,25 @@ def _bracketed_operator(w: str, start: int) -> bool:
                for j in range(start + 1, len(w)))
 
 
+def _product_before_digit(w: str, start: int) -> bool:
+    """r7 round 3 follow-up: a times sign or a middle dot printed right before a digit inside *w* (from *start*) is the
+    multiplier production ``MULT number`` ('AUC×1000', 'Count·1000'), judged on the PRINTED text: read as letters of a
+    name, the digits made it look joined to a letter on both sides like the unit glue of 'ng·h/mL'."""
+    return any(w[j] in PRODUCT_DOTS and w[j + 1] in DIGITS for j in range(start, len(w) - 1))
+
+
 def label(w: str) -> bool:
     """*w* is a LABEL: led by a letter after a run of openers or starters, that letter is not a lone operator letter
     ('E-3', 'x10^3', 'e3,', '(x10^3', 'E2' are none), no lone operator letter follows a bracket inside it ('Count(E3)',
-    'AUC(x1000)': r7 round 3), and with its digits read as the letters of a name (decision 3: label digits never act by
+    'AUC(x1000)': r7 round 3), no times sign or middle dot stands right before a digit ('AUC×1000': a multiplier, never
+    part of a name), and with its digits read as the letters of a name (decision 3: label digits never act by
     themselves) it is prose ('AUC0-24', 'CYP2D6*4', 't1/2', 'h-1', 'L·h⁻¹', '(AUC0-inf'; never 'AUC0^-24')."""
     i = 0
     while i < len(w) and (w[i] in OPENERS_BR or w[i] in STARTERS):
         i += 1
     if i >= len(w) or w[i] not in LETTERS or operator_letter(w, i) or _bracketed_operator(w, i):
         return False
-    return prose(w[i:].translate(_AS_LETTER))
+    return not _product_before_digit(w, i) and prose(w[i:].translate(_AS_LETTER))
 
 
 def unit_powers(w: str) -> bool:

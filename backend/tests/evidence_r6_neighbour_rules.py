@@ -139,10 +139,15 @@ def _bracket_op(w: str, start: int) -> bool:
     return any(w[j] in OPL and w[j - 1] in OPEN | CLOSE and lone_op(w, j) for j in range(start + 1, len(w)))
 
 
+def _dot_digit(w: str, start: int) -> bool:
+    """r7 round 3 follow-up: a times sign or middle dot printed right before a digit ('AUC×1000') is a multiplier."""
+    return any(w[j] in "×·" and w[j + 1] in DIG for j in range(start, len(w) - 1))
+
+
 def label(w: str) -> bool:
     i = _lead(w)
-    return i < len(w) and w[i] in LET and not lone_op(w, i) and not _bracket_op(w, i) and prose(
-        "".join("q" if c in DIG else c for c in w[i:]))
+    return i < len(w) and w[i] in LET and not lone_op(w, i) and not _bracket_op(w, i) and not _dot_digit(w, i) \
+        and prose("".join("q" if c in DIG else c for c in w[i:]))
 
 
 def glue(run: str) -> bool:

@@ -73,7 +73,9 @@ SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL",
            "[12,13]", "(10^3)", "1/2,", "Cmax:12",
            # r7 round 3: product amounts and scales, look-alike groups, split decimals, scale words glued to a label
            "1e6", "10000", "1,000,000", "100", "1000", "x1000", "(E3)", "Count(E3)", "0.", "12.", "1,OOO",
-           "OOO", "lS", ".OS", "mg[3]", "h[12]", "2.5", "-3")
+           "OOO", "lS", ".OS", "mg[3]", "h[12]", "2.5", "-3",
+           # r7 round 3 follow-up: a times sign or middle dot glued before digits in a label word (no label), unit glue
+           "AUC×1000", "Count·5", "ng×h", "CYP2D6*4")
 
 
 def vocabulary(max_len: int = 3) -> list[str]:

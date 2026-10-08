@@ -110,12 +110,27 @@ def test_the_two_column_checks_normalise_each_line_once(monkeypatch):
     assert counts[1] <= counts[0] + 2, counts                  # each distinct line once: no growth with the hits
 
 
-def test_a_long_merged_line_verifies_in_bounded_time():
-    rec, doc = _twocol(16_000)
+def _verify_seconds(n: int) -> float:
+    rec, doc = _twocol(n)
     t0 = time.perf_counter()
     with read_cache():
         verify(rec, doc)
-    assert time.perf_counter() - t0 < limit(1.0)
+    return time.perf_counter() - t0
+
+
+def test_a_long_merged_line_verifies_in_bounded_time():
+    """1 s strict in a normal run (unchanged; about 0.7 s). Under the coverage tracer this path measures about 7x
+    slower (4.95 s for the 64 000-character line, over the default 4 s allowance), so the traced limit uses its
+    measured factor (evidence_timing.limit(slowdown)); the doubling test below holds whatever tracer runs."""
+    assert _verify_seconds(16_000) < limit(1.0, slowdown=10.0)
+
+
+def test_the_cost_per_doubling_of_a_long_merged_line_stays_linear():
+    """The round-3 audit's scaling check: the cost per doubling of the line stays near 2x (a quadratic path is 4x; the
+    audited e900c59 path went 0.28 s -> 2.57 s from 16k to 64k characters, 9.2x for these two sizes); the ratio of two
+    sizes is the same under a tracer, and the fastest of three runs keeps machine noise out."""
+    small, large = (min(_verify_seconds(n) for _ in range(3)) for n in (4_000, 16_000))
+    assert large / small < 2.5 ** 2, (small, large)            # two doublings, at most 2.5x each
 
 
 def test_the_row_span_reads_each_line_once(monkeypatch):

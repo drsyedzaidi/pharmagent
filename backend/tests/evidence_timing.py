@@ -25,6 +25,9 @@ def tracing_active() -> bool:
     return monitoring is not None and any(monitoring.get_tool(i) is not None for i in _TOOL_IDS)
 
 
-def limit(seconds: float) -> float:
-    """The wall-clock limit to assert against: strict normally, scaled while a tracer is active."""
-    return seconds * TRACE_SLOWDOWN if tracing_active() else seconds
+def limit(seconds: float, slowdown: float = TRACE_SLOWDOWN) -> float:
+    """The wall-clock limit to assert against: strict normally, scaled while a tracer is active. *slowdown*: the
+    measured tracer factor of a code path that pays more than the default per line (r7 round 3: the two-column checks
+    of a 64 000-character line run about 7x slower under ``scripts/evidence_coverage.py``); the normal limit is the same
+    whatever it is."""
+    return seconds * slowdown if tracing_active() else seconds

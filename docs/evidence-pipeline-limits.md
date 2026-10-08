@@ -324,7 +324,9 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   `between 12 and 24`), a range whose left end carries a unit (`20 mg – 40 mg`), a table span on the wrong row or column, a
   quadratic verify cost on a long merged line, a hash-seed-dependent column split, and hygiene items. Each is fixed through a
   production or the four lists (see "Round 3 of r7" in evidence-pipeline.md). U after the round: 4.36 % -> 4.43 % (1,923 ->
-  1,952 of 44,072; 5 records newly pass, each read as printed; 0 value disagreements). What it refuses on the corpus: 484
+  1,952 of 44,072; 5 records newly pass, each read as printed; 0 value disagreements; the follow-up that makes a times
+  sign before a digit no label glue: 1,954, row `r3_label_dots`, 2 value-like records newly refused beside the lost-space
+  word `intoa10×10trialdesign`). What it refuses on the corpus: 484
   detached decimals (7 value-like: `=4. 6h` and `=3. 0h` of a broken layer that read 6 and 0 for 4.6 h and 3.0 h; 477
   reference-list line ends), 58 letters after a separator or a dash (13 value-like: the locant `49-OH-bupropion`, reference
   numbers `26.Poliwoda`, `5-FU`), 7 products (`(1500 · 0.10 · 3600)`, `× 100 iterations`), `E0 = 0` (no variable name), and
@@ -333,8 +335,12 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   words 283 (`no_expression`), words beside a refused word 180, the em dash 167, `(cid:N)` 163, glued letters 155, `_` 102
   (the em dash, `(cid:N)` and `_` are kept fail-closed by owner decisions 4 and 5: 432 records), glued symbols 100,
   resolved-but-failed 92, bad starts 81 and fractions 75.
-  Left by design or for the owner: (1) a multiplier letter glued inside a letter run is a letter of the label (`AUCx1000`,
-  decision 3), so only a bracketed or spaced scale is read; (2) a look-alike digit group after a PLAIN space (`1 OOO`) reads
+  Left by design or for the owner: (1) a multiplier LETTER glued inside a letter run is a letter of the label (`AUCx1000`,
+  `Countx1000`; decision 3: the corpus labels `Vmax1`, `Cmax1`, `Prax2001` have the same shape, and telling them apart needs
+  a letter-case heuristic, a shape detector), and a star before digits is an allele star (`CYP2D6*4`, 69 corpus uses), so
+  `AUC*1000` is a label too; a times sign or middle dot right before a digit is no label glue since the round-3 follow-up
+  (`AUC×1000` flags `scaled_header`, `Count×1000 250` is refused; 16 corpus words, all on lost-space lines such as
+  `valueof52.3×10`, 0 with a middle dot), so only the Latin letter and the star stay with the page image; (2) a look-alike digit group after a PLAIN space (`1 OOO`) reads
   1 with no flag (only a grouping space, thin, narrow or no-break, flags `composite_cell`: a three-letter word after a number
   and a plain space is ordinary prose); (3) decision 8 asymmetry (owner call): the Latin `x2` / `x²` stays an ordinary label
   on its line (its numbers keep their reading, except `x² = 3.84`, where `x²` is no variable name and 3.84 is unresolved),

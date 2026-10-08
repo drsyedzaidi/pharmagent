@@ -767,8 +767,11 @@ production stated in the reader, never a detector of the bad shape (`numgrammar/
   page is a list mark (`12, 15`), and `12.5. 15` or `35. [35]` is a sentence end.
 * VARIABLE is a label or one letter (above); a lone operator letter right after a bracket inside a label word is judged on the
   printed text, so a scale glued after a label's bracket is no name (`Count(E3) 250`, `Count(x1000) 250` refused;
-  `CYP2E1`, `AUC(0-24)` read). A multiplier letter glued inside a letter run is a letter of the label (`AUCx1000` reads as a
-  label, decision 3: the limits document).
+  `CYP2E1`, `AUC(0-24)` read). A times sign or middle dot printed right before a digit inside a letter-led word is the
+  multiplier production, never glue of a name (round-3 follow-up: read as letters of the name, the digits made `AUC×1000`
+  look like the unit glue of `ng·h/mL`): such a word is no label, so a header `AUC×1000` flags `scaled_header` and
+  `Count×1000 250` is refused; `ng·h/mL`, `ng×h` and the allele star of `CYP2D6*4` stay labels. A multiplier LETTER glued
+  inside a letter run is a letter of the label (`AUCx1000` reads as a label, decision 3: the limits document).
 * Every one-character terminal of the reader (caret, hyphen, star, slash, equals, point, comma, zero, square opener, the
   chi-square letter and square) is defined once in `alphabet.py` (an AST guard: no Compare against a one-character string,
   no `startswith` / `endswith` of one, no set display of characters, in the reader and its flag, unit and table modules).
