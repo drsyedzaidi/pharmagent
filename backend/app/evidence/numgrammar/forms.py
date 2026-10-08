@@ -6,8 +6,10 @@ REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
          ``2 × daily`` ``1.2 ×`` ``1.2 × l0³``            multiplier_operand
          ``10 ^ 3`` ``10 ³`` ``10^ 3``                    detached_exponent
          ``3.4 E-03`` ``2012 e1553``                      spaced_exponent
-         ``12 3/4``                                       mixed_number (a lone ``3/4`` is ``fraction``)
-         ``12 / 15`` ``12 /15`` ``12/ 15`` ``1 : 2``       fraction (a ratio, a date, a score: never two exact values)
+         ``12 3/4``                                       mixed_number (a lone ``3/4`` is a ratio)
+         ``12 /15`` ``12/ 15`` ``1 : 2`` ``5 / 12 / 2020`` fraction (a ratio, a date, a score: never two exact values)
+ACCEPT   ``12 / 15``                                      one ``ratio`` token (r7, owner decision 6: value 12/15, parts
+                                                          (12, 15); the slash spaced on both sides, nothing else)
          ``12 .5`` ``12 ,5``                              detached_decimal (a text layer split the number at its point)
          ``5.2 (x10^3 cells)`` ``5.2 [× 10^3]``           bracketed_multiplier (the scale hides in a bracket)
 """
@@ -16,7 +18,7 @@ from __future__ import annotations
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import BRACKET_MULTIPLIERS, DIGITS, MULTIPLIERS, OPENERS_BR
 from app.evidence.numgrammar.body import decimal_mantissa, to_float
-from app.evidence.numgrammar.scan import TAIL_MULT, TAIL_STAR, Scan, read_power, scan_word
+from app.evidence.numgrammar.scan import RATIO_INT, TAIL_MULT, TAIL_STAR, Scan, ratio_parts, read_power, scan_word
 from app.evidence.numgrammar.tok import MAX_PARTS, Tok
 
 _FRAGMENT_LEADS = frozenset(".,")
@@ -110,7 +112,8 @@ class Forms:
         if sp == W.MULT_TEN or W.ten_shape(t1[1:]):                         # 'x103', 'x10mg': a ten, no power
             return self.ten(out, a, sc, j)
         rest = scan_word(t1[1:], self.starts[j] + 1, self.style) if len(t1) > 1 and t1[1] in DIGITS else None
-        return None if rest is not None and rest.kind == "numeric" else self.operand(out, a, sc, j)
+        product = rest is not None and rest.kind == "numeric" and rest.toks[0].shape != "ratio"   # 'x3/4': an operand
+        return None if product else self.operand(out, a, sc, j)
 
     def _mult_word(self, a: int, sc: Scan, j: int, out: list[Tok]) -> int | None:
         """``N x <operand>``: the operand is the word after the multiplier word."""
@@ -165,11 +168,33 @@ class Forms:
             if j + 1 >= self.n or not W.digit_led(self.text(j + 1)):
                 return None
             last = j + 1
+            tok = self.spaced_ratio(a, sc, last) if nxt == "/" else None
+            if tok is not None:
+                self.put(out, a, last, self.flagged((tok,), a, last)[0])
+                return last
         elif len(nxt) > 1 and nxt[0] in W.RATIO_CHARS and nxt[1] in DIGITS:
             last = j
         else:
             return None
         return self.ratio_run(out, a, last, sc.toks[0].start, self.parts_of(a, a))
+
+    def spaced_ratio(self, a: int, sc: Scan, last: int) -> Tok | None:
+        """``12 / 15``: one unsigned integer token ending word *a*, a lone ``/`` word, and word *last* an unsigned
+        integer (trailing closers allowed) that no further ``/ N`` continues; None for any other shape."""
+        t = sc.toks[0]
+        word = self.text(last)
+        den = word.rstrip(W.RATIO_TRAIL)
+        if len(sc.toks) != 1 or t.shape != "int" or t.end != self.ends[a] or not RATIO_INT.fullmatch(t.canonical) \
+                or not RATIO_INT.fullmatch(den):
+            return None
+        if last + 2 < self.n and self.text(last + 1) in W.RATIO_CHARS and W.digit_led(self.text(last + 2)):
+            return None                                              # '5 / 12 / 2020': a date or a list
+        if a and W.ends_with_number(self.text(a - 1)):
+            return None                                              # '4 12 / 15': a whole part may stand before
+        rp = ratio_parts(t.canonical, den)
+        if rp is None:
+            return None
+        return Tok(t.start, self.starts[last] + len(den), rp[0], "ratio", rp[2], t.qualified, False, rp[1], "")
 
     def ratio_run(self, out: list[Tok], a: int, last: int, start: int, first: tuple[float, ...]) -> int:
         """The ratio expression of words a..last (*first*: the numbers of word a), continued over further ``/ N`` pairs

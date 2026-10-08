@@ -1,7 +1,7 @@
 """The canonical expressions of the r6 exhaustive tests (one sentence, page fragment or table cell each) and the
 helpers that read a variant of them: ``E[:b] + c + E[b:]`` for a boundary b and one code point c.
 
-``|`` in a template marks a boundary: the 43 expressions give about 290 (expression, boundary) pairs. The oracle that
+``|`` in a template marks a boundary: the expressions give about 300 (expression, boundary) pairs. The oracle that
 judges the variants is in ``evidence_r6_oracle.py``.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from app.evidence.numgrammar import Tok, tokens
 
 SEP = "\nok ok\n"
 REF_OUTSIDE = "\ufffd"
-REF_LINE = "†"
+REF_FORMER_LINE = "\u2014"         # EM DASH: a character of the deleted LINE list, outside since r7 (the derived rule)
 CID_PANEL = ("(cid:1)", "(cid:2879)")
 
 
@@ -74,6 +74,14 @@ _TEMPLATES = [
     ("line_n_eq_12", "page", ".", "|fill\nok ok\nn = 12\nok ok\nfill|"),
     ("line_cmax", "page", ".", "|fill\nok ok\nCmax was 12.5 ng/mL\nok ok\nfill|"),
     ("line_sci", "page", ".", "|fill\nok ok\nCmax 1.2 x 10^3 cells\nok ok\nfill|"),
+    # r7 (decision 5): the derived line rule. Every boundary two or more words from the number is on its line: each of the
+    # 1.1 M code points there is either listed (the number keeps its reading) or outside (every number of the line is
+    # unresolved, exactly like the reference outside character)
+    ("line_far", "page", ".", "|AUC |was |measured |at |12.5 |mg/L |in |all |subjects|"),
+    # r7 (decisions 6, 7, 8): the ratio production, an unmistakable citation and the chi-square form, swept like the rest
+    ("ratio_glued", "page", ".", "|n |12|/|15|"),
+    ("citation", "page", ".", "|efflux |[46]| |12 mg|"),
+    ("chi_square", "page", ".", "|LRT |\u03c7\u00b2| = |3.84|"),
 ]
 
 

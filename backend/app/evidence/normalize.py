@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar import number_spans, numbers_in
-from app.evidence.numgrammar.alphabet import ALL_LETTERS, GAP, char_class
+from app.evidence.numgrammar.alphabet import GAP, LETTERS, char_class
 from app.evidence.numgrammar.equivalents import CASE_PAIRS, LIGATURES, THIN, casefold_letters, fold
 from app.evidence.numgrammar.style import style_evidence
 from app.evidence.read_cache import cached
@@ -25,7 +25,7 @@ IdxMap = list[int]
 
 _SPACES = GAP | frozenset({THIN})       # the spaces the locator collapses (the thin space: target of NBSP in ``fold``)
 _SPACE_RUN = re.compile(char_class(_SPACES, negate=False) + "+")
-_WRAP_LETTERS = ALL_LETTERS | frozenset(CASE_PAIRS.values())      # a letter, before or after the lower-casing
+_WRAP_LETTERS = LETTERS | frozenset(CASE_PAIRS.values())      # a letter, before or after the lower-casing
 _HYPHEN_BREAK = re.compile("-\n")
 _LIGATURE = re.compile(char_class(frozenset(LIGATURES), negate=False))
 

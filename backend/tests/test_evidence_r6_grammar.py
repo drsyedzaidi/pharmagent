@@ -94,7 +94,7 @@ RAISED_AND_BROKEN = [
     ("10 ^ 3", "detached_exponent"), ("10 ³", "detached_exponent"), ("10^ 3", "detached_exponent"),
     ("3.4 E-03", "spaced_exponent"), ("2012 e1553", "spaced_exponent"), ("3.4 E3", "spaced_exponent"),
     ("12 3/4", "mixed_number"), ("12 1/2", "mixed_number"), ("12 1/10", "mixed_number"),
-    ("3/4", "fraction"), ("12/24", "fraction"), ("1/2 of subjects", "fraction"),
+    ("3/4/5", "fraction"), ("12 /24", "fraction"), ("1/0 of subjects", "fraction"),    # r7: 3/4 12/24 1/2 are ratios
     ("10³", "bare_superscript_power"), ("per 10⁶ cells", "bare_superscript_power"),
 ]
 
@@ -188,7 +188,7 @@ def test_a_numeric_led_word_the_grammar_rejects_is_one_unresolved_expression():
     assert [t.why for t in tokens("150mg")] == ["glued_letters"]
 
 
-@pytest.mark.parametrize("text", ["8:00", "12/24", "12/", "12=3", "12^3", "12-+3", "65+", "12³", "12%5", "12:30",
+@pytest.mark.parametrize("text", ["8:00", "12/24/36", "12/", "12=3",                     # r7: 12/24 is a ratio "12^3", "12-+3", "65+", "12³", "12%5", "12:30",
                                   ".05", "*12", "12<5", "3.5≈5", "2019;12:345", "12)3", "12.5.", "1.2.-3"])
 def test_other_glued_characters_reject_the_word(text):
     assert V(text)[0] is None or text in ("12.5.",), (text, V(text))
@@ -338,8 +338,8 @@ def test_an_unresolved_context_expression_names_its_offender_and_where_it_sits()
     c = tokens("12.\ue0005")[0]
     assert (c.offender, c.where) == ("U+E000", "inside the number")
     assert (tokens("(cid:3)85%")[0].offender, tokens("(cid:3)85%")[0].where) == ("(cid:3)", "inside the number")
-    assert (tokens("Adalat\u00ae 30 mg")[0].offender, tokens("Adalat\u00ae 30 mg")[0].where) == \
-        ("U+00AE", "one word before")
+    assert (tokens("Adalat_ 30 mg")[0].offender, tokens("Adalat_ 30 mg")[0].where) == \
+        ("U+005F", "one word before")                                     # r7: the registered sign is CONTEXT
     assert (tokens("12 \u00bd")[0].offender, tokens("12 \u00bd")[0].where) == ("U+00BD", "one word after")
     elsewhere = tokens("\u202eabc\u202c AUC 12.5 mg/L")[0]
     assert (elsewhere.offender, elsewhere.where) == ("U+202E", "elsewhere on the same line")

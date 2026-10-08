@@ -14,8 +14,9 @@ class Tok(NamedTuple):
     thin-space group). No cleaned view and no index map exist: offsets index the string that was passed in.
 
     resolved   ``value`` is a float, ``shape`` one of int decimal foreign_decimal style_dependent grouped
-               grouped_decimal middot sci bare_power, ``canonical`` the ASCII text the value was read from
-               (``-1.2e3``), ``decimal`` the character used as the decimal point ('' when none).
+               grouped_decimal middot sci bare_power ratio, ``canonical`` the ASCII text the value was read from
+               (``-1.2e3``; ``12/15`` for a ratio, whose value is the quotient and whose parts are the numerator and
+               the denominator), ``decimal`` the character used as the decimal point ('' when none).
     unresolved ``value`` is None and ``shape`` is ``unresolved_context`` (a character outside the allowed
                alphabet touches the number, sits one word away, or lies elsewhere on its line) or
                ``unresolved_shape:<why>`` (allowed characters in an order the grammar rejects). ``parts`` holds
@@ -58,5 +59,11 @@ class Tok(NamedTuple):
 
     @property
     def decimal_value(self) -> Decimal | None:
-        """The exact decimal reading of the canonical string, None when unresolved."""
-        return Decimal(self.canonical) if self.canonical else None
+        """The exact decimal reading of the canonical string, None when unresolved or a ratio (not a decimal)."""
+        return Decimal(self.canonical) if self.canonical and self.shape != "ratio" else None
+
+    @property
+    def key(self) -> Decimal | str | None:
+        """What a claim must equal to be this number: its exact decimal, or for a ratio (r7) its canonical ``n/d``, so a
+        ratio equals only the same printed parts, never its quotient or a reduced ratio; None when unresolved."""
+        return self.canonical if self.shape == "ratio" and self.value is not None else self.decimal_value

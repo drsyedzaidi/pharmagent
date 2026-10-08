@@ -1,4 +1,4 @@
-"""The five literal sets of the numeric reader, written a SECOND time as bare code points (r6 spec).
+"""The four literal lists of the numeric reader, written a SECOND time as bare code points (r6 spec; r7 deleted LINE).
 
 ``app/evidence/numgrammar/alphabet.py`` is the first copy. ``tests/test_evidence_r6_sets.py`` compares the two
 entry by entry and prints this table, and the exhaustive classification test classifies every code point from THIS
@@ -24,25 +24,21 @@ INSIDE_CPS = (
 )
 # ------------------------------------------------------------------ GAP (4) ---
 GAP_CPS = (0x20, 0x09, 0x0A, 0x0D)
-# ---------------------------------------------------------------- CONTEXT (73) ---
+# ---------------------------------------------------------------- CONTEXT (115) ---
+# r7 (owner decision 5): there is no LINE list. 42 of its 77 characters moved here (letters, prose marks and footnote
+# marks that never change the reading of a number beside them); the other 35 are outside like every unlisted character.
 CONTEXT_CPS = (
     *[c for c in range(0x41, 0x5B) if c not in (0x45, 0x58)],      # A-Z without E X
     *[c for c in range(0x61, 0x7B) if c not in (0x65, 0x78)],      # a-z without e x
     0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x3B7, 0x3B8,       # mu omega beta alpha tau lambda eta theta
-    0x3B5, 0x3B3, 0x3C3, 0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3,        # epsilon gamma sigma rho pi Delta Omega Sigma (chi is LINE)
+    0x3B5, 0x3B3, 0x3C3, 0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3,        # epsilon gamma sigma rho pi Delta Omega Sigma
+    0x3BA,                                    # kappa (r7, from LINE; chi is outside)
     0x28, 0x29, 0x5B, 0x5D,                   # ( ) [ ]
     0x3B, 0x3A, 0x2F, 0x3D, 0xB0,             # ; : / = DEGREE SIGN
-)
-# ------------------------------------------------------------------ LINE (77) ---
-LINE_CPS = (
-    0x21, 0x22, 0x23, 0x24, 0x26, 0x3F, 0x40, 0x5C, 0x5F, 0x60, 0x7B, 0x7C, 0x7D,        # ! " # $ & ? @ \ _ ` { | }
-    0x2018, 0x201C, 0x201D, 0x2014, 0x2026, 0x2022,                                     # quotes, em dash, ellipsis, bullet
-    0xA9, 0xAE, 0x2122, 0x2020, 0x2021, 0xA7, 0xB6, 0x2016, 0x2032,                      # (c) (R) TM dagger ddagger sect para ||  prime
-    0x2192, 0x2190, 0x2191, 0x2193, 0x221E, 0xBD,                                       # arrows, infinity, one half
-    *range(0x2080, 0x208C),                   # subscripts 0-9, plus, minus
-    0x3BA, 0x3C7,                             # kappa, chi (draws like a multiplier x)
     0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3, 0xE6, 0xC5, 0xE4, 0xF6, 0xD6, 0xFC, 0xED, 0xEF,
-    0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107, 0x10D, 0x11F, 0x142, 0x15B,   # accented Latin
+    0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107, 0x10D, 0x11F, 0x142, 0x15B,   # accented Latin (r7)
+    0x26, 0x40, 0x201C, 0x201D, 0xA9, 0xAE, 0x2122, 0x221E,           # & @ quotes (c) (R) TM infinity (r7)
+    0xA7, 0xB6, 0x2020, 0x2021,               # section, pilcrow, dagger, double dagger: footnote marks (r7)
 )
 # ------------------------------------------------------------- EQUIVALENTS (10) ---
 EQUIV_PIN = {
@@ -53,7 +49,11 @@ EQUIV_PIN = {
     0x223C: 0x7E,                                               # tilde operator -> ~
     0x25E6: 0xB0,                                               # white bullet -> degree sign
 }
-COUNTS = {"inside": 45, "gap": 4, "context": 73, "line": 77, "equiv": 10}
+COUNTS = {"inside": 45, "gap": 4, "context": 115, "equiv": 10}
+# the 42 characters of the deleted LINE list that are CONTEXT since r7 (the layer-B sweeps keep checking them as they did)
+FOLDED_FROM_LINE = frozenset((0x3BA, 0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3, 0xE6, 0xC5, 0xE4, 0xF6, 0xD6, 0xFC, 0xED,
+                              0xEF, 0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107, 0x10D, 0x11F, 0x142,
+                              0x15B, 0x26, 0x40, 0x201C, 0x201D, 0xA9, 0xAE, 0x2122, 0x221E, 0xA7, 0xB6, 0x2020, 0x2021))
 
 
 def expected_class(cp: int) -> str:
@@ -65,10 +65,8 @@ def expected_class(cp: int) -> str:
         return "gap"
     if cp in CONTEXT_SET:
         return "context"
-    if cp in LINE_SET:
-        return "line"
-    return "outside"
+    return "outside"                          # the derived line rule (r7): every character of no list
 
 
 INSIDE_SET, GAP_SET = frozenset(INSIDE_CPS), frozenset(GAP_CPS)
-CONTEXT_SET, LINE_SET = frozenset(CONTEXT_CPS), frozenset(LINE_CPS)
+CONTEXT_SET = frozenset(CONTEXT_CPS)

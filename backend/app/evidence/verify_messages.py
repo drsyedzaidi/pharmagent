@@ -21,7 +21,9 @@ SHAPE_WHY = {
     "detached_exponent": "an exponent detached from its number", "spaced_exponent": "a spaced exponent",
     "mixed_number": "a mixed number", "fraction": "a fraction", "glued_letters": "letters glued to the digits",
     "glued_symbol": "a symbol glued to the digits", "bad_start": "a number that starts in an unreadable way",
-    "bare_superscript_power": "a raised power of ten without a multiplier"}
+    "bare_superscript_power": "a raised power of ten without a multiplier",
+    "citation": "a bracketed reference citation, which is not a value",
+    "citation_list": "a pair of reference numbers in square brackets, never a decimal"}
 
 
 def named(label: str) -> str:

@@ -95,7 +95,7 @@ def test_a_digit_that_is_not_ascii_is_outside_the_alphabet_and_never_a_value(tex
 
 
 def test_the_classifier_agrees_with_the_second_copy_of_the_sets_on_every_listed_character():
-    for cp in (*pins.INSIDE_CPS, *pins.GAP_CPS, *pins.CONTEXT_CPS, *pins.LINE_CPS):
+    for cp in (*pins.INSIDE_CPS, *pins.GAP_CPS, *pins.CONTEXT_CPS):                # r7: the LINE list is deleted
         assert cls(chr(cp)) == pins.expected_class(cp)
     assert cls("x") == "inside" and cls("\u2212") == "inside" and cls("\u200b") == "outside"
 

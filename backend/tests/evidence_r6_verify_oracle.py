@@ -9,7 +9,7 @@ only, in the snippet only and in both, and the outcome is judged against the cle
   an expression is (``12 3/4`` is a mixed number, ``12% 3/4`` is a percentage and a fraction; ``150mg`` + TAB is
   ``150 mg``): such a pass must equal the pass of the same record with c replaced by its class representative
   (``rep_of``; U+0020 for a gap), so the verify() path follows the class argument of the tokenizer oracle. A character
-  of the line or outside class never turns a failing record into a pass;
+  of the outside class (r7: every character of no list) never turns a failing record into a pass;
 - a pass carries the clean number and the clean literal (c removed when it sits inside the literal's span);
 - a fail carries a reason from ``models.REASON_CODES``;
 - (strong) a code point of the OUTSIDE class anywhere in the page or the snippet is never a pass: the readability
@@ -37,6 +37,7 @@ CITES = {
     "range": "1.95", "pm": "5.3", "qual_glued": "0.5", "dose_mg": "150", "lancet": "12.4", "degree": "37",
     "mixed_number": "12", "ten_dose": "10", "mult_daily": "2", "glued_unit": "150", "cell_thousands": "3412",
     "cell_12_145": "145", "cell_lancet": "12.4", "cell_stars": "-14.2",
+    "ratio_glued": "12/15", "citation": "12", "chi_square": "3.84",       # r7: decisions 6, 7, 8
 }
 WHERES = ("page", "snippet", "both")
 MODES = ("text", "cell")

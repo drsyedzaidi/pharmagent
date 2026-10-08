@@ -7,8 +7,8 @@ parse placeholder, the label reader, the style evidence and the text-field locat
 
   scale     a label that scales the printed number keeps raising the flag when ANY non-ASCII character is inserted
             anywhere in it (a look-alike, an invisible mark or a stray symbol never hides the scale)
-  style     a line holding a character outside the alphabet (or a LINE character glued to its numbers) casts no vote on
-            the document's decimal style
+  style     a line holding a character outside the alphabet (or a character of the deleted LINE list glued to its
+            numbers) casts no vote on the document's decimal style
   thin      the parse placeholder restores exactly the approved spaces: every other character, a private-use one
             included, comes out of ``ThinSpaces.restore`` as it went in
   text      a text-field record whose page or snippet holds ANY inserted character inside a number never passes against
@@ -19,12 +19,15 @@ parse placeholder, the label reader, the style evidence and the text-field locat
   unit      (round 2) a unit holding a character outside INSIDE / CONTEXT / GAP is unresolved: it equals no unit and is
             recognised as none
   key       (round 2) a header key drops exactly the spaces and ``_ - , .`` and keeps every other character
+  readable  (r7, the derived line rule) the verifier's pre-check of a snippet, a value and a neighbouring cell
+            (``unreadable``) refuses a text exactly when it holds a character of no list: INSIDE, CONTEXT, GAP and the
+            equivalents' sources are readable, every other code point is named at its offset (the LINE list is gone)
 """
 from __future__ import annotations
 
 from app.evidence.extract_rules import norm_key
 from app.evidence.normalize import decimal_evidence, normalise
-from app.evidence.numgrammar import scale_shapes
+from app.evidence.numgrammar import scale_shapes, unreadable
 from app.evidence.numgrammar.equivalents import EQUIV, THIN
 from app.evidence.parse_guard import THIN_SPACES, ParseLimitError, protect_thin_spaces
 from app.evidence.record_checks import _UNIT_TOKEN_RE, recognised_unit
@@ -42,13 +45,14 @@ TEXT_PAGE, TEXT_SNIPPET = "Inoculum 100 cells/mL were infused.", "Inoculum 100 c
 
 
 def non_ascii(cps: list[int]) -> list[int]:
-    """The characters the reader cannot read (LINE or OUTSIDE class) that stand for no ASCII character: not an approved
-    equivalent of one (U+2010 is ``-``, U+00A0 a gap: inserting those is inserting an ASCII character, which may
-    legitimately change a label). A readable character (``±``, ``²``, ``μ``) changes what the label SAYS; an
-    unreadable one must never change what it MEANS."""
+    """The characters the reader cannot read (OUTSIDE class: r7 derives it, every character of no list) that stand for
+    no ASCII character: not an approved equivalent of one (U+2010 is ``-``, U+00A0 a gap: inserting those is inserting
+    an ASCII character, which may legitimately change a label). A readable character (``±``, ``²``, ``μ``, and since r7
+    the letters and marks folded into CONTEXT) changes what the label SAYS; an unreadable one must never change what it
+    MEANS."""
     ascii_equivalents = {ord(k) for k, v in EQUIV.items() if v.isascii() or v == THIN}
     return [cp for cp in cps if cp >= 0x80 and not 0xD800 <= cp <= 0xDFFF and cp not in ascii_equivalents
-            and P.expected_class(cp) in ("line", "outside")]
+            and P.expected_class(cp) == "outside"]
 
 
 def sweep_scale(cps: list[int]) -> list[str]:
@@ -68,13 +72,14 @@ def sweep_scale(cps: list[int]) -> list[str]:
 
 
 def sweep_style(cps: list[int]) -> list[str]:
-    """A character outside the alphabet anywhere in a line taints every number of it, so the line casts no vote; a LINE
-    character does the same to the words it touches and their neighbours, so a line made of one glued word does too.
+    """A character outside the alphabet anywhere in a line taints every number of it, so the line casts no vote; a
+    character of the deleted LINE list folded into CONTEXT (r7) glued between two numbers rejects the word, so a line made
+    of one glued word casts none either.
     The lines are independent (the reader works line by line): one appended line is checked against the base text, the
     others on their own."""
     bad, base = [], decimal_evidence(STYLE_BASE)
     for cp in cps:
-        if 0xD800 <= cp <= 0xDFFF or P.expected_class(cp) not in ("outside", "line"):
+        if 0xD800 <= cp <= 0xDFFF or not (P.expected_class(cp) == "outside" or cp in P.FOLDED_FROM_LINE):
             continue
         c = chr(cp)
         for line in STYLE_LINES:
@@ -197,8 +202,24 @@ def sweep_key(cps: list[int]) -> list[str]:
     return bad
 
 
+def sweep_readable(cps: list[int]) -> list[str]:
+    """``unreadable('AUC 12.5 mg ' + c + ' ok')`` is None exactly when c is listed (or an equivalent's source) and names c
+    at offset 12 otherwise: the derived line rule of r7 through the verifier's pre-check."""
+    bad = []
+    for cp in cps:
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        got = unreadable("AUC 12.5 mg " + chr(cp) + " ok")
+        want = None if P.expected_class(cp) != "outside" else (12, f"U+{cp:04X}")
+        if got != want:
+            bad.append(f"U+{cp:04X}: unreadable gives {got}, the derived rule {want}")
+        if len(bad) >= 20:
+            break
+    return bad
+
+
 SWEEPS = {"scale": sweep_scale, "style": sweep_style, "thin": sweep_thin, "text": sweep_text,
-          "locator": sweep_locator, "unit": sweep_unit, "key": sweep_key}
+          "locator": sweep_locator, "unit": sweep_unit, "key": sweep_key, "readable": sweep_readable}
 
 
 # ------------------------------------------------------------------------ the process pool ---

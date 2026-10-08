@@ -61,7 +61,9 @@ def test_the_style_evidence_comes_from_the_resolved_numbers_of_the_page_reading(
 def test_a_reference_pair_in_square_brackets_is_no_number_and_no_evidence():
     assert decimal_evidence("Drug X [1,2] and [3,4] and [5,6], t1/2 was 11.4 h") == (0, 1)
     for style in (".", ","):
-        assert [(t.value, t.why) for t in tokens("see [1,2] here", style)] == [(None, "citation_list")]
+        # r7 (decision 7): after a word the pair is an unmistakable citation, one non-value expression with its parts
+        assert [(t.value, t.why, t.parts) for t in tokens("see [1,2] here", style)] == [(None, "citation", (1.0, 2.0))]
+        assert [(t.value, t.why) for t in tokens("12 [1,2] here", style)] == [(12.0, ""), (None, "citation_list")]
     assert vals("[0,5] mg", ",") == [0.5]                                   # a bracketed decimal with head 0 is no pair
 
 
@@ -74,8 +76,9 @@ def test_decimal_evidence_is_linear_in_a_run_of_digit_groups():
 
 # --------------------------------------------------- Greek chi is a look-alike multiplier ---
 
-def test_greek_chi_is_a_line_character_and_taints_the_number_it_stands_beside():
-    assert "χ" in A.LINE and "χ" not in A.CONTEXT and len(A.GREEK) == 16
+def test_greek_chi_is_outside_and_taints_the_number_it_stands_beside():
+    # r7: chi was a LINE character; the LINE list is gone and chi is outside except in the explicit chi-square form
+    assert A.cls("χ") == "outside" and "χ" not in A.CONTEXT and "χ" not in A.GREEK and len(A.GREEK) == 17
     for text in ("AUC was 1.2 χ 10^3 ng.h/mL", "AUC was 1.2 χ10^3 ng.h/mL", "AUC 1.2 χ 10³ ng.h/mL"):
         assert all(t.value is None for t in tokens(text)), text
     assert vals("AUC was 1.2 x 10^3 ng.h/mL") == [1200.0]                       # the real multiplier is unchanged
@@ -133,13 +136,23 @@ def test_a_lone_number_a_negative_first_word_and_prose_with_a_dash_are_not_range
 
 # --------------------------------------------------------- ratios, fragments and brackets ---
 
-@pytest.mark.parametrize("text", ["Cmax 12 / 15 patients", "Cmax 12 /15 patients", "Cmax 12/ 15 patients", "Ratio 1 : 2 dilution",
-                                  "Date 5 / 12 / 2020 here", "score 3 :4", "n 12 \n/\n 15", "12 : 13"])
+@pytest.mark.parametrize("text", ["Cmax 12 / 15 / 18 patients", "Cmax 12 /15 patients", "Cmax 12/ 15 patients",
+                                  "Ratio 1 : 2 dilution", "Date 5 / 12 / 2020 here", "score 3 :4",
+                                  "n 12 \n/\n 15 \n/\n 18", "12 : 13"])
 def test_a_slash_or_colon_between_two_numbers_makes_them_one_unresolved_ratio(text):
     """'12 : 13' used to sit in test_evidence_r6_line_tier's list of 'context characters one word away are fine' (the colon
     is a CONTEXT character and never taints): it still never taints, and it is no longer two exact values either."""
     got = tokens(text)
     assert got and all(t.value is None and t.shape == "unresolved_shape:fraction" for t in got), (text, got)
+
+
+@pytest.mark.parametrize("text", ["Cmax 12 / 15 patients", "n 12 \n/\n 15"])
+def test_a_slash_spaced_on_both_sides_between_two_integers_is_one_ratio(text):
+    """r7 (owner decision 6) replaces the two shapes that left the list above: ``12 / 15`` is read only through the
+    explicit ratio production (value 12/15, parts (12, 15)); citing a part alone is a partial number
+    (tests/test_evidence_r7_ratio.py)."""
+    (t,) = tokens(text)
+    assert (t.value, t.shape, t.parts, t.canonical) == (0.8, "ratio", (12.0, 15.0), "12/15"), (text, t)
 
 
 @pytest.mark.parametrize("text, want", [("dose 12 mg / 15 mL", [12.0, 15.0]), ("Cmax 12 ng / mL", [12.0]),
@@ -227,8 +240,11 @@ def test_number_chars_are_the_inside_class_and_the_sources_of_the_equivalents():
 # ------------------------------------------------- invariants with the round-1 shapes in the mix ---
 
 _ATOMS = (list("0123456789") * 5 + list(".,'-+ \t\n") * 3 + ["[1,2]", " / ", " : ", " .5", " ,5", "(x10^3", "[x 10^3]", "<=", "~=",
-                                                            " -", "- ", "χ", "∼", "1.234e+03", "e", "x", "×", "10^3",
+                                                            " -", "- ", "†", "∼", "1.234e+03", "e", "x", "×", "10^3",
                                                             "≤(", "(", ")", "%", "±", "mg", "to", "12 -15", " "])
+# r7: chi is outside (it taints its whole line, so a padding that moves a line feed may change what it taints): it is
+# mixed in for the well-formedness check only; the gap-invariant mix holds the dagger, a CONTEXT mark since r7
+_CHI_ATOMS = _ATOMS + ["χ"] * 8
 
 
 @pytest.mark.parametrize("style", [".", ","])
@@ -252,6 +268,15 @@ def test_random_text_with_the_round_1_shapes_stays_well_formed_and_gap_invariant
             [(t.value, t.shape, t.qualified, t.ranged) for t in got], (s, padded)
         for mode in ("cell", "claim"):
             tokens(s, style, mode=mode)                                  # never raises
+    for _ in range(1500):
+        s = "".join(rnd.choice(_CHI_ATOMS) for _ in range(rnd.randint(1, 30)))
+        end = -1
+        for t in tokens(s, style):
+            assert 0 <= t.start < t.end <= len(s) and t.start >= end, (s, t)
+            end = t.end
+            assert (t.value is None) == (t.canonical == "" and t.shape.startswith("unresolved")), (s, t)
+            line = s.split("\n")[s.count("\n", 0, t.start)]
+            assert t.value is None or "χ" not in line, (s, t)               # chi taints every number of its line
 
 
 def test_the_style_evidence_of_two_texts_is_the_sum_of_their_evidence_when_prose_lies_between():

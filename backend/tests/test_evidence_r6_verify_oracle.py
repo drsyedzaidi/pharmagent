@@ -37,7 +37,7 @@ def test_the_sample_holds_listed_and_outside_code_points():
     from tests import evidence_r6_pins as P
     cps = V.sample_cps(150)
     classes = {P.expected_class(cp) for cp in cps}
-    assert classes == {"inside", "gap", "context", "line", "outside"}
+    assert classes == {"inside", "gap", "context", "outside"}                    # r7: the LINE list is deleted
     assert V.describe(0x200B).startswith("U+200B")
 
 

@@ -13,16 +13,17 @@ from app.evidence.numgrammar.alphabet import (
     GAP,
     INSIDE,
     LETTERS,
-    LINE_TIER_RE,
     MULTIPLIERS,
     NUMBER_CLOSERS,
     OPENERS_BR,
+    OUTSIDE_RE,
     SIGNS,
     STARTERS,
     WORD_RE,
     char_class,
 )
 from app.evidence.numgrammar.equivalents import THIN, fold
+from app.evidence.numgrammar.productions import mask_chi_square
 from app.evidence.numgrammar.tokenizer import tokens
 
 _TRAIL_STRIP = ".,;:)"
@@ -110,10 +111,10 @@ def words_before(text: str, start: int, n: int) -> list[str]:
 
 def unreadable(text: str) -> tuple[int, str] | None:
     """(offset, 'U+200B' or '(cid:3)') of the first character of *text* outside the readable alphabet (INSIDE,
-    CONTEXT, LINE, GAP and the equivalents) or the first pdfminer unmapped-glyph marker; None when the whole string
-    is readable. Offsets index *text* itself: the fold is 1:1."""
-    t = fold(text)
-    ch, cid = LINE_TIER_RE.search(t), CID_MARKER.search(t)
+    CONTEXT, GAP and the equivalents: the derived rule of r7) or the first pdfminer unmapped-glyph marker; None when the
+    whole string is readable (the chi of a chi-square form is: r7). Offsets index *text* itself: the fold is 1:1."""
+    t = mask_chi_square(fold(text))
+    ch, cid = OUTSIDE_RE.search(t), CID_MARKER.search(t)
     if ch is not None and (cid is None or ch.start() < cid.start()):
         return ch.start(), f"U+{ord(t[ch.start()]):04X}"
     return None if cid is None else (cid.start(), cid.group())

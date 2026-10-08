@@ -1,8 +1,9 @@
 """r6 numeric grammar, layer B: every code point at every boundary of every canonical expression.
 
-Normal gate (a few seconds): the independent oracle on the reference characters, every LISTED code point (209) at
+Normal gate (a few seconds): the independent oracle on the reference characters, every LISTED code point (174) at
 every boundary of every expression read directly, a stratified 2 048-point outside subset through the batch, and the
-golden file that pins the 28 class representatives.
+golden file that pins the 29 class representatives. r7: there is no LINE class; every code point of no list is outside
+and must read exactly like the reference outside character (the derived line rule, swept over every code point).
 
 Full run (``R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py``, or
 ``python -m tests.evidence_r6_oracle --workers 12 --log run.log``): all 1 112 064 code points x every pair on a
@@ -40,7 +41,7 @@ def sample():
 # ------------------------------------------------------------------ the expression set ---
 def test_the_expression_set_covers_the_specified_forms_and_about_260_pairs():
     names = {e.name for e in O.EXPRESSIONS}
-    for needed in ("n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
+    for needed in ("line_far", "ratio_glued", "citation", "chi_square", "n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
                    "neg_endash", "percent", "e_notation", "sci_x_caret", "sci_times_caret_neg", "sci_times_sup",
                    "bare_power", "range", "pm", "qual_glued", "qual_spaced", "tilde_operator", "dose_mg", "lancet",
                    "degree", "sbp_table", "mixed_number", "pua_inside", "braille_qualifier", "ten_dose", "mult_daily",
@@ -64,7 +65,8 @@ def test_the_clean_expressions_read_as_documented():
             "glued_unit": [None], "plus_glued": [None], "pua_inside": [None], "braille_qualifier": [None],
             "cid_inside": [None], "cid_lead": [None], "cell_thousands": [3412.0, 812.0], "cell_12_145": [12.0, 145.0],
             "cell_bad_groups": [None], "cell_pm_groups": [18900.0, 4100.0], "cell_lancet": [12.4],
-            "cell_stars": [-14.2], "line_n_eq_12": [12.0], "line_cmax": [12.5], "line_sci": [1200.0]}
+            "cell_stars": [-14.2], "line_n_eq_12": [12.0], "line_cmax": [12.5], "line_sci": [1200.0],
+            "line_far": [12.5], "ratio_glued": [0.8], "citation": [None, 12.0], "chi_square": [3.84]}
     for e in O.EXPRESSIONS:
         assert [t.value for t in O.run(e, e.text)] == want[e.name], e.name
     assert O.EXPRESSIONS[[e.name for e in O.EXPRESSIONS].index("cmax_comma")].style == ","
@@ -78,9 +80,9 @@ def test_the_reference_outside_line_and_cid_insertions_satisfy_the_oracle_at_eve
 
 
 def test_every_listed_code_point_at_every_boundary(golden):
-    """209 listed code points (inside, context, line, gap, equivalents) x every boundary, read directly."""
+    """174 listed code points (inside, context, gap, equivalents) x every boundary, read directly."""
     cps = O.non_outside_cps()
-    assert len(cps) == 45 + 8 + 4 + 73 + 2 + 77                     # equivalents counted with their target class
+    assert len(cps) == 45 + 8 + 4 + 115 + 2                         # equivalents counted with their target class
     bad = []
     for ei, b in O.PAIRS:
         e = O.EXPRESSIONS[ei]
@@ -102,16 +104,17 @@ def test_a_stratified_outside_subset_reads_exactly_like_the_reference_outside_ch
 
 def test_the_golden_file_pins_every_class_representative_at_every_boundary(golden):
     fresh = O.build_golden()
-    assert set(golden) == set(fresh) and len(golden) == len(O.PAIRS) * 28
+    assert set(golden) == set(fresh) and len(golden) == len(O.PAIRS) * 29
     changed = [k for k in fresh if golden[k] != fresh[k]]
     assert changed[:10] == [], ("the reader changed for a class representative: review the diff, then "
                                 "`python -m tests.evidence_r6_oracle --regen-golden`")
 
 
-def test_the_representatives_are_exactly_the_28_behaviours():
+def test_the_representatives_are_exactly_the_29_behaviours():
     reps = {O.rep_of(chr(cp)) for cp in P.INSIDE_SET | P.CONTEXT_SET}
-    assert len(reps) == 28
+    assert len(reps) == 29
     assert O.rep_of("7") == "5" and O.rep_of("0") == "0" and O.rep_of("E") == "e" and O.rep_of("μ") == "m"
+    assert O.rep_of("\u00e9") == "m" and O.rep_of("\u03ba") == "m" and O.rep_of("\u00ae") == "&"     # r7 folds
 
 
 # ------------------------------------------------------------- the harness is honest ---
@@ -140,19 +143,18 @@ def test_a_cell_reads_like_a_page_when_it_is_one_line():
                 assert tokens(s, e.style, mode="cell") == tokens(s, e.style, mode="page"), (e.name, b, ch)
 
 
-@pytest.mark.parametrize("label, patch", [
-    ("the line tier is blind to U+2029", lambda: ("LINE_TIER_RE", "\u2029")),
-    ("the word tier is blind to U+00AE", lambda: ("WORD_TIER_RE", "®")),
+@pytest.mark.parametrize("label, ch", [
+    ("the reader is blind to U+2029", "\u2029"),
+    ("the reader is blind to U+2022, a character of the deleted LINE list (r7)", "\u2022"),
 ])
-def test_the_sweep_catches_a_reader_that_ignores_a_character(label, patch, sample, monkeypatch):
-    attr, ch = patch()
-    original = getattr(taint, attr)
-    monkeypatch.setattr(taint, attr, re.compile(original.pattern.replace("[^", "[^" + ch, 1)))
+def test_the_sweep_catches_a_reader_that_ignores_a_character(label, ch, sample, monkeypatch):
+    # r7: one allow-list decides the word, window and line tiers (the derived rule), so one regex is patched
+    assert ord(ch) in sample
+    original = taint.OUTSIDE_RE
+    monkeypatch.setattr(taint, "OUTSIDE_RE", re.compile(original.pattern.replace("[^", "[^" + ch, 1)))
     found = []
     for ei, b in O.PAIRS[:60]:
         found += O.sweep_pair((ei, b), sample, None, direct=[]).errors
-        found += [f"{m}" for m in O.check_class(O.EXPRESSIONS[ei], b, ord("®"), None)] if attr == "WORD_TIER_RE" \
-            else []
     assert found, label
 
 

@@ -123,7 +123,7 @@ def test_layer_b_sample_has_no_violation(name, sample):
 
 def test_layer_b_sample_is_representative(sample):
     assert len(sample) >= 1500
-    assert {P.expected_class(cp) for cp in sample} == {"inside", "gap", "context", "line", "outside"}
+    assert {P.expected_class(cp) for cp in sample} == {"inside", "gap", "context", "outside"}       # r7: no LINE
     assert set(AUDITED) <= set(sample)
 
 
@@ -164,7 +164,7 @@ def test_layer_b_catches_a_locator_that_drops_or_equates_a_character(monkeypatch
 
 def test_layer_b_catches_a_unit_that_reads_a_character_outside_the_alphabet(monkeypatch):
     from app.evidence import unit_norm as UN
-    monkeypatch.setattr(UN, "WORD_TIER_RE", re.compile("[\u0000]"))
+    monkeypatch.setattr(UN, "OUTSIDE_RE", re.compile("[\u0000]"))
     assert any("U+3398" in m or "U+338E" in m for m in B.sweep_unit([0x338E, 0x3398]))
 
 
@@ -178,6 +178,14 @@ def test_layer_b_catches_a_header_key_that_drops_an_invisible_character(monkeypa
     from app.evidence import extract_rules as ER
     monkeypatch.setattr(ER, "fold", lambda text, claim=False: text.replace("\u200b", ""))
     assert any("U+200B" in m for m in B.sweep_key([0x200B]))
+
+
+def test_layer_b_catches_a_pre_check_that_reads_a_former_line_character(monkeypatch):
+    """r7: the derived rule is swept through ``unreadable``; a pre-check that still allowed the em dash is caught."""
+    from app.evidence.numgrammar import api
+    monkeypatch.setattr(api, "OUTSIDE_RE", re.compile(api.OUTSIDE_RE.pattern.replace("[^", "[^\u2014", 1)))
+    monkeypatch.setattr(B, "unreadable", api.unreadable)
+    assert any("U+2014" in m for m in B.sweep_readable([0x2014, 0x41]))
 
 
 def test_layer_b_catches_a_decoy_digit_that_votes(monkeypatch):

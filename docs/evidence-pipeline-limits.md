@@ -99,13 +99,17 @@ it matches a small explicit grammar made of an explicit allowed alphabet; everyt
 verification fails, the record is flagged, the reviewer compares with the page image). These are losses by design, not
 defects; each one is listed so a reviewer is not surprised, and none can pass as another number:
 
-- **Mixed numbers.** `12 3/4`, `12 1/2`, `12 ½` (`½` is a LINE character: it taints a number beside it). A lone fraction or
-  ratio (`3/4`, `140/90 mmHg`, `6/10`, `0.1/0.2/0.4 mg/kg`) is unresolved too, so a blood pressure or a dose ratio is never
-  read as two exact values; so is a spaced one (`12 / 15`, `12 /15`, `12/ 15`, `1 : 2`, `5 / 12 / 2020`) and a division in
-  running text (`17 / 0.7`).
+- **Mixed numbers and ratios.** `12 3/4`, `12 1/2`, `12 ½` (`½` is outside: it taints the line) are unresolved. Since r7 a
+  ratio of two integers (`3/4`, `140/90 mmHg`, `12 / 15`) is ONE `ratio` token (value n/d, parts n and d): it equals only a
+  claim that prints the same ratio, and citing a part alone (`140` of `140/90`) fails `partial_number`, so a blood pressure
+  is never read as two exact values. Every other slash or colon shape stays unresolved: `0.1/0.2/0.4 mg/kg`, `5/12/2020`,
+  `12 /15`, `12/ 15`, `1 : 2`, `8:00`, a division in running text (`17 / 0.7`), a ratio after a number (`4 12/15`, `2.1)
+  404/9696`: a whole part may stand before it) and a keyless proposal of a ratio carries the quotient as its `value_num`.
 - **Split decimals and bracketed scales.** `12 .5` and `12 ,5` (a text layer that split a number at its point; both are
   unresolved), `5.2 (x10^3 cells/mL)` and `5.2 [× 10^3]` (the scale hides in a bracket), a reference pair `[1,2]` (never a
-  decimal). `(4,6)` stays a decimal: in decimal-comma papers a parenthesised decimal is ordinary, so a reference pair in
+  decimal). Since r7 an unmistakable bracketed citation (`efflux [46].`, `studies[47–49]`) is a non-value expression: a record
+  citing its number fails, and its neighbours read as if it were a word; a bracket after a number (`89 [46]`, `9[4–9]`) or
+  alone in a cell keeps its old reading, and a label glued to a bracket group (`AUC[12–24]`) fails closed as a citation. `(4,6)` stays a decimal: in decimal-comma papers a parenthesised decimal is ordinary, so a reference pair in
   parentheses on a comma page is read as 4.6 (a known gap, not closable without losing every parenthesised SD).
 - **Raised exponents without an explicit marker.** `1.2 × 103` and `1.2 x 10 3` (an exponent set at full size but raised: the
   text layer cannot say 10^3 from 103), a bare `× 10` (`7.23 ×10 *`), `2 x 10 mg`, `n = 12 x 10`, the Lancet `0·10`, `12·105`;
@@ -118,14 +122,19 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
 - **Look-alike symbols.** Dashes (`‒ ― ﹘ ﹣ － ˗ ➖ ⁃ ⸺`), pluses, dots (`‧ ˙ ٫ ․`), multipliers (`⋅ ∙ ⨯ ✕ ✖ ∗ х Х χ`), comparisons
   (`≦ ≧ ⩽ ⩾ ≲ ≳ ≠`), `÷`, `‱`, fullwidth and small-form signs, Cyrillic and math letters are not in the alphabet and not in the
   equivalents table (ten entries: `− – ‐ ‑ ’` U+202F U+00A0 `µ ∼ ◦`). A number next to one is unresolved: a look-alike multiplier
-  would be fail-open, so there is no folding. The em dash (`—`) is a LINE character: it may stand on a number's line but not
-  next to it, so `Azithromycin — 0.66–1.8y` and `AUCR ≈ 2.3 — a moderate interaction` lose their numbers.
-- **Bullets, footnote marks and symbols next to numbers.** `• 150 mg`, `Adalat® 30 mg`, `partner§ 33 574`, `cm‖ 33.3`, `312†`,
-  `t½ 11.4 h`, `$18`, `£150 mg`, an arrow or a quote glued to a number, and `_ | ? " # & @` beside it (R code, markdown
-  tables, file names): LINE characters taint the number's own word and the words before and after it. Letters beyond
-  the 29 accented Latin letters and the 16 Greek letters of the alphabet (`É Š ž ō`, `δ φ ψ ν`, and `χ`, which draws like a
-  multiplier) taint the same way until admitted by the corpus rule. `χ` was a CONTEXT letter; moving it costs 2 numbers of
-  186,287 (`ΔOFV > 6.63 (χ² df=1`).
+  would be fail-open, so there is no folding. The em dash (`—`) is outside since r7 (it was a LINE character): every number of
+  its line is unresolved, so `Azithromycin — 0.66–1.8y`, `AUCR ≈ 2.3 — a moderate interaction` and a flattened table row
+  with `—` for "not available" lose their numbers (166 value-like records of the 60 papers).
+- **Bullets, arrows, code characters and symbols on a number's line (r7: the derived line rule).** There is no LINE list:
+  a character that is not INSIDE, CONTEXT, GAP or an equivalent's source taints its word, the words one separator away and
+  every number of its line. So `• 150 mg`, `cm‖ 33.3`, `t½ 11.4 h`, `$18`, `£150 mg`, an arrow (`ω = 0.40 → CV 41%`), a
+  `‘ — … ′` and `_ | ? " # ! { }` anywhere on the line (R code, markdown tables, file names) leave every number of the line
+  unresolved. The 42 LINE characters folded into CONTEXT (`κ`, 29 accented letters, `& @ “ ” © ® ™ ∞ § ¶ † ‡`) are allowed
+  beside a number (`Adalat® 30 mg`, `partner§ 33 574`, `AUC0–∞ 1234`) but are rejected glued to its digits (`312†`).
+  Letters beyond these (`É Š ž ō`, `δ φ ψ ν`) taint the same way until admitted by the corpus rule. `χ` is outside except
+  in the chi-square form `χ²(df) = n` (r7, decision 8); the corpus lines `ΔOFV > 6.63 (χ² df=1` are not in the form and lose
+  every number of the line. Rotated tables read backwards (`]18[muneuQ&evreH`, digits reversed) are a parse defect the
+  reader cannot see: lines that only held a folded mark now read (14 non-value-like records in the 60 papers).
 - **Units glued to digits.** `150mg`, `24h`, `1.73m2`, `3MIU`, `10mL`, `100µg`: a letter glued to the digits is rejected
   whatever the letter (a list of allowed unit letters would be a fourth list and would re-admit `10mL` read as `1OmL`). The
   honest cost is mostly text layers that lost every space; per-document counts are in `corpus_after.tsv`.
@@ -212,6 +221,18 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   sweeps (scale, style, thin, text, locator, unit, key) x 1,112,064 code points, with 0 errors; the record is
   `backend/tests/evidence_r6_attestation.json`. (8) Coverage (`scripts/evidence_coverage.py`, four chunks merged, 85 % per module):
   every module at or above 87.2 %, 96.5 % overall.
+
+- **r7 owner structure rules (2026-10-07; `pharmagent-evidence-work/r7/corpus_progress.tsv`).** U, the r6 metric (value-like
+  records of the 60-paper design corpus that the old reader passed and that no longer pass, over all 44,072 of its records),
+  after each rule: r6 HEAD 3.64 % (1,606); decision 5, the LINE list deleted and the line rule derived, 42 of its characters
+  folded into CONTEXT and 35 outside, 4.35 % (1,915: the em dash 166, `_` 102, `→` 53 now taint their lines); decision 6,
+  the ratio production, 4.34 % (1,912; `12/83(14.5%)` reads its percentage); decision 7, citations as non-value tokens,
+  4.40 % (1,941: 1,065 records that cite a reference number now fail, 29 of them counted value-like by the census, all of
+  them reference numbers); decision 8, the chi-square form, 4.40 % (no corpus line holds the form); decision 9, the range
+  flag of `−11.8 −14.2` pinned by tests, 4.40 %. Value disagreements among records that pass both readers: 0 at every
+  step. These structure rules do not reach the 1.5 % target; the residual causes are glued units (361), label digits and
+  lost spaces (330), the em dash (167), `(cid:N)` markers (160), parts of ratios and other resolved neighbours (138), `_`
+  (102), glued symbols (98) and `→` (53), the first two being the other writers' decisions 2 and 3.
 
 ## Later phases
 

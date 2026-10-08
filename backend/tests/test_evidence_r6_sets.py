@@ -1,4 +1,5 @@
-"""r6 numeric grammar, layer A: the five literal sets, the equivalence table and ``cls`` for EVERY code point.
+"""r6 numeric grammar, layer A: the literal sets, the equivalence table and ``cls`` for EVERY code point (r7: four
+classes; the LINE list is deleted and the line rule is derived from the four permitted lists).
 
 The sets are pinned twice (alphabet.py and tests/evidence_r6_pins.py, typed independently) and printed, so any
 addition shows up as a diff in both places. Nothing in the reader may use a Unicode category: an AST test pins that
@@ -36,37 +37,37 @@ def test_the_sets_are_pinned_entry_by_entry_against_the_independent_copy():
     assert _cps(A.INSIDE) == tuple(sorted(P.INSIDE_SET))
     assert _cps(A.GAP) == tuple(sorted(P.GAP_SET))
     assert _cps(A.CONTEXT) == tuple(sorted(P.CONTEXT_SET))
-    assert _cps(A.LINE) == tuple(sorted(P.LINE_SET))
     assert {ord(k): ord(v) for k, v in EQ.EQUIV.items()} == P.EQUIV_PIN
 
 
 def test_the_class_sizes_are_pinned():
-    assert (len(A.INSIDE), len(A.GAP), len(A.CONTEXT), len(A.LINE), len(EQ.EQUIV)) == (
-        P.COUNTS["inside"], P.COUNTS["gap"], P.COUNTS["context"], P.COUNTS["line"], P.COUNTS["equiv"])
+    assert (len(A.INSIDE), len(A.GAP), len(A.CONTEXT), len(EQ.EQUIV)) == (
+        P.COUNTS["inside"], P.COUNTS["gap"], P.COUNTS["context"], P.COUNTS["equiv"]) == (45, 4, 115, 10)
     assert len(P.INSIDE_CPS) == len(P.INSIDE_SET) and len(P.CONTEXT_CPS) == len(P.CONTEXT_SET)
-    assert len(P.LINE_CPS) == len(P.LINE_SET) and len(P.GAP_CPS) == len(P.GAP_SET)
+    assert len(P.GAP_CPS) == len(P.GAP_SET) and set(P.COUNTS) == {"inside", "gap", "context", "equiv"}
 
 
 def test_a_character_is_in_exactly_one_class_and_an_equivalent_source_is_in_none():
-    classes = [A.INSIDE, A.GAP, A.CONTEXT, A.LINE]
+    classes = [A.INSIDE, A.GAP, A.CONTEXT]
     for i, a in enumerate(classes):
         for b in classes[i + 1:]:
             assert not (a & b), sorted(a & b)
     for src, dst in EQ.EQUIV.items():
         assert not any(src in c for c in classes), f"{src!r} is an equivalent source and also listed"
         assert any(dst in c for c in classes), f"target {dst!r} of {src!r} must be an allowed character"
-    assert all(len(c) == 1 for c in A.INSIDE | A.GAP | A.CONTEXT | A.LINE | set(EQ.EQUIV) | set(EQ.EQUIV.values()))
+    assert all(len(c) == 1 for c in A.INSIDE | A.GAP | A.CONTEXT | set(EQ.EQUIV) | set(EQ.EQUIV.values()))
 
 
 def test_the_context_set_holds_the_48_ascii_letters_that_are_not_inside():
     assert len(A.CONTEXT_LETTERS) == 48 and not (A.CONTEXT_LETTERS & set("eExX"))
     assert A.ASCII_LETTERS == frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
-    assert len(A.GREEK) == 16 and "\u03c7" not in A.GREEK and "\u03c7" in A.LINE
+    assert len(A.GREEK) == 17 and "\u03ba" in A.GREEK and "\u03c7" not in A.GREEK and A.cls("\u03c7") == "outside"
+    assert len(A.ACCENTED) == 29 and len(A.CONTEXT_MARKS) == 12 and A.LETTERS == A.ASCII_LETTERS | A.GREEK | A.ACCENTED
 
 
 def test_print_the_exact_contents_of_every_class(capsys):
     """The visible record of the alphabet: ``pytest -s tests/test_evidence_r6_sets.py`` prints it."""
-    table = {"inside": A.INSIDE, "gap": A.GAP, "context": A.CONTEXT, "line": A.LINE}
+    table = {"inside": A.INSIDE, "gap": A.GAP, "context": A.CONTEXT}
     with capsys.disabled():
         for name, chars in table.items():
             print(f"\n{name} ({len(chars)}): {_fmt(_cps(chars))}")
@@ -112,7 +113,7 @@ def test_claim_mode_reads_a_thousands_position_ascii_space_as_a_thin_space():
 
 def test_cls_agrees_with_the_independent_copy_on_every_code_point():
     wrong = []
-    counts = {"inside": 0, "gap": 0, "context": 0, "line": 0, "outside": 0}
+    counts = {"inside": 0, "gap": 0, "context": 0, "outside": 0}
     for cp in ALL_CPS:
         want = P.expected_class(cp)
         counts[want] += 1
@@ -120,13 +121,12 @@ def test_cls_agrees_with_the_independent_copy_on_every_code_point():
             wrong.append((f"{cp:04X}", A.cls(chr(cp)), want))
     assert wrong == []
     # an equivalent classifies as its target: 8 of the 10 become inside (- x4, ' x1, thin space x2, ~ x1), 2 context
-    assert counts["inside"] == 45 + 8 and counts["context"] == 73 + 2
-    assert counts["gap"] == 4 and counts["line"] == 77
+    assert counts["inside"] == 45 + 8 and counts["context"] == 115 + 2 and counts["gap"] == 4
     assert sum(counts.values()) == 0x110000
 
 
 def test_every_code_point_not_listed_is_outside():
-    listed = set(P.INSIDE_SET | P.GAP_SET | P.CONTEXT_SET | P.LINE_SET | set(P.EQUIV_PIN))
+    listed = set(P.INSIDE_SET | P.GAP_SET | P.CONTEXT_SET | set(P.EQUIV_PIN))
     sample = [cp for cp in ALL_CPS if cp not in listed]
     assert len(sample) == 0x110000 - len(listed)
     assert all(A.cls(chr(cp)) == "outside" for cp in sample)
@@ -134,10 +134,9 @@ def test_every_code_point_not_listed_is_outside():
 
 def test_the_allowlist_regexes_agree_with_cls_on_every_code_point():
     text = "".join(map(chr, ALL_CPS))
-    line_tier = {m.start() for m in A.LINE_TIER_RE.finditer(text)}
-    word_tier = {m.start() for m in A.WORD_TIER_RE.finditer(text)}
-    assert line_tier == {cp for cp in ALL_CPS if P.expected_class(cp) == "outside"}
-    assert word_tier == {cp for cp in ALL_CPS if P.expected_class(cp) in ("outside", "line")}
+    # one allow-list for every tier (word, window, line): the derived rule of r7
+    outside = {m.start() for m in A.OUTSIDE_RE.finditer(text)}
+    assert outside == {cp for cp in ALL_CPS if P.expected_class(cp) == "outside"}
     inside_only = {m.start() for m in re.finditer(A.char_class(A.INSIDE, negate=False), text)}
     assert inside_only == {cp for cp in ALL_CPS if chr(cp) in A.INSIDE}
 

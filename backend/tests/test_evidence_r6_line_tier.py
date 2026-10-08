@@ -4,6 +4,9 @@ Word    a character outside INSIDE+CONTEXT in the expression's own word  -> the 
 Window  such a character one word before or after (a run of gap characters of any length is ONE separator, a line
         break included), or in the right operand behind a multiplier word -> every token of the word is unresolved
 Line    an OUTSIDE character (or a ``(cid:N)`` marker) anywhere on the token's line -> every token of that line
+
+r7 (owner decision 5): there is no LINE list. One allow-list (INSIDE, CONTEXT, GAP and the equivalents) decides all three
+tiers; a character of no list taints its word, its window and its line (tests/test_evidence_r7_line_derived.py).
 """
 from __future__ import annotations
 
@@ -44,7 +47,7 @@ def test_the_word_tier_names_the_character_and_where_it_sits():
 
 
 def test_a_number_made_unresolved_by_its_window_keeps_its_value_as_a_part():
-    (t,) = tokens("AUC® 12.5")
+    (t,) = tokens("AUC\u2122_ 12.5")                     # r7: the registered sign is CONTEXT, the low line is not
     assert (t.value, t.parts, t.reason) == (None, (12.5,), "unresolved_context")
     (u,) = tokens("12.\ue0005")
     assert (u.value, u.parts) == (None, ())
@@ -52,11 +55,11 @@ def test_a_number_made_unresolved_by_its_window_keeps_its_value_as_a_part():
 
 # ---------------------------------------------------------------- the window tier ---
 @pytest.mark.parametrize("text, where", [
-    ("Adalat® 30 mg", "one word before"), ("AUC0–∞ 1234", "one word before"),
-    ("-20 ∞C", "one word after"), ("$18 years", "inside the number"), ("£150 mg", "inside the number"),
+    ("Adalat_ 30 mg", "one word before"), ("AUC0–‘ 1234", "one word before"),
+    ("-20 ′C", "one word after"), ("$18 years", "inside the number"), ("£150 mg", "inside the number"),
     ("t½ 11.4 h", "one word before"), ("12 ½", "one word after"), ("• 150 mg", "one word before"),
-    ("Müller 2019", "one word before"), ("140 Å²", "inside the number"),
-    ("dose † 12", "one word before"), ("CL 12 †", "one word after"), ("ng\u22c5h/mL 1234", "one word before"),
+    ("Mü\u0161ller 2019", "one word before"), ("140 \u212b²", "inside the number"),
+    ("dose — 12", "one word before"), ("CL 12 —", "one word after"), ("ng\u22c5h/mL 1234", "one word before"),
 ])
 def test_a_character_outside_the_context_one_word_away_makes_the_number_unresolved(text, where):
     toks = [t for t in tokens(text) if t.parts or t.value is not None or t.reason]
@@ -65,14 +68,16 @@ def test_a_character_outside_the_context_one_word_away_makes_the_number_unresolv
 
 
 def test_the_context_characters_one_word_away_are_fine():
-    for ok in ("Cmax 12 (ng/mL)", "AUC [12] μg/L", "n = 12; p = 0.03", "12/kg", "ΔOFV 3.84", "ω = 0.40",
+    for ok in ("Cmax 12 (ng/mL)", "AUC [12.5] μg/L", "AUC (12) μg/L", "n = 12; p = 0.03", "12/kg", "ΔOFV 3.84", "ω = 0.40",
                "t1/2 = 8 h", "37°C", "see (12)", "x 12", "dose of 12 mg."):
         assert [v for v in V(ok) if v is None] == [], ok
 
 
 def test_the_window_is_two_words_wide_and_no_wider():
-    assert V("• ok 150 mg") == [150.0] and V("150 mg ok •") == [150.0]
-    assert V("• 150 mg") == [None] and V("150 • mg") == [None]
+    # r7: an unlisted character on the SAME line taints it (derived rule); the window is measured across a line break
+    assert V("•\nok 150 mg") == [150.0] and V("150 mg\nok •") == [150.0]
+    assert V("•\n150 mg") == [None] and V("150\n• mg") == [None]
+    assert V("• ok 150 mg") == [None] and V("150 mg ok •") == [None]
 
 
 def test_a_run_of_gap_characters_of_any_length_and_mix_is_one_separator():
@@ -89,9 +94,10 @@ def test_the_window_crosses_a_line_break_because_the_break_is_a_gap():
 
 def test_the_right_operand_behind_a_multiplier_word_belongs_to_the_expression():
     assert V(f"1.2 × {ZWSP}10^3") == [None]            # the operand word joins the left token: one expression
-    assert V("1.2 x † 10^3") == [None, None]
-    assert V("1.2 x 10^3 †") == [None]
-    assert V("2 x 10 †mg") == [None] and V("2 x 100 mg") == [2.0, 100.0]
+    assert V("1.2 x • 10^3") == [None, None]
+    assert V("1.2 x\n• 10^3") == [None, None] and V("1.2 x 10^3\n•") == [None]
+    assert V("1.2 x 10^3 •") == [None]
+    assert V("2 x 10 •mg") == [None] and V("2 x 100 mg") == [2.0, 100.0]
     assert all(v is None for v in V(f"2 x 10 {ZWSP}mg"))
 
 
@@ -117,10 +123,11 @@ def test_other_lines_keep_their_values_when_they_are_not_adjacent():
     assert V("1 2\n3 4\n\ufffd 5\n6 7") == [1.0, 2.0, 3.0, None, None, 6.0, 7.0]
 
 
-def test_a_character_of_the_line_class_taints_only_its_neighbourhood_not_the_line():
-    assert V("• ok ok 12 mg ok ok †") == [12.0]
+def test_a_character_of_no_list_taints_the_whole_line_and_a_folded_context_character_taints_nothing():
+    # r7 replaces the LINE-class test: the derived rule taints the line for every character of no list
+    assert V("• ok ok 12 mg ok ok") == [None] and V("12 mg ok ok †") == [12.0]
     assert V("Smith† reported 12.4 mg and 5 ng") == [12.4, 5.0]
-    assert V("partner§ 33 574") == [None, 574.0]
+    assert V("partner_ 33 574") == [None, None] and V("partner§ 33 574") == [33.0, 574.0]
 
 
 def test_a_cell_a_snippet_and_a_value_are_one_line_whatever_line_breaks_they_hold():

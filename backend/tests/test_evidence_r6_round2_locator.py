@@ -30,15 +30,15 @@ SAMPLE = sorted(set(non_outside_cps()) | set(stratified_outside(2048)) | set(S.L
 def test_the_ligature_table_is_pinned_and_expands_to_ascii_letters_only():
     assert {ord(k): v for k, v in EQ.LIGATURES.items()} == S.LIGATURE_PIN
     assert all(v.isascii() and v.isalpha() and v == v.lower() for v in EQ.LIGATURES.values())
-    assert not set(EQ.LIGATURES) & (set(EQ.EQUIV) | A.INSIDE | A.CONTEXT | A.LINE | A.GAP)     # outside the reader
+    assert not set(EQ.LIGATURES) & (set(EQ.EQUIV) | A.INSIDE | A.CONTEXT | A.GAP)     # outside the reader
 
 
 def test_the_case_table_is_pinned_one_to_one_and_complete_for_the_alphabets_letters():
     assert {ord(k): ord(v) for k, v in EQ.CASE_PAIRS.items()} == S.CASE_PIN
-    letters = A.ASCII_LETTERS | A.GREEK | A.LINE_KAPPA | A.LINE_CHI | A.LINE_ACCENTED
-    assert letters == A.ALL_LETTERS == S.LETTERS_PIN and len(letters) == 99
+    letters = A.ASCII_LETTERS | A.GREEK | A.ACCENTED          # r7: kappa is Greek (CONTEXT), chi is outside
+    assert letters == A.LETTERS == S.LETTERS_PIN and len(letters) == 98 and "\u03c7" not in letters
     assert A.UPPER_LETTERS == frozenset(EQ.CASE_PAIRS) and len(EQ.CASE_PAIRS) == 34
-    assert (len(EQ.LIGATURES), len(EQ.HEADER_SPELLINGS)) == (7, 1) and A.UPPER_LETTERS <= A.ALL_LETTERS
+    assert (len(EQ.LIGATURES), len(EQ.HEADER_SPELLINGS)) == (7, 1) and A.UPPER_LETTERS <= A.LETTERS
     for ch in letters:                                        # the explicit pairs agree with Unicode on every letter
         assert EQ.casefold_letters(ch) == ch.casefold() and len(ch.casefold()) == 1, ch
     assert EQ.casefold_letters("ΔΩΣÅ𝐶\u212a\u017f") == "δωσå𝐶\u212a\u017f"     # an unlisted character stays as it is
@@ -97,8 +97,8 @@ def test_whitespace_collapses_over_the_gap_set_and_the_thin_space_only():
 def test_a_hyphen_at_a_line_break_joins_only_the_letters_of_the_alphabet():
     assert dehyphenate_with_map("clear-\nance")[0] == "clearance"
     assert dehyphenate_with_map("Müller-\nWeiss")[0] == "MüllerWeiss"
-    assert dehyphenate_with_map("α-\nβ")[0] == "αβ" and dehyphenate_with_map("κ-\nχ")[0] == "κχ"
-    for text in ("0-\n24", "прибор-\nно", "a - \nb", "x-\n٣", "-\nb", "a-\n"):
+    assert dehyphenate_with_map("α-\nβ")[0] == "αβ" and dehyphenate_with_map("κ-\nλ")[0] == "κλ"
+    for text in ("0-\n24", "прибор-\nно", "a - \nb", "x-\n٣", "-\nb", "a-\n", "κ-\nχ"):     # r7: chi is outside
         assert dehyphenate_with_map(text)[0] == text, text
 
 

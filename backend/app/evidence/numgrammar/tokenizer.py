@@ -9,8 +9,9 @@ REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
          ``2 × daily`` ``1.2 ×`` ``1.2 × l0³``            multiplier_operand
          ``10 ^ 3`` ``10 ³`` ``10^ 3``                    detached_exponent
          ``3.4 E-03`` ``2012 e1553``                      spaced_exponent
-         ``12 3/4``                                       mixed_number (a lone ``3/4`` is ``fraction``)
-         ``12 / 15`` ``12 .5`` ``5.2 (x10^3 cells)``      fraction, detached_decimal, bracketed_multiplier
+         ``12 3/4``                                       mixed_number (a lone ``3/4`` is a ratio, r7)
+         ``12 /15`` ``12 .5`` ``5.2 (x10^3 cells)``       fraction, detached_decimal, bracketed_multiplier
+ACCEPT   ``12 / 15`` (and the glued ``12/15`` of scan.py)  -> one ``ratio`` token (r7, owner decision 6)
          (the rules live in forms.py)
 
 then the taint tiers (taint.py) turn an expression with an outside character in its word, its neighbouring words
@@ -18,7 +19,7 @@ or its line into ``unresolved_context``. Decimal style decides only the ``A,BBB`
 """
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
@@ -32,6 +33,7 @@ from app.evidence.numgrammar.alphabet import (
 )
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.forms import Forms
+from app.evidence.numgrammar.productions import Cite, citations, mask_chi_square, mask_citations
 from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_CONTEXT, REASON_SHAPE, Tok
@@ -165,8 +167,6 @@ class Reader(Forms):
             sp = W.special(w)
             if sp == W.E_WORD or sp == W.MULT_POWER:
                 return a
-            if sp == W.FRACTION:
-                return self._word_expr(out, a, "fraction")
             if sp == W.MULT_TEN:
                 return self._ten(out, a, a, s0, consumed_from=a)
         if a - 1 > consumed and a >= 1 and W.ten_shape(w) and self.mult_word(a - 1):   # '× 103', no mantissa
@@ -197,6 +197,8 @@ class Reader(Forms):
         n, t, starts, ends = self.n, self.t, self.starts, self.ends
         nxt = t[starts[a + 1]:ends[a + 1]] if a + 1 < n else ""
         prev = t[starts[a - 1]:ends[a - 1]] if a else ""
+        if toks[0].shape == "ratio" and toks[0].start == starts[a] and W.ends_with_number(prev):
+            return self._word_expr(out, a, "mixed_number", toks[0].parts)   # '...12 3/4': a whole part may stand before
         if sc.tail or (nxt and nxt[0] not in _UNIT_LEADS) or (prev and prev[0] not in LETTERS):
             done = self.forms(a, sc, consumed, out, nxt, prev)
             if done is not None:
@@ -209,6 +211,21 @@ class Reader(Forms):
         out.extend(self.flagged(toks, a))
         return a
 
+
+    def with_citations(self, out: list[Tok], cites: list[Cite]) -> list[Tok]:
+        """The citations (r7, decision 7) as unresolved expressions of their own, tainted like any expression, merged
+        in order; one inside a wider unresolved expression (its word holds an outside character) is part of that."""
+        starts = [t.start for t in out]
+        extra: list[Tok] = []
+        for c in cites:
+            k = bisect_left(starts, c.end)
+            if (k > 0 and out[k - 1].end > c.start) or (k < len(out) and out[k].start < c.end):
+                continue
+            wi = bisect_right(self.starts, c.start) - 1
+            d = self.marks.detail(wi, wi, c.start, c.end)
+            extra.append(Tok(c.start, c.end, None, REASON_CONTEXT if d else f"{REASON_SHAPE}:citation", c.refs,
+                             detail=d or "citation"))
+        return sorted(out + extra, key=lambda t: t.start) if extra else out
 
     def qualified_before(self, a: int) -> bool:
         """A qualifier stands right before word *a* (up to three words back; see ``words.qualifies``)."""
@@ -246,12 +263,14 @@ def tokens(text: str, style: str = ".", *, mode: str = "page") -> list[Tok]:
         raise ValueError(f"mode must be one of {MODES}")
     if not text or W.DIGIT_RE.search(text) is None:
         return []
-    folded = fold(text, claim=mode == "claim")
+    folded = mask_chi_square(fold(text, claim=mode == "claim"))     # r7: chi of the chi-square form is a label
     cid: dict[int, str] = {}
     if "(cid:" in folded:                      # the pdfminer marker is ONE outside character: mask it 1:1
         cid = {m.start(): m.group() for m in CID_MARKER.finditer(folded)}
         folded = CID_MARKER.sub(_mask, folded)
-    return Reader(folded, "," if style == "," else ".", mode != "page", cid).run()
+    cites = citations(folded) if "[" in folded else []     # r7: an unmistakable citation is masked, then emitted
+    reader = Reader(mask_citations(folded, cites), "," if style == "," else ".", mode != "page", cid)
+    return reader.with_citations(reader.run(), cites) if cites else reader.run()
 
 
 __all__ = ["MODES", "Reader", "TAIL_NONE", "tokens"]

@@ -15,15 +15,15 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar.alphabet import (
-    ALL_LETTERS,
     ASCII_LETTERS,
     DIGITS,
     GAP,
     GREEK,
+    LETTERS,
     MULTIPLIERS,
+    OUTSIDE_RE,
     SUP_TO_ASCII,
     UPPER_LETTERS,
-    WORD_TIER_RE,
     char_class,
 )
 from app.evidence.numgrammar.equivalents import THIN, casefold_letters, fold
@@ -44,7 +44,7 @@ def _spell(unit: str | None) -> str | None:
     """The unit as the reader scans it (``fold``, superscripts spelled with ASCII digits and signs), or None when it
     holds a character outside INSIDE, CONTEXT and GAP."""
     folded = fold(unit or "")
-    return None if WORD_TIER_RE.search(folded) else folded.translate(SUP_TO_ASCII)
+    return None if OUTSIDE_RE.search(folded) else folded.translate(SUP_TO_ASCII)
 
 
 def unit_resolved(unit: str | None) -> bool:
@@ -80,7 +80,7 @@ def _pieces(unit: str | None) -> list[str] | None:
 
 def _prefix(piece: str) -> tuple[str, str]:
     """(case-significant prefix letter or '', the rest) of one unit piece ('mIU' -> ('m', 'IU'))."""
-    if len(piece) > 1 and piece[0] in _CASE_PREFIXES and piece[1] in ALL_LETTERS:
+    if len(piece) > 1 and piece[0] in _CASE_PREFIXES and piece[1] in LETTERS:
         return piece[0], piece[1:]
     return "", piece
 
@@ -96,9 +96,9 @@ def prefix_conflict(proposed: str | None, printed: str | None) -> str | None:
     pairs = [(_prefix(pa), _prefix(pb)) for pa, pb in zip(a, b)]
     if not any(xa and xb and xa != xb for (xa, _), (xb, _) in pairs):
         return None
-    letters = [ch for piece in b for ch in piece if ch in ALL_LETTERS]
+    letters = [ch for piece in b for ch in piece if ch in LETTERS]
     caps_page = bool(letters) and all(ch in UPPER_LETTERS for ch in letters)
-    lower_rest = any(ch in ALL_LETTERS and ch not in UPPER_LETTERS for (_, ra), _ in pairs for ch in ra)
+    lower_rest = any(ch in LETTERS and ch not in UPPER_LETTERS for (_, ra), _ in pairs for ch in ra)
     return "ambiguous" if caps_page and lower_rest else "mismatch"
 
 

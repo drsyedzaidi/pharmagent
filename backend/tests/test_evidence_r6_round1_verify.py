@@ -200,6 +200,9 @@ def test_a_number_grouped_with_the_documents_decimal_point_is_flagged(snippet, v
 
 def test_a_reference_pair_is_not_a_decimal_on_a_comma_page():
     got = run(COMMA_PAGE + "Siehe Referenzen [1,2] fuer", "1,2", "1.2", style=",")
+    # r7 (decision 7): the pair is a citation; citing a number inside it fails with the citation sentence
+    assert (got.status, got.reason) == ("fail", M.REASON_UNRESOLVED_SHAPE) and "citation" in got.detail, got
+    got = run(COMMA_PAGE + "Wert 7 [1,2] fuer", "1,2", "1.2", style=",")          # after a number: the r6 pair rule
     assert (got.status, got.reason) == ("fail", M.REASON_PARTIAL_NUMBER), got
 
 

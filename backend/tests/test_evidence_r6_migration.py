@@ -167,9 +167,11 @@ def test_the_verify_fail_flag_carries_the_sentence_and_the_reason():
 
 
 def test_a_table_cell_with_a_glued_footnote_mark_fails_in_its_own_cell():
-    cell = "12.5†"
+    cell = "12.5\u2016"                                                       # r7: the double bar is outside
     res = check("12.5", cell, cell, cell=True)
-    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT)    # the glued dagger taints its word
+    assert (res.status, res.reason) == ("fail", M.REASON_UNRESOLVED_CONTEXT)    # the glued mark taints its word
+    dagger = check("12.5", "12.5†", "12.5†", cell=True)                          # r7: the dagger is a CONTEXT mark
+    assert (dagger.status, dagger.reason) == ("fail", M.REASON_PARTIAL_NUMBER)   # glued to the digits: rejected
     assert check("12.5", "12.5", "12.5", cell=True).status == "pass"
 
 

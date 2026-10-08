@@ -25,7 +25,7 @@ def _random_texts(n: int, seed: int, extra=()):
 def test_random_text_never_raises_and_every_expression_is_well_formed(mode, style):
     import math
     shapes = {"int", "decimal", "foreign_decimal", "style_dependent", "grouped", "grouped_decimal", "middot", "sci",
-              "bare_power"}
+              "bare_power", "ratio"}                                    # r7: the explicit ratio production
     for s in _random_texts(1500, 7, _HOSTILE):
         end = -1
         for t in tokens(s, style, mode=mode):

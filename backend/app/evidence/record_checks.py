@@ -20,7 +20,7 @@ from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
 from app.evidence.numgrammar import GAP, words_after
-from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, MULTIPLIERS, PERCENTS, char_class
+from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, LETTERS, MULTIPLIERS, PERCENTS, char_class
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.unit_norm import canonical_unit, normalise_unit, prefix_conflict
 from app.evidence.value_checks import token_context, value_flags
@@ -28,7 +28,7 @@ from app.evidence.value_checks import token_context, value_flags
 # a printed unit, from explicit classes (the alphabet's letters and digits; the text arrives folded, so the micro sign
 # is already the Greek mu): a symbol led by a letter, or a percent sign; then up to three letters, a slash and more
 _SPACE = char_class(GAP, negate=False)
-_LETTER = char_class(ASCII_LETTERS | GREEK, negate=False)
+_LETTER = char_class(LETTERS, negate=False)                       # a letter of the alphabet (r7: the accented ones too)
 _WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_"), negate=False)
 _UNIT_CHARS = "(?:" + _WORD + "|[/\u00b7*.^\\-])*"
 _UNIT_TOKEN_RE = re.compile("^" + _SPACE + "*(" + char_class(PERCENTS, negate=False) + "|" + _LETTER + _UNIT_CHARS

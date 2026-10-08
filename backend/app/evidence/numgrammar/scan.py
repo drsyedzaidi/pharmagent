@@ -10,6 +10,9 @@ EBNF (explicit classes only; ``digit`` is ``0-9`` and nothing else)::
     bare_power   = "10" "^" ["-"|"+"] digit{1,4}       (caret only: "10^6" = 1e6)
     power        = "^" ["-"|"+"] digit{1,4} | ["⁺"|"⁻"] supdigit{1,4}
     suffix       = "%" | "‰" | star_run                (zero gap, not part of the literal)
+    ratio        = int "/" int                         (r7: '12/15', value n/d, parts (n, d); int = 0 | [1-9]
+                                                        digit{0,5}; then the word ends, a trailing closer or an
+                                                        opener follows: every other slash shape is refused)
 
 A token starts at the word start, right after ( [ = < > ≤ ≥ ~ ≈ ±, or right after a joiner (- ± x X * × ·) that
 directly follows the previous token. A word led by a letter is a LABEL: digit runs not after a starter never form
@@ -55,6 +58,7 @@ _PLAIN_INT = re.compile("0|[1-9][0-9]{0,39}")
 _PLAIN_DEC = re.compile("(0|[1-9][0-9]{0,38})([.,])([0-9]{1,39})")
 _SUPDIG = re.compile(char_class(SUP_DIGITS, negate=False) + "+")
 _CITATION = re.compile("\\[[1-9][0-9]?,[0-9]{1,2}\\]")      # '[1,2]': a pair of reference numbers, never a decimal
+RATIO_INT = re.compile("0|[1-9][0-9]{0,5}")                 # one side of a ratio (r7, owner decision 6)
 OK, PCT, STAR, TAIL, BAD = 0, 1, 2, 3, -1
 TAIL_NONE, TAIL_MULT, TAIL_STAR = 0, 1, 2
 _SUP_MINUS = "\u207b"
@@ -234,6 +238,27 @@ def post(w: str, e: int, n: int) -> tuple[int, int, str]:
     return BAD, e, "glued_letters" if p in LETTERS else "glued_symbol"
 
 
+def ratio_parts(num: str, den: str) -> tuple[float, str, tuple[float, float]] | None:
+    """(value, canonical, parts) of the ratio num/den of two ``RATIO_INT`` strings, None for a zero denominator."""
+    n, d = to_float(num), to_float(den)
+    return None if not d else (n / d, f"{num}/{den}", (n, d))
+
+
+def _ratio(w: str, e: int, n: int, num: str) -> tuple[int, float | None, str, tuple[float, ...]]:
+    """The ratio whose numerator *num* ends at w[e] == '/': (end, value, canonical, parts) or (e, None, why, parts)
+    when the shape is refused (a long or zero denominator, a third part, a percent, a range, glued letters)."""
+    m = _DIG.match(w, e + 1)
+    den, k = m.group(), m.end()
+    rp = ratio_parts(num, den) if RATIO_INT.fullmatch(den) else None
+    parts = (to_float(num), to_float(den)) if len(den) <= MAX_DIGITS else (to_float(num),)
+    if rp is None:
+        return e, None, "fraction", parts
+    x = w[k] if k < n else ""
+    if x == "" or x in OPENERS_BR or (x in TRAILING and (k + 1 >= n or w[k + 1] not in DIGITS)):
+        return k, rp[0], rp[1], rp[2]
+    return e, None, "glued_letters" if x in LETTERS else "fraction", parts
+
+
 def _qualified(w: str, i: int) -> bool:
     """A qualifier stands before the token at w[i] in its own word, with only openers, ``=``, ``:``, ``;``, ``*`` and
     signs between (``<5``, ``<=5``, ``~=5``, ``\u2264(5)``, ``<-5``)."""
@@ -288,6 +313,16 @@ def scan_word(w: str, off: int, style: str) -> Scan:
                 return LABEL
             mantissa = to_float(canon) if canon else None
             return _rejected(shape, parts + ([mantissa] if mantissa is not None else []))
+        if shape == "int" and not joiner and c in DIGITS and end + 1 < n and w[end] == "/" and w[end + 1] in DIGITS \
+                and RATIO_INT.fullmatch(canon):                         # unsigned: '+3/4' and '-3/4' are refused
+            r_end, r_value, r_canon, r_parts = _ratio(w, end, n, canon)
+            if r_value is None:
+                return _rejected(r_canon, parts + list(r_parts)) if numeric_led else LABEL
+            toks.append(Tok(off + i, off + r_end, r_value, "ratio", r_parts, _qualified(w, i), False, r_canon, ""))
+            parts.append(r_value)
+            i = prev_end = r_end
+            tail = TAIL_NONE
+            continue
         act, after, why = post(w, end, n)
         if act == BAD:
             return _rejected(why, parts + [value]) if numeric_led else LABEL
@@ -312,4 +347,4 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     return Scan("numeric", tuple(toks), tail)
 
 
-__all__ = ["LABEL", "Scan", "post", "read_power", "read_token", "scan_word", "REASON_SHAPE"]
+__all__ = ["LABEL", "RATIO_INT", "Scan", "post", "ratio_parts", "read_power", "read_token", "scan_word", "REASON_SHAPE"]

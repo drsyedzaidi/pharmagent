@@ -2,13 +2,13 @@
 
 For one expression E (a sentence, a page fragment or a table cell), a boundary b and one code point c, the variant is
 ``E[:b] + c + E[b:]``. The oracle never re-implements the grammar; it states what the one-separator rule and the five
-classes of the alphabet promise, from the class of c alone:
+classes of the alphabet promise, from the class of c alone (r7: four classes; the LINE list is deleted and the line
+rule is DERIVED: a character of no list is outside):
 
 outside   every token on c's line, and every token whose word is c's word or one word before / after it, is
           ``unresolved_context``; every other token equals the clean token (offsets shifted); no resolved token
           spans c. (All ~1.1 M outside code points must behave identically: the sweep compares each one with the
-          reference outside character.)
-line      the same without the line tier: only c's word and its two neighbours are unresolved.
+          reference outside character, and the 35 outside characters of the deleted LINE list among them.)
 gap       identical to inserting U+0020.
 equiv     identical to inserting the equivalent's target.
 inside /  structurally identical (token spans, shapes, flags: not values) to the class representative of c
@@ -36,7 +36,7 @@ from tests.evidence_r6_expressions import (  # noqa: F401  (re-exported: the tes
     CID_PANEL,
     EXPRESSIONS,
     PAIRS,
-    REF_LINE,
+    REF_FORMER_LINE,
     REF_OUTSIDE,
     SEP,
     Expr,
@@ -59,7 +59,13 @@ _WORDS = re.compile("[^ \t\n\r]+")
 _MULT = frozenset("xX*×·")
 _ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 _GREEK = frozenset(chr(c) for c in (0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x3B7, 0x3B8, 0x3B5, 0x3B3, 0x3C3,
-                                    0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3))
+                                    0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3, 0x3BA))
+# r7: the letters and marks folded into CONTEXT from the deleted LINE list
+_ACCENTED = frozenset(chr(c) for c in (0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3, 0xE6, 0xC5, 0xE4, 0xF6, 0xD6, 0xFC,
+                                       0xED, 0xEF, 0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107,
+                                       0x10D, 0x11F, 0x142, 0x15B))
+_MARKS = frozenset(chr(c) for c in (0x26, 0x40, 0x201C, 0x201D, 0xA9, 0xAE, 0x2122, 0x221E, 0xA7, 0xB6, 0x2020,
+                                    0x2021))
 
 
 def repo_state() -> dict:
@@ -84,7 +90,8 @@ def class_of(cp: int) -> str:
 
 
 def rep_of(ch: str) -> str:
-    """The class representative of an inside or context character (the 28 behaviours the grammar can tell apart)."""
+    """The class representative of an inside or context character (the 29 behaviours the grammar can tell apart; a
+    mark folded into CONTEXT by r7 has no role in the grammar: ``&`` stands for all twelve)."""
     if ch == "0":
         return "0"
     if ch in "123456789":
@@ -93,8 +100,10 @@ def rep_of(ch: str) -> str:
         return "e"
     if ch in "xX":
         return "x"
-    if ch in _ASCII_LETTERS or ch in _GREEK:
+    if ch in _ASCII_LETTERS or ch in _GREEK or ch in _ACCENTED:
         return "m"
+    if ch in _MARKS:
+        return "&"
     if ch in "⁰¹²³⁴⁵⁶⁷⁸⁹":
         return "²"
     if ch in "⁺⁻":
@@ -115,7 +124,7 @@ def rep_of(ch: str) -> str:
 # characters that can never be part of a resolved literal ('(' '[' '=' start a token and ')' ']' ';' ':' trail one, so
 # next to them a number may split in two; a letter in a thin-space group may leave '900' of '18 900': values are not
 # compared, only that no resolved literal contains such a character)
-NON_NUMERIC = frozenset(_ASCII_LETTERS - set("eExX")) | _GREEK | frozenset("/°")
+NON_NUMERIC = frozenset(_ASCII_LETTERS - set("eExX")) | _GREEK | _ACCENTED | _MARKS | frozenset("/°")
 
 
 # ------------------------------------------------------------- the independent oracle ---
@@ -123,8 +132,9 @@ def _words(s: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in _WORDS.finditer(s)]
 
 
-def check_taint(e: Expr, b: int, ins: str, got: list[Tok], *, outside: bool) -> list[str]:
-    """What the tiers promise for an outside (or, without *outside*, a line-class) insertion; [] when it holds."""
+def check_taint(e: Expr, b: int, ins: str, got: list[Tok]) -> list[str]:
+    """What the tiers promise for an outside insertion (word, window and line: r7 has no LINE class); [] when it
+    holds."""
     s, ln = variants(e, b, ins), len(ins)
     words = _words(s)
     starts = [w[0] for w in words]
@@ -144,7 +154,7 @@ def check_taint(e: Expr, b: int, ins: str, got: list[Tok], *, outside: bool) -> 
     cline = line_of(b)
 
     def affected(a: int, z: int) -> bool:
-        return bool(set(range(widx(a), widx(z - 1) + 1)) & region) or (outside and cline in (line_of(a), line_of(z - 1)))
+        return bool(set(range(widx(a), widx(z - 1) + 1)) & region) or cline in (line_of(a), line_of(z - 1))
 
     def shift(a: int, z: int) -> tuple[int, int]:
         return a + (ln if a >= b else 0), z + (ln if z > b else 0)
@@ -172,15 +182,16 @@ def check_taint(e: Expr, b: int, ins: str, got: list[Tok], *, outside: bool) -> 
     return errors
 
 
-def check_not_inside(b: int, got: list[Tok]) -> list[str]:
-    """A letter, a Greek letter, ``/`` or the degree sign can never be part of a resolved number's literal."""
+def check_not_inside(b: int, got: list[Tok], ch: str = "") -> list[str]:
+    """A letter, a Greek letter, a mark, ``/`` or the degree sign can never be part of a resolved number's literal,
+    except the slash of a ratio (r7, owner decision 6: ``12/15`` is one ratio token)."""
     return [f"resolved token {g.value} spans the inserted character" for g in got
-            if g.value is not None and g.start <= b < g.end]
+            if g.value is not None and g.start <= b < g.end and not (ch == "/" and g.shape == "ratio")]
 
 
 # --------------------------------------------------------------------- class sweeps ---
 def check_class(e: Expr, b: int, cp: int, golden: dict[str, str] | None) -> list[str]:
-    """The oracle for one non-outside code point (inside, context, line, gap or an equivalent's source)."""
+    """The oracle for one non-outside code point (inside, context, gap or an equivalent's source)."""
     c = chr(cp)
     got = run(e, variants(e, b, c))
     kind = class_of(cp)
@@ -194,29 +205,28 @@ def check_class(e: Expr, b: int, cp: int, golden: dict[str, str] | None) -> list
         want = run(e, variants(e, b, " "))
         same = full(got) == full(want) and [t.detail for t in got] == [t.detail for t in want]
         return [] if same else [f"U+{cp:04X}: a gap character reads unlike U+0020"]
-    if kind == "line":
-        return [f"U+{cp:04X}: {m}" for m in check_taint(e, b, c, got, outside=False)]
     rep = rep_of(c)
     want = run(e, variants(e, b, rep))
     errors = [] if sig(got) == sig(want) else [f"U+{cp:04X}: structure differs from its representative {rep!r}"]
     if c in NON_NUMERIC:
-        errors += [f"U+{cp:04X}: {m}" for m in check_not_inside(b, got)]
+        errors += [f"U+{cp:04X}: {m}" for m in check_not_inside(b, got, c)]
     if golden is not None and c == rep and golden.get(f"{e.name}:{b}:{rep}") != golden_text(got):
         errors.append(f"U+{cp:04X}: golden differs for {e.name}:{b}:{rep!r}")
     return errors
 
 
 def _has_taint(e: Expr) -> bool:
-    return any(class_of(ord(ch)) in ("outside", "line") for ch in e.text) or "(cid:" in e.text
+    return any(class_of(ord(ch)) == "outside" for ch in e.text) or "(cid:" in e.text
 
 
 def reference_errors(e: Expr, b: int) -> list[str]:
-    """The independent oracle on the reference outside character, the reference line character and the cid panel."""
-    errors = [f"outside: {m}" for m in check_taint(e, b, REF_OUTSIDE, run(e, variants(e, b, REF_OUTSIDE)),
-                                                   outside=True)]
-    errors += [f"line: {m}" for m in check_taint(e, b, REF_LINE, run(e, variants(e, b, REF_LINE)), outside=False)]
+    """The independent oracle on the reference outside character, a character of the deleted LINE list (r7: it is
+    outside now and must taint its whole line) and the cid panel."""
+    errors = [f"outside: {m}" for m in check_taint(e, b, REF_OUTSIDE, run(e, variants(e, b, REF_OUTSIDE)))]
+    errors += [f"former line: {m}" for m in check_taint(e, b, REF_FORMER_LINE,
+                                                        run(e, variants(e, b, REF_FORMER_LINE)))]
     for marker in CID_PANEL:
-        errors += [f"{marker}: {m}" for m in check_taint(e, b, marker, run(e, variants(e, b, marker)), outside=True)]
+        errors += [f"{marker}: {m}" for m in check_taint(e, b, marker, run(e, variants(e, b, marker)))]
     return errors
 
 
@@ -295,7 +305,7 @@ def write_golden(flat: dict[str, str]) -> None:
 
 
 def build_golden() -> dict[str, str]:
-    """The pin of the 28 class representatives at every boundary (regenerate with R6_REGEN_GOLDEN=1)."""
+    """The pin of the 29 class representatives at every boundary (regenerate with R6_REGEN_GOLDEN=1)."""
     reps = sorted({rep_of(chr(cp)) for cp in P.INSIDE_SET | P.CONTEXT_SET})
     out: dict[str, str] = {}
     for e in EXPRESSIONS:

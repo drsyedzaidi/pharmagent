@@ -60,17 +60,18 @@ def find_snippet_in_page(snippet: str, page_text: str) -> list[int] | None:
     return None if hit is None else _raw_span(*hit)
 
 
-def _targets(value: str, style: str) -> tuple[list[Decimal], str, str]:
-    """(the exact decimals the proposal names, reason, detail): exactly ONE resolved number, in the page's style and
+def _targets(value: str, style: str) -> tuple[list[Decimal | str], str, str]:
+    """(the exact keys the proposal names, reason, detail): exactly ONE resolved number, in the page's style and
     (proposed values usually arrive in canonical point-decimal form: '18.2' for a page that prints '18,2') in point
     style. A number is the same number only when its canonical decimal is equal: no tolerance, so 3.2e-13 is never 0
-    and a changed last digit of a long integer is never the page's number."""
+    and a changed last digit of a long integer is never the page's number. A ratio's key is its canonical 'n/d' (r7):
+    it equals only the same printed ratio, never a decimal."""
     toks = tokens(value, style, mode="claim")
     if len(toks) != 1:
         return [], M.REASON_NO_NUMBER, ""
     if toks[0].value is None:
         return [], toks[0].reason, tok_sentence(toks[0], value)
-    read_style = toks[0].decimal_value
+    read_style = toks[0].key
     point = claim_decimal(value, ".")
     return [read_style] + ([point] if point is not None and point != read_style else []), "", ""
 
@@ -83,19 +84,23 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
     targets, reason, detail = _targets(value, decimal_style)
     if not targets:
         return None, reason, detail
-    if integer and targets[0] != targets[0].to_integral_value():
+    first = targets[0]
+    if integer and not (isinstance(first, Decimal) and first == first.to_integral_value()):
         return None, M.REASON_INTEGER_EXPECTED, ""
     toks = tokens(snippet, decimal_style, mode="claim")
     for t in toks:
-        if t.value is not None and t.decimal_value in targets:
+        if t.value is not None and t.key in targets:
             return (t.start, t.end), M.REASON_OK, ""
-    floats = [float(x) for x in targets]
+    floats = [float(x) for x in targets if isinstance(x, Decimal)]
     vdig = digits_of(value)
     holding = [t for t in toks if any(p in floats for p in t.parts)]
     tainted = next((t for t in toks if t.reason == M.REASON_UNRESOLVED_CONTEXT
                     and (t in holding or (vdig and vdig in digits_of(snippet[t.start:t.end])))), None)
     if tainted is not None:                       # the cited number touches a character outside the alphabet
         return None, M.REASON_UNRESOLVED_CONTEXT, tok_sentence(tainted, snippet)
+    cite = next((t for t in holding if t.why == "citation"), None)
+    if cite is not None:                          # r7: a number inside a bracketed citation is a reference, not a value
+        return None, M.REASON_UNRESOLVED_SHAPE, tok_sentence(cite, snippet)
     if holding:                                   # ... or is only a part of an expression the grammar rejects
         return None, M.REASON_PARTIAL_NUMBER, ""
     # A fragment is a STRICT sub-run of a token's digits ('24' in '245.6'); equal digits with a
@@ -145,7 +150,8 @@ def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
         if tok.value is not None:
             if (tok.start, tok.end) == (a, b):
                 hits.append((span, text[a:b], tok.value, [a, b]))
-        elif blocked is None and ((tok.start, tok.end) == (a, b) or tok.reason == M.REASON_UNRESOLVED_CONTEXT):
+        elif blocked is None and ((tok.start, tok.end) == (a, b) or tok.reason == M.REASON_UNRESOLVED_CONTEXT
+                                  or tok.why == "citation"):
             blocked = (tok, text, (a, b))
     return hits, seen, blocked
 

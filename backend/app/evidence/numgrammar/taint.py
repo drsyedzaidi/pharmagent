@@ -1,14 +1,13 @@
 """Where a character outside the allowed alphabet touches an expression (the owner's one-separator rule).
 
-Three tiers, all allow-list tests (alphabet.py):
+Three tiers of ONE allow-list test (r7: the derived rule of alphabet.py; there is no LINE list): a character that is
+not INSIDE, CONTEXT, GAP or an approved equivalent's source (``OUTSIDE_RE``), or a ``(cid:N)`` marker,
 
-1. WORD   a character that is not INSIDE or CONTEXT (so LINE or OUTSIDE, or a ``(cid:N)`` marker) in the
-          expression's own word.
-2. WINDOW the same character in the word before or after (one gap run of any length is ONE separator: padding
-          never widens the window), or in the right operand behind a multiplier word.
-3. LINE   an OUTSIDE character (or marker) anywhere on the expression's line: LINE-class characters are allowed
-          there, nothing else is. A line is the text between line feeds; for a table cell, a snippet or a value
-          it is the whole string.
+1. WORD   in the expression's own word,
+2. WINDOW in the word before or after (one gap run of any length is ONE separator: padding never widens the window,
+          and a line break is a gap), or in the right operand behind a multiplier word,
+3. LINE   anywhere on the expression's line. A line is the text between line feeds; for a table cell, a snippet or a
+          value it is the whole string.
 
 ``Marks.detail`` returns the fixed fragment the reviewer message is built from (``U+200B inside the number``,
 ``(cid:3) one word before``, ``U+2028 elsewhere on the same line``), or '' when nothing taints the expression.
@@ -19,7 +18,7 @@ import re
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 
-from app.evidence.numgrammar.alphabet import LINE_TIER_RE, WORD_TIER_RE
+from app.evidence.numgrammar.alphabet import OUTSIDE_RE
 
 _NEWLINE = re.compile("\n")
 INSIDE_THE_NUMBER = "inside the number"
@@ -36,14 +35,12 @@ class Marks:
 
     A ``(cid:N)`` marker arrives masked: the tokenizer replaced each marker 1:1 by MASK, an OUTSIDE character, and
     passes ``cid`` (marker start -> marker text) so the reviewer fragment can name the marker."""
-    __slots__ = ("text", "bad", "outside", "cid", "cid_starts", "whole_line", "_nl", "_lines", "starts", "ends",
-                 "mult_word")
+    __slots__ = ("text", "bad", "cid", "cid_starts", "whole_line", "_nl", "_lines", "starts", "ends", "mult_word")
 
     def __init__(self, text: str, starts: list[int], ends: list[int], whole_line: bool,
                  mult_word: Callable[[int], bool], cid: dict[int, str]) -> None:
         self.text, self.starts, self.ends, self.whole_line, self.mult_word = text, starts, ends, whole_line, mult_word
-        self.bad = [m.start() for m in WORD_TIER_RE.finditer(text)]
-        self.outside = [m.start() for m in LINE_TIER_RE.finditer(text)]
+        self.bad = [m.start() for m in OUTSIDE_RE.finditer(text)]
         self.cid, self.cid_starts = cid, sorted(cid)
         self._nl: list[int] | None = None
         self._lines: dict[int, int] | None = None
@@ -73,7 +70,7 @@ class Marks:
         """line number -> its first OUTSIDE position."""
         if self._lines is None:
             lines: dict[int, int] = {}
-            for p in self.outside:
+            for p in self.bad:
                 lines.setdefault(self._line_of(p), p)
             self._lines = lines
         return self._lines
@@ -104,6 +101,6 @@ class Marks:
                 return f"{self.label(p)} {ONE_AFTER}"
             if self.mult_word(lw + 1) and lw + 2 < n and (p := self.first_bad(starts[lw + 2], ends[lw + 2])) >= 0:
                 return f"{self.label(p)} {BEHIND_MULT}"
-        if self.outside and (p := self.line_offender(fw, lw)) >= 0:
+        if (p := self.line_offender(fw, lw)) >= 0:
             return f"{self.label(p)} {SAME_LINE}"
         return ""

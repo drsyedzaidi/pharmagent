@@ -16,6 +16,7 @@ from app.evidence.numgrammar.alphabet import (
     SUP_CHARS,
     SUP_DIGITS,
     SUP_SIGNS,
+    TRAILING,
     char_class,
 )
 
@@ -77,6 +78,7 @@ def exp_like(w: str) -> bool:
 
 
 RATIO_CHARS = frozenset("/:")                           # a lone word of one of these between two numbers is a ratio
+RATIO_TRAIL = "".join(sorted(TRAILING))                  # closers a spaced ratio's denominator word may end with
 
 
 def operator_tail(w: str) -> str:

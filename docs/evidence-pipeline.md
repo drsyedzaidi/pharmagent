@@ -493,26 +493,44 @@ allowed alphabet. Approved equivalents are normalised through ONE table. EVERY o
 expression, or within one visual separator of it, makes the expression unresolved: its value is None, verification
 fails, the record is flagged and the reviewer compares the value with the page image. There is no list of bad
 characters anywhere in the reader: no Unicode category, no code-point blocklist, no `str.isdigit`. The only lists are the
-allowed alphabet, the context sets, the gap set and the equivalents table. (The snippet locator, `normalize.py`, finds
+allowed alphabet (INSIDE), the context set, the gap set and the equivalents table; there is no fifth (r7 deleted LINE, and
+the line rule is derived from these four). (The snippet locator, `normalize.py`, finds
 text and never yields a value; since round 2 it folds through the equivalents table plus three explicit tables of its own
 and has no NFKC; see "Locator" below.)
 
-**Alphabet.** Five classes; a character is in exactly one (`numgrammar/alphabet.py`, written a second time as bare
+**Alphabet.** Four classes; a character is in exactly one (`numgrammar/alphabet.py`, written a second time as bare
 code points in `tests/evidence_r6_pins.py`; the two copies are compared entry by entry):
 
 | Class | Members |
 |---|---|
 | INSIDE (45) | may stand inside a numeric token: digits `0-9`; signs `+ -`; separators `. , '` U+2009 THIN SPACE, U+00B7 `·`; exponent marker `e E`; multipliers `x X * ×` (and `·`); `^`; superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and signs `⁺⁻`; `% ‰`; `±`; qualifiers `< > ≤ ≥ ~ ≈` |
 | GAP (4) | space, tab, line feed, carriage return: one visual separator (a run of any length and mix is ONE) |
-| CONTEXT (73) | allowed in a word within one separator of a token: the other 48 ASCII letters, 16 Greek letters (`μ ω β α τ λ η θ ε γ σ ρ π Δ Ω Σ`), `( ) [ ] ; : / = °` |
-| LINE (77) | allowed anywhere on the token's line but not in its word nor in the word before or after it: the printable ASCII `! " # $ & ? @ \ _ { } \|` and the backtick, typographic `‘ “ ” — … • © ® ™ † ‡ § ¶ ‖ ′ → ← ↑ ↓ ∞ ½`, subscripts `₀-₉ ₊ ₋`, `κ`, `χ` (it draws like the multiplier `x`: `1.2 χ 10^3` must not read as 1.2), 29 accented Latin letters seen in author names |
-| OUTSIDE | everything else (about 1.11 million code points) and the pdfminer marker `(cid:N)` (the text layer's U+FFFD, treated as one character): controls except tab and line breaks, every format character (soft hyphen, zero-width, bidi), combining marks, private use, unassigned, every non-ASCII digit, look-alike dashes, dots, multipliers and comparisons, fullwidth forms, Cyrillic, math letters, `‱`, `€`, ligatures |
+| CONTEXT (115) | allowed on a number's line and in a word within one separator of it: the other 48 ASCII letters, 17 Greek letters (`μ ω β α τ λ η θ ε γ σ ρ π κ Δ Ω Σ`), the 29 accented Latin letters of author names, `( ) [ ] ; : / = °`, and the prose and footnote marks `& @ “ ” © ® ™ ∞ § ¶ † ‡` |
+| OUTSIDE | everything else (about 1.11 million code points) and the pdfminer marker `(cid:N)` (the text layer's U+FFFD): controls except tab and line breaks, every format character (soft hyphen, zero-width, bidi), combining marks, private use, unassigned, every non-ASCII digit, look-alike dashes, dots, multipliers and comparisons, fullwidth forms, Cyrillic, math letters, `‱`, `€`, ligatures, and since r7 the 35 characters of the deleted LINE list that are not CONTEXT: `! " # $ ? \ _ { } \|` and the backtick, `‘ — … • ‖ ′ → ← ↑ ↓ ½`, the subscripts `₀-₉ ₊ ₋` and `χ` (readable only in the chi-square form) |
+
+**The derived line rule (r7, owner decision 5).** The LINE list (77 characters allowed on a number's line but not within
+one separator of it) was a fifth hand-written list and is deleted with its tests. A text is READABLE where every character
+is INSIDE, CONTEXT, GAP or an equivalent's source (`alphabet.READABLE`; `OUTSIDE_RE` is its complement, built from the
+four lists, never typed): a character that is not readable taints its word, the words one separator away and every number
+of its line, one allow-list for the three tiers (`taint.py`), for the snippet and value pre-check (`unreadable`) and for a
+table cell's neighbours. The 77 characters were folded one by one. CONTEXT takes a character only when it can never change
+the reading of a number beside it (no digit, sign, dash, separator, multiplier, exponent, fraction, range or comparison
+look-alike), it is never seen as a mis-mapped glyph in the 449 parse caches, and decision 4 does not keep it fail-closed:
+κ and the 29 accented letters (letters: they lead a label like any letter), `& @ “ ” © ® ™` (prose: `Beal & Sheiner, 1980`,
+`PK-Sim® database`), `∞` (`AUC0–∞`; the MacRoman reading of a degree sign, which is CONTEXT too) and the footnote marks
+`§ ¶ † ‡` (NEJM rows `Placental abruption§ 41 (7.3)`); none of the twelve marks stands between two digits anywhere in the
+corpus. The other 35 are outside: `# ? _ |` (decision 4), `$` and `\` (mis-mapped `≥` and `<` of Elsevier fonts:
+`Patients $18 years`, `(\1% of dose)`), `‘` (a mis-mapped `∞`: `AUC(0–‘)`), `— … •` (dash, range and middle-dot
+look-alikes), `′` and the backtick (apostrophe look-alikes), `‖` (the bar of decision 4), `" ! { }` (code, factorial,
+ditto), the arrows (a relation between numbers, `240→184`, and the markers of rotated tables read backwards), `½`
+(`12 ½` is 12.5), the subscripts (digit look-alikes) and `χ` (decision 8). Cost on the 60-paper corpus: U rises from
+3.64 % to 4.35 % (`r7/corpus_progress.tsv`; the em dash alone 166 value-like records, `_` 102, `→` 53).
 
 **Equivalents (the only normalisation, 1:1 so offsets never move).** `−` U+2212, `–` U+2013, `‐` U+2010 and `‑` U+2011
 are `-`; `’` U+2019 is `'`; U+202F and U+00A0 are U+2009; `µ` U+00B5 is `μ`; `∼` U+223C is `~`; `◦` U+25E6 is `°`. Each has
 corpus evidence (see the comment of `equivalents.py`). U+2009 groups digits only between two digits and is a plain gap
-elsewhere. Rejected as equivalents: `⋅ ∙` (OUTSIDE: a look-alike multiplier would be fail-open), `—` (a LINE character: a
-list dash, or "not available" in a table), `‒`, `ʼ`, fullwidth and small-form signs (OUTSIDE), `′` (LINE).
+elsewhere. Rejected as equivalents: `⋅ ∙` (OUTSIDE: a look-alike multiplier would be fail-open), `—` (outside since r7: a
+list dash, or "not available" in a table), `‒`, `ʼ`, fullwidth and small-form signs (OUTSIDE), `′` (outside since r7).
 
 **Three more explicit tables, around the reader (`numgrammar/equivalents.py`, round 2).** The reader reads `EQUIV` only. The
 snippet locator, the unit comparison and the header key used to fold with NFKC and Unicode case folding of their own, which
@@ -540,19 +558,48 @@ page's style (a thousands group never carries an exponent), so `1.234e+03` on a 
 A qualifier before a token is read through a RUN of operator characters (`< > ≤ ≥ ~ ≈` and `= ( [ : ; * + -`) in its own word or
 in the words right before it: `≤(12.5)`, `~=12.5`, `<=(5)`, `< = 5`, `< ( 5 )`, `<- 5` are qualified like `<5`; a run without a
 qualifier (`=`, `(`) is not. A range is marked on both ends however it is spaced: `12–15`, `12 - 15`, `12 -15` (the right end is a
-signed number right after a number), `5.0- 12.4`, `0.5-` + line break + `1.5`, `12.5 ∼ 15.0`.
+signed number right after a number), `5.0- 12.4`, `0.5-` + line break + `1.5`, `12.5 ∼ 15.0`; two signed numbers one gap
+apart with no delimiter, table structure or explicit range marker (`−11.8 −14.2`) are both range ends and flag
+`censored_value` (r7, owner decision 9: the reader never guesses a list).
+**Ratio (r7, owner decision 6).** `ratio = int "/" int` glued in one word (`12/15`, `3/4`, `140/90`, `(12/15)`) or with
+the slash spaced on both sides (`12 / 15`, a gap run each side): one `ratio` token whose value is n/d, canonical `12/15`,
+parts (12, 15) and literal the printed span. Each side is `0` or 1-6 digits without a leading zero; the glued form ends the
+word or is followed by a trailing closer or an opener. A ratio equals only a claim that prints the same ratio (its key is
+the canonical `n/d`, `Tok.key`): never its quotient (`0.8`), never a reduced ratio (`4/5`); citing either part alone fails
+`partial_number`; a ratio is never an integer. Refused (`unresolved_shape:fraction` unless named): `12 /15`, `12/ 15`,
+`1 : 2`, `8:00`, `5/12/2020`, `5 / 12 / 2020`, `1.5/2`, `05/12`, `12/0`, `12/15%`, `12/15-18/20`, a signed `-3/4` or
+`+3/4` (`glued_symbol`), `12/15mg` (`glued_letters`), a ratio right after a word that ends in a number (`4 12/15`,
+`m12 3/4`: `mixed_number`, a whole part may stand before it) and a ratio behind a multiplier (`12 x3/4`:
+`multiplier_operand`).
+**Citation (r7, owner decision 7; `numgrammar/productions.py`).** `citation = "[" ref {("," | "-") ref} "]"` with
+`ref = [1-9] digit{0,2}` and no digit after the bracket, when it is unmistakable: glued to a word (after a letter, or after a
+trailing closer that follows a letter: `studies[47–49]`, `al.[1]`, `(ADC)[4]`), continuing a citation (`[1][2]`,
+`[27] [28]`, `[21]–[23]`), or after a word that ends in a letter (`efflux [46].`). It is masked 1:1 before the words are
+read, so it never taints a number, never ends a range and is never an operand, and it is emitted as one unresolved
+expression (`unresolved_shape:citation`, parts = the reference numbers): a record citing a number inside it fails with the
+sentence "a bracketed reference citation, which is not a value". After a number (`89 [46]`, the range of a median
+`9[4–9]`), after a lone multiplier or exponent letter, or with no word before it (a cell `[62]`) a bracket keeps its old
+reading; letters are not told apart by case, so a label glued to a bracket group (`AUC[12–24]`) reads as a citation and
+fails closed.
+**Chi-square (r7, owner decision 8).** Greek chi is outside except in
+`chi ("²" | "2") ["(" ["df" [gap] "=" [gap]] digit{1,3} ")"] [gap] "=" [gap]` followed by a digit (`χ² = 3.84`,
+`χ²(1) = 6.63`, `χ2(df=2) = 7.1`): that chi is masked 1:1 as a label letter and the degrees of freedom and the number read as
+usual. Every other chi (`1.2 χ 10^3`, `(χ² df=1, p<0.01)`, `χ² threshold`) and every look-alike (capital chi, Cyrillic
+`х`, a Latin `x`) is what the alphabet says it is: chi taints its line. The corpus holds chi on 3 lines of 2 papers, none in
+the form.
 Three reading modes: `page` (page text and columns: a line feed ends a line; an ASCII space never groups digits),
 `cell` (a table cell is one line) and `claim` (a snippet or a proposed value: one line, and a space in thousands
 position reads as a thin space, so `18 900` is 18900).
 
 **Gap and context rule.** A word is a maximal run of non-gap characters; `W-` and `W+` are the words one gap run away.
-Three allow-list tiers decide whether an expression is tainted (`numgrammar/taint.py`):
-(1) a character that is not INSIDE or CONTEXT in the expression's own word makes the whole word one unresolved
-expression; (2) the same character in the word before or after (or the right operand behind a multiplier word) makes
-every token of the word unresolved, so `Adalat® 30 mg`, `AUC0–∞ 1234`, `$18 years`, `t½ 11.4 h`, `• 150 mg` and
-`<⠀12` (U+2800 between a qualifier and its number) are all unresolved; (3) a character OUTSIDE anywhere on the token's
-line (a table cell, snippet or value: the whole string) makes every token on that line unresolved, which is why an
-unmapped `(cid:3)` or a soft hyphen poisons its line. LINE characters are allowed on the line but not within one separator.
+One allow-list (the derived rule: INSIDE, CONTEXT, GAP and the equivalents' sources) decides three tiers
+(`numgrammar/taint.py`): (1) a character of no list in the expression's own word makes the whole word one unresolved
+expression; (2) the same character in the word before or after (or the right operand behind a multiplier word; a line
+break is a gap, so the window crosses it) makes every token of the word unresolved, so `Adalat_ 30 mg`, `$18 years`,
+`t½ 11.4 h`, `• 150 mg`, `dose — 12` and `<⠀12` (U+2800 between a qualifier and its number) are all unresolved; (3) the same
+character anywhere on the token's line (a table cell, snippet or value: the whole string) makes every token on that line
+unresolved, which is why an unmapped `(cid:3)`, a soft hyphen or an em dash poisons its line. `Adalat® 30 mg` and
+`AUC0–∞ 1234` read since r7 (`®` and `∞` are CONTEXT).
 Padding never widens a window: 5000 spaces are one separator. A qualifier cannot be hidden by a character that taints
 (it taints the number), and a gap, an opener or an equals sign inserted between a qualifier and its number does not hide it:
 the qualifier is read through the operator run (see Grammar).
@@ -560,19 +607,19 @@ the qualifier is read through the operator run (see Grammar).
 **Multi-word forms** (across exactly one gap run, line breaks included). Accepted: `1.2 × 10^3`, `1.2 ×10⁻³`,
 `1.2× 10^3`. Unresolved shapes: `ten_after_multiplier` (`2 x 10 mg`, `1.2 × 103`, `1.2 x 10 3`: a ten with no readable power,
 possibly a raised exponent the text layer lost), `multiplier_operand` (`2 × daily`, `1.2 ×` at a line end, `1.2 × l0³`),
-`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (`3/4`; also a
-ratio, a score or a date with a slash or colon word between two numbers, spaced or glued to one of them: `12 / 15`, `12 /15`,
-`12/ 15`, `1 : 2`, `5 / 12 / 2020`), `detached_decimal` (`12 .5`, `12 ,5`: a text layer split the number at its point),
+`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (a slash or
+colon shape the ratio production refuses: `12 /15`, `12/ 15`, `1 : 2`, `5 / 12 / 2020`; `12 / 15` itself is a ratio since
+r7), `detached_decimal` (`12 .5`, `12 ,5`: a text layer split the number at its point),
 `bracketed_multiplier` (`5.2 (x10^3 cells/mL)`, `5.2 [× 10^3]`: the scale hides in a bracket after the number),
 `bare_superscript_power` (`10³` without a multiplier). `2 x 100 mg` is two plain numbers. A pair of reference numbers in
-square brackets (`[1,2]`, head 1-99, tail 1-2 digits) is `citation_list`, never a decimal; `(4,6)` stays a decimal (in
-decimal-comma papers a parenthesised decimal is ordinary).
+square brackets (`[1,2]`, head 1-99, tail 1-2 digits) is `citation_list`, never a decimal (after a word it is a `citation`,
+r7); `(4,6)` stays a decimal (in decimal-comma papers a parenthesised decimal is ordinary).
 
 **Unresolved shapes (the `why` of `unresolved_shape`).** `too_many_digits`, `leading_zero` (`007`), `middot` (`12·4` on
 a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
 `ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
-`detached_decimal`, `bracketed_multiplier`, `citation_list`,
-`glued_letters` (`150mg`, `24h`, `1.73m2`, `1O5`, `12З`), `glued_symbol` (`8:00`, `12/24`, `65+`, `12=`), `bad_start`
+`detached_decimal`, `bracketed_multiplier`, `citation_list`, `citation` (r7),
+`glued_letters` (`150mg`, `24h`, `1.73m2`, `1O5`, `12З`), `glued_symbol` (`8:00`, `12/24/36`, `65+`, `12=`), `bad_start`
 (`.05`), `bare_superscript_power`. A unit glued to the digits is rejected whatever the letters: a list of allowed unit
 letters would be a fourth list, and it would re-admit `10mL` read as `1OmL`.
 
@@ -596,8 +643,8 @@ number): there is no tolerance, and a proposal whose own reading differs from th
 `1,234`) is stored as the page literal. For a TABLE cell the cells right before and after it in its row are the words one
 separator away: a character outside the alphabet (or a `(cid:N)` marker) in either leaves the number unresolved ("in the
 previous cell" / "in the next cell"), a qualifier, a lone `-` or `~`, or `to` in the previous cell flags `censored_value`,
-and a multiplier or thousands word in either flags `scaled_header` (a LINE character in a neighbouring cell, `AUC0–∞`
-beside its value, is allowed).
+and a multiplier or thousands word in either flags `scaled_header` (since r7 `∞` is CONTEXT, so `AUC0–∞` beside its value is
+allowed; a character of no list in a neighbouring cell, `—` for "not available", leaves the number unresolved).
 
 **Style evidence.** `infer_decimal_style` and the document's evidence count the RESOLVED numbers of the page reading by the
 decimal mark they use (`numgrammar/style.py`: a point decimal, a comma decimal, the mantissa of a power); thousands
@@ -624,21 +671,25 @@ so the many records of a table page read the page text once. A table page of 120
 
 **How to extend it.** Nothing is added by a special case. (a) A character an honest page prints next to numbers: admit it
 by the corpus rule, one hit on a digit-bearing line in ordinary prose and never a mis-mapped glyph, as a literal
-code point in `alphabet.py` (CONTEXT to allow it within one word of a number, LINE to allow it only elsewhere on the
-line; a letter that DRAWS like an INSIDE character, such as `χ` for `x`, is LINE) and in `tests/evidence_r6_pins.py`, update
+code point in `alphabet.py` (CONTEXT: there is no other class since r7, so a character that draws like an INSIDE character,
+a dash, a range or a fraction, such as `χ` for `x` or `½`, or that the corpus shows mis-mapped, stays outside and taints its
+line) and in `tests/evidence_r6_pins.py`, update
 the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
 `tests/evidence_r6_golden.json` (the class-representative behaviours) and write the code point and its corpus evidence in
 the docstring. (b) A look-alike that is really one of the approved characters: one entry in `EQUIV` (target a character
 already in the alphabet), the same two test copies, and corpus evidence. (c) A new multi-word form: a rule in
-`numgrammar/tokenizer.py` with a test in `tests/test_evidence_r6_grammar.py`. (d) A spelling around the reader (a ligature
+`numgrammar/tokenizer.py` (a whole-text production such as the citation or the chi-square form: `numgrammar/productions.py`)
+with a test in `tests/test_evidence_r6_grammar.py` or a `tests/test_evidence_r7_*.py` file, and an expression in
+`tests/evidence_r6_expressions.py` so the exhaustive tier sweeps it. (d) A spelling around the reader (a ligature
 of the locator, the infinity sign of a header key, a case pair): one entry in `LIGATURES`, `HEADER_SPELLINGS` or `CASE_PAIRS`
 (`numgrammar/equivalents.py`), the second copy in `tests/evidence_r6_round2_spec.py`, and corpus evidence; a unit or a header
 with any other character stays unresolved or unmatched. Then run the exhaustive tier
 (`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 16
-minutes on 12 workers: every code point at every boundary of 291 (expression, boundary) pairs through `tokens()`, and
+minutes on 12 workers: every code point at every boundary of 316 (expression, boundary) pairs through `tokens()`, and
 through the paths around it, `tests/evidence_r6_layer_b.py`: the label reader `scale_shapes`, the style evidence, the parse
 placeholder `protect_thin_spaces` / `restore`, the text-field locator, and, since round 2, `normalise` against its
-specification, the unit comparison with the printed-unit reader, and the header key), the verify oracle
+specification, the unit comparison with the printed-unit reader, and the header key, and since r7 the verifier's
+pre-check `unreadable` against the derived line rule), the verify oracle
 (`tests/test_evidence_r6_verify_oracle.py`) and the corpus comparison. The run records `git rev-parse HEAD` and the dirty
 files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit first, then run.
 

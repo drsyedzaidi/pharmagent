@@ -112,7 +112,8 @@ def test_parse_claim_is_the_one_token_reading_of_a_proposed_value():
 
 def test_every_export_resolves_and_the_package_surface_is_complete():
     import app.evidence.numgrammar as NG
-    for name in ("INSIDE", "CONTEXT", "LINE", "GAP", "EQUIV", "CID_MARKER", "cls", "Tok", "tokens", "parse_claim",
+    assert not hasattr(NG, "LINE") and "LINE" not in NG.__all__                 # r7: the LINE list is deleted
+    for name in ("INSIDE", "CONTEXT", "GAP", "EQUIV", "CID_MARKER", "cls", "Tok", "tokens", "parse_claim",
                  "number_spans", "numbers_in", "words_after", "words_before", "scale_shapes", "is_data_cell",
                  "find_n_lead", "find_dose"):
         assert hasattr(NG, name), name
