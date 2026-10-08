@@ -308,7 +308,11 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   a word that ends in a hyphen or slash before a number (`AUC0-\n24`, `t1/\n2`, and alike `docu-\n2`) marks the number as
   a range end (`censored_value`), never a clean pass. The 1.5 % target is not met; the residual causes are those of writer
   2 and 3 above (lost-space and label words 276, beside-a-refused-word 182, the em dash 167, `(cid:N)` 163, glued letters
-  134, `_` 102, glued symbols 100, resolved-but-failed 93, bad starts 87, fractions 80).
+  134, `_` 102, glued symbols 100, resolved-but-failed 93, bad starts 87, fractions 80). The full runs of this round (commit
+  ac19921): 401 (expression, boundary) pairs x 1,112,064 code points = 445,937,664 variants, the neighbour-shape sweep
+  (30,845 words, 2,159,150 variants; 7,864 fail-closed cases where a refused production leaves the number unresolved) and
+  ten layer-B sweeps x 1,112,064 code points, 0 errors each; coverage (four chunks merged, 85 % per module) every module at
+  or above 87.2 %, 96.7 % overall.
 
 ## Later phases
 
