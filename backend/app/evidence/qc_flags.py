@@ -5,16 +5,17 @@ human who decides. Shape: {code, severity warn|error, message, field, group, ori
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections import defaultdict
 from typing import Any
 
 from app.evidence import models as M
 from app.evidence.normalize import numbers_in
+from app.evidence.numgrammar.alphabet import OUTSIDE_RE, WORD_RE
+from app.evidence.numgrammar.equivalents import THIN, casefold_letters, fold
 from app.evidence.unit_norm import normalise_unit, same_unit
 
 __all__ = ["normalise_unit", "same_value", "scripted_flags", "merge_llm_flags", "slot_key", "group_key",
-           "is_interval_field"]
+           "is_interval_field", "label_key"]
 
 MAX_CODE_CHARS, MAX_MESSAGE_CHARS = 40, 300
 _CODE_RE = re.compile(r"[a-z0-9_]{1,40}")          # a model flag code is an identifier, never text
@@ -51,15 +52,31 @@ def _canon(rec: dict[str, Any], index: dict[str, dict[str, Any]]) -> str:
     return str(spec["name"]) if spec else str(rec.get("field") or "")
 
 
+def label_key(group: Any) -> str:
+    """The EXACT comparison form of a group label (r7 writer 3): the reader's equivalents (``fold``), the case of the
+    letters the alphabet lists (``CASE_PAIRS``), runs of the GAP set as one space, trimmed. Nothing else is equated or
+    dropped: 'Arm 1\u00b2', 'Arm \u2461', 'Arm \uff11\uff12' and 'Arm 1<U+200B>2' are four groups, never 'Arm 12'. It
+    decides which fields a group holds (``required_missing``), so a look-alike or invisible character can only ADD a
+    flag."""
+    return " ".join(WORD_RE.findall(casefold_letters(fold(str(group or "")))))
+
+
 def group_key(group: Any) -> str:
-    """Comparison form of a group label: NFKC, invisible format characters (category Cf: U+200B,
-    U+2060, U+FEFF, bidi controls) removed, casefold, whitespace collapsed and trimmed."""
-    text = "".join(ch for ch in unicodedata.normalize("NFKC", str(group or "")) if unicodedata.category(ch) != "Cf")
-    return " ".join(text.casefold().split())
+    """The MERGING comparison form of a group label (duplicates, conflicting values, interval peers, slots): the exact
+    form with the thin space read as a gap and every character outside the readable alphabet dropped (the derived
+    allow-list of the reader, ``OUTSIDE_RE``; no NFKC and no Unicode category), so 'Healthy<U+200B>' is 'healthy' and an
+    inserted invisible character never dodges the ``duplicate`` flag; 'Arm 1\u00b2' (a readable superscript) stays apart
+    from 'Arm 12'. Merging only ever adds a flag here."""
+    text = OUTSIDE_RE.sub("", casefold_letters(fold(str(group or ""))).replace(THIN, " "))
+    return " ".join(WORD_RE.findall(text))
 
 
 def _key(rec: dict[str, Any]) -> Key:
     return str(rec.get("source_id") or ""), group_key(rec.get("group_label"))
+
+
+def _label(rec: dict[str, Any]) -> Key:
+    return str(rec.get("source_id") or ""), label_key(rec.get("group_label"))
 
 
 def _is_int(x: float | None) -> bool:
@@ -213,12 +230,12 @@ def scripted_flags(records: list[Any], template: dict[str, Any], approved_record
     live_list = [{**M.as_mapping(r)} for r in live or []]
     for r in recs + approved_list + live_list:
         r["_canon"] = _canon(r, index)
-    present: dict[Key, set[str]] = defaultdict(set)
+    present: dict[Key, set[str]] = defaultdict(set)          # by the EXACT label: a merged label never hides a field
     by_source: dict[str, set[str]] = defaultdict(set)
     peers: dict[Key, dict[str, dict[str, Any]]] = defaultdict(dict)
     batch: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for r in recs + approved_list:
-        present[_key(r)].add(r["_canon"])
+        present[_label(r)].add(r["_canon"])
         by_source[_key(r)[0]].add(r["_canon"])
         peers[_key(r)].setdefault(r["_canon"], r)
     for r in recs + live_list:
@@ -226,7 +243,7 @@ def scripted_flags(records: list[Any], template: dict[str, Any], approved_record
     approved = {(str(r.get("source_id") or ""), r["_canon"].casefold(), _key(r)[1]): r for r in approved_list}
     # an ungrouped record ('' group: a text-rule n or dose) is checked against its whole source
     return [_record_flags(r, r["_canon"], str(r.get("group_label") or ""), index,
-                          by_source[_key(r)[0]] if not _key(r)[1] else present[_key(r)], approved,
+                          by_source[_key(r)[0]] if not _label(r)[1] else present[_label(r)], approved,
                           peers[_key(r)], required, batch[(*_key(r), r["_canon"].casefold())])
             for r in recs]
 

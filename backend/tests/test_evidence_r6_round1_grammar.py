@@ -99,9 +99,17 @@ def test_a_qualifier_is_never_hidden_by_an_opener_an_equals_sign_or_a_gap(text):
     assert len(got) == 1 and got[0].qualified, text
 
 
-@pytest.mark.parametrize("text", ["Cmax = 12.5", "Cmax ( 12.5 )", "Cmax: 12.5", "n=12.5", "Cmax (12.5)", "Cmax 12.5 <"])
+@pytest.mark.parametrize("text", ["Cmax = 12.5", "Cmax ( 12.5 )", "Cmax: 12.5", "n=12.5", "Cmax (12.5)"])
 def test_an_operator_run_without_a_qualifier_does_not_qualify(text):
     assert [t.qualified for t in tokens(text) if t.value == 12.5] == [False]
+
+
+def test_a_qualifier_after_a_number_with_no_number_after_it_leaves_the_number_unresolved():
+    """r7 writer 3 (the neighbour-word allow-list): 'Cmax 12.5 <' read 12.5 unqualified; a qualifier word is accepted
+    after a number only between two numbers ('1.25 > 1.0'), so a dangling one leaves 12.5 unresolved."""
+    got = tokens("Cmax 12.5 <")
+    assert [t.value for t in got] == [None] and got[0].why == "neighbour" and got[0].parts == (12.5,)
+    assert [t.value for t in tokens("ratio 1.25 > 1.0")] == [1.25, 1.0]
 
 
 def test_the_word_helper_reads_runs_of_operator_words():
@@ -175,9 +183,17 @@ def test_a_scale_in_a_bracket_after_the_number_leaves_the_number_unresolved(text
     assert got and got[0].value is None and got[0].shape == "unresolved_shape:bracketed_multiplier", (text, got)
 
 
-@pytest.mark.parametrize("text", ["Cmax 5.2 (ng/mL)", "Cmax 5.2 (xenon)", "Cmax 5.2 (x ng/mL)", "Cmax 5.2 [n=12]"])
+@pytest.mark.parametrize("text", ["Cmax 5.2 (ng/mL)", "Cmax 5.2 (xenon)", "Cmax 5.2 [n=12]"])
 def test_a_bracket_without_a_power_of_ten_is_not_a_scale(text):
     assert tokens(text)[0].value == 5.2
+
+
+def test_a_lone_multiplier_in_a_bracket_after_the_number_leaves_it_unresolved_with_or_without_a_power():
+    """r7 writer 3: 'Cmax 5.2 (x ng/mL)' read 5.2; '(x' is a lone multiplier after an opener, no accepted production, so
+    the number is unresolved whatever follows it (the owner's finding '5.2 (x 1000)' is the same shape)."""
+    for text in ("Cmax 5.2 (x ng/mL)", "Cmax 5.2 (x 1000)", "Cmax 5.2 ( x 10^3 )"):
+        got = tokens(text)[0]
+        assert got.value is None and got.shape == "unresolved_shape:bracketed_multiplier" and 5.2 in got.parts, text
 
 
 # --------------------------------------------- a mantissa is never a thousands group ---

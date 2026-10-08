@@ -122,6 +122,16 @@ def _numeric_word(word: str, style: str) -> bool:
     return bool(toks) and toks[0].start <= 1 and toks[0].value is not None
 
 
+def _own_word(text: str, a: int) -> str:
+    """The whole word of *text* that holds the offset *a*."""
+    k, e = a, a
+    while k > 0 and text[k - 1] not in GAP:
+        k -= 1
+    while e < len(text) and text[e] not in GAP:
+        e += 1
+    return text[k:e]
+
+
 def _own_prefix(text: str, a: int) -> str:
     """The characters of the token's own word before the token ('<' of '<0.5')."""
     k = a
@@ -169,8 +179,11 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
         and _numeric_word(prev[-2], style)
     to_after = bool(nxt) and loose_in(nxt[0].rstrip(_TRAIL), _TO) and len(nxt) == 2 and _numeric_word(nxt[1], style)
     # the tokenizer marks a dash glued to the number, a lone '-' or '~' word before or after it; a lone one in the
-    # neighbouring table cell is read here
-    ranged = tok.ranged or bool(prev) and prev[-1] in RANGE_WORDS or bool(nxt) and nxt[0] in RANGE_WORDS
+    # neighbouring table cell is read here, and so is a dash glued to the end of the previous cell after its number
+    # (r7 writer 3: the cells ['5.0-', '12.4'] are one range; the cell '5.0-' itself is unresolved: no right end)
+    glued = bool(prev) and prev[-1].endswith("-") and W.ends_with_number(prev[-1][:-1]) \
+        and W.digit_led(_own_word(ctx, a + off))
+    ranged = tok.ranged or glued or bool(prev) and prev[-1] in RANGE_WORDS or bool(nxt) and nxt[0] in RANGE_WORDS
     if is_interval_field(str(field or "")) or not (ranged or to_before or to_after):
         return []
     return [_flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: {literal!r} is one end of a printed range; a "

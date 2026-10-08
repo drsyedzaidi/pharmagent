@@ -13,6 +13,9 @@ needs no git history, so a shallow checkout verifies it too).
     cd backend && R6_EXHAUSTIVE=1 python -m pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py
     git add tests/evidence_r6_attestation.json && git commit
 
+r7 writer 3 adds a third record, ``neighbours``: the NEIGHBOUR-SHAPE SWEEP (``evidence_r6_neighbour_spec``, every word of its
+vocabulary at one and two words before and after every target), written by the exhaustive token module.
+
 The runs refuse a dirty tree (their log would be evidence of the tree, not of the commit) and write nothing under
 ``R6_ALLOW_DIRTY=1``.
 """
@@ -26,7 +29,7 @@ from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1]
 ATTESTATION = Path(__file__).with_name("evidence_r6_attestation.json")
-KINDS = ("tokens", "layer_b")
+KINDS = ("tokens", "layer_b", "neighbours")
 CODE_POINTS = 0x110000 - 2048                  # every Unicode scalar value (the 2 048 surrogates excluded)
 
 
@@ -84,8 +87,9 @@ def git_ancestor(head: str) -> bool | None:
 
 
 def problems(data: dict[str, Any] | None, *, pairs: int, sweeps: tuple[str, ...], now: str | None = None,
-             ancestor: Any = git_ancestor) -> list[str]:
-    """Why *data* is not proof that both full runs passed on the current code (empty when it is)."""
+             ancestor: Any = git_ancestor, neighbours: int | None = None) -> list[str]:
+    """Why *data* is not proof that the full runs passed on the current code (empty when it is). *neighbours*: the size of
+    the neighbour-shape vocabulary, when that sweep's full run is required too (r7 writer 3; the gate requires it)."""
     if not data:
         return ["there is no attestation: run the two exhaustive tests on a clean commit (see evidence_r6_attest.py)"]
     out: list[str] = []
@@ -103,10 +107,19 @@ def problems(data: dict[str, Any] | None, *, pairs: int, sweeps: tuple[str, ...]
     elif layer_b.get("errors") != 0 or layer_b.get("code_points") != {name: CODE_POINTS for name in sweeps}:
         out.append(f"the layer-B sweeps covered {layer_b.get('code_points')} with {layer_b.get('errors')} errors; "
                    f"{sorted(sweeps)} x {CODE_POINTS} and 0 errors needed")
-    for kind, run in (("tokens", tokens_run), ("layer_b", layer_b)):
+    runs = [("tokens", tokens_run), ("layer_b", layer_b)]
+    if neighbours is not None:
+        sweep = data.get("neighbours") or {}
+        runs.append(("neighbours", sweep))
+        if not sweep:
+            out.append("the neighbour-shape sweep (test_evidence_r6_exhaustive.py) has no passing full run")
+        elif (sweep.get("errors"), sweep.get("words")) != (0, neighbours):
+            out.append(f"the neighbour-shape sweep covered {sweep.get('words')} words with {sweep.get('errors')} errors; "
+                       f"{neighbours} words and 0 errors needed")
+    for kind, run in runs:
         if run and (run.get("dirty") or not run.get("head")):
             out.append(f"the {kind} run was made on a dirty or unknown tree: run it on a clean commit")
-    heads = {run.get("head") for run in (tokens_run, layer_b) if run.get("head")}
+    heads = {run.get("head") for _, run in runs if run.get("head")}
     if len(heads) > 1:
         out.append(f"the two runs were made at different commits: {sorted(heads)}")
     for head in heads:

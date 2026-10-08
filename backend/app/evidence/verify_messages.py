@@ -25,7 +25,9 @@ SHAPE_WHY = {
     "citation": "a bracketed reference citation, which is not a value",
     "citation_list": "a pair of reference numbers in square brackets, never a decimal",
     "split_unit": "a unit broken by a space inside it, as in '10m L': the text layer split the unit",
-    "label": "digits inside a label word, which are part of a name, never a value"}
+    "label": "digits inside a label word, which are part of a name, never a value",
+    "neighbour": "a word beside the number that belongs to no accepted form: a sign, multiplier, exponent letter, "
+    "qualifier, percent or number word the reader cannot place, which may change the value"}
 
 
 def named(label: str) -> str:

@@ -191,9 +191,12 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   238 s -> 0.07 s, the style evidence of a 128 KB run of digit groups 40 s -> linear, one 200 000-glyph page of `ﷺ` 3 s and
   470 MB -> bounded (round 1: NFKC capped at four characters of expansion; round 2: the locator has no NFKC, so a glyph
   never expands at all).
-- **What round 1 leaves, by design.** (a) The group-label key (`qc_flags.group_key`) keeps NFKC and drops format characters (a
-  Unicode category): it is a duplicate detector that only ever MERGES labels (`Healthy` and `Healthy<U+200B>` are one group), so
-  a finer key would let an inserted zero-width character dodge the `duplicate` flag; the message that names a code point for a
+- **What round 1 leaves, by design.** (a) The group-label key (`qc_flags.group_key`) kept NFKC and dropped format characters (a
+  Unicode category) until r7 writer 3: it merged `Arm 1²` with `Arm 12` and `Arm ②` with `Arm 2`, which silenced
+  `required_missing`. It now has two keys and no NFKC or category: `label_key` (the equivalents, the case of the listed
+  letters, gaps) decides which fields a group holds, so distinct labels never hide a missing field, and `group_key` (the same,
+  with every character outside the readable alphabet dropped, `OUTSIDE_RE`) merges `Healthy` and `Healthy<U+200B>` for the
+  `duplicate`, conflict, interval and slot checks; both can only add flags. The message that names a code point for a
   human (`verify_messages.py`) uses `unicodedata.name`. Both are named with their reason in `tests/test_evidence_r6_scope.py`,
   which fails for any other use in `app/evidence`. (Round 2 removed the other exceptions: the snippet locator, the unit
   comparison, the template header key and the ink pairing fold through `fold()` and explicit tables, with no NFKC and no
@@ -255,6 +258,28 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   decades `1970s`, `mg/day`, lost-space prose `150mgtid`), `_` 102, glued symbols 98 (`2019;13(2):93`, `10.1007/`), bad starts
   86 (lost-space references `(3):597`), `→` 54, `#` 48, the mis-mapped `‘` 35, `"` 33, `$` 33, citations 30 and the arrows
   and bars of rotated tables. None of these is addressed by decisions 2-4.
+
+- **r7 writer 3: the neighbour-word allow-list (2026-10-08; `pharmagent-evidence-work/r7/corpus_progress.tsv`).** The recheck
+  reproduced wrong values made only of allowed characters: `1.2 e-3.` (any trailing punctuation after a spaced exponent)
+  cited as 1.2, `5.2 ( x 10^3 )` (a scale behind an opener that is its own word) as 5.2, `-(12)` and `- ( 12 )` (a sign before
+  an opener) as +12, all passing with no flag in text and cells. The shape detectors behind them are deleted and every word of
+  a number's window, and the glue inside its own word, must be an accepted production (see "Neighbour words" in
+  evidence-pipeline.md). U after the rule: 3.81 % -> 4.32 % (1,678 -> 1,903; no record newly passes, 0 value disagreements).
+  The 225 value-like records it refuses: 106 beside a number word the grammar rejects (lost-space table labels `60mgOD 466±187`,
+  `9years 73.2%`, rotated tables `%631\n240`, arithmetic `0.693/8 = 0.0866`, reference shapes), 62 beside a lone sign, dash or
+  multiplier with no number on its far side (markdown and bullet dashes `- 90% CI`, `(ideally < 100) - RSE%`, `GMR + 90% CI`,
+  `R = 1 + (I/K)`, `Cav × 100%`, the mis-mapped `(* 80%)`), 34 inside their own word (`the 3-` at the end of a one-line snippet
+  whose `fold` is on the next line: the snippet cannot show the right end; `(A–E)` in lost-space words: a lone `E` touching a
+  dash), 13 beside a label with an unjoined qualifier or lone operator letter (`DBP>120mmHgafter`), 10 beside a prose word with
+  an unjoined modifier (`Alcohol+++(daily...)`). Each is the owner's rule applied as written: a sign, multiplier, exponent
+  letter, qualifier or percent beside a number that belongs to no production may change the number. What the allow-list does
+  NOT judge: the cells beside a cited table cell (they are checked for unreadable characters, qualifiers, range words, a range
+  dash glued to the previous cell, r7 writer 3, and scale words, not by the word allow-list), a number two words away (`1.2 cells
+  ×10^3` reads 1.2: the window is one word), and a bare power next to a number (`1.2 10^3` reads both: a complete production;
+  a lost multiplier glyph between them is not visible). The sweep found a crash the earlier sweeps could not reach: `3/4 x 10^3`
+  (a ratio as the mantissa of a power) raised `ValueError` in `tokens()` at writer 2's head; a ratio is never a mantissa now.
+  The P2 items: the cells `['5.0-', '12.4']` flag `censored_value` on 12.4 and leave 5.0 unresolved; the group keys above. U is
+  above the previous value, and the 1.5 % target is further away: the residual causes are those of writer 2 plus the 225 above.
 
 ## Later phases
 

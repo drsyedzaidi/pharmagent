@@ -20,6 +20,7 @@ import pytest
 
 from app.evidence.numgrammar import taint, tokens
 from tests import evidence_r6_attest as attest
+from tests import evidence_r6_neighbour_spec as NS
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
 
@@ -191,3 +192,20 @@ def test_every_code_point_at_every_boundary_on_a_process_pool():
     if not result["dirty"]:                       # a clean full run is the attestation the normal gate checks
         attest.record("tokens", {k: result[k] for k in ("pairs", "variants", "errors", "wall_seconds", "workers", "head",
                                                         "dirty")})
+
+
+@pytest.mark.exhaustive
+@pytest.mark.skipif(os.environ.get("R6_EXHAUSTIVE") != "1", reason="set R6_EXHAUSTIVE=1 for the neighbour-shape sweep")
+def test_every_neighbour_word_at_every_window_position_on_a_process_pool():
+    """r7 writer 3: every word of the neighbour vocabulary (all strings of 1 to 3 characters over modifiers, digits,
+    e E x X, openers, closers and punctuation, plus unit, label and prose samples) one and two words before and after every
+    target of evidence_r6_neighbour_spec: never a value beside a refused word, never a different value."""
+    workers = int(os.environ.get("R6_WORKERS", max(1, min(12, (os.cpu_count() or 2) - 2))))
+    result = NS.full_run(workers)
+    assert result["failures"] == [] and result["errors"] == 0, result
+    assert result["words"] == len(NS.vocabulary())
+    assert result["dirty"] == [] or os.environ.get("R6_ALLOW_DIRTY") == "1", (
+        "the run is evidence of a dirty tree, not of the commit: commit first or set R6_ALLOW_DIRTY=1", result["dirty"])
+    if not result["dirty"]:
+        attest.record("neighbours", {k: result[k] for k in ("words", "variants", "errors", "strict", "wall_seconds",
+                                                            "head", "dirty")})

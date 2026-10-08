@@ -52,6 +52,7 @@ from app.evidence.numgrammar.alphabet import (
 )
 from app.evidence.numgrammar.body import MAX_DIGITS, MIDDOT, exp_int, read_body, to_float
 from app.evidence.numgrammar.body import mantissa as read_mantissa
+from app.evidence.numgrammar.glue import glue, prefix
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_SHAPE, Tok
 from app.evidence.numgrammar.units import unit_end
 
@@ -293,7 +294,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     numeric_led = lead != "" and lead in INSIDE and lead not in ASCII_LETTERS
     toks: list[Tok] = []
     parts: list[float] = []
-    i, prev_end, tail, unit = 0, -1, TAIL_NONE, ""
+    i, prev_end, tail, unit, glue_from = 0, -1, TAIL_NONE, "", 0
     while i < n:
         c = w[i]
         if prev_end == i and c in JOINERS and i + 1 < n and w[i + 1] in DIGITS:
@@ -314,6 +315,9 @@ def scan_word(w: str, off: int, style: str) -> Scan:
                 return _rejected("bad_start", parts)           # '.05', '*12', 'x-20' inside a numeric word
             i = max(end, i + 1)
             continue
+        if not joiner and i > glue_from and not prefix(w[glue_from:i]):     # r7 writer 3: '-(12)', '-=12', 'x(12)'
+            got = parts + ([value] if value is not None else [])
+            return _rejected("glued_symbol", got) if numeric_led else LABEL
         if value is None:
             if not numeric_led:
                 return LABEL
@@ -326,7 +330,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
                 return _rejected(r_canon, parts + list(r_parts)) if numeric_led else LABEL
             toks.append(Tok(off + i, off + r_end, r_value, "ratio", r_parts, _qualified(w, i), False, r_canon, ""))
             parts.append(r_value)
-            i = prev_end = r_end
+            i = prev_end = glue_from = r_end
             tail = TAIL_NONE
             continue
         act, after, why = post(w, end, n)
@@ -341,16 +345,19 @@ def scan_word(w: str, off: int, style: str) -> Scan:
         part = (to_float(canon.partition("e")[0]),) if shape == "sci" else ((10.0,) if shape == "bare_power" else ())
         toks.append(Tok(off + i, off + end, value, shape, part, qualified, ranged, canon, mark))
         parts.append(value)
-        i = prev_end = end
+        i = prev_end = glue_from = end
         tail, unit = TAIL_NONE, ""
         if act == TAIL:
             tail = TAIL_MULT
         elif act in (PCT, STAR, UNIT):
-            i = prev_end = after
+            i = prev_end = glue_from = after
             tail = TAIL_STAR if act == STAR and i == n else TAIL_NONE
             unit = w[end:after] if act == UNIT and after == n else ""
     if not toks:
         return LABEL
+    rest = w[glue_from:]                                    # r7 writer 3: '12-x', '12(e)', '5/x'; a lone '-' is a range
+    if rest and tail != TAIL_MULT and rest != "-" and not glue(rest):
+        return _rejected("glued_symbol", parts) if numeric_led else LABEL
     return Scan("numeric", tuple(toks), tail, unit=unit)
 
 

@@ -6,8 +6,9 @@ the two layer-B sweeps (registered in ``evidence_r6_layer_b.SWEEPS``):
 
   unitprod  every code point at every boundary inside the glued unit of a few expressions ('took 150mg daily'): an outside
             character leaves the number unresolved (context); for any other character the number resolves ONLY when the
-            glued text up to its first boundary is a unit of the specification (soundness), with the clean value and the
-            number alone as literal; for a letter it resolves EXACTLY when the specification says so
+            glued text up to its first boundary is a unit of the specification and what follows the boundary in the
+            word is inert glue (r7 writer 3, the neighbour specification: '3ml,E' is no reading) (soundness), with the
+            clean value and the number alone as literal; for a letter it resolves EXACTLY when the specification says so
   label     every code point at every boundary inside a label word ('AUC0-24 -0.5 h'): replacing the digits the reader
             calls label digits (``labels=True``) by a letter changes no token outside the label word (decision 3: label
             digits never act on a neighbour by themselves)
@@ -17,6 +18,7 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar import tokens
+from tests import evidence_r6_neighbour_spec as N
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
 
@@ -73,7 +75,7 @@ def _unit_case(text: str, number: str, b: int, cp: int) -> str:
     word = (text[:b] + f + text[b:])[s0:we + 1]
     tail = word[len(number):]
     n = spec_unit(tail)
-    want = n >= 0 and (n < len(tail) or not spec_split(tail, text[we + 1:].split(" ")[0]))
+    want = n >= 0 and (n < len(tail) or not spec_split(tail, text[we + 1:].split(" ")[0])) and N.glue(tail[n:].rstrip())
     got = hit is not None and hit.value is not None and (hit.start, hit.end) == (s0, ns)
     if got and (not want or v[hit.start:hit.end] != number):
         return f"resolved {v[hit.start:hit.end]!r} though the glued text {tail!r} is no unit of the specification"

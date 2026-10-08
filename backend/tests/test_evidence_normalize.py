@@ -102,7 +102,8 @@ def test_the_classifier_agrees_with_the_second_copy_of_the_sets_on_every_listed_
 
 def test_a_numeric_token_is_ascii_only():
     assert tokens("١٢٣") == [] and [t.value for t in tokens("１２")] == []
-    assert [t.value for t in tokens("x 12 y")] == [12.0]
+    assert [t.value for t in tokens("q 12 y")] == [12.0]
+    assert [t.value for t in tokens("x 12 y")] == [None]      # r7 writer 3: a lone x is a multiplier beside the number
 
 
 # -------------------------------------------------------------- normalise ---

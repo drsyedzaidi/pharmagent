@@ -94,8 +94,9 @@ Immutability:
 `record_hash` is the sha256 of the canonical JSON of {source_sha256, template_hash, field, group, value,
 unit, locator without span/literal/token, extractor}. It leaves out status, flags and verification, so the
 identity of a claim stays stable: re-extracting the same claim inserts nothing. A different value for a
-(source, canonical field under the current template, normalised group: NFKC, invisible format characters
-such as U+200B removed, casefolded) that already has an approved record (a different value means a
+(source, canonical field under the current template, merged group: `qc_flags.group_key`, the reader's equivalents, the
+case of the listed letters, every character outside the readable alphabet dropped, gaps collapsed; no NFKC since r7 writer 3)
+that already has an approved record (a different value means a
 different number OR a different unit: 2.31 L/h and 2.31 mL/min conflict), or that any live
 proposal holds (the same batch or an earlier extraction run), gets the flag `duplicate` on both sides;
 approving it over an approved value needs `allow_conflict: true` on the decision. After a run, a live
@@ -636,18 +637,51 @@ the qualifier is read through the operator run (see Grammar).
 **Multi-word forms** (across exactly one gap run, line breaks included). Accepted: `1.2 × 10^3`, `1.2 ×10⁻³`,
 `1.2× 10^3`. Unresolved shapes: `ten_after_multiplier` (`2 x 10 mg`, `1.2 × 103`, `1.2 x 10 3`: a ten with no readable power,
 possibly a raised exponent the text layer lost), `multiplier_operand` (`2 × daily`, `1.2 ×` at a line end, `1.2 × l0³`),
-`detached_exponent` (`10 ^ 3`, `10 ³`), `spaced_exponent` (`3.4 E-03`), `mixed_number` (`12 3/4`), `fraction` (a slash or
+`detached_exponent` (`10 ^ 3`, `10 ³`), `mixed_number` (`12 3/4`), `fraction` (a slash or
 colon shape the ratio production refuses: `12 /15`, `12/ 15`, `1 : 2`, `5 / 12 / 2020`; `12 / 15` itself is a ratio since
 r7), `detached_decimal` (`12 .5`, `12 ,5`: a text layer split the number at its point),
-`bracketed_multiplier` (`5.2 (x10^3 cells/mL)`, `5.2 [× 10^3]`: the scale hides in a bracket after the number),
-`bare_superscript_power` (`10³` without a multiplier). `2 x 100 mg` is two plain numbers. A pair of reference numbers in
+`bare_superscript_power` (`10³` without a multiplier). The spaced exponent (`3.4 E-03`) and the bracketed scale
+(`5.2 (x10^3 cells/mL)`) are no forms since r7 writer 3: the neighbour-word allow-list below refuses them (named
+`spaced_exponent` and `bracketed_multiplier`) together with every shape the old detectors missed. A ratio is never a
+mantissa (`3/4 x 10^3` is unresolved; it raised `ValueError` at writer 2's head). `2 x 100 mg` is two plain numbers. A pair of reference numbers in
 square brackets (`[1,2]`, head 1-99, tail 1-2 digits) is `citation_list`, never a decimal (after a word it is a `citation`,
 r7); `(4,6)` stays a decimal (in decimal-comma papers a parenthesised decimal is ordinary).
+
+**Neighbour words (r7 writer 3; `numgrammar/neighbours.py`, `numgrammar/glue.py`).** The character rule cannot see a wrong
+reading made only of allowed characters (`1.2 e-3.` cited as 1.2, `5.2 ( x 10^3 )` as 5.2, `-(12)` as +12), and shape
+detectors for such cases always missed a shape. So a resolved number keeps its value only when the words of its WINDOW are
+accepted productions: one word on each side, punctuation-only words (`( [ ) ] , ; : . ' / =`) skipped and belonging to the
+window, the window crossing line breaks like the taint window. The productions: PROSE (no digit; every MODIFIER, i.e. a
+sign, multiplier, exponent letter, caret, superscript, qualifier, plus-minus or percent, joined to a letter the way prose and
+units join one: `ng·h/mL`, `h⁻¹`, `cells/10^6` read as a label, `-fold`, `%CV`, `Cmax*`, `e.g.`; a LONE `e E x X`, with no
+letter beside it, that touches a modifier, a digit, `=` or (on its right) an opener, or is the whole word, is an operator
+letter and never prose), LABEL (led by a letter that is no lone operator letter, prose with its digits read as letters:
+`AUC0-24`, `CYP2D6*4`, `h-1`; never `E-3`, `x10^3`, `E2`), NUMBER (not led by a letter, read as resolved numbers, no
+dangling multiplier, not across a lone separator word: `12 . 5` is one number split in two), a reference pair `[26,27]`,
+VARIABLE (any letter-led word behind `=`: `E = 0.9`, `x = 12`), QUALIFIER (before the number: `<`, `<=`, `≤(`, `p<`, `<-`),
+DISPERSION (`±`), PERCENT (`45 %`, and `16.9 %, 13.1`: the number before owns it), INFIX (a lone `- ~ x X * × ·`, or after the
+number a qualifier, directly beside it with a number, or a unit then a number, on its far side: `12 - 15`, `20 mg – 40 mg`,
+`2 x 3 mg`, `1.25 > 1.0`; a lone multiplier before a ten is a scale, never a product) and RANGE END (a word ending in a dash
+after its number is completed only by a number directly after it, `0.5-\n1.5`, or a prose word, a compound the text layer
+split: `10- fold`, `150- and 300-mg`). Everything else makes the number one unresolved expression through the refused word:
+`1.2 e 3`, `12 e3,`, `Ki (1.2 E-3)`, `5.2 / x 10^3`, `- ( 12 )`, `Table 3 - Results`, `- 90% CI`, `GMR + 90%`, `12 5th`,
+`60mgOD 466`, a cell `5.0-`. Inside its own word the GLUE before, between and after the tokens must be inert too (punctuation
+around prose or label digits; before the first token a run of starters, or a variable then `=`): `-(12)`, `−[12.5]`, `-=12`,
+`x(12)`, `Cmax-(12)`, `12)x(15`, `12-x`, `3ml,E` are unresolved. A word is judged by its own shape, never by whether its own
+numbers resolved: nothing cascades and the cost stays linear. The allow-list only refuses: on the 60-paper corpus no record
+newly passes and U rises from 3.81 % to 4.32 % (`r7/corpus_progress.tsv`; see the limits document).
+The NEIGHBOUR-SHAPE SWEEP (`tests/evidence_r6_neighbour_spec.py`, an independent statement of these productions) inserts
+every word of 1 to 3 characters over modifiers, digits, `e E x X`, openers, closers and punctuation (31 characters), plus
+unit, label and prose samples (30 827 words), one and two words before and after 16 targets: the reader may keep a value
+only beside a word the specification accepts, and never yields a different value or literal (the multiplier-power
+production `12.5 x10^3` is the one accepted change, parsed into the number). An inert window may still leave the number
+unresolved when a form takes it (`150 1/5`, `12 xenon`): fail closed, counted, never an error.
 
 **Unresolved shapes (the `why` of `unresolved_shape`).** `too_many_digits`, `leading_zero` (`007`), `middot` (`12·4` on
 a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
 `ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
-`detached_decimal`, `bracketed_multiplier`, `citation_list`, `citation` (r7),
+`detached_decimal`, `bracketed_multiplier`, `citation_list`, `citation` (r7), `neighbour` (r7 writer 3: a window word that is
+no accepted production),
 `glued_letters` (`1OmL`, `150mgtid`, `5th`, `1O5`, `12З`: letters that are no full unit production), `glued_symbol`
 (`8:00`, `12/24/36`, `65+`, `12=`), `bad_start` (`.05`), `bare_superscript_power`, `split_unit` (`10m L`, r7 writer 2) and
 `label` (only in the verifier's `labels=True` reading, r7 writer 2). Since r7 writer 2 a unit glued to the digits is read
@@ -733,13 +767,15 @@ files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit firs
 `tests/evidence_r6_attestation.json` together with a digest of every file the runs execute (`app/evidence`, the
 `tests/evidence_r6_*` modules and golden file, the two exhaustive test modules; `tests/evidence_r6_attest.py`).
 `tests/test_evidence_r6_attestation.py` is part of the normal gate and recomputes the digest: **any change to `app/evidence`
-or to the oracle fails it until both full runs are made again** (commit the code, run both, commit the attestation).
+or to the oracle fails it until both full runs are made again** (commit the code, run both, commit the attestation). Since
+r7 writer 3 the token module's full run also runs the neighbour-shape sweep (1 911 274 variants) and records it as a third
+entry, `neighbours`, which the gate requires.
 The digest needs no git history (a shallow checkout verifies it); the recorded commit must be an ancestor of HEAD when git
 can tell. Keep the logs of a run as `exhaustive_<head>.log` next to the other work files. The scope test
 (`tests/test_evidence_r6_scope.py`) walks EVERY module of `app/evidence` for `unicodedata`, `str.is*`, `\d \w \s \b` classes
-and hand-typed non-ASCII lists; each use that remains is named in it with its reason (prose patterns, the group-label key
-`qc_flags.group_key`, which only ever merges labels, a message that names a code point for a human, the dose rule's unit
-words), and an exception that no longer applies fails the test. The locator, the unit comparison, the header key and the
+and hand-typed non-ASCII lists; each use that remains is named in it with its reason (prose patterns, a message that names
+a code point for a human, the dose rule's unit words; since r7 writer 3 the group-label keys use none), and an exception
+that no longer applies fails the test. The locator, the unit comparison, the header key and the
 ink pairing have none. A test also fails for a name a package re-exports without a caller in `app/`, and for a module
 constant referenced nowhere (`tests/test_evidence_r6_round2_hygiene.py`). Stored rows: `verify_records` re-verifies proposed
 rows under the grammar (expect more failures: glued units, `2 x 10 mg`, lines with `(cid:N)`); approved rows are immutable

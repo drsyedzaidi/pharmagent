@@ -47,7 +47,7 @@ PLAIN = [
     ("37°C and 37 °C and 37◦C", ".", [37.0, 37.0, 37.0]),
     ("CL 12.4 L h-1 and 90 mL/min/1.73m2", ".", [12.4, 90.0]),
     ("n = 12.", ".", [12.0]), ("12-fold and 24-h", ".", [12.0, 24.0]), ("12.)", ".", [12.0]),
-    ("(gsd - 1) × 100 = 41%", ".", [1.0, 100.0, 41.0]),
+    ("(gsd - 1) × 100 = 41%", ".", [None, 100.0, 41.0]),   # r7 writer 3: the 1 of 'gsd - 1' is subtracted, no range
     ("Table 1.", ".", [1.0]), ("2.1) 404/9696 (4.2)", ".", [2.1, None, 4.2]),
     ("12.4 (n = 10)", ".", [12.4, 10.0]), ("150 mg/kg", ".", [150.0]), ("ratio 1:2", ".", [None]),
     ("df=3,P=0.08", ".", [3.0, 0.08]),
@@ -283,11 +283,14 @@ def test_the_cell_mode_reads_like_a_page_but_the_whole_cell_is_one_line():
 
 # ----------------------------------------------------------------- offsets, flags ---
 def test_offsets_are_native_literals_keep_their_equivalents():
-    text = f"x −20 y –11.8* z 18{T}900 w 24’560 v 37◦C"
+    text = f"u −20 y –11.8* z 18{T}900 w 24’560 v 37◦C"
     lits = [text[t.start:t.end] for t in tokens(text)]
     assert lits == ["−20", "–11.8", f"18{T}900", "24’560", "37"]
     from app.evidence.numgrammar.equivalents import fold
     assert len(fold(text)) == len(text)
+    # r7 writer 3: a lone x before a number is a multiplier, never a filler letter: '−20' is unresolved there
+    first = tokens("x" + text[1:])[0]
+    assert first.value is None and first.why == "neighbour" and "−20" in ("x" + text[1:])[first.start:first.end]
 
 
 def test_a_scientific_token_spans_mantissa_to_power_and_unresolved_expressions_span_whole_words():

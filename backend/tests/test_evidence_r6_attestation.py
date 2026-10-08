@@ -10,6 +10,7 @@ import pytest
 
 from tests import evidence_r6_attest as A
 from tests import evidence_r6_layer_b as B
+from tests import evidence_r6_neighbour_spec as NS
 from tests import evidence_r6_oracle as O
 
 HOW = ("the exhaustive tier has not been run on this code: commit, then `R6_EXHAUSTIVE=1 python -m pytest -m exhaustive "
@@ -31,8 +32,25 @@ def problems(data, **kw):
 # ------------------------------------------------------------------------- the gate ---
 
 def test_both_full_runs_passed_on_exactly_the_code_of_this_checkout():
-    got = A.problems(A.load(), pairs=len(O.PAIRS), sweeps=tuple(B.SWEEPS))
+    got = A.problems(A.load(), pairs=len(O.PAIRS), sweeps=tuple(B.SWEEPS), neighbours=len(NS.vocabulary()))
     assert got == [], f"{HOW}\n" + "\n".join(got)
+
+
+GOOD_NEIGHBOURS = {"errors": 0, "words": 30825, "variants": 1911150, "head": "a" * 40, "dirty": []}
+
+
+def test_the_neighbour_sweep_is_required_when_the_gate_asks_for_it_and_every_shortfall_is_reported():
+    """r7 writer 3: the third record. Without ``neighbours`` the old two-record check is unchanged."""
+    def check(data):
+        return A.problems(data, pairs=291, sweeps=SWEEPS, now="d" * 64, ancestor=lambda head: True, neighbours=30825)
+    data = {**good(), "neighbours": dict(GOOD_NEIGHBOURS)}
+    assert check(data) == [] and problems(good()) == []
+    assert any("neighbour-shape sweep" in p and "no passing" in p for p in check(good()))
+    for field, value, needle in (("errors", 2, "neighbour-shape sweep covered"), ("words", 5, "neighbour-shape sweep covered"),
+                                 ("dirty", ["x"], "neighbours run was made on a dirty"),
+                                 ("head", "b" * 40, "different commits")):
+        bad = {**good(), "neighbours": {**GOOD_NEIGHBOURS, field: value}}
+        assert any(needle in p for p in check(bad)), (field, check(bad))
 
 
 def test_the_gate_reads_the_committed_file_and_the_inputs_cover_the_reader_and_the_oracle():

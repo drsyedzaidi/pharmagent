@@ -12,6 +12,7 @@ import pytest
 from app.evidence import models as M
 from app.evidence.numgrammar import tokens
 from tests.evidence_r5b_support import check
+from tests.evidence_timing import limit
 
 LABELS = ("AUC0-24", "CYP2D6", "t1/2", "C24h", "mL/min/1.73m2", "m12", "AUC0–24h", "(CYP3A4)", "Level2-Acero,1")
 
@@ -105,6 +106,8 @@ def test_label_expressions_and_the_citation_rule_stay_linear_on_a_hostile_page()
     many = tokens("CYP2D6 [12] " * 20_000, labels=True)
     glued = tokens("a1[1]" * 40_000, labels=True)
     chain = tokens("AUC=0-24[1]" * 20_000, labels=True)
-    assert time.perf_counter() - t0 < 6.0                           # quadratic paths took minutes
+    # quadratic paths took minutes; limit() is 6.0 s in every normal run and scales only under a line tracer (r7 writer
+    # 3: the raw 6.0 broke the documented timing convention and sat at 5.8 s traced at 3ca2b0a)
+    assert time.perf_counter() - t0 < limit(6.0)
     assert len(many) == 40_000 and {t.why for t in many} == {"label", "citation"}
     assert len(glued) == 80_000 and len(chain) == 60_000

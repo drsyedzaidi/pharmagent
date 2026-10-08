@@ -11,12 +11,15 @@ REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
 ACCEPT   ``12 / 15``                                      one ``ratio`` token (r7, owner decision 6: value 12/15, parts
                                                           (12, 15); the slash spaced on both sides, nothing else)
          ``12 .5`` ``12 ,5``                              detached_decimal (a text layer split the number at its point)
-         ``5.2 (x10^3 cells)`` ``5.2 [× 10^3]``           bracketed_multiplier (the scale hides in a bracket)
+
+r7 writer 3: the spaced exponent (``3.4 E-03``) and the bracketed scale (``5.2 (x10^3 cells)``) are no forms any more:
+they were shape detectors that missed shapes (``1.2 e-3.``, ``5.2 ( x 10^3 )``). The neighbour-word allow-list
+(neighbours.py) refuses every word beside a number that is no accepted production, those two included.
 """
 from __future__ import annotations
 
 from app.evidence.numgrammar import words as W
-from app.evidence.numgrammar.alphabet import BRACKET_MULTIPLIERS, DIGITS, MULTIPLIERS, OPENERS_BR
+from app.evidence.numgrammar.alphabet import DIGITS, MULTIPLIERS, OPENERS_BR
 from app.evidence.numgrammar.body import decimal_mantissa, to_float
 from app.evidence.numgrammar.scan import RATIO_INT, TAIL_MULT, TAIL_STAR, Scan, ratio_parts, read_power, scan_word
 from app.evidence.numgrammar.tok import MAX_PARTS, Tok
@@ -38,12 +41,8 @@ class Forms:
             c = nxt[0]
             if c in MULTIPLIERS:
                 done = self.form_mult(a, sc, out, nxt)
-            elif c == "e" or c == "E":
-                done = self.form_exponent(a, sc, out, nxt)
             elif c in DIGITS:
                 done = self.form_fraction(a, sc, out, nxt)
-            elif c in OPENERS_BR:
-                done = self.form_bracket_mult(a, sc, out, nxt)
             elif c in _FRAGMENT_LEADS:
                 done = self.form_fragment(a, sc, out, nxt)
             else:
@@ -56,10 +55,11 @@ class Forms:
 
     # ------------------------------------------------------------------ forms ---
     def joinable(self, a: int, sc: Scan) -> bool:
-        """One plain token that ends the word (before a glued multiplier): a mantissa a power can join."""
+        """One plain token that ends the word (before a glued multiplier): a mantissa a power can join. A ratio is never
+        a mantissa (r7 writer 3: '3/4 x 10^3' crashed building the canonical '3/4e3')."""
         t = sc.toks[0]
         tail = 1 if sc.tail == TAIL_MULT else 0
-        return len(sc.toks) == 1 and t.shape not in ("sci", "bare_power") and t.end == self.ends[a] - tail
+        return len(sc.toks) == 1 and t.shape not in ("sci", "bare_power", "ratio") and t.end == self.ends[a] - tail
 
     def sci(self, out: list[Tok], a: int, sc: Scan, last: int, power_text: str, at: int) -> int:
         """One scientific token from the mantissa of word *a* and the power at ``power_text[at:]`` (word *last*)."""
@@ -75,8 +75,7 @@ class Forms:
         if value is None:
             return self.expr(out, a, last, t.start, self.ends[last], "exponent_range", (t.value,))
         tok = Tok(t.start, self.ends[last], value, "sci", (to_float(mant),), t.qualified, t.ranged, canon, mark)
-        self.put(out, a, last, self.flagged((tok,), a, last)[0])
-        return last
+        return self.put(out, a, last, self.flagged((tok,), a, last))
 
     def operand(self, out: list[Tok], a: int, sc: Scan, last: int) -> int:
         """A multiplier without a number to its right: the left token and the operand word are one expression."""
@@ -127,13 +126,6 @@ class Forms:
             return self.ten(out, a, sc, k)
         return None if self.numeric_word(k) else self.operand(out, a, sc, k)
 
-    def form_exponent(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
-        """``3.4 E-03``: an exponent in the next word."""
-        if W.E_WORD_RE.fullmatch(nxt):
-            return self.expr(out, a, a + 1, sc.toks[0].start, self.ends[a + 1], "spaced_exponent",
-                             self.parts_of(a, a))
-        return None
-
     def form_fraction(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
         """``12 3/4``: an integer followed by a fraction word is a mixed number."""
         t = sc.toks[0]
@@ -144,7 +136,7 @@ class Forms:
 
     def form_detached(self, a: int, sc: Scan, consumed: int, out: list[Tok], nxt: str, prev: str) -> int | None:
         """``10 ^ 3``, ``10 ³``, ``10^ 3``: an exponent word next to a number that is not a power."""
-        if nxt and W.exp_like(nxt):
+        if nxt and W.exp_like(nxt) and nxt[0] not in OPENERS_BR:       # '(x10^3)': the window names a bracketed scale
             last = self.absorb(a + 1)
             return self.expr(out, a, last, sc.toks[0].start, self.ends[last], "detached_exponent",
                              self.parts_of(a, a))
@@ -170,8 +162,7 @@ class Forms:
             last = j + 1
             tok = self.spaced_ratio(a, sc, last) if nxt == "/" else None
             if tok is not None:
-                self.put(out, a, last, self.flagged((tok,), a, last)[0])
-                return last
+                return self.put(out, a, last, self.flagged((tok,), a, last))
         elif len(nxt) > 1 and nxt[0] in W.RATIO_CHARS and nxt[1] in DIGITS:
             last = j
         else:
@@ -210,18 +201,4 @@ class Forms:
         t = sc.toks[-1]
         if len(nxt) > 1 and nxt[1] in DIGITS and t.shape == "int" and t.end == self.ends[a]:
             return self.expr(out, a, a + 1, sc.toks[0].start, self.ends[a + 1], "detached_decimal", self.parts_of(a, a))
-        return None
-
-    def form_bracket_mult(self, a: int, sc: Scan, out: list[Tok], nxt: str) -> int | None:
-        """``5.2 (x10^3 cells/mL)``, ``5.2 [× 10^3]``: a scale in a bracket after the number. The multiplier opens the
-        next word (glued to its ten, or alone with the ten one word further)."""
-        if len(nxt) < 2 or nxt[1] not in BRACKET_MULTIPLIERS:
-            return None
-        rest = nxt[2:]
-        if rest:
-            return self.expr(out, a, a + 1, sc.toks[0].start, self.ends[a + 1], "bracketed_multiplier",
-                             self.parts_of(a, a)) if W.ten_shape(rest) else None
-        if a + 2 < self.n and (W.ten_shape(self.text(a + 2)) or W.BARE_POWER_RE.match(self.text(a + 2))):
-            return self.expr(out, a, a + 2, sc.toks[0].start, self.ends[a + 2], "bracketed_multiplier",
-                             self.parts_of(a, a))
         return None

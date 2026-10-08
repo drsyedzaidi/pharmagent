@@ -120,7 +120,6 @@ UPPER_LETTERS = ASCII_UPPER | GREEK_UPPER | frozenset("\u00c1\u00c5\u00d6\u00d8\
 STARTERS = frozenset("([<>\u2264\u2265~\u2248=\u00b1")  # a token may start right after one of these in a word
 OPERATORS = QUALIFIERS | frozenset("=([:;*+-")           # a run of these before a token qualifies it when it holds one
 RANGE_WORDS = frozenset("-~")                            # a lone word of one of these between two numbers is a range
-BRACKET_MULTIPLIERS = frozenset("xX\u00d7")              # the multipliers that open a bracketed scale '(x10^3'
 NUMBER_CLOSERS = frozenset(")];:,.'%\u2030*")            # may follow the last digit of a number glued to its word
 JOINERS = frozenset("-\u00b1xX*\u00d7\u00b7")            # a token may start right after one that follows a token
 TRAILING = frozenset(")],;:.'")                          # may follow a token glued (not followed by a digit)

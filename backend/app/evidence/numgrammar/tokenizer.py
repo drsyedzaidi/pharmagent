@@ -8,16 +8,18 @@ ACCEPT   ``1.2 x 10^3``  ``1.2 ×10⁻³``  ``1.2× 10^3``  ``1.2 ×\\n10^3``  -
 REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
          ``2 × daily`` ``1.2 ×`` ``1.2 × l0³``            multiplier_operand
          ``10 ^ 3`` ``10 ³`` ``10^ 3``                    detached_exponent
-         ``3.4 E-03`` ``2012 e1553``                      spaced_exponent
          ``12 3/4``                                       mixed_number (a lone ``3/4`` is a ratio, r7)
-         ``12 /15`` ``12 .5`` ``5.2 (x10^3 cells)``       fraction, detached_decimal, bracketed_multiplier
+         ``12 /15`` ``12 .5``                             fraction, detached_decimal
 ACCEPT   ``12 / 15`` (and the glued ``12/15`` of scan.py)  -> one ``ratio`` token (r7, owner decision 6)
 REJECT   ``10m L`` ``81ng/m L,`` ``15m in``                 split_unit (r7, decision 2: the next word continues a glued
                                                             unit of units.py; a text layer broke the unit)
          (the rules live in forms.py)
 
 then the taint tiers (taint.py) turn an expression with an outside character in its word, its neighbouring words
-or its line into ``unresolved_context``. Decimal style decides only the ``A,BBB`` / ``A.BBB`` cases.
+or its line into ``unresolved_context``, and the neighbour-word allow-list (neighbours.py, r7 writer 3) turns a resolved
+number whose window holds a word that is no accepted production (``3.4 E-03``, ``1.2 e-3.``, ``5.2 ( x 10^3 )``,
+``- ( 12 )``) into one unresolved expression through that word. Decimal style decides only the ``A,BBB`` / ``A.BBB``
+cases.
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ from app.evidence.numgrammar.alphabet import (
 from app.evidence.numgrammar.body import MAX_DIGITS, to_float
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.forms import Forms
+from app.evidence.numgrammar.neighbours import LEFT, Window
 from app.evidence.numgrammar.productions import Cite, citations, mask_chi_square, mask_citations
 from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
@@ -66,17 +69,19 @@ def _demote(tok: Tok, detail: str) -> Tok:
     return Tok(tok.start, tok.end, None, REASON_CONTEXT, parts, tok.qualified, tok.ranged, "", "", detail)
 
 
-class Reader(Forms):
+class Reader(Forms, Window):
     """The words of one folded text and the forms that read them. One instance per ``tokens`` call."""
-    __slots__ = ("t", "style", "starts", "ends", "n", "marks", "cache", "anchors")
+    __slots__ = ("t", "style", "starts", "ends", "words", "n", "marks", "cache", "anchors")
 
     def __init__(self, folded: str, style: str, whole_line: bool, cid: dict[int, str]) -> None:
         self.t, self.style = folded, style
         self.starts: list[int] = []
         self.ends: list[int] = []
+        self.words: list[str] = []
         for m in WORD_RE.finditer(folded):
             self.starts.append(m.start())
             self.ends.append(m.end())
+            self.words.append(m.group())
         self.n = len(self.starts)
         self.marks = Marks(folded, self.starts, self.ends, whole_line, self.mult_word, cid)
         self.cache: dict[int, Scan] = {}
@@ -94,7 +99,7 @@ class Reader(Forms):
         return out
 
     def text(self, i: int) -> str:
-        return self.t[self.starts[i]:self.ends[i]]
+        return self.words[i]
 
     def mult_word(self, i: int) -> bool:
         return W.is_mult_word(self.text(i))
@@ -158,9 +163,28 @@ class Reader(Forms):
         return tuple(out[:MAX_PARTS])
 
     # --------------------------------------------------------------- emission ---
-    def put(self, out: list[Tok], fw: int, lw: int, tok: Tok) -> None:
-        d = self.marks.detail(fw, lw, tok.start, tok.end)
-        out.append(_demote(tok, d) if d else tok)
+    def put(self, out: list[Tok], fw: int, lw: int, toks: tuple[Tok, ...]) -> int:
+        """Emit the resolved (and flagged) tokens of words fw..lw; returns the last word consumed. A tainting character
+        in the words or their window demotes each token; a window word that is no accepted production (r7 writer 3,
+        neighbours.py) turns them into one unresolved expression through that word."""
+        d = self.marks.detail(fw, lw, toks[0].start, toks[-1].end) if self.marks.bad else ""
+        if d:
+            out.extend(_demote(x, d) for x in toks)
+            return lw
+        last = toks[-1]
+        fault = self.window_fault(fw, lw, self.t[self.ends[lw] - 1] == "-")    # a word that ends in a range dash
+        if fault is None:
+            out.extend(toks)
+            return lw
+        side, k, why = fault
+        start, end, first, final = toks[0].start, last.end, fw, lw
+        if k != lw and self.scan(k).kind != "numeric" and self.scan(k).kind != "rejected":   # no expression of its own
+            if side == LEFT and (not out or out[-1].end <= self.starts[k]):
+                start, first = self.starts[k], k
+            elif side != LEFT:
+                end, final = self.ends[k], k
+        parts = tuple(p for x in toks for p in (x.value, *x.parts))[:MAX_PARTS]
+        return self.expr(out, first, final, start, end, why, parts)
 
     def expr(self, out: list[Tok], fw: int, lw: int, start: int, end: int, why: str, parts: tuple[float, ...]) -> int:
         d = self.marks.detail(fw, lw, start, end)
@@ -229,13 +253,7 @@ class Reader(Forms):
             done = self.forms(a, sc, consumed, out, nxt, prev)
             if done is not None:
                 return done
-        if self.marks.bad:
-            d = self.marks.detail(a, a, toks[0].start, toks[-1].end)
-            if d:
-                out.extend(_demote(x, d) for x in toks)
-                return a
-        out.extend(self.flagged(toks, a))
-        return a
+        return self.put(out, a, a, self.flagged(toks, a))
 
 
     def with_citations(self, out: list[Tok], cites: list[Cite]) -> list[Tok]:

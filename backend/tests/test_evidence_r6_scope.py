@@ -7,8 +7,9 @@ its reason, and an entry that no longer matches any use fails the test, so the l
 
 Round 2 removed the entries of the snippet locator (``normalize.py``), the unit comparison (``unit_norm.py``), the header
 key (``extract_rules.norm_key``) and the ink pairing (``parse_ink_match.py``): they fold through ``fold()`` and the
-alphabet's explicit tables now. What remains are prose patterns, the group-label key (a duplicate detector that merges
-labels, never splits them), the message that names a code point for a human, and the unit WORDS of the dose rule.
+alphabet's explicit tables now. r7 writer 3 removed the group-label key's NFKC and Unicode-category exception: it folds
+through ``fold()``, ``CASE_PAIRS`` and the derived allow-list (``qc_flags.label_key`` / ``group_key``). What remains are
+prose patterns, the message that names a code point for a human, and the unit WORDS of the dose rule.
 """
 from __future__ import annotations
 
@@ -39,8 +40,7 @@ ALLOWED = {
     ("parse_tables.py", "regex-shorthand"): "the 'Table N' caption pattern",
     ("prompts.py", "regex-shorthand"): "parsing of model output",
     ("proposal_check.py", "regex-shorthand"): "the instruction-text detector (prompt injection), prose only",
-    ("qc_flags.py", "unicodedata"): "group_key: the comparison form of a group label (format characters dropped)",
-    ("qc_flags.py", "regex-shorthand"): "group_key whitespace collapse",
+    ("qc_flags.py", "regex-shorthand"): "the bound / interval field-name patterns (prose field names, never a number)",
     ("screen_rules.py", "regex-shorthand"): "keyword tokenisation of the screening criteria",
     ("verify_messages.py", "unicodedata"): "names a code point for a human; never classifies one",
 }
