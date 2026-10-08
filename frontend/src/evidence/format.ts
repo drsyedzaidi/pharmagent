@@ -2,7 +2,7 @@
 import type { AuditEntry, PharmState } from '../types';
 import type {
   Criterion, CriterionKind, DecimalSetting, EvidenceMarker, EvidenceSnapshot, FailReason, FieldType, Inclusion,
-  ParseStatus, ScreenRow, TemplateField, VerifyFields,
+  ParseStatus, QcFlag, ScreenRow, TemplateField, VerifyFields,
 } from './types';
 
 /** Client-side mirror of the backend upload cap (ingest.MAX_BYTES). */
@@ -222,7 +222,24 @@ export const REASON_WORDS: Record<FailReason, string> = {
   text_not_in_snippet: 'text not in snippet',
   partial_number: 'only part of a longer number on the page',
   crosses_columns: 'joins text from two page columns',
+  unresolved_context: 'unreadable character near the number, compare with the page image',
+  unresolved_shape: 'number written in a form the reader does not accept, compare with the page image',
 };
 
 export const failWords = (r: VerifyFields): string =>
   r.verify_status === 'pass' ? '' : (REASON_WORDS[r.verify_reason] ?? r.verify_reason);
+
+/** The server-written sentence behind a failed check (for the numeric-grammar codes it names the offending
+ *  character and its code point), or '' when there is none. The backend appends it to the record's verify_fail
+ *  flag as `<field>: verification failed (<reason>): <detail>` (qc_flags._record_flags); only that flag, for this
+ *  record's own reason, is read. */
+export function failDetail(r: VerifyFields & { flags: readonly QcFlag[] }): string {
+  if (r.verify_status === 'pass') return '';
+  const marker = `verification failed (${r.verify_reason}): `;
+  for (const f of r.flags) {
+    if (f.code !== 'verify_fail') continue;
+    const at = f.message.indexOf(marker);
+    if (at >= 0) return f.message.slice(at + marker.length).trim();
+  }
+  return '';
+}

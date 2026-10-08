@@ -24,10 +24,13 @@ export type DecimalStyle = '.' | ',';
 export type CriterionKind = 'inclusion' | 'exclusion';
 export type FieldType = 'number' | 'integer' | 'text';
 export type DecimalSetting = 'auto' | '.' | ',';
+/** Backend models.REASON_CODES (tests/reasonWords.test.ts reads that tuple), plus 'non_ascii_digits', which only a
+ *  row stored before r6 can still carry. */
 export type FailReason =
   | 'empty_snippet' | 'snippet_too_long' | 'page_out_of_range' | 'non_ascii_digits' | 'no_number'
   | 'number_mismatch' | 'integer_expected' | 'snippet_not_on_page' | 'table_cell_mismatch'
-  | 'source_changed' | 'text_not_in_snippet' | 'partial_number' | 'crosses_columns';
+  | 'source_changed' | 'text_not_in_snippet' | 'partial_number' | 'crosses_columns'
+  | 'unresolved_context' | 'unresolved_shape';
 export type FlagCode =
   | 'required_missing' | 'out_of_range' | 'non_integer_n' | 'duplicate' | 'unit_mismatch' | 'unit_missing'
   | 'se_nonpositive' | 'ci_inverted' | 'composite_cell' | 'table_low_confidence' | 'verify_fail'

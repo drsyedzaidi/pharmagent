@@ -100,6 +100,8 @@
 .ev-met.dim { color: var(--text-dim); }
 .ev-verify.bad { align-items: flex-start; max-width: 220px; }
 .ev-verify svg { flex-shrink: 0; margin-top: 2px; }
+/* the server's own sentence under the plain words: names the offending character and its code point */
+.ev-verify-detail { margin-top: 2px; max-width: 320px; font-size: 11px; color: var(--text); overflow-wrap: anywhere; }
 
 /* QC flag chips: icon + code, severity also in the icon shape and sr-only text */
 .ev-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }

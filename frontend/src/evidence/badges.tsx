@@ -1,7 +1,7 @@
 /** Small status vocabulary shared by the Screening and Records tabs and the chat cards.
  *  Colour is never the only signal: every badge pairs a lucide icon with a word. */
 import { AlertTriangle, CheckCircle, CircleQuestionMark, Clock, OctagonAlert, XCircle } from 'lucide-react';
-import { failWords } from './format';
+import { failDetail, failWords } from './format';
 import type { DecisionStatus, Inclusion, QcFlag, Verdict, VerifyFields } from './types';
 
 const VERDICT: Record<Verdict, { cls: string; Icon: typeof CheckCircle }> = {
@@ -36,14 +36,20 @@ export function StatusPill({ status }: { status: DecisionStatus }) {
   return <span className={`pill ${cls}`}><Icon size={12} aria-hidden="true" /> {status}</span>;
 }
 
-export function VerifyBadge({ rec }: { rec: VerifyFields }) {
+/** Verified / not found, in plain words; a failed check also shows the server's own sentence (which names the
+ *  offending character and its code point for the numeric-grammar codes) under the plain words. */
+export function VerifyBadge({ rec }: { rec: VerifyFields & { flags: readonly QcFlag[] } }) {
   if (rec.verify_status === 'pass') {
     return <span className="ev-verify ok"><CheckCircle size={13} aria-hidden="true" /> verified</span>;
   }
+  const detail = failDetail(rec);
   return (
-    <span className="ev-verify bad" title={rec.verify_reason}>
-      <XCircle size={13} aria-hidden="true" /> not found: {failWords(rec)}
-    </span>
+    <>
+      <span className="ev-verify bad" title={rec.verify_reason}>
+        <XCircle size={13} aria-hidden="true" /> not found: {failWords(rec)}
+      </span>
+      {detail && <div className="ev-verify-detail">{detail}</div>}
+    </>
   );
 }
 
