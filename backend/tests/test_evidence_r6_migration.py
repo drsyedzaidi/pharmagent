@@ -272,7 +272,7 @@ def test_keyless_text_rules_read_n_and_a_dose_through_the_grammar():
     assert out["dose"]["value"] == "150" and out["dose"]["unit"] == "mg" and out["dose"]["value_num"] == 150.0
     glued = {"decimal_style": ".", "pages": [{"n": 1, "text": "Others took 150mg dose once.", "columns": [],
                                               "tables": []}]}
-    assert text_extract(glued, template, "S1") == []                 # a glued unit is unresolved: no candidate
+    assert text_extract(glued, template, "S1") == []                 # r7: 150mg reads, but the dose rule needs a unit word
 
 
 def test_leading_number_proposes_what_verify_will_read_and_never_a_later_number():

@@ -91,7 +91,7 @@ def test_the_key_of_a_number_is_its_exact_decimal():
 
 
 @pytest.mark.parametrize("text, why", [
-    ("m12 3/4", "mixed_number"), ("Week 4 12/15 responders", "mixed_number"), ("4 12 / 15", "fraction"),
+    ("m 12 3/4", "mixed_number"), ("Week 4 12/15 responders", "mixed_number"), ("4 12 / 15", "fraction"),
     ("12 x3/4", "multiplier_operand"), ("12 *3/4", "multiplier_operand"), ("12 x 3/4", "multiplier_operand"),
     ("+3/4", "glued_symbol"), ("12 +3/4", "glued_symbol"),
 ])

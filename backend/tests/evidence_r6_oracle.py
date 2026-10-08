@@ -13,7 +13,9 @@ gap       identical to inserting U+0020.
 equiv     identical to inserting the equivalent's target.
 inside /  structurally identical (token spans, shapes, flags: not values) to the class representative of c
 context   (``rep_of``), pinned in the golden file; a letter, bracket or ``; : / = deg`` never makes a number the
-          clean text did not hold.
+          clean text did not hold. r7 (owner decision 2): a letter of a unit terminal or of the connector ``per`` is its
+          own class (it may complete a unit production), every other letter is ``q``; the plain exponents ``2 3`` are
+          the class ``2``, the other digits 1-9 ``5``.
 
 Page-mode text is batched: the variants of one pair are joined with ``SEP`` so each sits on its own line and the
 tokenizer scans ~40 000 of them in one call; the per-variant result is read back by offset.
@@ -66,6 +68,8 @@ _ACCENTED = frozenset(chr(c) for c in (0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3,
                                        0x10D, 0x11F, 0x142, 0x15B))
 _MARKS = frozenset(chr(c) for c in (0x26, 0x40, 0x201C, 0x201D, 0xA9, 0xAE, 0x2122, 0x221E, 0xA7, 0xB6, 0x2020,
                                     0x2021))
+# r7 (decision 2): the letters of the unit terminals and of the connector 'per' (e is INSIDE and keeps its class)
+UNIT_LETTERS = frozenset("".join(P.UNIT_PREFIX_PIN | P.UNIT_BASE_PIN | P.UNIT_PREFIXED_BASE_PIN) + "pr")
 
 
 def repo_state() -> dict:
@@ -90,18 +94,23 @@ def class_of(cp: int) -> str:
 
 
 def rep_of(ch: str) -> str:
-    """The class representative of an inside or context character (the 29 behaviours the grammar can tell apart; a
-    mark folded into CONTEXT by r7 has no role in the grammar: ``&`` stands for all twelve)."""
+    """The class representative of an inside or context character (the 49 behaviours the grammar can tell apart; a
+    mark folded into CONTEXT by r7 has no role in the grammar: ``&`` stands for all twelve; r7 decision 2: each letter
+    of a unit terminal is its own class, ``q`` stands for every other letter, ``2`` for the plain exponents 2 and 3)."""
     if ch == "0":
         return "0"
+    if ch in "23":
+        return "2"
     if ch in "123456789":
         return "5"
     if ch in "eE":
         return "e"
     if ch in "xX":
         return "x"
+    if ch in UNIT_LETTERS:
+        return ch
     if ch in _ASCII_LETTERS or ch in _GREEK or ch in _ACCENTED:
-        return "m"
+        return "q"
     if ch in _MARKS:
         return "&"
     if ch in "⁰¹²³⁴⁵⁶⁷⁸⁹":
@@ -305,7 +314,7 @@ def write_golden(flat: dict[str, str]) -> None:
 
 
 def build_golden() -> dict[str, str]:
-    """The pin of the 29 class representatives at every boundary (regenerate with R6_REGEN_GOLDEN=1)."""
+    """The pin of the 49 class representatives at every boundary (regenerate with R6_REGEN_GOLDEN=1)."""
     reps = sorted({rep_of(chr(cp)) for cp in P.INSIDE_SET | P.CONTEXT_SET})
     out: dict[str, str] = {}
     for e in EXPRESSIONS:

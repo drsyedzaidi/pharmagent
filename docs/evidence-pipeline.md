@@ -547,6 +547,29 @@ stays as it is.
 `‰` and star runs (`-14.2***`) stay outside the literal. A digit run is a token only at the start of a word, after
 `( [ = < > ≤ ≥ ~ ≈ ±`, or after a joiner (`- ± x X * × ·`) that directly follows another token (`12-15`, `36.6±4.3`,
 `45%–55%`). A word led by a letter is a label (`AUC0-24`, `t1/2`, `CYP2B6`, `mL/min/1.73m2`): its digits never form tokens.
+**Labels (r7 writer 2, owner decision 3).** The digits of a label are a name, never a value, and they never act on a
+neighbour by themselves: a word ends in a NUMBER (`Reader.number_end`) only when its last digit, closers aside, belongs to a
+token or the word is numeric-led (a rejected one too: `1O5 3/4` stays a mixed number), so `m12 3/4` and `AUC0-24 3/4` read
+the ratio, `CYP2D6 12 / 15` the spaced ratio, `AUC0-24 -0.5` is no range end, and a bracket after a label whose last
+digits are no token is a citation (`CYP2D6 [38]`, `AUC0-24[3]`; `data(n=7)[48]` still ends in the number 7 and keeps its
+reading). The verifier reads `tokens(..., labels=True)`: every stretch of a label word outside the expressions already read
+that holds a digit is one `unresolved_shape:label` expression (parts = its digit runs), added after the reading so it
+changes nothing else; every other caller reads exactly what it read before. A record that cites a digit inside a label fails
+`unresolved_shape` with "the cited number '24' is part of the label 'AUC0-24': digits inside a word led by a letter
+(AUC0-24, CYP2D6, t1/2) are a name, never a value; cite a number printed on its own."
+**Units (r7 writer 2, owner decision 2; `numgrammar/units.py`).** A unit glued to a number is read by a production, never
+by a letter list: `unit = atom {("/" | "per") atom}`, `atom = ([prefix] base | prefix prefixed_base) [exponent]`,
+`exponent = "2" | "3" | "^" [sign] digit{1,2} | [superscript sign] superscript digit{1,2}`, parsed directly after the number
+and accepted only when it ends at a boundary (word end, a trailing closer not before a digit, an opener): `150mg`, `24h`,
+`10mL`, `1.73m2`, `(20mg)`, `2.5mg/kg/h`, `0.6ng/ml,`, `5h^-1`, `12(5M)`. The terminals are grammar data of the CONTEXT
+allow-list (`alphabet.UNIT_PREFIXES` m μ n k c, `UNIT_BASES` g h L y M min m w mmHg Hz IU, `UNIT_PREFIXED_BASES` l), each
+admitted by its count in a complete production at a former glued-letters rejection of the corpus (counts in the comment
+of `alphabet.py`; `d` is refused because 17 of its 21 bare uses are figure panels and `2nd` would parse as n + d, `s`
+because every bare use is a decade, `1970s`, the lower-case `l` stands only after a prefix because no bare `l` is glued to
+a number in the corpus and `23l` may be `231`, words such as `days` are not unit symbols). The unit is context: the
+token's literal is the number alone and its value never changes. A glued word that is not a full production stays
+`glued_letters` (`1OmL`, `3MIU`, `150mgtid`, `5th`, `1970s`, `23l`, `5h-1`, `9.9mg*`, `75–150mg/day`, `12/15mg`), and a
+glued unit that the next word continues is `split_unit` (`10m L`, `81ng/m L,`, `15m in`, `10mg /kg`).
 A number-led word whose digit run cannot start a token, or whose token fails its post-boundary, is rejected as a whole.
 Separators follow the page's decimal style only where the text cannot decide (`3,412`, `1.250`): one separator once with
 a group other than three digits is a decimal (`18,2`, `0,412`), a repeated or apostrophe / thin-space separator groups
@@ -581,6 +604,12 @@ sentence "a bracketed reference citation, which is not a value". After a number 
 `9[4–9]`), after a lone multiplier or exponent letter, or with no word before it (a cell `[62]`) a bracket keeps its old
 reading; letters are not told apart by case, so a label glued to a bracket group (`AUC[12–24]`) reads as a citation and
 fails closed.
+**Decision 4 re-examined (r7 writer 2): kept fail-closed.** A `(cid:N)` marker and `_ | ? #` still taint their line. The
+corpus establishes no unambiguous rule (`pharmagent-evidence-work/r7/w2_d4_census.txt`): one marker means different glyphs
+across and within documents (`(cid:1)` is `±` in `30.6(cid:1)5.8` of one paper and a separator in `Pharmacol(cid:1)(cid:127)`
+of another, `(cid:3)` is `≥` in `or(cid:3)85%` and `×` in `2.0 (cid:3) 50 mm`, `(cid:2)` a degree sign in `37(cid:2)C`);
+`#` is an R comment, a number sign and a mis-mapped comparison (`verified (#15 ng/ml)`); `|` a table rule, an R formula
+`(1|Subject)` and a running-header separator; `_` code and LaTeX subscripts; `?` a question mark and a lost glyph (`?3231`).
 **Chi-square (r7, owner decision 8).** Greek chi is outside except in
 `chi ("²" | "2") ["(" ["df" [gap] "=" [gap]] digit{1,3} ")"] [gap] "=" [gap]` followed by a digit (`χ² = 3.84`,
 `χ²(1) = 6.63`, `χ2(df=2) = 7.1`): that chi is masked 1:1 as a label letter and the degrees of freedom and the number read as
@@ -619,9 +648,10 @@ r7); `(4,6)` stays a decimal (in decimal-comma papers a parenthesised decimal is
 a page that does not use it), `groups` (`1,23,456`, `0.123 4`), `ambiguous_tail`, `separators`, `exponent_range`,
 `ten_after_multiplier`, `multiplier_operand`, `detached_exponent`, `spaced_exponent`, `mixed_number`, `fraction`,
 `detached_decimal`, `bracketed_multiplier`, `citation_list`, `citation` (r7),
-`glued_letters` (`150mg`, `24h`, `1.73m2`, `1O5`, `12З`), `glued_symbol` (`8:00`, `12/24/36`, `65+`, `12=`), `bad_start`
-(`.05`), `bare_superscript_power`. A unit glued to the digits is rejected whatever the letters: a list of allowed unit
-letters would be a fourth list, and it would re-admit `10mL` read as `1OmL`.
+`glued_letters` (`1OmL`, `150mgtid`, `5th`, `1O5`, `12З`: letters that are no full unit production), `glued_symbol`
+(`8:00`, `12/24/36`, `65+`, `12=`), `bad_start` (`.05`), `bare_superscript_power`, `split_unit` (`10m L`, r7 writer 2) and
+`label` (only in the verifier's `labels=True` reading, r7 writer 2). Since r7 writer 2 a unit glued to the digits is read
+by the unit production (see "Units" above); r6 rejected it whatever the letters.
 
 **Reviewer sentences** (`verify_messages.py`, fixed templates; the code point is named with `unicodedata.name`, a display-only
 use to label a character for a human, never to classify one). Context: "the cited
@@ -678,18 +708,24 @@ the pinned counts in `tests/test_evidence_r6_sets.py`, regenerate
 `tests/evidence_r6_golden.json` (the class-representative behaviours) and write the code point and its corpus evidence in
 the docstring. (b) A look-alike that is really one of the approved characters: one entry in `EQUIV` (target a character
 already in the alphabet), the same two test copies, and corpus evidence. (c) A new multi-word form: a rule in
-`numgrammar/tokenizer.py` (a whole-text production such as the citation or the chi-square form: `numgrammar/productions.py`)
+`numgrammar/tokenizer.py` (a whole-text production such as the citation or the chi-square form: `numgrammar/productions.py`;
+a unit terminal: one entry in `UNIT_PREFIXES`, `UNIT_BASES` or `UNIT_PREFIXED_BASES` with its corpus count, the second copy
+in `tests/evidence_r6_pins.py`, and the representative classes of `tests/evidence_r6_oracle.py`, where every letter of a
+unit terminal is its own class)
 with a test in `tests/test_evidence_r6_grammar.py` or a `tests/test_evidence_r7_*.py` file, and an expression in
 `tests/evidence_r6_expressions.py` so the exhaustive tier sweeps it. (d) A spelling around the reader (a ligature
 of the locator, the infinity sign of a header key, a case pair): one entry in `LIGATURES`, `HEADER_SPELLINGS` or `CASE_PAIRS`
 (`numgrammar/equivalents.py`), the second copy in `tests/evidence_r6_round2_spec.py`, and corpus evidence; a unit or a header
 with any other character stays unresolved or unmatched. Then run the exhaustive tier
-(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 16
-minutes on 12 workers: every code point at every boundary of 316 (expression, boundary) pairs through `tokens()`, and
+(`R6_EXHAUSTIVE=1 pytest -m exhaustive tests/test_evidence_r6_exhaustive.py tests/test_evidence_r6_scope.py`, about 20
+minutes on 12 workers: every code point at every boundary of 397 (expression, boundary) pairs through `tokens()` (r7 writer
+2 added the glued-unit and label expressions; 49 class representatives), and
 through the paths around it, `tests/evidence_r6_layer_b.py`: the label reader `scale_shapes`, the style evidence, the parse
 placeholder `protect_thin_spaces` / `restore`, the text-field locator, and, since round 2, `normalise` against its
 specification, the unit comparison with the printed-unit reader, and the header key, and since r7 the verifier's
-pre-check `unreadable` against the derived line rule), the verify oracle
+pre-check `unreadable` against the derived line rule, and since r7 writer 2 the unit production against an independent
+specification, `unitprod`, and label digits that must change no token outside their word, `label`;
+`tests/evidence_r6_unit_spec.py`), the verify oracle
 (`tests/test_evidence_r6_verify_oracle.py`) and the corpus comparison. The run records `git rev-parse HEAD` and the dirty
 files in its log and refuses a dirty tree unless `R6_ALLOW_DIRTY=1`: commit first, then run.
 

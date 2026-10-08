@@ -82,6 +82,17 @@ _TEMPLATES = [
     ("ratio_glued", "page", ".", "|n |12|/|15|"),
     ("citation", "page", ".", "|efflux |[46]| |12 mg|"),
     ("chi_square", "page", ".", "|LRT |\u03c7\u00b2| = |3.84|"),
+    # r7 writer 2 (decision 2): the unit production, every code point at every boundary of a glued unit (a chain with
+    # denominators, a plain exponent, the 'per' connector, a unit the next word continues, a unit closed by a bracket)
+    ("unit_chain", "page", ".", "|dose |2|.|5|m|g|/|k|g|/|h| |iv|"),
+    ("unit_exponent", "page", ".", "|BSA |1|.|73|m|2| |ok|"),
+    ("unit_per", "page", ".", "|took |5|m|g|p|e|r|k|g| |ok|"),
+    ("unit_split", "page", ".", "|took |10|m| |L| |daily|"),
+    ("unit_cell", "cell", ".", "|(|20|m|g|)|"),
+    # (decision 3): label words whose digits must never act on a neighbour (a range end, a mixed number, a citation)
+    ("label_range", "page", ".", "|AUC|0|-|24| |-|0.5| |h|"),
+    ("label_ratio", "page", ".", "|by |CYP|2|D|6| |3|/|4| |of|"),
+    ("label_cite", "page", ".", "|CYP|2|D|6| |[38]| |20 |trials|"),
 ]
 
 

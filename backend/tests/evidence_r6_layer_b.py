@@ -22,6 +22,8 @@ parse placeholder, the label reader, the style evidence and the text-field locat
   readable  (r7, the derived line rule) the verifier's pre-check of a snippet, a value and a neighbouring cell
             (``unreadable``) refuses a text exactly when it holds a character of no list: INSIDE, CONTEXT, GAP and the
             equivalents' sources are readable, every other code point is named at its offset (the LINE list is gone)
+  unitprod  (r7 writer 2, decision 2) the unit production against its independent specification (evidence_r6_unit_spec)
+  label     (r7 writer 2, decision 3) label digits never change a token outside their label word
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from app.evidence.unit_norm import canonical_unit, same_unit, unit_resolved
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P
 from tests import evidence_r6_round2_spec as S
+from tests import evidence_r6_unit_spec as U
 from tests.evidence_r6_round1_support import run
 
 SCALE_LABELS = ("AUC (x1000)", "AUC (×10^3)", "AUC × 10³", "Cmax (thousands)", "AUC x 1000", "Dose (millions)",
@@ -219,7 +222,8 @@ def sweep_readable(cps: list[int]) -> list[str]:
 
 
 SWEEPS = {"scale": sweep_scale, "style": sweep_style, "thin": sweep_thin, "text": sweep_text,
-          "locator": sweep_locator, "unit": sweep_unit, "key": sweep_key, "readable": sweep_readable}
+          "locator": sweep_locator, "unit": sweep_unit, "key": sweep_key, "readable": sweep_readable,
+          "unitprod": U.sweep_unitprod, "label": U.sweep_label}          # r7 writer 2: decisions 2 and 3
 
 
 # ------------------------------------------------------------------------ the process pool ---

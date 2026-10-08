@@ -28,7 +28,7 @@ from app.evidence.normalize import IdxMap, normalise
 from app.evidence.numgrammar import Tok, claim_decimal, digits_of, tokens, unreadable
 from app.evidence.read_cache import read
 from app.evidence.verify_columns import ColumnLines
-from app.evidence.verify_messages import context_sentence, tok_sentence, unreadable_sentence
+from app.evidence.verify_messages import context_sentence, label_sentence, tok_sentence, unreadable_sentence
 
 MAX_SNIPPET_CHARS = 300
 
@@ -87,7 +87,7 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
     first = targets[0]
     if integer and not (isinstance(first, Decimal) and first == first.to_integral_value()):
         return None, M.REASON_INTEGER_EXPECTED, ""
-    toks = tokens(snippet, decimal_style, mode="claim")
+    toks = tokens(snippet, decimal_style, mode="claim", labels=True)
     for t in toks:
         if t.value is not None and t.key in targets:
             return (t.start, t.end), M.REASON_OK, ""
@@ -101,8 +101,12 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
     cite = next((t for t in holding if t.why == "citation"), None)
     if cite is not None:                          # r7: a number inside a bracketed citation is a reference, not a value
         return None, M.REASON_UNRESOLVED_SHAPE, tok_sentence(cite, snippet)
-    if holding:                                   # ... or is only a part of an expression the grammar rejects
+    if any(t.why != "label" for t in holding):    # ... or is only a part of an expression the grammar rejects
         return None, M.REASON_PARTIAL_NUMBER, ""
+    label = next((t for t in toks if t.why == "label"
+                  and (t in holding or (vdig and vdig in digits_of(snippet[t.start:t.end])))), None)
+    if label is not None:                         # r7, decision 3: a digit of a label word ('24' of 'AUC0-24')
+        return None, M.REASON_UNRESOLVED_SHAPE, label_sentence(value, snippet[label.start:label.end])
     # A fragment is a STRICT sub-run of a token's digits ('24' in '245.6'); equal digits with a
     # different reading ('3.412' vs '3,412') are a separator mismatch, i.e. number_mismatch.
     fragment = any(vdig and vdig != digits_of(snippet[t.start:t.end]) and vdig in digits_of(snippet[t.start:t.end])
@@ -151,7 +155,7 @@ def _hits(snippet: str, lit: tuple[int, int] | None, text: str, style: str,
             if (tok.start, tok.end) == (a, b):
                 hits.append((span, text[a:b], tok.value, [a, b]))
         elif blocked is None and ((tok.start, tok.end) == (a, b) or tok.reason == M.REASON_UNRESOLVED_CONTEXT
-                                  or tok.why == "citation"):
+                                  or tok.why in ("citation", "label")):
             blocked = (tok, text, (a, b))
     return hits, seen, blocked
 
@@ -164,6 +168,8 @@ def _blocked(loc: dict[str, Any], blocked: tuple[Tok, str, tuple[int, int]]) -> 
     """The page prints the cited number as an expression the grammar cannot read: its code and reviewer sentence
     (naming the cited number, which may be only a part of the word that holds the offending character)."""
     tok, text, (a, b) = blocked
+    if tok.why == "label":                        # r7, decision 3: the page prints the cited digits inside a label word
+        return _fail(loc, tok.reason, label_sentence(text[a:b], text[tok.start:tok.end]))
     return _fail(loc, tok.reason, tok_sentence(tok._replace(start=a, end=b) if tok.reason == M.REASON_UNRESOLVED_CONTEXT
                                                 else tok, text))
 

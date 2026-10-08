@@ -50,6 +50,17 @@ EQUIV_PIN = {
     0x25E6: 0xB0,                                               # white bullet -> degree sign
 }
 COUNTS = {"inside": 45, "gap": 4, "context": 115, "equiv": 10}
+
+
+# ------------------------------------------- the unit production's terminals (r7, owner decision 2) ---
+def _terms(*cps: tuple[int, ...]) -> frozenset[str]:
+    return frozenset("".join(map(chr, t)) for t in cps)
+
+
+UNIT_PREFIX_PIN = _terms((0x6D,), (0x3BC,), (0x6E,), (0x6B,), (0x63,))                  # m mu n k c
+UNIT_BASE_PIN = _terms((0x67,), (0x68,), (0x4C,), (0x79,), (0x4D,), (0x6D, 0x69, 0x6E), (0x6D,), (0x77,),
+                       (0x6D, 0x6D, 0x48, 0x67), (0x48, 0x7A), (0x49, 0x55))        # g h L y M min m w mmHg Hz IU
+UNIT_PREFIXED_BASE_PIN = _terms((0x6C,))                                              # l (only after a prefix: ml)
 # the 42 characters of the deleted LINE list that are CONTEXT since r7 (the layer-B sweeps keep checking them as they did)
 FOLDED_FROM_LINE = frozenset((0x3BA, 0xE9, 0xE8, 0xEB, 0xE2, 0xE1, 0xC1, 0xE3, 0xE6, 0xC5, 0xE4, 0xF6, 0xD6, 0xFC, 0xED,
                               0xEF, 0xF3, 0xF8, 0xD8, 0xFA, 0x171, 0xF1, 0x144, 0xE7, 0xC7, 0x107, 0x10D, 0x11F, 0x142,

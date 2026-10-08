@@ -23,7 +23,9 @@ SHAPE_WHY = {
     "glued_symbol": "a symbol glued to the digits", "bad_start": "a number that starts in an unreadable way",
     "bare_superscript_power": "a raised power of ten without a multiplier",
     "citation": "a bracketed reference citation, which is not a value",
-    "citation_list": "a pair of reference numbers in square brackets, never a decimal"}
+    "citation_list": "a pair of reference numbers in square brackets, never a decimal",
+    "split_unit": "a unit broken by a space inside it, as in '10m L': the text layer split the unit",
+    "label": "digits inside a label word, which are part of a name, never a value"}
 
 
 def named(label: str) -> str:
@@ -44,6 +46,12 @@ def shape_sentence(expr: str, why: str) -> str:
     """The cited expression *expr* is written in an order of allowed characters the grammar rejects."""
     return (f"the cited number {expr!r} is written in a form the reader does not accept "
             f"({SHAPE_WHY.get(why, why.replace('_', ' '))}); read it on the page image.")
+
+
+def label_sentence(literal: str, label: str) -> str:
+    """The cited number *literal* is a digit run of the label word *label* (r7, owner decision 3)."""
+    return (f"the cited number {literal!r} is part of the label {label!r}: digits inside a word led by a letter "
+            f"(AUC0-24, CYP2D6, t1/2) are a name, never a value; cite a number printed on its own.")
 
 
 def unreadable_sentence(what: str, offender: str) -> str:

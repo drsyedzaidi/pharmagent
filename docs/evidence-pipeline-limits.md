@@ -135,12 +135,22 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   in the chi-square form `χ²(df) = n` (r7, decision 8); the corpus lines `ΔOFV > 6.63 (χ² df=1` are not in the form and lose
   every number of the line. Rotated tables read backwards (`]18[muneuQ&evreH`, digits reversed) are a parse defect the
   reader cannot see: lines that only held a folded mark now read (14 non-value-like records in the 60 papers).
-- **Units glued to digits.** `150mg`, `24h`, `1.73m2`, `3MIU`, `10mL`, `100µg`: a letter glued to the digits is rejected
-  whatever the letter (a list of allowed unit letters would be a fourth list and would re-admit `10mL` read as `1OmL`). The
-  honest cost is mostly text layers that lost every space; per-document counts are in `corpus_after.tsv`.
+- **Units glued to digits (r7 writer 2, owner decision 2).** `150mg`, `24h`, `10mL`, `1.73m2`, `100µg` are read through the
+  unit production (see "Units" in evidence-pipeline.md): the number alone is the literal. Still unresolved: a glued word
+  that is not a full production (`1OmL`, `3MIU`, `150mgtid`, `5th`, `1970s`, `23l`, `mg/day`, `5h-1`, `9.9mg*`), a ratio
+  with a unit (`140/90mmHg`) and a unit the next word continues (`10m L`, `15m in`: `split_unit`). What the production cannot
+  see: a unit letter that is really something else is read as a unit and the number stays right (`Figure 2g`, `Fig. 5h`
+  are figure panels, `EVID = 1L` an R integer, `12(5M)` five males); a text layer that moved a space INTO a number reads the
+  part after it (`2 0m go f` reads 0 for 20 mg, `=4. 6h` 6 for 4.6 h, `e35 0µg/kg` 0 for 350): 7 of the 302 corpus records
+  that newly pass, all on broken text layers, plus `AUC(0,12h)` read as 0.12 (an interval 0-12 h). A prefix is allowed
+  before every base, so a nonsense unit (`24mh`, `5ky`) reads its number; the unit itself is never interpreted.
 - **Digits inside label words and lost-space text layers.** `CYP3A4*20`, `AUC0-24`, `t1/2`, `mL/min/1.73m2`, DOIs and
-  reference shapes (`2019;13(2):93–103`, `10.1080/14622416`), and any number glued to a word by a text layer without spaces
-  (`window(25–100ng/mL)isindicated`) form no token. Leading zeros (`007`, `05`), digit groups that are not groups of three
+  reference shapes (`2019;13(2):93–103`, `10.1080/14622416`), and any number glued after letters by a text layer without
+  spaces (`afterwhichitgraduallydecreasedto14`) form no token; a value after a starter inside such a word does
+  (`window(25–100ng/mL)isindicated` reads 25 and 100 since the unit production). Since r7 writer 2 (owner decision 3) a
+  record that cites a label digit fails `unresolved_shape` with the label sentence, and label digits never make a neighbour
+  a range end, a mixed-number fraction or a bracket after a number (`m12 3/4` reads the ratio 3/4, `CYP2D6 [38]` is a
+  citation; 24 non-value reference numbers of the corpus newly fail as citations). Leading zeros (`007`, `05`), digit groups that are not groups of three
   (`1,23,456`, `0.123 4`), `A.BBB` with the wrong decimal style (`21741,229`) and more than 40 digits are unresolved.
 - **Lines with a character outside the alphabet.** A pdfminer `(cid:N)` marker (a glyph the text layer lost: a lost `≥ ± × ° µ −`),
   a soft hyphen, a Symbol-font glyph read as another character (`¥` for `×`, `£` for `≤`, `Þ ð þ ¼ ª`) or any OUTSIDE character
@@ -233,6 +243,18 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   step. These structure rules do not reach the 1.5 % target; the residual causes are glued units (361), label digits and
   lost spaces (330), the em dash (167), `(cid:N)` markers (160), parts of ratios and other resolved neighbours (138), `_`
   (102), glued symbols (98) and `→` (53), the first two being the other writers' decisions 2 and 3.
+
+- **r7 writer 2: glued units and label digits (2026-10-07; `pharmagent-evidence-work/r7/corpus_progress.tsv`).** U after
+  decision 2 (the unit production) 4.40 % -> 3.81 % (1,941 -> 1,678; 302 records newly pass, 263 value-like, 0 value
+  disagreements, 7 read differently by a human, see "Units glued to digits"); decision 3 (labels) 3.81 % (no record newly
+  passes; 24 reference numbers after a label newly fail as citations, none value-like); decision 4 re-examined and kept
+  fail-closed, 3.81 % (no rule: see "Decision 4 re-examined" in evidence-pipeline.md); the prefix-only `l` 3.81 %. The
+  1.5 % target is not met. The residual value-like failures (1,678 of 44,072): digits in lost-space or label words
+  (`no_expression`) 274, the em dash on the line 167, `(cid:N)` markers 161, resolved tokens whose record still fails 138
+  (mostly a ratio part cited alone and table rows split differently), letters glued that are no unit 132 (ordinals `5th`,
+  decades `1970s`, `mg/day`, lost-space prose `150mgtid`), `_` 102, glued symbols 98 (`2019;13(2):93`, `10.1007/`), bad starts
+  86 (lost-space references `(3):597`), `→` 54, `#` 48, the mis-mapped `‘` 35, `"` 33, `$` 33, citations 30 and the arrows
+  and bars of rotated tables. None of these is addressed by decisions 2-4.
 
 ## Later phases
 

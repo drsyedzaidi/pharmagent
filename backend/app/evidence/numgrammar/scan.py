@@ -10,6 +10,7 @@ EBNF (explicit classes only; ``digit`` is ``0-9`` and nothing else)::
     bare_power   = "10" "^" ["-"|"+"] digit{1,4}       (caret only: "10^6" = 1e6)
     power        = "^" ["-"|"+"] digit{1,4} | ["⁺"|"⁻"] supdigit{1,4}
     suffix       = "%" | "‰" | star_run                (zero gap, not part of the literal)
+    unit         = see units.py                        (r7, decision 2: '150mg', '24h', '1.73m2'; context, not literal)
     ratio        = int "/" int                         (r7: '12/15', value n/d, parts (n, d); int = 0 | [1-9]
                                                         digit{0,5}; then the word ends, a trailing closer or an
                                                         opener follows: every other slash shape is refused)
@@ -52,6 +53,7 @@ from app.evidence.numgrammar.alphabet import (
 from app.evidence.numgrammar.body import MAX_DIGITS, MIDDOT, exp_int, read_body, to_float
 from app.evidence.numgrammar.body import mantissa as read_mantissa
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_SHAPE, Tok
+from app.evidence.numgrammar.units import unit_end
 
 _DIG = re.compile("[0-9]+")
 _PLAIN_INT = re.compile("0|[1-9][0-9]{0,39}")
@@ -59,7 +61,7 @@ _PLAIN_DEC = re.compile("(0|[1-9][0-9]{0,38})([.,])([0-9]{1,39})")
 _SUPDIG = re.compile(char_class(SUP_DIGITS, negate=False) + "+")
 _CITATION = re.compile("\\[[1-9][0-9]?,[0-9]{1,2}\\]")      # '[1,2]': a pair of reference numbers, never a decimal
 RATIO_INT = re.compile("0|[1-9][0-9]{0,5}")                 # one side of a ratio (r7, owner decision 6)
-OK, PCT, STAR, TAIL, BAD = 0, 1, 2, 3, -1
+OK, PCT, STAR, TAIL, UNIT, BAD = 0, 1, 2, 3, 4, -1
 TAIL_NONE, TAIL_MULT, TAIL_STAR = 0, 1, 2
 _SUP_MINUS = "\u207b"
 _DEGREE = "\u00b0"
@@ -73,6 +75,7 @@ class Scan(NamedTuple):
     tail: int = TAIL_NONE          # a glued multiplier (x X × ·) or a trailing star run ends the word
     why: str = ""
     parts: tuple[float, ...] = ()
+    unit: str = ""                 # a glued unit that ends the word ('mg' of '150mg'): the next word may split it
 
 
 LABEL = Scan("label")
@@ -204,9 +207,9 @@ def _after_mult(w: str, e: int, n: int, p: str, x: str) -> tuple[int, int, str]:
 
 
 def post(w: str, e: int, n: int) -> tuple[int, int, str]:
-    """The post-boundary of a token ending at *e*: ``(OK|PCT|STAR|TAIL, index after the suffix, "")`` or
-    ``(BAD, e, reason)``. A letter, ``=``, ``^``, ``+``, ``:`` + digit, ``/`` + digit, a second sign... glued to the
-    digits reject the word."""
+    """The post-boundary of a token ending at *e*: ``(OK|PCT|STAR|TAIL|UNIT, index after the suffix or unit, "")`` or
+    ``(BAD, e, reason)``. A letter that starts no complete unit production (units.py), ``=``, ``^``, ``+``, ``:`` +
+    digit, ``/`` + digit, a second sign... glued to the digits reject the word."""
     if e >= n:
         return OK, e, ""
     p = w[e]
@@ -235,7 +238,10 @@ def post(w: str, e: int, n: int) -> tuple[int, int, str]:
         return (OK, e, "") if x in DIGITS or x in SIGNS else (BAD, e, "glued_symbol")
     if p in MULTIPLIERS:
         return _after_mult(w, e, n, p, x)
-    return BAD, e, "glued_letters" if p in LETTERS else "glued_symbol"
+    if p in LETTERS:
+        u = unit_end(w, e)
+        return (UNIT, u, "") if u > e else (BAD, e, "glued_letters")
+    return BAD, e, "glued_symbol"
 
 
 def ratio_parts(num: str, den: str) -> tuple[float, str, tuple[float, float]] | None:
@@ -287,7 +293,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     numeric_led = lead != "" and lead in INSIDE and lead not in ASCII_LETTERS
     toks: list[Tok] = []
     parts: list[float] = []
-    i, prev_end, tail = 0, -1, TAIL_NONE
+    i, prev_end, tail, unit = 0, -1, TAIL_NONE, ""
     while i < n:
         c = w[i]
         if prev_end == i and c in JOINERS and i + 1 < n and w[i + 1] in DIGITS:
@@ -336,15 +342,16 @@ def scan_word(w: str, off: int, style: str) -> Scan:
         toks.append(Tok(off + i, off + end, value, shape, part, qualified, ranged, canon, mark))
         parts.append(value)
         i = prev_end = end
-        tail = TAIL_NONE
+        tail, unit = TAIL_NONE, ""
         if act == TAIL:
             tail = TAIL_MULT
-        elif act in (PCT, STAR):
+        elif act in (PCT, STAR, UNIT):
             i = prev_end = after
             tail = TAIL_STAR if act == STAR and i == n else TAIL_NONE
+            unit = w[end:after] if act == UNIT and after == n else ""
     if not toks:
         return LABEL
-    return Scan("numeric", tuple(toks), tail)
+    return Scan("numeric", tuple(toks), tail, unit=unit)
 
 
 __all__ = ["LABEL", "RATIO_INT", "Scan", "post", "ratio_parts", "read_power", "read_token", "scan_word", "REASON_SHAPE"]

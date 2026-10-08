@@ -189,7 +189,7 @@ class Forms:
             return None
         if last + 2 < self.n and self.text(last + 1) in W.RATIO_CHARS and W.digit_led(self.text(last + 2)):
             return None                                              # '5 / 12 / 2020': a date or a list
-        if a and W.ends_with_number(self.text(a - 1)):
+        if a and self.number_end(a - 1):
             return None                                              # '4 12 / 15': a whole part may stand before
         rp = ratio_parts(t.canonical, den)
         if rp is None:

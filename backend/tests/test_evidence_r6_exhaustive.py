@@ -39,17 +39,18 @@ def sample():
 
 
 # ------------------------------------------------------------------ the expression set ---
-def test_the_expression_set_covers_the_specified_forms_and_about_260_pairs():
+def test_the_expression_set_covers_the_specified_forms_and_397_pairs():
     names = {e.name for e in O.EXPRESSIONS}
-    for needed in ("line_far", "ratio_glued", "citation", "chi_square", "n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
+    for needed in ("unit_chain", "unit_exponent", "unit_per", "unit_split", "unit_cell", "label_range", "label_ratio",
+                   "label_cite", "line_far", "ratio_glued", "citation", "chi_square", "n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
                    "neg_endash", "percent", "e_notation", "sci_x_caret", "sci_times_caret_neg", "sci_times_sup",
                    "bare_power", "range", "pm", "qual_glued", "qual_spaced", "tilde_operator", "dose_mg", "lancet",
                    "degree", "sbp_table", "mixed_number", "pua_inside", "braille_qualifier", "ten_dose", "mult_daily",
                    "detached", "lookalike_ten", "cid_inside", "cid_lead", "glued_unit", "plus_glued",
                    "cell_thousands", "cell_12_145", "cell_bad_groups", "cell_pm_groups", "cell_lancet", "cell_stars"):
         assert needed in names, needed
-    assert 250 <= len(O.PAIRS) <= 320
-    assert sum(1 for e in O.EXPRESSIONS if e.mode == "cell") == 6
+    assert len(O.PAIRS) == 397                                     # r7 writer 2: 316 + 81 unit and label pairs
+    assert sum(1 for e in O.EXPRESSIONS if e.mode == "cell") == 7
     for e in O.EXPRESSIONS:
         assert all(0 <= b <= len(e.text) for b in e.cuts) and e.cuts == tuple(sorted(set(e.cuts))), e.name
 
@@ -62,11 +63,13 @@ def test_the_clean_expressions_read_as_documented():
             "qual_glued": [0.5], "qual_spaced": [0.5], "tilde_operator": [45.0], "dose_mg": [150.0],
             "lancet": [12.4], "degree": [37.0], "sbp_table": [-11.8, -14.2], "mixed_number": [None],
             "ten_dose": [None], "mult_daily": [None], "detached": [None], "lookalike_ten": [None],
-            "glued_unit": [None], "plus_glued": [None], "pua_inside": [None], "braille_qualifier": [None],
+            "glued_unit": [150.0], "plus_glued": [None], "pua_inside": [None], "braille_qualifier": [None],
             "cid_inside": [None], "cid_lead": [None], "cell_thousands": [3412.0, 812.0], "cell_12_145": [12.0, 145.0],
             "cell_bad_groups": [None], "cell_pm_groups": [18900.0, 4100.0], "cell_lancet": [12.4],
             "cell_stars": [-14.2], "line_n_eq_12": [12.0], "line_cmax": [12.5], "line_sci": [1200.0],
-            "line_far": [12.5], "ratio_glued": [0.8], "citation": [None, 12.0], "chi_square": [3.84]}
+            "line_far": [12.5], "ratio_glued": [0.8], "citation": [None, 12.0], "chi_square": [3.84],
+            "unit_chain": [2.5], "unit_exponent": [1.73], "unit_per": [5.0], "unit_split": [None], "unit_cell": [20.0],
+            "label_range": [-0.5], "label_ratio": [0.75], "label_cite": [None, 20.0]}
     for e in O.EXPRESSIONS:
         assert [t.value for t in O.run(e, e.text)] == want[e.name], e.name
     assert O.EXPRESSIONS[[e.name for e in O.EXPRESSIONS].index("cmax_comma")].style == ","
@@ -104,17 +107,19 @@ def test_a_stratified_outside_subset_reads_exactly_like_the_reference_outside_ch
 
 def test_the_golden_file_pins_every_class_representative_at_every_boundary(golden):
     fresh = O.build_golden()
-    assert set(golden) == set(fresh) and len(golden) == len(O.PAIRS) * 29
+    assert set(golden) == set(fresh) and len(golden) == len(O.PAIRS) * 49
     changed = [k for k in fresh if golden[k] != fresh[k]]
     assert changed[:10] == [], ("the reader changed for a class representative: review the diff, then "
                                 "`python -m tests.evidence_r6_oracle --regen-golden`")
 
 
-def test_the_representatives_are_exactly_the_29_behaviours():
+def test_the_representatives_are_exactly_the_49_behaviours():
     reps = {O.rep_of(chr(cp)) for cp in P.INSIDE_SET | P.CONTEXT_SET}
-    assert len(reps) == 29
-    assert O.rep_of("7") == "5" and O.rep_of("0") == "0" and O.rep_of("E") == "e" and O.rep_of("μ") == "m"
-    assert O.rep_of("\u00e9") == "m" and O.rep_of("\u03ba") == "m" and O.rep_of("\u00ae") == "&"     # r7 folds
+    assert len(reps) == 49                     # r7 writer 2: 29 - letter 'm' + 'q' + exponent '2' + 19 unit letters
+    assert O.rep_of("7") == "5" and O.rep_of("0") == "0" and O.rep_of("E") == "e" and O.rep_of("μ") == "μ"
+    assert O.rep_of("\u00e9") == "q" and O.rep_of("\u03ba") == "q" and O.rep_of("\u00ae") == "&"     # r7 folds
+    assert O.rep_of("3") == O.rep_of("2") == "2" and O.rep_of("b") == O.rep_of("Q") == "q"
+    assert all(O.rep_of(c) == c for c in O.UNIT_LETTERS) and len(O.UNIT_LETTERS) == 19
 
 
 # ------------------------------------------------------------- the harness is honest ---

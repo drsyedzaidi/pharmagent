@@ -91,6 +91,24 @@ CLOSERS_BR = frozenset(")]")                           # U+0029 U+005D
 CONTEXT_PUNCT = frozenset(";:/=\u00b0")                # U+003B U+003A U+002F U+003D U+00B0 DEGREE SIGN
 CONTEXT = frozenset().union(CONTEXT_LETTERS, GREEK, ACCENTED, CONTEXT_MARKS, OPENERS_BR, CLOSERS_BR, CONTEXT_PUNCT)
 
+# ------------------------------------------- the unit production's terminals (r7, owner decision 2) ---
+# Grammar data of the CONTEXT allow-list, not a new class: every character of a terminal is a CONTEXT letter (a test
+# pins it). ``units.py`` parses ``atom {("/" | "per") atom}``, ``atom = ([prefix] base | prefix prefixed) [exponent]``,
+# glued right after a number ('150mg', '24h', '10mL', '1.73m2'). Each terminal is admitted by its count in a COMPLETE
+# production glued to a number at a former glued_letters rejection of the 449 parse caches (r7/w2_unit_census3.txt; all
+# in the 60-paper design corpus, none elsewhere):
+#   prefixes  m 172 (mg 122, mL 23, ml 14, mM 13), n 29 (ng 25, nM 4), k 16 (kg), mu 12 (ug 9, uM 3), c 6 (cm)
+#   bases     g 181, h 46, L 44, y 29, M 27, min 24, m 20, w 8, mmHg 8, Hz 4, IU 2
+#   prefixed  l 14, every one after a prefix (ml, ng/ml): no bare 'l' is glued to a number anywhere, so the lower-case
+#             l is a base only after a prefix and '23l' stays unresolved (it may be '231'; tests/test_evidence_r3_*)
+# Refused by the same census: d (17 of 21 bare uses are figure panels '2d', and 'nd' of '2nd' would parse as n + d),
+# s (all 8 bare uses are decades: '1970s'), U, hr, wk (1 use each), the prefixes p u f M G d (no use), and words
+# (days 5, years 12, weeks 21, hours 5: a word is not a unit symbol). A glued word that is not a full production
+# ('1OmL', '150mgtid', '2nd', '5th', '1970s', '23l') stays unresolved.
+UNIT_PREFIXES = frozenset({"m", "\u03bc", "n", "k", "c"})              # milli micro nano kilo centi
+UNIT_BASES = frozenset({"g", "h", "L", "y", "M", "min", "m", "w", "mmHg", "Hz", "IU"})
+UNIT_PREFIXED_BASES = frozenset({"l"})                                  # a base only after a prefix: 'ml'
+
 # ------------------------------------------------------------------ role sets used by the reader ---
 ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 # every letter the alphabet lists (a word led by one is a label): the letters whose case the locator, a unit and a

@@ -110,7 +110,7 @@ def test_a_broken_scale_or_fraction_is_one_unresolved_expression_with_its_reason
 @pytest.mark.parametrize("text, citing", [
     ("Peak 1.2 × 103 cells", 1.2), ("Peak 1.2 x 10 3 cells", 3.0), ("Patients took 2 x 10 mg tablets", 10.0),
     ("Patients took 2 x 10 mg tablets", 2.0), ("12 3/4", 12.0), ("3.4 E-03", 3.4), ("2 × daily", 2.0),
-    ("150mg", 150.0), ("10 ^ 3", 10.0),
+    ("150mgtid", 150.0), ("10 ^ 3", 10.0),
 ])
 def test_the_resolved_pieces_of_an_unresolved_expression_are_its_parts(text, citing):
     toks = tokens(text)
@@ -182,10 +182,12 @@ def test_a_token_may_start_after_an_opener_a_qualifier_or_a_joiner_inside_a_word
 
 
 def test_a_numeric_led_word_the_grammar_rejects_is_one_unresolved_expression():
-    for text in ("150mg", "24h", "1.73m2", "100µg", "3MIU", "10mL", "12and", "23l", "1O5", "5th", "12e", "12\u0417", "\u043112"):
+    for text in ("150mgtid", "24hours", "1.73m23", "100µ", "3MIU", "1OmL", "12and", "23l", "1O5", "5th", "12e",
+                 "12\u0417", "\u043112"):
         toks = tokens(text)
         assert all(t.value is None for t in toks) and toks, text
-    assert [t.why for t in tokens("150mg")] == ["glued_letters"]
+    assert [t.why for t in tokens("150mgtid")] == ["glued_letters"]
+    assert [t.value for t in tokens("150mg 24h 1.73m2 100µg 10mL")] == [150.0, 24.0, 1.73, 100.0, 10.0]   # r7 units
 
 
 @pytest.mark.parametrize("text", ["8:00", "12/24/36", "12/", "12=3",                     # r7: 12/24 is a ratio "12^3", "12-+3", "65+", "12³", "12%5", "12:30",
@@ -236,7 +238,7 @@ def test_an_equivalent_reads_exactly_like_its_target(src, dst):
 def test_the_no_break_spaces_group_digits_like_a_thin_space():
     for sp in ("\u00a0", "\u202f"):
         assert V(f"1{sp}234 ng") == [1234.0] and V(f"AUC{sp}12") == [12.0] and V(f"{sp}12{sp}") == [12.0]
-    assert V("245µg") == [None] and V("100 µg") == [100.0]
+    assert V("245µg") == [245.0] and V("245µ") == [None] and V("100 µg") == [100.0]      # r7: the unit production
 
 
 def test_the_micro_sign_is_a_greek_mu_and_the_white_bullet_a_degree_sign():

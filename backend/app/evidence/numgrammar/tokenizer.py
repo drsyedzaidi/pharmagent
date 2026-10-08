@@ -12,6 +12,8 @@ REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
          ``12 3/4``                                       mixed_number (a lone ``3/4`` is a ratio, r7)
          ``12 /15`` ``12 .5`` ``5.2 (x10^3 cells)``       fraction, detached_decimal, bracketed_multiplier
 ACCEPT   ``12 / 15`` (and the glued ``12/15`` of scan.py)  -> one ``ratio`` token (r7, owner decision 6)
+REJECT   ``10m L`` ``81ng/m L,`` ``15m in``                 split_unit (r7, decision 2: the next word continues a glued
+                                                            unit of units.py; a text layer broke the unit)
          (the rules live in forms.py)
 
 then the taint tiers (taint.py) turn an expression with an outside character in its word, its neighbouring words
@@ -19,7 +21,9 @@ or its line into ``unresolved_context``. Decimal style decides only the ``A,BBB`
 """
 from __future__ import annotations
 
+import re
 from bisect import bisect_left, bisect_right
+from itertools import islice
 
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
@@ -28,15 +32,18 @@ from app.evidence.numgrammar.alphabet import (
     INSIDE_ONLY_RE,
     LETTERS,
     MULTIPLIERS,
+    NUMBER_CLOSERS,
     RANGE_WORDS,
     WORD_RE,
 )
+from app.evidence.numgrammar.body import MAX_DIGITS, to_float
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.forms import Forms
 from app.evidence.numgrammar.productions import Cite, citations, mask_chi_square, mask_citations
 from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
 from app.evidence.numgrammar.tok import MAX_PARTS, REASON_CONTEXT, REASON_SHAPE, Tok
+from app.evidence.numgrammar.units import splits
 
 MODES = ("page", "claim", "cell")
 ABSORB_WORDS = 2          # words of INSIDE characters a ten after a multiplier swallows ('1.2 x 10 3', '10 ^ 3')
@@ -46,6 +53,7 @@ _SPECIAL_LEADS = frozenset("eE") | MULTIPLIERS
 
 
 MASK = "\ufffd"          # stands for a (cid:N) marker, character for character: offsets never move
+_DIGIT_RUN = re.compile("[0-9]+")
 
 
 def _mask(m) -> str:
@@ -113,6 +121,22 @@ class Reader(Forms):
             return False
         w = self.text(i)
         return not W.letter_led(w) and not W.special(w) and self.scan(i).kind == "numeric"
+
+    def number_end(self, i: int, drop: int = 0) -> bool:
+        """Word *i* (without its last *drop* characters) ends in a NUMBER: its last digit, closers aside, belongs to a
+        token, or the word is numeric-led (a rejected one too: '1O5 3/4' stays a mixed number). The digits of a label
+        (r7, owner decision 3: ``AUC0-24``, ``CYP2D6``, ``m12``) are not a number: they never make the next word a
+        range end, the fraction of a mixed number or the second part of a spaced ratio."""
+        w = self.text(i)[:len(self.text(i)) - drop]
+        if not W.ends_with_number(w):
+            return False
+        if not W.letter_led(w):
+            return True
+        sc = self.scan(i)
+        k = len(w)
+        while w[k - 1] in NUMBER_CLOSERS:
+            k -= 1
+        return sc.kind == "numeric" and sc.toks[-1].end == self.starts[i] + k
 
     def absorb(self, j: int) -> int:
         """Last word index after swallowing up to ABSORB_WORDS following words made only of INSIDE characters."""
@@ -197,7 +221,9 @@ class Reader(Forms):
         n, t, starts, ends = self.n, self.t, self.starts, self.ends
         nxt = t[starts[a + 1]:ends[a + 1]] if a + 1 < n else ""
         prev = t[starts[a - 1]:ends[a - 1]] if a else ""
-        if toks[0].shape == "ratio" and toks[0].start == starts[a] and W.ends_with_number(prev):
+        if sc.unit and nxt and splits(sc.unit, nxt):                       # '10m L': the next word continues the unit
+            return self.expr(out, a, a + 1, toks[0].start, ends[a + 1], "split_unit", self.parts_of(a, a))
+        if toks[0].shape == "ratio" and toks[0].start == starts[a] and a and self.number_end(a - 1):
             return self._word_expr(out, a, "mixed_number", toks[0].parts)   # '...12 3/4': a whole part may stand before
         if sc.tail or (nxt and nxt[0] not in _UNIT_LEADS) or (prev and prev[0] not in LETTERS):
             done = self.forms(a, sc, consumed, out, nxt, prev)
@@ -227,6 +253,33 @@ class Reader(Forms):
                              detail=d or "citation"))
         return sorted(out + extra, key=lambda t: t.start) if extra else out
 
+    def with_labels(self, out: list[Tok]) -> list[Tok]:
+        """The digits of every LABEL (r7, owner decision 3: a word led by a letter, ``AUC0-24``, ``CYP2D6``, ``t1/2``,
+        ``C24h``) as unresolved expressions ``unresolved_shape:label``: each stretch of a label word outside the
+        expressions already read that holds a digit (parts = its digit runs). They are added AFTER the reading, so they
+        never change another expression; a record that cites one fails with the label sentence."""
+        starts = [t.start for t in out]
+        extra: list[Tok] = []
+        for wi in self.anchors:
+            if not W.letter_led(self.text(wi)):
+                continue
+            lo, hi = self.starts[wi], self.ends[wi]
+            k = max(bisect_right(starts, lo) - 1, 0)
+            while k < len(out) and out[k].start < hi:          # the expressions that overlap the word, in order
+                if out[k].end > lo:
+                    self._label(extra, lo, min(out[k].start, hi))
+                    lo = max(lo, out[k].end)
+                k += 1
+            self._label(extra, lo, hi)
+        return sorted(out + extra, key=lambda t: t.start) if extra else out
+
+    def _label(self, extra: list[Tok], lo: int, hi: int) -> None:
+        """One label expression over t[lo:hi] when it holds a digit; parts = its first MAX_PARTS digit runs."""
+        if lo < hi and W.DIGIT_RE.search(self.t, lo, hi) is not None:
+            runs = islice((to_float(m.group()) for m in _DIGIT_RUN.finditer(self.t, lo, hi)
+                           if m.end() - m.start() <= MAX_DIGITS), MAX_PARTS)
+            extra.append(Tok(lo, hi, None, f"{REASON_SHAPE}:label", tuple(runs), detail="label"))
+
     def qualified_before(self, a: int) -> bool:
         """A qualifier stands right before word *a* (up to three words back; see ``words.qualifies``)."""
         return W.qualifies([self.text(k) for k in range(max(0, a - 3), a)])
@@ -243,8 +296,8 @@ class Reader(Forms):
         lone = prev in RANGE_WORDS or nxt in RANGE_WORDS
         left = bool(nxt) and ((nxt[0] == "-" and W.signed_digits(nxt) and W.ends_with_number(last))
                               or (last.endswith("-") and W.digit_led(nxt)))
-        right = bool(prev) and ((W.ends_with_number(prev) and self.t[toks[0].start] == "-")
-                                or (prev.endswith("-") and W.ends_with_number(prev[:-1]) and W.digit_led(self.text(a))))
+        right = bool(prev) and ((self.number_end(a - 1) and self.t[toks[0].start] == "-")
+                                or (prev.endswith("-") and self.number_end(a - 1, 1) and W.digit_led(self.text(a))))
         if not (q or lone or left or right):
             return toks
         end = len(toks) - 1
@@ -253,12 +306,13 @@ class Reader(Forms):
 
 
 
-def tokens(text: str, style: str = ".", *, mode: str = "page") -> list[Tok]:
+def tokens(text: str, style: str = ".", *, mode: str = "page", labels: bool = False) -> list[Tok]:
     """Every numeric expression of *text*, in order; ``value`` None marks an unresolved one.
 
     ``mode="page"`` is for page text and column strings (an ASCII space never groups digits), ``"cell"`` for a
     table cell (page reading, the whole string is one line), ``"claim"`` for a snippet or a proposed value (a
-    thousands-position ASCII space reads as a thin space, the whole string is one line)."""
+    thousands-position ASCII space reads as a thin space, the whole string is one line). ``labels=True`` (the
+    verifier) also returns the digits of label words as ``unresolved_shape:label`` expressions (r7, decision 3)."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     if not text or W.DIGIT_RE.search(text) is None:
@@ -270,7 +324,8 @@ def tokens(text: str, style: str = ".", *, mode: str = "page") -> list[Tok]:
         folded = CID_MARKER.sub(_mask, folded)
     cites = citations(folded) if "[" in folded else []     # r7: an unmistakable citation is masked, then emitted
     reader = Reader(mask_citations(folded, cites), "," if style == "," else ".", mode != "page", cid)
-    return reader.with_citations(reader.run(), cites) if cites else reader.run()
+    out = reader.with_citations(reader.run(), cites) if cites else reader.run()
+    return reader.with_labels(out) if labels else out
 
 
 __all__ = ["MODES", "Reader", "TAIL_NONE", "tokens"]

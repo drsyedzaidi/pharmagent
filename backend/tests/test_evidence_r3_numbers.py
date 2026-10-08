@@ -62,16 +62,18 @@ def test_letter_glued_to_digits_makes_the_token_unreadable(text):
     assert toks and all(t.value is None for t in toks), toks
 
 
-@pytest.mark.parametrize("text,shape", [
-    ("150mg", "unresolved_shape:glued_letters"), ("24h", "unresolved_shape:glued_letters"),
-    ("1.73m2", "unresolved_shape:glued_letters"), ("100µg", "unresolved_shape:glued_letters"),
-    ("3MIU", "unresolved_shape:glued_letters"), ("10mL", "unresolved_shape:glued_letters"),
-    ("2x daily", "unresolved_shape:multiplier_operand")])
-def test_a_glued_unit_is_unresolved(text, shape):
-    """Was test_a_glued_unit_still_reads (150mg -> 150, '2x daily' -> 2): a letter glued to the digits is a shape the
-    grammar rejects, whatever the letter (a fourth list of 'allowed unit letters' would re-admit '10mL' read as 1OmL);
-    the reviewer reads the page image. '2x daily' is the multiplier without a number, like '2 × daily'."""
-    assert [(t.value, t.shape) for t in tokens(text, ".", mode="page")] == [(None, shape)]
+@pytest.mark.parametrize("text,want", [
+    ("150mg", (150.0, "int")), ("24h", (24.0, "int")), ("1.73m2", (1.73, "decimal")), ("100µg", (100.0, "int")),
+    ("10mL", (10.0, "int")), ("3MIU", (None, "unresolved_shape:glued_letters")),
+    ("1OmL", (None, "unresolved_shape:glued_letters")), ("23l", (None, "unresolved_shape:glued_letters")),
+    ("150mgtid", (None, "unresolved_shape:glued_letters")), ("10m L", (None, "unresolved_shape:split_unit")),
+    ("2x daily", (None, "unresolved_shape:multiplier_operand"))])
+def test_a_glued_unit_reads_through_the_unit_production_and_a_broken_one_is_unresolved(text, want):
+    """Was test_a_glued_unit_is_unresolved (r6: every glued letter rejected the word). r7, owner decision 2: a unit
+    glued to the digits is read by the grammar's unit production (an explicit prefix and base set, units.py) and the
+    number is the literal alone; a glued word that is not a full production ('3MIU', '1OmL', '23l', '150mgtid') or a
+    unit the next word continues ('10m L') stays unresolved. '2x daily' is the multiplier without a number."""
+    assert [(t.value, t.shape) for t in tokens(text, ".", mode="page")] == [want]
 
 
 @pytest.mark.parametrize("cell,value", [("12З", "12"), ("1O5", "1"), ("23l", "23")])

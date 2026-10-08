@@ -73,9 +73,9 @@ def test_a_table_page_is_normalised_and_tokenised_once_per_request_not_once_per_
         seen["normalise"] += t == text
         return real_norm(t)
 
-    def count_tokens(t, style, mode="page"):
+    def count_tokens(t, style, mode="page", **kw):
         seen["tokens"] += t == text
-        return real_tokens(t, style, mode=mode)
+        return real_tokens(t, style, mode=mode, **kw)
 
     monkeypatch.setattr(N, "_normalise", count_norm)
     monkeypatch.setattr(RC, "tokens", count_tokens)

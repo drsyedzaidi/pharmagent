@@ -58,8 +58,9 @@ class Reading(NamedTuple):
 
 
 def read(text: str, style: str, mode: str) -> Reading:
-    """``tokens(text, style, mode=mode)`` of a page text, column or cell, once per request."""
+    """``tokens(text, style, mode=mode, labels=True)`` of a page text, column or cell, once per request (the label
+    expressions of r7 included: a record that cites a digit of a label is told so)."""
     def make() -> Reading:
-        toks = tuple(tokens(text, style, mode=mode))
+        toks = tuple(tokens(text, style, mode=mode, labels=True))
         return Reading(toks, tuple(t.start for t in toks))
     return cached(("tokens", text, style, mode), make, len(text))

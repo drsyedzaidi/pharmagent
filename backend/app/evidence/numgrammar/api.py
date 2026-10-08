@@ -242,8 +242,9 @@ def find_n_lead(text: str) -> list[tuple[int, int, int, int]]:
 
 def find_dose(text: str) -> list[tuple[int, int, float, str]]:
     """(start, end, value, unit word) of every number of at most 5 integer digits and 3 decimals followed by a unit
-    word of an extraction rule (mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is unresolved, so it
-    is never a candidate; the caller applies its own context pattern to the surrounding line. The text is folded
+    word of an extraction rule (mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is read by the unit
+    production since r7 but is no candidate here (the rule reads the next word); the caller applies its own context
+    pattern to the surrounding line. The text is folded
     once: the next word of every number is found by a forward scan, never by folding the page again."""
     t = fold(text)
     out: list[tuple[int, int, float, str]] = []
