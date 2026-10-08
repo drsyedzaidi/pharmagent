@@ -1,28 +1,30 @@
 {
- "digest": "d761d1dcfa854da792c579db4888b488c33ae9a9272e08b8ff05825e63f27dea",
+ "digest": "f4aa1b5c9e519a2d5d1abd60ae3499d5c3c76f4680797f318c2a04e0bac07fbd",
  "layer_b": {
   "code_points": {
    "key": 1112064,
+   "label": 1112064,
    "locator": 1112064,
    "readable": 1112064,
    "scale": 1112064,
    "style": 1112064,
    "text": 1112064,
    "thin": 1112064,
-   "unit": 1112064
+   "unit": 1112064,
+   "unitprod": 1112064
   },
   "dirty": [],
   "errors": 0,
-  "head": "49d18f89fbf0690886d5622d3e1253fb6d455466",
-  "wall_seconds": 334.5
+  "head": "1b63319290d70fde7ae70b0e3f01dd11f10fd78b",
+  "wall_seconds": 505.9
  },
  "tokens": {
   "dirty": [],
   "errors": 0,
-  "head": "49d18f89fbf0690886d5622d3e1253fb6d455466",
-  "pairs": 316,
-  "variants": 351412224,
-  "wall_seconds": 556.2,
+  "head": "1b63319290d70fde7ae70b0e3f01dd11f10fd78b",
+  "pairs": 397,
+  "variants": 441489408,
+  "wall_seconds": 742.9,
   "workers": 12
  }
 }
