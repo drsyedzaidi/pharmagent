@@ -1,9 +1,10 @@
 {
- "digest": "dc849cdba039504469cac4a86bf1db562d637ec9efc0f718bc4dcb7ed4ae90a9",
+ "digest": "d761d1dcfa854da792c579db4888b488c33ae9a9272e08b8ff05825e63f27dea",
  "layer_b": {
   "code_points": {
    "key": 1112064,
    "locator": 1112064,
+   "readable": 1112064,
    "scale": 1112064,
    "style": 1112064,
    "text": 1112064,
@@ -12,16 +13,16 @@
   },
   "dirty": [],
   "errors": 0,
-  "head": "7f286febb87789fefc9aaa9a445df648d41a8ea6",
-  "wall_seconds": 340.3
+  "head": "49d18f89fbf0690886d5622d3e1253fb6d455466",
+  "wall_seconds": 334.5
  },
  "tokens": {
   "dirty": [],
   "errors": 0,
-  "head": "7f286febb87789fefc9aaa9a445df648d41a8ea6",
-  "pairs": 291,
-  "variants": 323610624,
-  "wall_seconds": 520.1,
+  "head": "49d18f89fbf0690886d5622d3e1253fb6d455466",
+  "pairs": 316,
+  "variants": 351412224,
+  "wall_seconds": 556.2,
   "workers": 12
  }
 }
