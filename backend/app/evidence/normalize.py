@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import re
 
+from app.evidence.letter_tables import CASE_PAIRS, LIGATURES, casefold_letters
 from app.evidence.numgrammar import number_spans, numbers_in
 from app.evidence.numgrammar.alphabet import GAP, LETTERS, char_class
-from app.evidence.numgrammar.equivalents import CASE_PAIRS, LIGATURES, THIN, casefold_letters, fold
+from app.evidence.numgrammar.equivalents import THIN, fold
 from app.evidence.numgrammar.style import style_evidence
 from app.evidence.read_cache import cached
 

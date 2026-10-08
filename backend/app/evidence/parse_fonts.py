@@ -37,6 +37,7 @@ from pdfminer.pdffont import PDFCIDFont, PDFType3Font
 from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdftypes import PDFObjRef, PDFStream, resolve1
 
+from app.evidence import gaps
 from app.evidence.numgrammar.alphabet import DIGITS, NUMBER_CHARS
 from app.evidence.numgrammar.equivalents import fold
 
@@ -128,7 +129,7 @@ def _hides(text: str | None, drawn: set[str]) -> bool:
     """True when the glyph drawn is a number character the text does not report: a digit reported as
     anything without a digit, or any number character reported as whitespace / nothing."""
     folded = fold(text or "")
-    return bool(drawn & DIGITS and not set(folded) & DIGITS) or bool(drawn and not folded.strip())
+    return bool(drawn & DIGITS and not set(folded) & DIGITS) or bool(drawn and gaps.blank(folded))
 
 
 def _simple(font: Any, spec: dict) -> tuple[set[str], set[str]]:
@@ -232,7 +233,7 @@ class GlyphChecker:
                 else:
                     verdict = (font.fontname, *_simple(font, spec))
             except Exception:                                # unreadable font dict: identity unknown
-                verdict = ("", set(), set("0123456789"))
+                verdict = ("", set(), set(NUMBER_CHARS))
             self.cache[key] = verdict
         return self.cache[key]
 
@@ -242,7 +243,7 @@ class GlyphChecker:
         try:
             specs = _font_specs(page.page_obj.resources)
         except Exception:
-            return {UNVERIFIED: "0123456789"}
+            return {UNVERIFIED: "".join(sorted(NUMBER_CHARS))}
         bad, unknown = set(), set()
         for key, spec in specs:
             name, b, u = self._judge(key, spec)

@@ -43,14 +43,15 @@ def sample():
 def test_the_expression_set_covers_the_specified_forms_and_397_pairs():
     names = {e.name for e in O.EXPRESSIONS}
     for needed in ("unit_chain", "unit_exponent", "unit_per", "unit_split", "unit_cell", "label_range", "label_ratio",
-                   "label_cite", "line_far", "ratio_glued", "citation", "chi_square", "n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
+                   "label_cite", "window_after_open", "window_before_open", "window_after_comma",
+                   "window_before_equals", "line_far", "ratio_glued", "citation", "chi_square", "n_eq_12", "cmax_dot", "cmax_comma", "auc_thousands", "auc_thin", "neg_hyphen", "neg_minus",
                    "neg_endash", "percent", "e_notation", "sci_x_caret", "sci_times_caret_neg", "sci_times_sup",
                    "bare_power", "range", "pm", "qual_glued", "qual_spaced", "tilde_operator", "dose_mg", "lancet",
                    "degree", "sbp_table", "mixed_number", "pua_inside", "braille_qualifier", "ten_dose", "mult_daily",
                    "detached", "lookalike_ten", "cid_inside", "cid_lead", "glued_unit", "plus_glued",
                    "cell_thousands", "cell_12_145", "cell_bad_groups", "cell_pm_groups", "cell_lancet", "cell_stars"):
         assert needed in names, needed
-    assert len(O.PAIRS) == 397                                     # r7 writer 2: 316 + 81 unit and label pairs
+    assert len(O.PAIRS) == 401                     # r7 writer 2: 316 + 81 unit and label pairs; round 2: 4 window pairs
     assert sum(1 for e in O.EXPRESSIONS if e.mode == "cell") == 7
     for e in O.EXPRESSIONS:
         assert all(0 <= b <= len(e.text) for b in e.cuts) and e.cuts == tuple(sorted(set(e.cuts))), e.name
@@ -70,7 +71,8 @@ def test_the_clean_expressions_read_as_documented():
             "cell_stars": [-14.2], "line_n_eq_12": [12.0], "line_cmax": [12.5], "line_sci": [1200.0],
             "line_far": [12.5], "ratio_glued": [0.8], "citation": [None, 12.0], "chi_square": [3.84],
             "unit_chain": [2.5], "unit_exponent": [1.73], "unit_per": [5.0], "unit_split": [None], "unit_cell": [20.0],
-            "label_range": [-0.5], "label_ratio": [0.75], "label_cite": [None, 20.0]}
+            "label_range": [-0.5], "label_ratio": [0.75], "label_cite": [None, 20.0], "window_after_open": [12.5],
+            "window_before_open": [12.5], "window_after_comma": [12.5], "window_before_equals": [12.5]}
     for e in O.EXPRESSIONS:
         assert [t.value for t in O.run(e, e.text)] == want[e.name], e.name
     assert O.EXPRESSIONS[[e.name for e in O.EXPRESSIONS].index("cmax_comma")].style == ","

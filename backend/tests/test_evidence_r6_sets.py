@@ -168,7 +168,8 @@ def _modules() -> list[tuple[Path, ast.Module]]:
 
 def test_the_package_imports_no_unicodedata_and_uses_no_category_test():
     banned_attrs = {"isdigit", "isalpha", "isspace", "isalnum", "isnumeric", "isdecimal", "isidentifier",
-                    "isprintable", "category", "normalize", "isupper", "islower", "casefold", "lower", "upper"}
+                    "isprintable", "category", "normalize", "isupper", "islower", "casefold", "lower", "upper",
+                    "isascii"}                                  # r7 round 2: a code-point range test
     for path, tree in _modules():
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -176,8 +177,8 @@ def test_the_package_imports_no_unicodedata_and_uses_no_category_test():
             if isinstance(node, ast.ImportFrom):
                 assert node.module != "unicodedata", path
             if isinstance(node, ast.Attribute) and node.attr in banned_attrs:
-                # the reviewer-facing label of a scale word may casefold ('Thousands'); nothing else may
-                assert node.attr == "casefold" and path.name == "api.py", (path.name, node.lineno, node.attr)
+                # r7 round 2: no exception any more (the flag words fold through letter_tables.casefold_letters)
+                raise AssertionError((path.name, node.lineno, node.attr))
 
 
 def _docstring_nodes(tree: ast.Module) -> set[int]:

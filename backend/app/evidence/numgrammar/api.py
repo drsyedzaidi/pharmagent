@@ -1,38 +1,57 @@
 """The surface the callers use (verify, value_checks, record_checks, extract_rules, qc_flags): thin helpers over
 ``tokens``. None of them reads a number the tokenizer did not resolve, and none keeps a cleaned view of the text.
+
+Every character class here is a role set of alphabet.py (r7 round 2: no ``str.isascii``, no hand-typed set); the word
+lists of the flag checks and of the dose rule are in ``app/evidence/word_lists.py``, outside the reader.
 """
 from __future__ import annotations
 
 import re
 from decimal import Decimal
 
+from app.evidence.letter_tables import casefold_letters
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
+    ASCII_LETTERS,
     CID_MARKER,
+    CLOSERS_BR,
+    CONTEXT_PUNCT,
+    DECIMAL_MARKS,
     DIGITS,
     GAP,
     INSIDE,
     LETTERS,
     MULTIPLIERS,
+    N_LETTERS,
     NUMBER_CLOSERS,
     OPENERS_BR,
     OUTSIDE_RE,
+    SEPARATORS,
     SIGNS,
+    SLASH,
     STARTERS,
+    SUP_CHARS,
+    TRAILING,
     WORD_RE,
     char_class,
 )
-from app.evidence.numgrammar.equivalents import THIN, fold
+from app.evidence.numgrammar.body import MIDDOT
+from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.productions import mask_chi_square
 from app.evidence.numgrammar.tokenizer import tokens
+from app.evidence.word_lists import DOSE_UNITS, SCALE_WORDS
 
-_TRAIL_STRIP = ".,;:)"
-_DOSE_UNITS = frozenset({"mg", "\u03bcg", "ug", "g", "mg/kg", "\u03bcg/kg"})
-_DATA_CELL = re.compile(char_class(INSIDE | GAP | frozenset("()/"), negate=False) + "+")
-_THOUSAND_PLAIN = re.compile("1[,.'" + THIN + "]?000")
-_SCALE_WORDS = frozenset({"thousand", "thousands", "million", "millions", "billion", "billions"})
-MULT_CHARS = "".join(sorted(MULTIPLIERS))
+_DATA_CELL = re.compile(char_class(INSIDE | GAP | OPENERS_BR | CLOSERS_BR | SLASH, negate=False) + "+")
+_THOUSAND_PLAIN = re.compile("1" + char_class(SEPARATORS - {MIDDOT}, negate=False) + "?000")
 _SCALE_WHY = frozenset({"ten_after_multiplier", "multiplier_operand", "detached_exponent", "bare_superscript_power"})
+# the characters a word list reads as themselves: ASCII letters, numbers and their punctuation, brackets, the CONTEXT
+# punctuation and the gaps; every other character (a Greek or accented letter, a mark, a superscript, a character the
+# reader cannot read) may be a look-alike in a flag word and stands for any one character or for none (``loose_in``)
+_PLAIN = (INSIDE - SUP_CHARS) | ASCII_LETTERS | OPENERS_BR | CLOSERS_BR | CONTEXT_PUNCT | GAP
+
+
+def _foreign(c: str) -> bool:
+    return c not in _PLAIN
 
 
 def parse_claim(value: str, style: str = ".") -> float | None:
@@ -123,64 +142,77 @@ def unreadable(text: str) -> tuple[int, str] | None:
 # ------------------------------------------------------------ labels, cells ---
 
 def loose_in(word: str, targets: frozenset[str]) -> bool:
-    """*word* (any case) is one of the lowercase ASCII *targets* where every character that is not ASCII stands for
-    any one character (``τo`` is ``to``, ``αbove`` is ``above``, ``thоusands`` is ``thousands``) or for none
-    (a zero-width character inside ``thousands``). Only ever used to RAISE a flag (a word list of the value
+    """*word* (the alphabet's capitals lower-cased) is one of the lowercase ASCII *targets* where every FOREIGN
+    character (a Greek or accented letter, a mark, a superscript, a character the reader cannot read: everything outside
+    ``_PLAIN``) stands for any one character (``τo`` is ``to``, ``αbove`` is ``above``, ``thоusands`` is ``thousands``)
+    or for none (a zero-width character inside ``thousands``). Only ever used to RAISE a flag (a word list of the value
     checks), never to read a number: a look-alike or padded spelling must flag like the plain spelling does."""
-    w = word.casefold()
+    w = casefold_letters(word)
     if w in targets:
         return True
-    if w.isascii():
+    if not any(_foreign(c) for c in w):
         return False
-    if "".join(c for c in w if c.isascii()) in targets:        # an unreadable character inside the word
+    if "".join(c for c in w if not _foreign(c)) in targets:        # a foreign character inside the word
         return True
-    return any(len(t) == len(w) and all(x == y or not x.isascii() for x, y in zip(w, t, strict=True))
-               for t in targets)
+    return any(len(t) == len(w) and all(x == y or _foreign(x) for x, y in zip(w, t, strict=True)) for t in targets)
+
+
+_TRAILING = "".join(sorted(TRAILING))
+
+
+def _strip_trailing(w: str) -> str:
+    """*w* without its trailing closers and punctuation (``alphabet.TRAILING``)."""
+    return w.rstrip(_TRAILING)
+
+
+def _core(w: str) -> str:
+    """The word without one leading starter or sign and its trailing closers."""
+    core = w[1:] if (w[0] in STARTERS or w[0] in SIGNS) and len(w) > 1 else w
+    return _strip_trailing(core) or core
 
 
 def _stray_multiplier(core: str) -> bool:
-    """A word that is one multiplier character, or one non-ASCII character where a multiplier would stand."""
-    return W.is_mult_word(core) or (len(core) == 1 and not core.isascii())
+    """A word that is one multiplier character, or one foreign character where a multiplier would stand."""
+    return W.is_mult_word(core) or (len(core) == 1 and _foreign(core))
 
 
 def _thousand_word(core: str) -> bool:
     """``x1000``, ``/1,000``, ``×1000`` or a stray symbol glued to ``1000``: a multiplier or divisor of 1000."""
-    return len(core) > 1 and (core[0] in MULT_CHARS or core[0] == "/" or not core[0].isascii()) \
+    return len(core) > 1 and (core[0] in MULTIPLIERS or core[0] in SLASH or _foreign(core[0])) \
         and _THOUSAND_PLAIN.fullmatch(core[1:]) is not None
 
 
 def _unreadable_scale(core: str) -> bool:
-    """A multiplier character glued to something that is not ASCII (``x1０００``, ``×１０００``): a scale the label
-    prints in a form the reader cannot read."""
-    return len(core) > 1 and core[0] in MULT_CHARS and not core[1:].isascii()
+    """A multiplier character glued to a foreign character (``x1０００``, ``×１０００``): a scale the label prints in a
+    form the reader cannot read."""
+    return len(core) > 1 and core[0] in MULTIPLIERS and any(_foreign(c) for c in core[1:])
 
 
 def _power_word(core: str) -> bool:
     """``×10^3``, ``x10³`` or a stray symbol glued to a power of ten."""
     return W.special(core) in (W.MULT_POWER, W.MULT_TEN) or (
-        len(core) > 1 and not core[0].isascii() and W.BARE_POWER_RE.fullmatch(core[1:]) is not None)
+        len(core) > 1 and _foreign(core[0]) and W.BARE_POWER_RE.fullmatch(core[1:]) is not None)
 
 
 def _scale_word(core: str, prev: str, nxt: str) -> bool:
     """One label word that scales the printed number."""
-    if W.special(core) == W.E_WORD or _power_word(core) or _thousand_word(core) or loose_in(core, _SCALE_WORDS) \
+    if W.special(core) == W.E_WORD or _power_word(core) or _thousand_word(core) or loose_in(core, SCALE_WORDS) \
             or _unreadable_scale(core):
         return True
-    denominator = prev.endswith("/") or prev.casefold() == "per"          # 'cells/10^6 cells' is a unit
+    denominator = prev.endswith(tuple(SLASH)) or casefold_letters(prev) == "per"   # 'cells/10^6 cells' is a unit
     if not denominator and W.BARE_POWER_RE.fullmatch(core):
         return True
-    return (_stray_multiplier(core) or core == "/") and _THOUSAND_PLAIN.fullmatch(nxt.rstrip(_TRAIL_STRIP)) is not None
+    return (_stray_multiplier(core) or core in SLASH) and _THOUSAND_PLAIN.fullmatch(_strip_trailing(nxt)) is not None
 
 
 def _scale_view(t: str) -> bool:
     """The scale reading of one folded label (see ``scale_shapes``)."""
     ws = [m.group() for m in WORD_RE.finditer(t)]
     for i, w in enumerate(ws):
-        core = w[1:] if (w[0] in STARTERS or w[0] in SIGNS) and len(w) > 1 else w
-        core = core.rstrip(_TRAIL_STRIP) or core
+        core = _core(w)
         prev = ws[i - 1] if i else ""
         nxt = ws[i + 1] if i + 1 < len(ws) else ""
-        if W.letter_led(core) and not (W.special(core) or loose_in(core, _SCALE_WORDS) or _stray_multiplier(core)
+        if W.letter_led(core) and not (W.special(core) or loose_in(core, SCALE_WORDS) or _stray_multiplier(core)
                                        or _thousand_word(core) or _power_word(core) or _unreadable_scale(core)):
             continue
         if _scale_word(core, prev, nxt):
@@ -193,14 +225,15 @@ def _scale_view(t: str) -> bool:
 def scale_shapes(label: str) -> bool:
     """True when a header, row label, unit or proposed unit carries a multiplier of the printed number or cannot be
     read for one: an accepted or broken power-of-ten word (``×10³``, ``x10^3``, ``× 10 3``, ``10³``), a spaced
-    exponent (``E+03``), a multiplier (or a stray non-ASCII symbol where one stands) before 1000 in any grouping,
-    thousand(s) / million(s) / billion(s) (a look-alike spelling counts: ``loose_in``), or a number of the label that
+    exponent (``E+03``), a multiplier (or a stray foreign symbol where one stands) before 1000 in any grouping,
+    a scale word (``word_lists.SCALE_WORDS``; a look-alike spelling counts: ``loose_in``), or a number of the label that
     touches a character outside the alphabet. A power after ``/`` or ``per`` is a unit denominator and does not
     count; a label word led by a letter never counts (``AUC0-inf``, ``ng.h/mL``). The label is read twice, as it
-    stands and with every non-ASCII character removed, and either reading raises the flag: a character the reader
-    cannot read, put anywhere in the label, never hides a scale. Neither reading can lower a flag."""
+    stands and with every character the reader cannot read removed (``OUTSIDE_RE``), and either reading raises the flag:
+    a character the reader cannot read, put anywhere in the label, never hides a scale. Neither reading can lower a
+    flag."""
     t = fold(label)
-    return _scale_view(t) or (not t.isascii() and _scale_view("".join(c for c in t if c.isascii())))
+    return _scale_view(t) or (OUTSIDE_RE.search(t) is not None and _scale_view(OUTSIDE_RE.sub("", t)))
 
 
 def is_data_cell(text: str) -> bool:
@@ -221,7 +254,7 @@ def _before_equals(t: str, i: int) -> int | None:
     j -= 1
     while j > 0 and t[j - 1] in GAP:
         j -= 1
-    if j == 0 or t[j - 1] not in ("n", "N"):
+    if j == 0 or t[j - 1] not in N_LETTERS:
         return None
     k = j - 1
     return None if k > 0 and t[k - 1] in LETTERS else k
@@ -240,10 +273,10 @@ def find_n_lead(text: str) -> list[tuple[int, int, int, int]]:
     return out
 
 
-def find_dose(text: str) -> list[tuple[int, int, float, str]]:
+def find_dose(text: str, units: frozenset[str] = DOSE_UNITS) -> list[tuple[int, int, float, str]]:
     """(start, end, value, unit word) of every number of at most 5 integer digits and 3 decimals followed by a unit
-    word of an extraction rule (mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is read by the unit
-    production since r7 but is no candidate here (the rule reads the next word); the caller applies its own context
+    word of an extraction rule (*units*: mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is read by the
+    unit production since r7 but is no candidate here (the rule reads the next word); the caller applies its own context
     pattern to the surrounding line. The text is folded
     once: the next word of every number is found by a forward scan, never by folding the page again."""
     t = fold(text)
@@ -254,8 +287,8 @@ def find_dose(text: str) -> list[tuple[int, int, float, str]]:
                 or len(whole) > 5 or len(frac) > 3 or not all(c in DIGITS for c in whole + frac):
             continue
         nxt = _next_word(t, _word_bounds(t, max(tok.end - 1, 0))[1])
-        unit = t[nxt[0]:nxt[1]].rstrip(_TRAIL_STRIP) if nxt else ""
-        if unit.casefold() in _DOSE_UNITS:
+        unit = _strip_trailing(t[nxt[0]:nxt[1]]) if nxt else ""
+        if casefold_letters(unit) in units:
             out.append((tok.start, tok.end, tok.value, unit))
     return out
 
@@ -290,7 +323,7 @@ def digit_group(word: str, lo: int, hi: int, *, decimals: bool = False, lead: bo
         i += 1
     if not lo <= i <= hi:
         return False
-    return i == len(body) or (decimals and body[i] in ".," and is_digit_run(body[i + 1:], 1, len(body)))
+    return i == len(body) or (decimals and body[i] in DECIMAL_MARKS and is_digit_run(body[i + 1:], 1, len(body)))
 
 
 def claim_decimal(value: str, style: str = ".") -> Decimal | None:

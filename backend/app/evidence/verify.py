@@ -23,9 +23,11 @@ from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence import models as M
 from app.evidence.normalize import IdxMap, normalise
 from app.evidence.numgrammar import Tok, claim_decimal, digits_of, tokens, unreadable
+from app.evidence.numgrammar.neighbours import punct_only
 from app.evidence.read_cache import read
 from app.evidence.verify_columns import ColumnLines
 from app.evidence.verify_messages import context_sentence, label_sentence, tok_sentence, unreadable_sentence
@@ -200,7 +202,10 @@ def _verify_text(loc: dict[str, Any], page: dict[str, Any], snippet: str, lit: t
         seen_any, blocked = seen_any or seen, blocked or block
         if column is None and len(columns) == 2 and hits:
             lines = lines or ColumnLines(columns)            # the columns are read once, not once per occurrence
-            kept = next((h for h in hits if not lines.crosses(h[0], text)), None)
+            # r7 round 2: a number on a column line is read in its column (the page text puts the other column's
+            # words around it), so only a hit on a line that spans the columns may pass in the page text
+            kept = next((h for h in hits if not lines.crosses(h[0], text)
+                         and not (h[3] is not None and lines.column_line(h[3][0], text))), None)
             crossed = crossed or kept is None
             hits = [] if kept is None else [kept]
         if hits:
@@ -264,13 +269,21 @@ def _row_fragment(literal: str, text: str, anchors: list[str], style: str) -> bo
 
 
 def _neighbour_offence(row: list[Any], col: int, literal: str) -> str:
-    """The reviewer sentence when the cell right before or after the cited one holds a character outside the allowed
-    alphabet or a ``(cid:N)`` marker (a qualifier, a sign or a multiplier the reader cannot read), else ''. A cell is
-    one line; its neighbours are the words one separator away, so a look-alike ``≲`` in the next cell leaves the
-    number as unresolved as it does on a page line."""
-    for k, where in ((col - 1, "in the previous cell"), (col + 1, "in the next cell")):
-        if 0 <= k < len(row) and (bad := unreadable(str(row[k] or ""))) is not None:
-            return context_sentence(literal, bad[1], where)
+    """The reviewer sentence when a neighbouring cell of the cited one holds a character outside the allowed alphabet or
+    a ``(cid:N)`` marker (a qualifier, a sign or a multiplier the reader cannot read), else ''. A cell is one line; its
+    neighbours are the words one separator away, and like the window of a page line (r7 round 2) the walk on each side
+    goes past the cells that hold no word the allow-list judges (empty, blank or punctuation-only: a spanned cell, a
+    lone
+    bracket) to the first cell that does: each cell walked is read."""
+    for side, where in ((-1, "in the previous cell"), (1, "in the next cell")):
+        k = col + side
+        while 0 <= k < len(row):
+            text = str(row[k] or "")
+            if (bad := unreadable(text)) is not None:
+                return context_sentence(literal, bad[1], where)
+            if not (gaps.blank(text) or punct_only(gaps.strip(text))):
+                break
+            k += side
     return ""
 
 
@@ -305,7 +318,7 @@ def verify(record_like: Any, pages_doc: dict[str, Any], *, field_type: str = "nu
     value = str(rec.get("value") if rec.get("value") is not None else "")
     snippet = str(loc.get("snippet") or "")
     style = loc.get("decimal_style") or pages_doc.get("decimal_style") or "."
-    if not snippet.strip():
+    if not gaps.strip(snippet):
         return _fail(loc, M.REASON_EMPTY_SNIPPET)
     if len(snippet) > MAX_SNIPPET_CHARS:
         return _fail(loc, M.REASON_SNIPPET_TOO_LONG)

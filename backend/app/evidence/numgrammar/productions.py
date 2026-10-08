@@ -2,7 +2,15 @@
 
 CITATION (decision 7). An unmistakable bracketed citation is a NON-VALUE token::
 
-    citation = "[" ref {("," | "-") ref} "]"      ref = [1-9] digit{0,2}; no digit right after "]"
+    group    = "[" gap* ref {gap* ("," | "-") gap* ref} gap* "]"     ref = [1-9] digit{0,2}; no digit right after "]"
+    citation = an unmistakable group (below)                         '[46]', '[1, 2, 3]', '[12-15]', '[ 12 ]'
+    bracket_list = a group with a comma that is NOT unmistakable but starts a word: '12 [1,2]', a cell '[1, 5]'
+
+r7 round 2: the gaps of a spaced Vancouver list ('efflux [12, 13]') belong to the group (they were read as three
+numbers),
+and the one other bracket production is the ``bracket_list``: a comma list of reference-like integers in square brackets
+is a list, never a decimal or a thousands number (it replaces scan.py's detector of the one shape ``[n,m]``). Both are
+masked and emitted as unresolved expressions with the references as parts.
 
 It is unmistakable when it is glued to a word (after a letter, or after a trailing closer that follows a letter:
 ``studies[47-49]``, ``al.[1]``, ``(ADC)[4]``), when it continues a citation (``[1][2]``, ``[27] [28]``,
@@ -34,12 +42,14 @@ from bisect import bisect_left
 from typing import NamedTuple
 
 from app.evidence.numgrammar.alphabet import (
+    DECIMAL_MARKS,
     DIGITS,
     EXP_MARKERS,
     GAP,
     INSIDE,
     LETTERS,
     MULTIPLIERS,
+    REF_SEPARATORS,
     STARTERS,
     TRAILING,
     char_class,
@@ -51,9 +61,13 @@ CHI = "\u03c7"                                     # GREEK SMALL LETTER CHI: a t
 _GAPS = char_class(GAP, negate=False) + "*"
 _CHI_SQUARE = re.compile(CHI + "(?=(?:\u00b2|2)(?:\\((?:df" + _GAPS + "=" + _GAPS + ")?[0-9]{1,3}\\))?" + _GAPS + "="
                          + _GAPS + "[0-9])")
-_GROUP = re.compile("\\[[1-9][0-9]{0,2}(?:[,-][1-9][0-9]{0,2})*\\](?![0-9])")
+_REF_SEP = char_class(REF_SEPARATORS, negate=False)
+_GROUP = re.compile("\\[" + _GAPS + "[1-9][0-9]{0,2}(?:" + _GAPS + _REF_SEP + _GAPS + "[1-9][0-9]{0,2})*" + _GAPS
+                    + "\\](?![0-9])")
+_LIST_SEP = (REF_SEPARATORS & DECIMAL_MARKS)                 # the comma that makes a bracket group a list
 _REF = re.compile("[0-9]+")
 _GAP_RE = re.compile(char_class(GAP, negate=False))
+_NON_GAP_RE = re.compile(char_class(GAP, negate=True))
 _CLOSE = "".join(sorted(TRAILING))                # closers that may stand between a word and its citation
 _LONE = MULTIPLIERS | EXP_MARKERS                 # a one-character multiplier or exponent word: never before a citation
 
@@ -62,6 +76,7 @@ class Cite(NamedTuple):
     start: int
     end: int
     refs: tuple[float, ...]
+    why: str = "citation"                         # or "bracket_list" (r7 round 2)
 
 
 def _previous_word(t: str, s: int) -> tuple[int, int] | None:
@@ -148,26 +163,31 @@ def _unmistakable(t: str, s: int, chain: int, word_start: _WordStarts) -> bool:
 
 
 def citations(t: str) -> list[Cite]:
-    """Every unmistakable citation of the folded text *t*, in order."""
+    """Every unmistakable citation and every bracket list of the folded text *t*, in order."""
     out: list[Cite] = []
     chain = -1
     word_start = _WordStarts(t)
     for m in _GROUP.finditer(t):
+        refs = tuple(to_float(r) for r in _REF.findall(m.group()))
         if _unmistakable(t, m.start(), chain, word_start):
-            out.append(Cite(m.start(), m.end(), tuple(to_float(r) for r in _REF.findall(m.group()))))
+            out.append(Cite(m.start(), m.end(), refs))
             chain = m.end()
+        elif (m.start() == 0 or t[m.start() - 1] in GAP) and not _LIST_SEP.isdisjoint(m.group()):
+            out.append(Cite(m.start(), m.end(), refs, "bracket_list"))
     return out
 
 
 def mask_citations(t: str, cites: list[Cite]) -> str:
-    """*t* with every citation replaced 1:1 by ``MASK_LETTER``: offsets never move."""
+    """*t* with every character of every citation but its gaps replaced 1:1 by ``MASK_LETTER``: offsets never move and a
+    line break inside a spaced list stays a line break."""
     if not cites:
         return t
     parts, at = [], 0
     for c in cites:
-        parts += [t[at:c.start], MASK_LETTER * (c.end - c.start)]
+        parts += [t[at:c.start], _NON_GAP_RE.sub(MASK_LETTER, t[c.start:c.end])]
         at = c.end
     return "".join(parts) + t[at:]
+
 
 
 def mask_chi_square(t: str) -> str:

@@ -27,6 +27,7 @@ from pdfminer.pdfinterp import PDFPageInterpreter
 from pdfminer.pdftypes import PDFStream, resolve1
 from pdfplumber.page import PDFPageAggregatorWithMarkedContent
 
+from app.evidence import gaps
 from app.evidence.numgrammar.alphabet import DIGITS, cls
 from app.evidence.numgrammar.equivalents import THIN, THIN_SOURCES
 
@@ -164,7 +165,7 @@ def _on_dark_box(c: dict[str, Any], boxes: list[dict[str, Any]]) -> bool:
 def _squashed(c: dict[str, Any]) -> bool:
     """Drawn with (near) zero width or height: '1 Tz', a squashing Tm, or a sub-point font."""
     text = str(c.get("text", ""))
-    if not text.strip() or cls(text[:1]) == "outside":     # spaces; a character the reader cannot read is never dropped
+    if gaps.blank(text) or cls(text[:1]) == "outside":     # spaces; a character the reader cannot read is never dropped
         return False
     width, height = float(c["x1"]) - float(c["x0"]), float(c["bottom"]) - float(c["top"])
     return height < MIN_GLYPH_PT or width < MIN_WIDTH_EM * max(height, float(c.get("size") or 0.0))

@@ -4,13 +4,16 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar.alphabet import (
+    CARET,
     DIGITS,
+    EXP_MARKERS,
     LETTERS,
     MULTIPLIERS,
     NUMBER_CLOSERS,
     OPENERS_BR,
     OPERATORS,
     QUALIFIERS,
+    RATIO_MARKS,
     SIGNS,
     STARTERS,
     SUP_CHARS,
@@ -20,16 +23,16 @@ from app.evidence.numgrammar.alphabet import (
     char_class,
 )
 
-MULT_CHARS = "".join(sorted(MULTIPLIERS))               # for str.strip
 _MULT = char_class(MULTIPLIERS, negate=False)
-_POWER = ("(?:\\^[-+]?[0-9]{1,4}|" + char_class(SUP_SIGNS, negate=False) + "?"
+_POWER = ("(?:\\^" + char_class(SIGNS, negate=False) + "?[0-9]{1,4}|" + char_class(SUP_SIGNS, negate=False) + "?"
           + char_class(SUP_DIGITS, negate=False) + "{1,4})")
 BARE_POWER_RE = re.compile("10" + _POWER)               # '10^3', '10⁻³': a ten with a power, no mantissa
 MULT_POWER_RE = re.compile(_MULT + "10" + _POWER)       # '×10^3', 'x10³': a multiplier glued to a power of ten
 MULT_TEN_RE = re.compile(_MULT + "10(?!0)[0-9]*")       # 'x103', '×10': a multiplier glued to a ten, no power
-E_WORD_RE = re.compile("[eE][-+]?[0-9]{1,4}")           # a spaced exponent: 'E-03', 'e3'
+E_WORD_RE = re.compile(char_class(EXP_MARKERS, negate=False) + char_class(SIGNS, negate=False)
+                       + "?[0-9]{1,4}")                     # a spaced exponent: 'E-03', 'e3'
 FRACTION_RE = re.compile("[0-9]{1,3}/[0-9]{1,3}")       # '3/4'
-CARET_OR_SUP_RE = re.compile("[\\^" + "".join(sorted(SUP_CHARS)) + "]")
+CARET_OR_SUP_RE = re.compile(char_class(SUP_CHARS | {CARET}, negate=False))
 DIGIT_RE = re.compile("[0-9]")
 
 # special words
@@ -39,7 +42,7 @@ E_WORD, FRACTION, MULT_POWER, MULT_TEN = "eword", "fraction", "multpow", "multte
 def special(w: str) -> str:
     """The special shape of the whole word *w*, '' for an ordinary word."""
     c = w[0]
-    if c == "e" or c == "E":
+    if c in EXP_MARKERS:
         return E_WORD if E_WORD_RE.fullmatch(w) else ""
     if c in DIGITS:
         return FRACTION if "/" in w and FRACTION_RE.fullmatch(w) else ""
@@ -53,7 +56,7 @@ def special(w: str) -> str:
 def is_mult_word(w: str) -> bool:
     """A word that is ONE multiplier character (``x``, ``X``, ``*``, ``×``, ``·``): ``xx`` and ``**`` are
     not multipliers (``1.2 ** 10^3`` must not read as 1.2 x 10^3)."""
-    return len(w) == 1 and w in MULT_CHARS
+    return w in MULTIPLIERS
 
 
 def ten_shape(w: str) -> bool:
@@ -77,7 +80,7 @@ def exp_like(w: str) -> bool:
     return BARE_POWER_RE.fullmatch(w) is None and MULT_POWER_RE.fullmatch(w) is None
 
 
-RATIO_CHARS = frozenset("/:")                           # a lone word of one of these between two numbers is a ratio
+RATIO_CHARS = RATIO_MARKS                                # a lone word of one of these between two numbers is a ratio
 RATIO_TRAIL = "".join(sorted(TRAILING))                  # closers a spaced ratio's denominator word may end with
 
 

@@ -16,9 +16,26 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
+from app.evidence import gaps
+from app.evidence.letter_tables import HEADER_SPELLINGS, casefold_letters
 from app.evidence.numgrammar import GAP, claim_decimal, find_dose, find_n_lead, parse_claim, tokens
-from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, char_class
-from app.evidence.numgrammar.equivalents import HEADER_SPELLINGS, THIN, casefold_letters, fold
+from app.evidence.numgrammar.alphabet import (
+    ASCII_LETTERS,
+    CARET,
+    CLOSERS_BR,
+    DECIMAL_MARKS,
+    DIGITS,
+    GREEK,
+    LETTERS,
+    MULTIPLIERS,
+    OPENERS_BR,
+    PERCENTS,
+    PRODUCT_DOTS,
+    SIGNS,
+    SLASH,
+    char_class,
+)
+from app.evidence.numgrammar.equivalents import THIN, fold
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
 VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
@@ -28,11 +45,15 @@ DISPERSION_HEADERS = frozenset({"sd", "se", "sem", "rse", "cv", "cv%", "%cv", "r
                                 "90%ci", "range", "iqr", "min", "max", "p", "pvalue", "n", "shrinkage", "iiv"})
 _KEY_STRIP = re.compile(char_class(GAP | frozenset({THIN, "_", "-", ",", "."}), negate=False) + "+")
 _HEADER_TABLE = str.maketrans(HEADER_SPELLINGS)
-_PAREN_UNIT_RE = re.compile(r"^(?P<label>.*?)\s*[(\[](?P<unit>[^()\[\]]{1,40})[)\]]\s*$")
+_PAREN_UNIT_RE = re.compile("^(?P<label>.*?)" + char_class(GAP, negate=False) + "*"
+                             + char_class(OPENERS_BR, negate=False)
+                             + "(?P<unit>" + char_class(OPENERS_BR | CLOSERS_BR, negate=True) + "{1,40})"
+                             + char_class(CLOSERS_BR, negate=False) + char_class(GAP, negate=False) + "*$")
 _SPACE = char_class(GAP, negate=False)
-_UNIT_HEAD = char_class(ASCII_LETTERS | GREEK | frozenset("%\u00b5"), negate=False)
-_UNIT_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_%\u00b5"), negate=False)
-_UNIT_BODY = "(?:" + _UNIT_WORD + "|[/\u00b7^.*\\-]){0,24}"
+_UNIT_HEAD = char_class(ASCII_LETTERS | GREEK | PERCENTS, negate=False)       # a unit symbol starts with one of these
+_UNIT_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | PERCENTS, negate=False)
+_UNIT_JOINS = SLASH | PRODUCT_DOTS | {CARET} | DECIMAL_MARKS | (MULTIPLIERS - LETTERS) | SIGNS
+_UNIT_BODY = "(?:" + _UNIT_WORD + "|" + char_class(_UNIT_JOINS, negate=False) + "){0,24}"
 _TRAIL_UNIT_RE = re.compile("^" + _SPACE + "*(?P<unit>" + _UNIT_HEAD + _UNIT_BODY + ")" + _SPACE + "*$")
 _DOSE_CTX = re.compile(r"\bdos(?:e|es|ed|ing|age)\b|\badminist", re.IGNORECASE)
 
@@ -86,9 +107,9 @@ def field_index(template: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 
 def split_unit(label: str) -> tuple[str, str | None]:
     """'Cmax (ng/mL)' -> ('Cmax', 'ng/mL'); a label without a bracketed unit -> (label, None)."""
-    text = " ".join(str(label or "").split())
+    text = gaps.collapse(str(label or ""))
     m = _PAREN_UNIT_RE.match(text)
-    return (m.group("label").strip(), m.group("unit").strip() or None) if m else (text, None)
+    return (gaps.strip(m.group("label")), gaps.strip(m.group("unit")) or None) if m else (text, None)
 
 
 def match_field(text: str, index: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -123,8 +144,10 @@ def leading_number(cell: str, style: str) -> tuple[str, float, str] | None:
 
 
 def trailing_unit(rest: str) -> str | None:
-    m = _TRAIL_UNIT_RE.match(rest)
-    return m.group("unit") if m else None
+    """The unit printed after a cell's number, as printed: matched on the folded text (the micro sign is the Greek mu,
+    1:1, so the printed span is the same span)."""
+    m = _TRAIL_UNIT_RE.match(fold(rest))
+    return rest[m.start("unit"):m.end("unit")] if m else None
 
 
 # ---------------------------------------------------------------- proposals ---
@@ -141,7 +164,7 @@ def _proposal(spec: dict[str, Any], *, source_id: str, page: int, kind: str, sni
 
 def cell_proposal(spec: dict[str, Any], cell_text: str, *, source_id: str, page: int, style: str,
                   cell: dict[str, Any], group: str, unit: str | None) -> dict[str, Any] | None:
-    text = str(cell_text or "").strip()
+    text = gaps.strip(str(cell_text or ""))
     if not text or len(text) > MAX_SNIPPET:
         return None
     value, value_num = text, None
@@ -155,8 +178,8 @@ def cell_proposal(spec: dict[str, Any], cell_text: str, *, source_id: str, page:
 
 
 def _cell_ref(table: dict[str, Any], row: int, col: int, header: str, row_label: str) -> dict[str, Any]:
-    return {"table": int(table.get("index") or 0), "row": row, "col": col, "header": header.strip(),
-            "row_label": row_label.strip()}
+    return {"table": int(table.get("index") or 0), "row": row, "col": col, "header": gaps.strip(header),
+            "row_label": gaps.strip(row_label)}
 
 
 def _wide(rows: list[list[str]], matched: dict[int, dict[str, Any]], table: dict[str, Any], page: int,
@@ -164,9 +187,9 @@ def _wide(rows: list[list[str]], matched: dict[int, dict[str, Any]], table: dict
     out = []
     header = rows[0]
     for ri, row in enumerate(rows[1:], 1):
-        row_label = row[0].strip() if row else ""
+        row_label = gaps.strip(row[0]) if row else ""
         for ci, spec in matched.items():
-            if ci >= len(row) or not row[ci].strip():
+            if ci >= len(row) or not gaps.strip(row[ci]):
                 continue
             _, unit = split_unit(header[ci])
             p = cell_proposal(spec, row[ci], source_id=source_id, page=page, style=decimal_style(spec, doc),
@@ -181,13 +204,13 @@ def _long_columns(header: list[str]) -> tuple[int | None, list[tuple[int, str]],
     unit_col = next((ci for ci, h in enumerate(header[1:], 1) if norm_key(h) in UNIT_HEADERS), None)
     value_cols, skipped = [], []
     for ci, h in enumerate(header[1:], 1):
-        if ci == unit_col or not h.strip():
+        if ci == unit_col or not gaps.strip(h):
             continue
         label, _ = split_unit(h)
         if norm_key(label) in DISPERSION_HEADERS:
-            skipped.append(h.strip())
+            skipped.append(gaps.strip(h))
             continue
-        value_cols.append((ci, "" if norm_key(h) in VALUE_HEADERS else h.strip()))
+        value_cols.append((ci, "" if norm_key(h) in VALUE_HEADERS else gaps.strip(h)))
     return unit_col, value_cols, skipped
 
 
@@ -198,14 +221,14 @@ def _long(rows: list[list[str]], index: dict[str, dict[str, Any]], table: dict[s
     out = []
     for ri, row in enumerate(rows[1:], 1):
         label = row[0] if row else ""
-        spec = match_field(label, index) if label.strip() else None
+        spec = match_field(label, index) if gaps.strip(label) else None
         if spec is None:
-            if label.strip():
-                unmatched.append(label.strip())
+            if gaps.strip(label):
+                unmatched.append(gaps.strip(label))
             continue
         _, unit = split_unit(label)
-        if unit_col is not None and unit_col < len(row) and row[unit_col].strip():
-            unit = row[unit_col].strip()
+        if unit_col is not None and unit_col < len(row) and gaps.strip(row[unit_col]):
+            unit = gaps.strip(row[unit_col])
         for ci, group in value_cols:
             if ci >= len(row):
                 continue
@@ -224,14 +247,14 @@ def table_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str)
     for page in doc.get("pages") or []:
         for table in page.get("tables") or []:
             rows = [[str(c or "") for c in r] for r in (table.get("rows") or [])
-                    if any(str(c or "").strip() for c in r)]
+                    if any(gaps.strip(str(c or "")) for c in r)]
             if len(rows) < 2:
                 continue
             header = rows[0]
-            matched = {ci: spec for ci, h in enumerate(header) if h.strip() and (spec := match_field(h, index))}
+            matched = {ci: spec for ci, h in enumerate(header) if gaps.strip(h) and (spec := match_field(h, index))}
             if matched:
                 proposals.extend(_wide(rows, matched, table, int(page["n"]), doc, source_id))
-                unmatched.extend(h.strip() for ci, h in enumerate(header) if h.strip() and ci not in matched)
+                unmatched.extend(gaps.strip(h) for ci, h in enumerate(header) if gaps.strip(h) and ci not in matched)
             else:
                 got, missed = _long(rows, index, table, int(page["n"]), doc, source_id)
                 proposals.extend(got)
@@ -249,7 +272,7 @@ def _window(text: str, start: int, end: int) -> str:
     if le - ls > MAX_SNIPPET:
         ls = max(ls, min(start - WINDOW_HALF, le - MAX_SNIPPET))
         le = min(le, ls + MAX_SNIPPET)
-    return text[ls:le].strip()
+    return gaps.strip(text[ls:le])
 
 
 def text_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str) -> list[dict[str, Any]]:

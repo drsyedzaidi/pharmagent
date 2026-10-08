@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from app.evidence import gaps
 from app.evidence.numgrammar.alphabet import CID_MARKER
 from app.evidence.numgrammar.alphabet import NUMBER_CHARS as OVERLAP_CRITICAL
 from app.evidence.numgrammar.equivalents import fold
@@ -82,7 +83,7 @@ def _transfer(page: Any, chars: list[dict[str, Any]], texts: list[str], origins:
         ux, uy, _ = inv @ np.array([float(c["matrix"][4]), float(c["matrix"][5]), 1.0])
         near = [k for i in (-1, 0, 1) for j in (-1, 0, 1) for k in grid.get((int(ux // 2) + i, int(uy // 2) + j), [])]
         near = [(float(np.hypot(origins[k, 0] - ux, origins[k, 1] - uy)), k) for k in near]
-        if not text.strip():
+        if gaps.blank(text):
             spaces[id(c)] = [k for d, k in sorted(near)
                              if d <= EXACT_PT and visible[k] and fold(texts[k]) in OVERLAP_CRITICAL]
             continue

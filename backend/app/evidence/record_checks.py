@@ -16,31 +16,42 @@ import re
 from functools import cache
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key, split_unit
 from app.evidence.normalize import normalise
 from app.evidence.numgrammar import GAP, words_after
-from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, GREEK, LETTERS, MULTIPLIERS, PERCENTS, char_class
+from app.evidence.numgrammar.alphabet import (
+    ASCII_LETTERS,
+    CARET,
+    DIGITS,
+    GREEK,
+    LETTERS,
+    MULT_LETTERS,
+    MULTIPLIERS,
+    PERCENTS,
+    SLASH,
+    char_class,
+)
 from app.evidence.numgrammar.equivalents import fold
-from app.evidence.unit_norm import canonical_unit, normalise_unit, prefix_conflict
+from app.evidence.unit_norm import NOT_CONTINUATIONS, UNIT_SYMBOLS, canonical_unit, normalise_unit, prefix_conflict
 from app.evidence.value_checks import token_context, value_flags
 
 # a printed unit, from explicit classes (the alphabet's letters and digits; the text arrives folded, so the micro sign
 # is already the Greek mu): a symbol led by a letter, or a percent sign; then up to three letters, a slash and more
 _SPACE = char_class(GAP, negate=False)
 _LETTER = char_class(LETTERS, negate=False)                       # a letter of the alphabet (r7: the accented ones too)
-_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_"), negate=False)
+_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS, negate=False)
 _UNIT_CHARS = "(?:" + _WORD + "|[/\u00b7*.^\\-])*"
 _UNIT_TOKEN_RE = re.compile("^" + _SPACE + "*(" + char_class(PERCENTS, negate=False) + "|" + _LETTER + _UNIT_CHARS
                             + "(?:" + _SPACE + "+" + _LETTER
                             + "{1,3}(?:/(?:" + _WORD + "|[.^\\-])+)+)?)")
 _NEXT_TOKEN_RE = re.compile("^" + _SPACE + "*(/|per(?!" + _WORD + ")|" + char_class(GAP, negate=True) + "+)")
-_NOT_CONTINUATIONS = {"x", "fold", "%"}
 UNIT_WORDS = 3          # whole words after the token a printed unit may span ('mg kg-1 h-1', 'ng h/mL')
-_JOINERS = frozenset("/^") | (MULTIPLIERS - frozenset("xX"))   # a next token made only of these continues a unit
-_BASES = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
-          "h", "min", "s", "d", "wk", "iu", "miu", "u", *sorted(PERCENTS), "kda", "m2", "cells", "cell", "10^6", "10^9",
-          "bpm", "mmhg", "x", "fold")
+_JOINERS = SLASH | {CARET} | (MULTIPLIERS - MULT_LETTERS)   # a next token made only of these continues a unit
+# the unit comparison tables are single-sourced in unit_norm.py (r7 round 2): the printed-unit symbols and the words
+# that never continue a unit; never reader data
+_BASES, _NOT_CONTINUATIONS = UNIT_SYMBOLS, NOT_CONTINUATIONS
 
 
 @cache
@@ -100,7 +111,7 @@ def _adjacent_unit(loc: dict[str, Any], page: dict[str, Any]) -> Printed:
     a, b = m.start(1) - len(lead), m.end(1) - len(lead)
     printed = raw[idx[a]:idx[b - 1] + 1] if 0 <= a < b <= len(idx) else None
     tail = rest[m.end():]
-    if not tail.strip():
+    if not gaps.strip(tail):
         return unit, len(words) <= UNIT_WORDS, printed
     return unit, not _continues(tail), printed
 

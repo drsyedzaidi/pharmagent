@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence.parse_guard import _is_white, tables_affordable
 
 CELL_GAP_FACTOR = 2.0           # horizontal gap (x modal size) that separates layout-table cells
@@ -46,7 +47,7 @@ def _inked(o: dict[str, Any]) -> bool:
 
 
 def _clean_cell(cell: Any) -> str:
-    return " ".join(str(cell).split()) if cell is not None else ""
+    return gaps.collapse(str(cell)) if cell is not None else ""
 
 
 def _caption_above(lines: list[dict[str, Any]], top: float) -> str | None:
@@ -141,7 +142,7 @@ def _layout_table(lines: list[dict[str, Any]], start: int, gap: float
             while len(rows[-1]) <= j:
                 rows[-1].append("")
                 words[-1].append([])
-            rows[-1][j] = (rows[-1][j] + " " + cells[0]["text"]).strip()
+            rows[-1][j] = gaps.strip(rows[-1][j] + " " + cells[0]["text"])
             words[-1][j] = words[-1][j] + cells[0]["words"]
         else:
             break
@@ -149,7 +150,7 @@ def _layout_table(lines: list[dict[str, Any]], start: int, gap: float
         i += 1
     if len(rows) < 2:
         return None
-    table = {"strategy": "layout", "bbox": None, "caption": caption.strip(), "rows": rows}
+    table = {"strategy": "layout", "bbox": None, "caption": gaps.strip(caption), "rows": rows}
     return table, {f"{r}:{c}": ws for r, row in enumerate(words) for c, ws in enumerate(row) if ws}
 
 

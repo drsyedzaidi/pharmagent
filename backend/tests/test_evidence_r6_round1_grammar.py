@@ -63,7 +63,9 @@ def test_a_reference_pair_in_square_brackets_is_no_number_and_no_evidence():
     for style in (".", ","):
         # r7 (decision 7): after a word the pair is an unmistakable citation, one non-value expression with its parts
         assert [(t.value, t.why, t.parts) for t in tokens("see [1,2] here", style)] == [(None, "citation", (1.0, 2.0))]
-        assert [(t.value, t.why) for t in tokens("12 [1,2] here", style)] == [(12.0, ""), (None, "citation_list")]
+        # r7 round 2: the pair after a number is the explicit bracket_list production (productions.py), not a detector
+        assert [(t.value, t.why, t.parts) for t in tokens("12 [1,2] here", style)] == [
+            (12.0, "", ()), (None, "bracket_list", (1.0, 2.0))]
     assert vals("[0,5] mg", ",") == [0.5]                                   # a bracketed decimal with head 0 is no pair
 
 

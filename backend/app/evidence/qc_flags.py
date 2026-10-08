@@ -9,9 +9,10 @@ from collections import defaultdict
 from typing import Any
 
 from app.evidence import models as M
+from app.evidence.letter_tables import casefold_letters
 from app.evidence.normalize import numbers_in
 from app.evidence.numgrammar.alphabet import OUTSIDE_RE, WORD_RE
-from app.evidence.numgrammar.equivalents import THIN, casefold_letters, fold
+from app.evidence.numgrammar.equivalents import THIN, fold
 from app.evidence.unit_norm import normalise_unit, same_unit
 
 __all__ = ["normalise_unit", "same_value", "scripted_flags", "merge_llm_flags", "slot_key", "group_key",

@@ -20,7 +20,7 @@ import pdfplumber
 
 from app.evidence import parse_layout
 from app.evidence.normalize import infer_decimal_style
-from app.evidence.numgrammar.alphabet import DIGITS, SIGN_CHARS
+from app.evidence.numgrammar.alphabet import DIGITS, NUMBER_CHARS, SIGN_CHARS
 from app.evidence.numgrammar.equivalents import EQUIV
 from app.evidence.parse_budget import check_glyph_budget
 from app.evidence.parse_fonts import MISMATCH, UNVERIFIED, GlyphChecker
@@ -41,7 +41,7 @@ from app.evidence.parse_tables import find_tables, text_lines
 # visibility filter, thin spaces turned into word gaps, no rendered-ink check, no round-3 glyph / space
 # checks, no layout sidecar) is re-parsed. Version 7 only ADDS the layout sidecar (parse_layout): every
 # text-bearing field is byte-identical to version 6, because stored record spans index them.
-PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 7"
+PARSER_NAME = f"pdfplumber {pdfplumber.__version__} / evidence-parse 8"
 BODY_SIZE_RATIO = 0.75          # chars smaller than this x modal size are 'small_text'
 COLUMN_GAP_FRACTION = 0.08      # minimum empty band (fraction of page width) between two columns
 COLUMN_MIN_WORDS = 20
@@ -243,7 +243,7 @@ def _glyph_check(page, glyphs: GlyphChecker, chars: list[dict[str, Any]],
     try:
         out = {code: set(v) for code, v in glyphs.page(page).items()}
     except Exception:                            # fail closed: the fonts could not be judged
-        out = {UNVERIFIED: set("0123456789")}
+        out = {UNVERIFIED: set(NUMBER_CHARS)}
     extra = {**ink_flags, MISMATCH: set(ink_flags.get(MISMATCH, ())) | orientation_outliers(chars),
              "overlapping_glyphs": overlapping_chars(chars)}
     merged = {code: out.get(code, set()) | set(extra.get(code, ())) for code in {*out, *extra}}

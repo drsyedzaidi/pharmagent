@@ -74,8 +74,11 @@ def test_junk_between_multiplier_and_ten_is_unresolved(junk, cell):
 def test_a_plain_newline_keeps_two_numbers_and_the_line_separators_leave_one_unresolved_expression():
     """Was test_line_separators_stay_two_numbers_like_a_plain_newline: U+2028 / U+2029 / U+0085 read as [1.2, 1000.0]
     like a newline. They are outside the allowed alphabet, so the numbers touching them are ONE unresolved
-    expression; the line feed is the only one that still reads two numbers."""
-    assert [t.value for t in tokens("1.2\n10^3", ".")] == [1.2, 1000.0]
+    expression. r7 round 2 (P0 finding): the line feed no longer reads two numbers either: a bare power one gap after a
+    number is a detached scale (a multiplier the text layer dropped: 'WBC 1.2\n10^9 cells' is 1.2 x 10^9), so both are
+    one unresolved expression that keeps both values as its parts."""
+    got = tokens("1.2\n10^3", ".")
+    assert [(t.value, t.why, t.parts) for t in got] == [(None, "detached_exponent", (1.2, 1000.0))]
     for sep in ("\u2028", "\u2029", "\u0085"):
         toks = tokens(f"1.2{sep}10^3", ".")
         assert [(t.value, t.reason) for t in toks] == [(None, "unresolved_context")], sep

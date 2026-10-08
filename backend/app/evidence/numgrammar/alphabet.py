@@ -54,7 +54,8 @@ DIGITS = frozenset("0123456789")                       # U+0030..U+0039
 SIGNS = frozenset("+-")                                # U+002B U+002D
 SEPARATORS = frozenset(".,'" + THIN + "\u00b7")        # U+002E U+002C U+0027 U+2009 THIN SPACE, U+00B7 MIDDLE DOT
 EXP_MARKERS = frozenset("eE")                          # U+0065 U+0045
-MULTIPLIERS = frozenset("xX*\u00d7\u00b7")             # U+0078 U+0058 U+002A U+00D7 (U+00B7 doubles as one)
+MULT_LETTERS = frozenset("xX")                         # U+0078 U+0058: the two multipliers that are letters
+MULTIPLIERS = MULT_LETTERS | frozenset("*\u00d7\u00b7")   # U+002A U+00D7 (U+00B7 doubles as one)
 CARET = "^"                                            # U+005E
 SUP_DIGITS = frozenset(                                # U+2070 U+00B9 U+00B2 U+00B3 U+2074..U+2079
     "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079")
@@ -110,21 +111,39 @@ UNIT_BASES = frozenset({"g", "h", "L", "y", "M", "min", "m", "w", "mmHg", "Hz", 
 UNIT_PREFIXED_BASES = frozenset({"l"})                                  # a base only after a prefix: 'ml'
 
 # ------------------------------------------------------------------ role sets used by the reader ---
-ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+# Each role set is defined ONCE here, as members of the four lists (an intersection or a union of them: a role set
+# can never hold a character the lists do not; tests/test_evidence_r7_round2_hygiene.py pins every one as a subset of
+# INSIDE, CONTEXT and GAP). No other module of the reader types a character set of its own (r7 round 2).
+ASCII_LETTERS = CONTEXT_LETTERS | EXP_MARKERS | MULT_LETTERS        # the 52 ASCII letters
 # every letter the alphabet lists (a word led by one is a label): the letters whose case the locator, a unit and a
 # header key fold, and between which a hyphen at a line break joins a wrapped word
 LETTERS = ASCII_LETTERS | GREEK | ACCENTED
-ASCII_UPPER = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-GREEK_UPPER = frozenset("\u0394\u03a9\u03a3")                  # the capitals of GREEK (the others are lower case)
-UPPER_LETTERS = ASCII_UPPER | GREEK_UPPER | frozenset("\u00c1\u00c5\u00d6\u00d8\u00c7")   # the capitals of LETTERS
-STARTERS = frozenset("([<>\u2264\u2265~\u2248=\u00b1")  # a token may start right after one of these in a word
-OPERATORS = QUALIFIERS | frozenset("=([:;*+-")           # a run of these before a token qualifies it when it holds one
-RANGE_WORDS = frozenset("-~")                            # a lone word of one of these between two numbers is a range
-NUMBER_CLOSERS = frozenset(")];:,.'%\u2030*")            # may follow the last digit of a number glued to its word
-JOINERS = frozenset("-\u00b1xX*\u00d7\u00b7")            # a token may start right after one that follows a token
-TRAILING = frozenset(")],;:.'")                          # may follow a token glued (not followed by a digit)
 SUP_CHARS = SUP_DIGITS | SUP_SIGNS
 SIGN_CHARS = SIGNS | SUP_SIGNS                           # every sign a number or an exponent can start with
+(MIDDOT,) = SEPARATORS & MULTIPLIERS                     # U+00B7: the one separator that doubles as a multiplier
+STAR = "*"                                               # the multiplier that is also a footnote star run
+SUP_MINUS = "\u207b"                                    # the superscript minus of SUP_SIGNS (a negative power)
+DEGREE = "\u00b0"                                       # the degree sign of CONTEXT_PUNCT ('37°C')
+PRODUCT_DOTS = MULTIPLIERS - MULT_LETTERS - {STAR}       # the times sign and the middle dot
+DECIMAL_MARKS = SEPARATORS & frozenset(".,")             # the separators that may be a decimal point
+GROUP_ONLY = SEPARATORS - DECIMAL_MARKS - {MIDDOT}       # ' and the thin space: they only ever group thousands
+EQUALS = CONTEXT_PUNCT & frozenset("=")
+RATIO_MARKS = CONTEXT_PUNCT & frozenset("/:")            # a lone word of one between two numbers: a ratio mark
+SLASH = CONTEXT_PUNCT & frozenset("/")                   # a ratio's, a unit denominator's and a divisor's slash
+N_LETTERS = CONTEXT_LETTERS & frozenset("nN")            # the 'n' of the sample-size production 'n = 12'
+# a token may start right after one of these in its word ('n=12', '<5', '(12', '±3')
+STARTERS = OPENERS_BR | QUALIFIERS | EQUALS | {PLUS_MINUS}
+# a run of these before a token qualifies it when it holds a qualifier ('<=', '~=', '<(', '<-')
+OPERATORS = QUALIFIERS | EQUALS | OPENERS_BR | (CONTEXT_PUNCT & frozenset(":;")) | (MULTIPLIERS & {STAR}) | SIGNS
+HYPHEN = SIGNS & frozenset("-")                          # the hyphen-minus (a sign, a range dash, a word's hyphen)
+RANGE_WORDS = HYPHEN | (QUALIFIERS & frozenset("~"))      # a lone one between two numbers: a range
+# may follow a token glued to it (not followed by a digit)
+TRAILING = CLOSERS_BR | (CONTEXT_PUNCT & frozenset(";:")) | DECIMAL_MARKS | (SEPARATORS & frozenset("'"))
+NUMBER_CLOSERS = TRAILING | PERCENTS | (MULTIPLIERS & {STAR})   # may follow the last digit of a number in its word
+JOINERS = (SIGNS & frozenset("-")) | {PLUS_MINUS} | MULTIPLIERS  # a token may start right after one after a token
+REF_SEPARATORS = (DECIMAL_MARKS & frozenset(",")) | (SIGNS & frozenset("-"))   # between the references of a citation
+NAME_LETTER = "q"                                        # the CONTEXT letter a label digit reads as (decision 3)
+LIST_MARKS = (DECIMAL_MARKS & frozenset(",")) | (CONTEXT_PUNCT & frozenset(";"))   # end a list item ('1/2, 3/4')
 SUP_TO_ASCII = str.maketrans("\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b",
                              "0123456789+-")
 

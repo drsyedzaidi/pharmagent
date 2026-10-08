@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.evidence import gaps
 from app.evidence import models as M
 from app.evidence.normalize import decimal_evidence
 from app.evidence.numgrammar import (
@@ -36,19 +37,26 @@ from app.evidence.numgrammar import (
     words_before,
 )
 from app.evidence.numgrammar import words as W
-from app.evidence.numgrammar.alphabet import RANGE_WORDS
+from app.evidence.numgrammar.alphabet import CLOSERS_BR, QUALIFIERS, RANGE_WORDS, TRAILING
+from app.evidence.numgrammar.units import UNIT_RE
 from app.evidence.qc_flags import is_interval_field
 from app.evidence.read_cache import cached, read
+from app.evidence.word_lists import (
+    AFTER_SCALE_WORDS,
+    BOUND_LEADS,
+    BOUND_WORDS,
+    EQUAL,
+    OR,
+    QUALIFIER_WORDS,
+    SCALE_SYMBOLS,
+    TO,
+)
 
-# a word BEFORE the token that makes it a bound or an approximation ('below 12.4', 'BLQ 12.4', 'approx. 12.4'); every
-# word list is matched with ``loose_in``, so a look-alike spelling ('αbove') raises the flag the plain one does
-_QUALIFIER_WORDS = frozenset({"below", "above", "under", "over", "approximately", "approx", "about", "circa", "ca",
-                              "blq", "bloq", "lloq", "uloq"})
-# the only look-backs: 'less than', 'more than', 'greater than', 'up to', 'at least', 'at most' and '... or equal to'
-_BOUND_WORDS = frozenset({"than", "to", "least", "most"})
-_BOUND_LEADS = frozenset({"less", "more", "greater", "up", "at"})
-_TO, _OR, _EQUAL = frozenset({"to"}), frozenset({"or"}), frozenset({"equal"})
-_TRAIL = ".,;:"
+# the word lists of these checks (qualifier, bound and scale words) are in word_lists.py: every one is matched with
+# ``loose_in``, so a look-alike spelling ('αbove') raises the flag the plain one does
+_QUALIFIER_WORDS, _BOUND_WORDS, _BOUND_LEADS = QUALIFIER_WORDS, BOUND_WORDS, BOUND_LEADS
+_TO, _OR, _EQUAL = TO, OR, EQUAL
+_TRAIL = "".join(sorted(TRAILING - CLOSERS_BR - {"'"}))
 DECISIVE_MIN, DECISIVE_RATIO = 3, 3
 LOOK_BACK = 4                      # words before the token the qualifier look-back reads ('less than or equal to')
 
@@ -147,7 +155,8 @@ def _qualifier(tok: Tok, text: str, a: int, prev: list[str]) -> str:
     w = [x.rstrip(_TRAIL) for x in prev]
     w1, w2, w3 = (w[-1] if w else ""), (w[-2] if len(w) > 1 else ""), (w[-3] if len(w) > 2 else "")
     if tok.qualified:
-        return _own_prefix(text, a) or (prev[-1] if prev else "")
+        return _own_prefix(text, a) or next((x for x in reversed(prev) if not QUALIFIERS.isdisjoint(x)),
+                                            prev[-1] if prev else "")
     if W.qualifies(prev):
         return prev[-1]
     if loose_in(w1, _BOUND_WORDS) and loose_in(w2, _BOUND_LEADS):
@@ -193,12 +202,38 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
 def _header_rows(rows: list[Any]) -> list[int]:
     """Indexes of the rows of a table that hold no data cell after their first cell (header rows), once per request."""
     return cached(("header rows", id(rows)),
-                  lambda: [i for i, h in enumerate(rows) if not any(is_data_cell(str(x or "").strip()) for x in h[1:])],
+                  lambda: [i for i, h in enumerate(rows)
+                           if not any(is_data_cell(gaps.strip(str(x or ""))) for x in h[1:])],
                   sum(len(r) for r in rows))
+
+
+def scale_after(loc: dict[str, Any], page: dict[str, Any]) -> str:
+    """The scale printed right AFTER the verified token, '' when none: a glued bare capital M (``1.5M``: the unit
+    production reads it as molar, but it may be millions), a scale word (``1.5 million``, ``1.5 bn``; a look-alike
+    spelling
+    counts) or a scale symbol (``1.5 k``, ``1.5 M``) as the next word (r7 round 2)."""
+    got = verified_token(loc, page)
+    if got is None or got[3] is None:
+        return ""
+    text, _, b, _ = got
+    e = b
+    while e < len(text) and text[e] not in GAP:
+        e += 1
+    glued = text[b:e]                                   # the rest of the token's own word ('M' of '1.5M')
+    m = UNIT_RE.match(glued)
+    if m is not None and glued[:m.end()] in SCALE_SYMBOLS:
+        return glued[:m.end()]
+    nxt = words_after(text, b, 1)
+    word = nxt[0].rstrip(_TRAIL + "".join(sorted(CLOSERS_BR))) if nxt else ""
+    return word if word in SCALE_SYMBOLS or (word and loose_in(word, AFTER_SCALE_WORDS)) else ""
 
 
 def scaled_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
     loc = p.get("locator") or {}
+    after = scale_after(loc, page)
+    if after:
+        return [_flag(M.FLAG_SCALED_HEADER, "error", f"{p['field']}: the page prints {after!r} right after the number: "
+                      "the printed number is not the value until it is scaled; compare with the page image", p)]
     labels = [str(p.get("unit") or "")]
     if loc.get("kind") == "table":
         cell = loc.get("cell") or {}
@@ -208,7 +243,7 @@ def scaled_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]
             block = [rows[i] for i in _header_rows(rows) if i < cell["row"]] or [header]
             labels += [str(h[col] or "") for h in block if col < len(h)] + [str(row[0] or "") if row else ""]
             labels += [str(row[i] or "") for i, h in enumerate(header)
-                       if i < len(row) and str(h or "").strip().casefold() in ("unit", "units")]
+                       if i < len(row) and gaps.strip(str(h or "")).casefold() in ("unit", "units")]
             labels += [str(row[k] or "") for k in (col - 1, col + 1) if 0 <= k < len(row)]   # a scale cell beside it
         except (KeyError, IndexError, TypeError):
             pass

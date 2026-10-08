@@ -29,6 +29,8 @@ from typing import NamedTuple
 
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
+    DECIMAL_MARKS,
+    DEGREE,
     DIGITS,
     EXP_MARKERS,
     INSIDE,
@@ -45,6 +47,7 @@ from app.evidence.numgrammar.alphabet import (
     STARTERS,
     SUP_CHARS,
     SUP_DIGITS,
+    SUP_MINUS,
     SUP_SIGNS,
     SUP_TO_ASCII,
     TRAILING,
@@ -58,14 +61,11 @@ from app.evidence.numgrammar.units import unit_end
 
 _DIG = re.compile("[0-9]+")
 _PLAIN_INT = re.compile("0|[1-9][0-9]{0,39}")
-_PLAIN_DEC = re.compile("(0|[1-9][0-9]{0,38})([.,])([0-9]{1,39})")
+_PLAIN_DEC = re.compile("(0|[1-9][0-9]{0,38})(" + char_class(DECIMAL_MARKS, negate=False) + ")([0-9]{1,39})")
 _SUPDIG = re.compile(char_class(SUP_DIGITS, negate=False) + "+")
-_CITATION = re.compile("\\[[1-9][0-9]?,[0-9]{1,2}\\]")      # '[1,2]': a pair of reference numbers, never a decimal
 RATIO_INT = re.compile("0|[1-9][0-9]{0,5}")                 # one side of a ratio (r7, owner decision 6)
 OK, PCT, STAR, TAIL, UNIT, BAD = 0, 1, 2, 3, 4, -1
 TAIL_NONE, TAIL_MULT, TAIL_STAR = 0, 1, 2
-_SUP_MINUS = "\u207b"
-_DEGREE = "\u00b0"
 
 
 class Scan(NamedTuple):
@@ -96,7 +96,7 @@ def read_power(w: str, k: int, n: int) -> tuple[int | None, int] | None:
     if c in SUP_CHARS:
         p, neg = k, False
         if c in SUP_SIGNS:
-            neg, p = c == _SUP_MINUS, p + 1
+            neg, p = c == SUP_MINUS, p + 1
         m = _SUPDIG.match(w, p)
         return None if m is None else (exp_int(m.group().translate(SUP_TO_ASCII), neg), m.end())
     return None
@@ -184,6 +184,8 @@ def read_token(w: str, s: int, n: int, style: str) -> tuple | None:
         if mant is not None and not isinstance(mant, str):
             exp = _exponent(w, j, n, sign, mant[0])
             body = mant if exp is not None else body
+        elif mant is None and seps and _exponent(w, j, n, sign, "1") is not None:
+            return j, None, "groups", "", ""      # r7 round 2: a thousands group never carries an exponent
     if isinstance(body, str):
         return j, None, body, "", ""
     canon, shape, mark = body
@@ -230,7 +232,7 @@ def post(w: str, e: int, n: int) -> tuple[int, int, str]:
         if y == "" or y in TRAILING:
             return STAR, k, ""
         return _after_mult(w, e, n, p, y) if k == e + 1 and y in DIGITS else (BAD, e, "glued_symbol")
-    if p == _DEGREE or p in OPENERS_BR:
+    if p == DEGREE or p in OPENERS_BR:
         return OK, e, ""
     if p == "/":
         return (OK, e, "") if x != "" and x not in DIGITS else (BAD, e, "glued_symbol")
@@ -244,6 +246,25 @@ def post(w: str, e: int, n: int) -> tuple[int, int, str]:
         u = unit_end(w, e)
         return (UNIT, u, "") if u > e else (BAD, e, "glued_letters")
     return BAD, e, "glued_symbol"
+
+
+def lead_power(w: str, i: int) -> int:
+    """The index of the power (its caret or first superscript) when ``w[i:]`` starts with a power of ten (``10^3``,
+    ``10⁻³``) that ends the way a glued token may end (``post``: the word end, a trailing closer not before a digit, an
+    opener, a unit, a denominator, a percent or star suffix) and whatever follows is inert glue: ``10^3.``, ``10^3)``,
+    ``10^3/mL``; -1 otherwise (``10^3x``, ``10^3-``, ``10^3.5``, ``10^3/5``). The multiplier-power production across a
+    gap reads its power word with this (r7 round 2: '1.2 x 10^3.' reads like '1.2x10^3.')."""
+    n = len(w)
+    if w[i:i + 2] != "10" or i + 2 >= n:
+        return -1
+    pw = read_power(w, i + 2, n)
+    if pw is None:
+        return -1
+    act, after, _ = post(w, pw[1], n)
+    if act in (BAD, TAIL):
+        return -1
+    rest = w[after:] if act in (PCT, STAR, UNIT) else w[pw[1]:]
+    return i + 2 if not rest or (_DIG.search(rest) is None and glue(rest)) else -1
 
 
 def ratio_parts(num: str, den: str) -> tuple[float, str, tuple[float, float]] | None:
@@ -288,8 +309,6 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     m = _PLAIN_DEC.fullmatch(w)
     if m is not None and not isinstance(body := read_body([m[1], m[3]], [m[2]], style), str):
         return Scan("numeric", (Tok(off, off + n, to_float(body[0]), body[1], (), False, False, body[0], body[2]),))
-    if w[0] == "[" and _CITATION.fullmatch(w.rstrip(".,;:)'")) is not None:
-        return _rejected("citation_list", [])
     lead_i = 1 if w[0] in STARTERS else 0
     lead = w[lead_i] if lead_i < n else ""
     numeric_led = lead != "" and lead in INSIDE and lead not in ASCII_LETTERS
@@ -362,4 +381,5 @@ def scan_word(w: str, off: int, style: str) -> Scan:
     return Scan("numeric", tuple(toks), tail, unit=unit, dash=rest == "-")
 
 
-__all__ = ["LABEL", "RATIO_INT", "Scan", "post", "ratio_parts", "read_power", "read_token", "scan_word", "REASON_SHAPE"]
+__all__ = ["LABEL", "RATIO_INT", "Scan", "lead_power", "post", "ratio_parts", "read_power", "read_token", "scan_word",
+           "REASON_SHAPE"]

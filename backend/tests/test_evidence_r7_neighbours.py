@@ -200,6 +200,6 @@ def test_the_sweep_catches_a_reader_without_the_window_rule(monkeypatch):
 
 def test_the_sweep_catches_a_prose_rule_that_accepts_an_operator_letter(monkeypatch):
     from app.evidence.numgrammar import glue as G
-    monkeypatch.setattr(G, "operator_letter", lambda w, i: False)
+    monkeypatch.setattr(G, "operator_letter", lambda w, i, *bounds: False)        # r7 round 2: (w, i, core bounds)
     errors, _ = N.sweep(["e", "x", "(x", "E,"])
     assert errors

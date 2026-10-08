@@ -30,7 +30,7 @@ def one(text: str):
 @pytest.mark.parametrize("text, span, value, parts, canonical", [
     ("12/15", (0, 5), 0.8, (12.0, 15.0), "12/15"),
     ("3/4", (0, 3), 0.75, (3.0, 4.0), "3/4"),
-    ("BP 140/90 mmHg", (3, 9), 140 / 90, (140.0, 90.0), "140/90"),
+    ("BP 140/90 at rest", (3, 9), 140 / 90, (140.0, 90.0), "140/90"),
     ("responders (12/15).", (12, 17), 0.8, (12.0, 15.0), "12/15"),
     ("0/15 responded", (0, 4), 0.0, (0.0, 15.0), "0/15"),
     ("12 / 15", (0, 7), 0.8, (12.0, 15.0), "12/15"),
@@ -53,6 +53,13 @@ def test_every_other_slash_or_colon_shape_is_refused(text):
     assert got and all(t.value is None and t.reason == "unresolved_shape" for t in got if t.parts or "/" in
                        text[t.start:t.end] or ":" in text[t.start:t.end]), (text, got)
     assert not any(t.shape == "ratio" for t in got), (text, got)
+
+
+def test_a_ratio_with_a_unit_after_it_is_refused_with_both_parts():
+    """r7 round 2 (P0 finding): a ratio is dimensionless; '140/90 mmHg' prints two pressures, never their quotient 1.56
+    (it was a resolved ratio of value 140/90 until round 2)."""
+    got = tokens("BP 140/90 mmHg")
+    assert [(t.value, t.why, t.parts) for t in got] == [(None, "fraction", (140.0, 90.0))]
 
 
 def test_a_mixed_number_and_a_ratio_inside_a_label_word_are_never_a_ratio():

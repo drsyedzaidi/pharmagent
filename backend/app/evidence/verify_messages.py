@@ -10,6 +10,9 @@ from __future__ import annotations
 import unicodedata
 
 from app.evidence.numgrammar import Tok
+from app.evidence.numgrammar.alphabet import CLOSERS_BR, TRAILING
+
+_GLUE_MARKS = TRAILING - CLOSERS_BR - {"'"}         # , . ; : glued between a name and its digits ('Cmax:12')
 
 COMPARE = "Compare the value with the page image."
 SHAPE_WHY = {
@@ -51,7 +54,14 @@ def shape_sentence(expr: str, why: str) -> str:
 
 
 def label_sentence(literal: str, label: str) -> str:
-    """The cited number *literal* is a digit run of the label word *label* (r7, owner decision 3)."""
+    """The cited number *literal* is a digit run of the label word *label* (r7, owner decision 3). When a mark glues it
+    to the name ('Cmax:12', 'Cmax,12', 'p<.05': r7 round 2) the sentence says so: it may be a value written without a
+    space, which the reader cannot tell from digits of a name."""
+    at = label.find(literal)
+    if at > 0 and label[at - 1] in _GLUE_MARKS:
+        return (f"the cited number {literal!r} is glued to the name {label!r} by {label[at - 1]!r} with no space: a "
+                f"value written after a name cannot be told from digits inside a name (AUC0-24, CYP2D6, t1/2), so it "
+                f"is not read as a number here; read it on the page image.")
     return (f"the cited number {literal!r} is part of the label {label!r}: digits inside a word led by a letter "
             f"(AUC0-24, CYP2D6, t1/2) are a name, never a value; cite a number printed on its own.")
 

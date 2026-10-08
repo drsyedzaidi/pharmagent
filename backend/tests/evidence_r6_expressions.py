@@ -93,6 +93,12 @@ _TEMPLATES = [
     ("label_range", "page", ".", "|AUC|0|-|24| |-|0.5| |h|"),
     ("label_ratio", "page", ".", "|by |CYP|2|D|6| |3|/|4| |of|"),
     ("label_cite", "page", ".", "|CYP|2|D|6| |[38]| |20 |trials|"),
+    # r7 round 2: the taint window follows the allow-list window past punctuation words, across a line break: a code
+    # point inserted as its own word one punctuation word away from the number (the four sweep templates of the review)
+    ("window_after_open", "page", ".", "Cmax 12.5\n(  |  cells/L)"),
+    ("window_before_open", "page", ".", "Dose | \n( 12.5 ) mg"),
+    ("window_after_comma", "page", ".", "Cmax 12.5 ,\n | mg"),
+    ("window_before_equals", "page", ".", "Cmax | =\n12.5 mg"),
 ]
 
 

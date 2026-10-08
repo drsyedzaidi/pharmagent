@@ -3,6 +3,12 @@
 A page text of a two-column paper holds the merged lines (one line of the left column followed by one line of the right
 column on the same baseline). ``ColumnLines`` normalises the lines of both columns ONCE per verification, so testing
 many occurrences of a snippet never reads the columns again.
+
+r7 round 2: a number on a COLUMN line (a merged line, or a line that is one column's own line) is read in its column,
+never in the page text: the page text puts the other column's words around it (the line after '... was 2.5' starts
+with the other column, so a scale 'x 10^9' on the column's next line, or a qualifier 'less than' at the end of the
+column's previous line, is invisible there). ``column_line`` says when a page-text hit is such a number; ``verify``
+then reads it in the columns only. A line that spans both columns (a title) is the page text's own.
 """
 from __future__ import annotations
 
@@ -25,6 +31,14 @@ class ColumnLines:
             if len(lp) < len(nl) and nl.startswith(lp + " ") and nl[len(lp) + 1:] in self.right:
                 return m[len(lp) - 1] + 1, m[len(lp) + 1]
         return None
+
+    def column_line(self, pos: int, text: str) -> bool:
+        """True when the page-text line holding *pos* is a merged line or one column's own line."""
+        ls = text.rfind("\n", 0, pos) + 1
+        le = text.find("\n", pos)
+        line = text[ls:len(text) if le < 0 else le]
+        nl = normalise(line)[0]
+        return nl in self.left or nl in self.right or self.cut(line) is not None
 
     def crosses(self, span: list[int], text: str) -> bool:
         """True when a page-text span joins the two columns: it covers the boundary of a merged line, or runs over a

@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from app.evidence.normalize import normalise
+from app.evidence.numgrammar.alphabet import DIGITS, LETTERS, char_class
 
 STOPWORDS = frozenset("""
 a an and are as at be by for from has have in into is it its of on or that the this to was were with
@@ -20,10 +21,13 @@ than then there their they them these those such via per within without about ab
 study studies report reports reported reporting describe describes described include includes included
 exclude excludes excluded paper papers article articles publication publications data value values
 """.split())
-# keyword tokens (never a value): runs of letters, runs of ASCII digits; a non-ASCII digit is neither
-_TOKEN_RE = re.compile(r"[^\W0-9_]+|[0-9]+", re.UNICODE)
-_TERM_RE = re.compile(r"[^\W0-9_][^\W_]*(?:-[^\W_]+)*", re.UNICODE)
-_OR_RE = re.compile(r"\bor\b|;", re.IGNORECASE)
+# keyword tokens (never a value): runs of the alphabet's letters, runs of ASCII digits (r7 round 2: built from the
+# reader's lists; a Unicode word class made every non-ASCII digit a letter); any other character separates tokens
+_LETTER = char_class(LETTERS, negate=False)
+_ALNUM = char_class(LETTERS | DIGITS, negate=False)
+_TOKEN_RE = re.compile(_LETTER + "+|[0-9]+")
+_TERM_RE = re.compile(_LETTER + _ALNUM + "*(?:-" + _ALNUM + "+)*")
+_OR_RE = re.compile("(?<!" + _LETTER + ")or(?!" + _LETTER + ")|;", re.IGNORECASE)
 MAX_SNIPPET, MAX_EVIDENCE_PER_CRITERION, MIN_TERM_LEN = 300, 6, 2
 
 

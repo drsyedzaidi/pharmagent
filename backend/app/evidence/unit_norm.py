@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 
+from app.evidence.letter_tables import UPPER_LETTERS, casefold_letters
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
     DIGITS,
@@ -22,21 +23,29 @@ from app.evidence.numgrammar.alphabet import (
     LETTERS,
     MULTIPLIERS,
     OUTSIDE_RE,
+    PERCENTS,
     SUP_TO_ASCII,
-    UPPER_LETTERS,
     char_class,
 )
-from app.evidence.numgrammar.equivalents import THIN, casefold_letters, fold
+from app.evidence.numgrammar.equivalents import THIN, fold
 
 UNRESOLVED = "\x00"            # starts the comparison form of a unit that holds a character outside the alphabet
 _MICRO = "\u03bc"              # GREEK SMALL LETTER MU: the target of the approved MICRO SIGN equivalent
-_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS | frozenset("_"), negate=False)
+_WORD = char_class(ASCII_LETTERS | GREEK | DIGITS, negate=False)
 _WHOLE = ("(?<!" + _WORD + ")", "(?!" + _WORD + ")")         # a whole word: no word character right before or after it
 _UNIT_SYNONYMS = tuple((re.compile(_WHOLE[0] + pattern + _WHOLE[1]), rep) for pattern, rep in (
     ("(hrs?|hours?)", "h"), ("(liters?|litres?)", "l"), ("mcg", "ug"), ("(seconds?|sec)", "s")))
 _STRIP = GAP | frozenset({THIN, "."}) | (MULTIPLIERS - frozenset("xX"))   # a unit separator: space . * times dot
 _UNIT_STRIP = re.compile(char_class(_STRIP, negate=False) + "+")
 _EQUIV = {"mcg": "ug", "cc": "ml", "hr": "h", "hrs": "h", "mins": "min", "sec": "s", "lit": "l"}
+# the printed-unit symbols a comparison form may be segmented into (record_checks.recognised_unit: 'ngh' = 'ng' + 'h')
+# and the words that never continue a printed unit. Unit COMPARISON data, never reader data: the number reader's glued
+# unit production (numgrammar/units.py) has its own corpus-counted terminals, and a symbol here never makes a number
+# readable
+UNIT_SYMBOLS = ("kg", "g", "mg", "ug", "ng", "pg", "mol", "mmol", "umol", "nmol", "pmol", "l", "ml", "dl", "ul",
+                "h", "min", "s", "d", "wk", "iu", "miu", "u", *sorted(PERCENTS), "kda", "m2", "cells", "cell", "10^6",
+                "10^9", "bpm", "mmhg", "x", "fold")
+NOT_CONTINUATIONS = frozenset({"x", "fold", *PERCENTS})
 _CASE_PREFIXES = frozenset("Mm")           # mega / milli: the only prefix pair told apart by case alone
 
 

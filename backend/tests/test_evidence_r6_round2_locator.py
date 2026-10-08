@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.evidence import letter_tables as LT
 from app.evidence import models as M
 from app.evidence import normalize as N
 from app.evidence.normalize import dehyphenate_with_map, normalise, strip_ws_with_map
@@ -28,20 +29,20 @@ SAMPLE = sorted(set(non_outside_cps()) | set(stratified_outside(2048)) | set(S.L
 # ------------------------------------------------------------------ the tables ---
 
 def test_the_ligature_table_is_pinned_and_expands_to_ascii_letters_only():
-    assert {ord(k): v for k, v in EQ.LIGATURES.items()} == S.LIGATURE_PIN
-    assert all(v.isascii() and v.isalpha() and v == v.lower() for v in EQ.LIGATURES.values())
-    assert not set(EQ.LIGATURES) & (set(EQ.EQUIV) | A.INSIDE | A.CONTEXT | A.GAP)     # outside the reader
+    assert {ord(k): v for k, v in LT.LIGATURES.items()} == S.LIGATURE_PIN
+    assert all(v.isascii() and v.isalpha() and v == v.lower() for v in LT.LIGATURES.values())
+    assert not set(LT.LIGATURES) & (set(EQ.EQUIV) | A.INSIDE | A.CONTEXT | A.GAP)     # outside the reader
 
 
 def test_the_case_table_is_pinned_one_to_one_and_complete_for_the_alphabets_letters():
-    assert {ord(k): ord(v) for k, v in EQ.CASE_PAIRS.items()} == S.CASE_PIN
+    assert {ord(k): ord(v) for k, v in LT.CASE_PAIRS.items()} == S.CASE_PIN
     letters = A.ASCII_LETTERS | A.GREEK | A.ACCENTED          # r7: kappa is Greek (CONTEXT), chi is outside
     assert letters == A.LETTERS == S.LETTERS_PIN and len(letters) == 98 and "\u03c7" not in letters
-    assert A.UPPER_LETTERS == frozenset(EQ.CASE_PAIRS) and len(EQ.CASE_PAIRS) == 34
-    assert (len(EQ.LIGATURES), len(EQ.HEADER_SPELLINGS)) == (7, 1) and A.UPPER_LETTERS <= A.LETTERS
+    assert LT.UPPER_LETTERS == frozenset(LT.CASE_PAIRS) and len(LT.CASE_PAIRS) == 34
+    assert (len(LT.LIGATURES), len(LT.HEADER_SPELLINGS)) == (7, 1) and LT.UPPER_LETTERS <= A.LETTERS
     for ch in letters:                                        # the explicit pairs agree with Unicode on every letter
-        assert EQ.casefold_letters(ch) == ch.casefold() and len(ch.casefold()) == 1, ch
-    assert EQ.casefold_letters("ΔΩΣÅ𝐶\u212a\u017f") == "δωσå𝐶\u212a\u017f"     # an unlisted character stays as it is
+        assert LT.casefold_letters(ch) == ch.casefold() and len(ch.casefold()) == 1, ch
+    assert LT.casefold_letters("ΔΩΣÅ𝐶\u212a\u017f") == "δωσå𝐶\u212a\u017f"     # an unlisted character stays as it is
 
 
 # ------------------------------------------------------------- one character at a time ---

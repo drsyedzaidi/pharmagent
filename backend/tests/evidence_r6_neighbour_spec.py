@@ -19,6 +19,13 @@ operator letter (e E x X with no letter beside it that touches a modifier, a dig
 the whole word); a LABEL is led by a letter that is no lone operator letter and is prose with its digits read as letters;
 a NUMBER is not led by a letter and reads alone as resolved numbers (a dangling dash aside); then the qualifier, dispersion,
 percent, variable, infix, citation-pair and range-end productions of neighbours.py.
+
+r7 round 2 (the productions live in ``evidence_r6_neighbour_rules``): a number neighbour is never a bare power, a ten behind
+a lone multiplier, a ratio part led by '/' or ':', or a fraction right after an integer that ends its word unless a list mark
+separates them; a lone ':' or '/' between two numbers is no production; a word led by a multiplier right after the number,
+a one-letter spaced exponent (unless a unit symbol with a unit exponent) and a word with a power that follows no unit symbol
+are refused; a ratio target refuses a unit or multiplier after it, a multiplier before it and a number before it without a
+list mark; a bracket group with a comma, or after a word ending in a letter, is masked (it is a label to its neighbours).
 """
 from __future__ import annotations
 
@@ -28,193 +35,14 @@ from typing import NamedTuple
 
 from app.evidence.numgrammar import tokens
 from tests import evidence_r6_oracle as O
-from tests import evidence_r6_pins as P
-
-DIG = frozenset("0123456789")
-LET = O._ASCII_LETTERS | O._GREEK | O._ACCENTED
-OPEN, CLOSE = frozenset("(["), frozenset(")]")
-PUNCT = OPEN | CLOSE | frozenset(",;:.'/=")
-TRAIL = CLOSE | frozenset(",;:.'")
-OPL = frozenset("eExX")
-SUP = frozenset("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻")
-QUAL = frozenset("<>≤≥~≈")
-MOD = frozenset("+-*×·^±%‰") | SUP | QUAL
-STARTERS = OPEN | QUAL | frozenset("=±")
-SEPS = frozenset(".,'")
-GAPS = re.compile("[^ \t\n\r]+")
-
-
-def fold(s: str) -> str:
-    return "".join(chr(P.EQUIV_PIN.get(ord(c), ord(c))) for c in s)
-
-
-def _let(w: str, i: int) -> bool:
-    return 0 <= i < len(w) and w[i] in LET
-
-
-def _core(w: str) -> tuple[int, int]:
-    lo, hi = 0, len(w)
-    while lo < hi and w[lo] in OPEN:
-        lo += 1
-    while hi > lo and w[hi - 1] in TRAIL:
-        hi -= 1
-    return lo, hi
-
-
-def lone_op(w: str, i: int) -> bool:
-    if w[i] not in OPL or _let(w, i - 1) or _let(w, i + 1):
-        return False
-    if _core(w) == (i, i + 1):
-        return True
-    left = i > 0 and (w[i - 1] in MOD or w[i - 1] in DIG or w[i - 1] == "=")
-    right = i + 1 < len(w) and (w[i + 1] in MOD or w[i + 1] in DIG or w[i + 1] in "=([")
-    return left or right
-
-
-def _joined(w: str, i: int) -> bool:
-    c = w[i]
-    if c in "+-±%‰":
-        return _let(w, i - 1) or _let(w, i + 1)
-    if c == "*":
-        a, b = i, i + 1
-        while a > 0 and w[a - 1] == "*":
-            a -= 1
-        while b < len(w) and w[b] == "*":
-            b += 1
-        return _let(w, a - 1) or _let(w, b)
-    if c in "×·":
-        return _let(w, i - 1) and _let(w, i + 1)
-    if c in SUP:
-        a = i
-        while a > 0 and w[a - 1] in SUP:
-            a -= 1
-        return _let(w, a - 1)
-    if c == "^":
-        return _let(w, i - 1) and (_let(w, i + 1) or w[i + 1:i + 2] in ("+", "-"))
-    return False
-
-
-def prose(w: str) -> bool:
-    return not any(c in DIG for c in w) and all(
-        not lone_op(w, i) if c in OPL else (c not in MOD or _joined(w, i)) for i, c in enumerate(w))
-
-
-def _lead(w: str) -> int:
-    i = 0
-    while i < len(w) and (w[i] in OPEN or w[i] in STARTERS):
-        i += 1
-    return i
-
-
-def lead_letter(w: str) -> bool:
-    return _lead(w) < len(w) and w[_lead(w)] in LET
-
-
-def label(w: str) -> bool:
-    i = _lead(w)
-    return i < len(w) and w[i] in LET and not lone_op(w, i) and prose("".join("q" if c in DIG else c for c in w[i:]))
-
-
-def glue(run: str) -> bool:
-    """The text between the tokens of one word, or after its last one (a unit's boundary included), is inert:
-    punctuation around one prose stretch whose digits read as letters ('', ')', '-fold', ',44.83'; never ',E', '(x)')."""
-    a, b = 0, len(run)
-    while a < b and run[a] in PUNCT:
-        a += 1
-    while b > a and run[b - 1] in PUNCT:
-        b -= 1
-    return prose("".join("q" if c in DIG else c for c in run[a:b]))
-
-
-def number(w: str) -> bool:
-    if lead_letter(w) or not any(c in DIG for c in w):
-        return False
-    body = w[:-1] if w.endswith("-") else w
-    got = tokens(body, mode="cell")
-    return bool(got) and all(t.value is not None for t in got)
-
-
-def _has_tokens(w: str) -> bool:
-    return any(t.value is not None for t in tokens(w[:-1] if w.endswith("-") else w, mode="cell"))
-
-
-def _infix_ok(words: list[str], k: int, side: int) -> bool:
-    j = k + side
-    if 0 <= j < len(words) and number(words[j]):
-        return True
-    return (0 <= j < len(words) and not any(c in DIG for c in words[j]) and not all(c in PUNCT for c in words[j])
-            and prose(words[j]) and 0 <= j + side < len(words) and number(words[j + side]))
-
-
-def _word_ok(words: list[str], k: int, side: int, adjacent: bool, split: bool, assigned: bool) -> bool:
-    w = words[k]
-    if side < 0 and (assigned or w.endswith("=")) and _lead_open_letter(w):
-        return True
-    if any(c in DIG for c in w):
-        if lead_letter(w):
-            return _has_tokens(w) or label(w)
-        return (not split and number(w)) or re.fullmatch(r"\[[1-9][0-9]?,[0-9]{1,2}\]", w) is not None
-    if prose(w):
-        return True
-    lo, hi = _core(w)
-    if w[lo:hi] == "±":
-        return True
-    if hi - lo == 1 and w[lo] in "%‰" and (side > 0 or (k >= 1 and number(words[k - 1]))):
-        return True
-    if side < 0 and _qualifier(w):
-        return True
-    mult = len(w) == 1 and w in "xX*×·"
-    if side < 0 and mult and re.match("[+-]?10(?!0)", words[k + 1]):
-        return False                                       # 'x 10^3' left of the number: a scale, never a product
-    infix = w in ("-", "~") or mult or (side > 0 and all(c in QUAL for c in w))
-    return infix and adjacent and _infix_ok(words, k, side)
-
-
-def _lead_open_letter(w: str) -> bool:
-    i = 0
-    while i < len(w) and w[i] in OPEN:
-        i += 1
-    return i < len(w) and w[i] in LET
-
-
-def _qualifier(w: str) -> bool:
-    k = len(w)
-    while k > 0 and w[k - 1] in QUAL | frozenset("=([:;*+-"):
-        k -= 1
-    head, run = w[:k], w[k:]
-    if not any(c in QUAL for c in run):
-        return False
-    a, b = 0, len(head)
-    while a < b and head[a] in PUNCT:
-        a += 1
-    while b > a and head[b - 1] in PUNCT:
-        b -= 1
-    return prose("".join("q" if c in DIG else c for c in head[a:b]))
-
-
-def spec_inert(text: str, first: int, last: int) -> bool:
-    """The window of the number over words first..last of *text* (folded) is inert."""
-    words = [m.group() for m in GAPS.finditer(text)]
-    dash = words[last].endswith("-") and words[last][-2:-1] in DIG | {"%", "\u2030"}   # T's own word: '5.0-' only
-    for side, k0 in ((-1, first - 1), (1, last + 1)):
-        k, split, assigned = k0, False, False
-        edge = words[first][0] if side < 0 else words[last][-1]
-        while 0 <= k < len(words) and all(c in PUNCT for c in words[k]):
-            split = split or (edge in DIG and all(c in SEPS for c in words[k]))
-            assigned = assigned or "=" in words[k]
-            k += side
-        if not 0 <= k < len(words):
-            if side > 0 and dash:
-                return False
-            continue
-        if side > 0 and dash:
-            ok = k == k0 and (number(words[k]) or (lead_letter(words[k]) and prose(words[k])))
-        else:
-            facing = words[k][-1 if side < 0 else 0]
-            ok = _word_ok(words, k, side, k == k0, split and facing in DIG, assigned)
-        if not ok:
-            return False
-    return True
+from tests.evidence_r6_neighbour_rules import (  # noqa: F401  (re-exported: the unit specification reads glue here)
+    _POWER,
+    GAPS,
+    fold,
+    glue,
+    spec_inert,
+    target_kind,
+)
 
 
 # ------------------------------------------------------------------------------------------------- the harness ---
@@ -231,12 +59,16 @@ TARGETS = (
     Target("change −20 mg", "−20"), Target("range 12 – 15 mg", "12"), Target("range 12 – 15 mg", "15"),
     Target("range 5.0- 12.4 mg", "5.0"), Target("conc <0.5 ng/mL", "0.5"), Target("response 45% of", "45"),
     Target("ratio 12/15 of", "12/15"), Target("12.5 (3.1)", "12.5", "cell"),
+    Target("count 10^6 cells/mL", "10^6"), Target("ka 0.12 h-1 rate", "0.12"),       # r7 round 2: a power, a unit
 )
 ALPHABET = "+-*×·^²⁻<~±%015eExXq([)].,;:/='"
 SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL", "%CV", "L/h", "°C", "μg", "daily", "once-daily",
            "-fold", "e.g.", "i.e.", "Cmax*", "*P", "exposure", "and", "AUC0-24", "CYP2D6", "t1/2", "Cmax,ss",
            "AUC0–∞", "C24h", "E2", "x10^3", "e-3", "E+03", "(x10^3)", "×10³", "[1,2]", "[46]", "p<", "<=",
-           "n=12", "2x", "12.5", "(3.1)", "-15", "3/4", "10^3", "1.2e3", "x10", "E-3.", "e3,")
+           "n=12", "2x", "12.5", "(3.1)", "-15", "3/4", "10^3", "1.2e3", "x10", "E-3.", "e3,",
+           # r7 round 2: look-alikes of an exponent or a power, unit exponents, scale words, a label that continues
+           "é-3", "è+03", "ε-03", "l0³", "lO³", "h⁻¹", "s⁻¹", "day⁻¹", "L-1", "M", "million", "AUC0-", "t1/", "mg/",
+           "[12,13]", "(10^3)", "1/2,", "Cmax:12")
 
 
 def vocabulary(max_len: int = 3) -> list[str]:
@@ -272,16 +104,25 @@ _MULT_POWER = re.compile("[xX*×·]10(?:\\^([-+]?[0-9]{1,4})|([⁺⁻]?[⁰¹²�
 _SUP_ASCII = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 
 
-def sci_join(t: Target, at: int, word: str) -> float | None:
-    """The value of the multiplier-power production when *word* ('x10^3', '×10³') is inserted right after a plain number
-    T that ends its word: the power is parsed INTO the number (the one accepted way a word beside a number changes its
-    value); None otherwise."""
-    m = _MULT_POWER.fullmatch(fold(word))
+_MANTISSA_MULT = re.compile("([(\\[<>≤≥~≈=±]*)([-+]?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?)[xX*×·]")   # starters, mantissa
+
+
+def sci_join(t: Target, at: int, word: str) -> tuple[float, int, int] | None:
+    """(value, start, end) of the multiplier-power production when the inserted *word* joins T: a power word ('x10^3',
+    '×10³') right after a plain number T that ends its word, or (r7 round 2) a plain number with a glued multiplier
+    ('5x', '-5x', '2×') right before a power of ten T: the power and the number are ONE token (the one accepted way a
+    word beside a number changes its value); None otherwise."""
     s = t.text.index(t.literal)
     e = s + len(t.literal)
-    if m is None or at != e or re.fullmatch("[−-]?[0-9]+(?:\\.[0-9]+)?", t.literal) is None:
-        return None
-    return float(fold(t.literal)) * 10.0 ** int((m.group(1) or m.group(2)).translate(_SUP_ASCII))
+    m = _MULT_POWER.fullmatch(fold(word))
+    if m is not None and at == e and re.fullmatch("[−-]?[0-9]+(?:\\.[0-9]+)?", t.literal) is not None:
+        return float(fold(t.literal)) * 10.0 ** int((m.group(1) or m.group(2)).translate(_SUP_ASCII)), s, e + 1 + len(word)
+    p = _POWER.fullmatch(t.literal)
+    b = _MANTISSA_MULT.fullmatch(fold(word))
+    if p is not None and b is not None and at == s:
+        exp = t.literal[2:].lstrip("^").translate(_SUP_ASCII)
+        return float(b.group(2)) * 10.0 ** int(exp), s + 1 + len(b.group(1)), e + len(word) + 2
+    return None
 
 
 def check(t: Target, at: int, fi: int, word: str) -> tuple[str, str]:
@@ -294,15 +135,15 @@ def check(t: Target, at: int, fi: int, word: str) -> tuple[str, str]:
     resolved = [x for x in got if x.value is not None]
     joined = sci_join(t, at, word)
     if joined is not None:                     # T and the power are ONE token, or T is unresolved: never T alone
-        ok = all((x.start, x.end) == (s, e + 1 + len(word)) and abs(x.value - joined) <= 1e-9 * abs(joined)
-                 for x in resolved)
+        value, js, je = joined
+        ok = all((x.start, x.end) == (js, je) and abs(x.value - value) <= 1e-9 * max(abs(value), 1.0) for x in resolved)
         return ("", "") if ok else ("error", f"a power not parsed into T: {[(v[x.start:x.end], x.value) for x in resolved]}")
     if any((x.start, x.end, x.value) != (s, e, want.value) for x in resolved):
         return "error", f"a different value or literal: {[(v[x.start:x.end], x.value) for x in resolved]}"
     words = [m for m in GAPS.finditer(v)]
     first = next(i for i, m in enumerate(words) if m.start() <= s < m.end())
     last = next(i for i, m in enumerate(words) if m.start() < e <= m.end())
-    inert = spec_inert(fold(v), first, last)
+    inert = spec_inert(fold(v), first, last, target_kind(t.literal))
     if resolved and not inert:
         return "error", "T keeps its value beside a word the specification refuses"
     if not resolved and inert:

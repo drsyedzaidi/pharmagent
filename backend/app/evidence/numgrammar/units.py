@@ -24,7 +24,12 @@ from __future__ import annotations
 import re
 
 from app.evidence.numgrammar.alphabet import (
+    CARET,
     OPENERS_BR,
+    PRODUCT_DOTS,
+    SIGNS,
+    SLASH,
+    SUP_CHARS,
     SUP_DIGITS,
     SUP_SIGNS,
     TRAILING,
@@ -42,14 +47,27 @@ def _alt(terms: frozenset[str]) -> str:
     return "(?:" + "|".join(re.escape(t) for t in sorted(terms, key=lambda s: (-len(s), s))) + ")"
 
 
-_EXPONENT = ("(?:[23](?![0-9])|\\^[-+]?[0-9]{1,2}(?![0-9])|" + char_class(SUP_SIGNS, negate=False) + "?"
+_EXPONENT = ("(?:[23](?![0-9])|\\^" + char_class(SIGNS, negate=False) + "?[0-9]{1,2}(?![0-9])|"
+             + char_class(SUP_SIGNS, negate=False) + "?"
              + char_class(SUP_DIGITS, negate=False) + "{1,2})")
-_ATOM = ("(?:" + _alt(UNIT_PREFIXES) + "?" + _alt(UNIT_BASES) + "|" + _alt(UNIT_PREFIXES) + _alt(UNIT_PREFIXED_BASES)
-         + ")" + _EXPONENT + "?")
+_ATOM_BODY = ("(?:" + _alt(UNIT_PREFIXES) + "?" + _alt(UNIT_BASES) + "|" + _alt(UNIT_PREFIXES)
+              + _alt(UNIT_PREFIXED_BASES) + ")")
+_ATOM = _ATOM_BODY + _EXPONENT + "?"
 _UNIT = _ATOM + "(?:(?:/|per)" + _ATOM + ")*"
 _BOUNDARY = ("(?=\\Z|" + char_class(TRAILING, negate=False) + "(?![0-9])|" + char_class(OPENERS_BR, negate=False)
              + ")")
 UNIT_RE = re.compile(_UNIT + _BOUNDARY)
+ATOM_RE = re.compile(_ATOM_BODY)                     # one unit symbol without its exponent ('m', 'mL', 'h', 'cm')
+# a unit symbol, then what ends it inside a word: the word end, a denominator, a product dot, an exponent, a closer
+_UNIT_LED = re.compile(_ATOM_BODY + "(?=\\Z|" + char_class(SLASH | PRODUCT_DOTS | SUP_CHARS | TRAILING | {CARET}
+                                                           | SIGNS, negate=False) + ")")
+
+
+def unit_led(w: str) -> bool:
+    """The word starts with a unit symbol that no letter continues ('mg', 'mg/kg', 'mmHg,', 'h-1', 'mL\u207b\u00b9';
+    never 'months', 'Lung', 'events'): the unit after a ratio refuses the ratio (r7 round 2: a ratio is
+    dimensionless)."""
+    return _UNIT_LED.match(w) is not None
 
 
 def unit_end(w: str, e: int) -> int:
@@ -65,4 +83,4 @@ def splits(unit: str, nxt: str) -> bool:
     return m is not None and m.end() > len(unit)
 
 
-__all__ = ["UNIT_RE", "splits", "unit_end"]
+__all__ = ["ATOM_RE", "UNIT_RE", "splits", "unit_end", "unit_led"]

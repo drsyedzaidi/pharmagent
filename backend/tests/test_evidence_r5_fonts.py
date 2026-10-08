@@ -15,10 +15,12 @@ import pytest
 from pdfminer.pdftypes import PDFStream
 
 from app.evidence import parse_fonts as PF
+from app.evidence.numgrammar.alphabet import NUMBER_CHARS
 from tests import evidence_fontpdf as F
 from tests import evidence_trickpdf as T
 
 DIGITS = "0123456789"
+NUMBER_CHARS_TEXT = "".join(sorted(NUMBER_CHARS))
 HELV_TOUNI = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 7 0 R >>"
 
 
@@ -194,12 +196,14 @@ def test_fonts_inside_a_form_xobject_are_judged():
 def test_an_unreadable_font_dict_in_a_form_the_page_lists_leaves_every_digit_unverified():
     bad = b"<< /Type /Font /Subtype /Type0 /BaseFont /X >>"                # no DescendantFonts
     data = F.font_pdf(bad, {}, xobject=b"", draw_form=False)
-    assert _verdict(data) == {PF.UNVERIFIED: DIGITS}
+    # r7 round 2: every number character the reader can resolve (NUMBER_CHARS: digits, signs, separators, multipliers),
+    # the digits included: an unjudgeable font marks the whole number, never only its digits
+    assert _verdict(data) == {PF.UNVERIFIED: NUMBER_CHARS_TEXT} and set(DIGITS) <= set(NUMBER_CHARS_TEXT)
 
 
 def test_unreadable_page_resources_leave_every_digit_unverified():
     page = SimpleNamespace(chars=[], page_obj=None)                       # page_obj.resources raises
-    assert PF.GlyphChecker().page(page) == {PF.UNVERIFIED: DIGITS}
+    assert PF.GlyphChecker().page(page) == {PF.UNVERIFIED: NUMBER_CHARS_TEXT}         # r7 round 2: digits and more
 
 
 def test_a_font_is_judged_once_per_document():

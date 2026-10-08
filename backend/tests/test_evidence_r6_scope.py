@@ -27,21 +27,19 @@ from tests import evidence_r6_pins as P
 
 EVIDENCE = Path(__file__).resolve().parents[1] / "app" / "evidence"
 STR_METHODS = {"isdigit", "isalpha", "isnumeric", "isdecimal", "isalnum", "isspace", "isupper", "islower", "isidentifier",
-               "isprintable"}
+               "isprintable", "isascii"}                    # r7 round 2: isascii is a code-point range test
 SHORTHAND = re.compile(r"\\[dDwWsSbB]")
 LIST_FILES = {"numgrammar/alphabet.py", "numgrammar/equivalents.py"}          # the allowed alphabet and the one table
 
 # (module, kind) -> why it is allowed: none of them reads a number out of text, and none can make a number readable
 ALLOWED = {
     ("extract_rules.py", "regex-shorthand"): "header-key stripping, a bracketed unit and the dose-context prose pattern",
-    ("extract_rules.py", "nonascii-list"): "the micro sign as the first character of a trailing unit word",
-    ("numgrammar/api.py", "nonascii-list"): "the unit WORDS of the keyless dose rule (mg, μg, mg/kg ...)",
+    ("word_lists.py", "nonascii-list"): "the unit WORDS of the keyless dose rule (mg, μg, mg/kg ...)",
     ("parse_layout.py", "str-is"): "maps word texts onto page-text offsets (whitespace skipping)",
     ("parse_tables.py", "regex-shorthand"): "the 'Table N' caption pattern",
     ("prompts.py", "regex-shorthand"): "parsing of model output",
     ("proposal_check.py", "regex-shorthand"): "the instruction-text detector (prompt injection), prose only",
     ("qc_flags.py", "regex-shorthand"): "the bound / interval field-name patterns (prose field names, never a number)",
-    ("screen_rules.py", "regex-shorthand"): "keyword tokenisation of the screening criteria",
     ("verify_messages.py", "unicodedata"): "names a code point for a human; never classifies one",
 }
 
@@ -98,7 +96,7 @@ def test_the_reader_package_has_no_unicodedata_and_the_only_hand_typed_lists_are
     for path in sorted((EVIDENCE / "numgrammar").glob("*.py")):
         rel = f"numgrammar/{path.name}"
         kinds = _uses(ast.parse(path.read_text("utf-8")), rel)
-        assert kinds <= ({"nonascii-list"} if rel == "numgrammar/api.py" else set()), (rel, kinds)
+        assert kinds == set(), (rel, kinds)                 # r7 round 2: api.py's dose-unit words left the package
 
 
 def test_every_pinned_exception_names_a_module_that_exists():

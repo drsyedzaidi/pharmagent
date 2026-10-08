@@ -50,6 +50,7 @@ from typing import Any
 
 import numpy as np
 
+from app.evidence import gaps
 from app.evidence.numgrammar.alphabet import NUMBER_CHARS as OVERLAP_CRITICAL
 from app.evidence.numgrammar.alphabet import cls
 from app.evidence.parse_ink_match import _transfer
@@ -111,7 +112,7 @@ def _glyphs(page: Any) -> tuple[list[str], np.ndarray, np.ndarray, list[int], di
     try:
         for i in range(raw.FPDFText_CountChars(tp)):
             text = chr(raw.FPDFText_GetUnicode(tp, i))
-            if raw.FPDFText_IsGenerated(tp, i) == 1 or not text.strip():
+            if raw.FPDFText_IsGenerated(tp, i) == 1 or gaps.blank(text):
                 continue
             obj = raw.FPDFText_GetTextObject(tp, i)
             key = ctypes.cast(obj, ctypes.c_void_p).value

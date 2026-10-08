@@ -130,8 +130,8 @@ def test_a_header_key_keeps_every_character_it_cannot_fold():
 
 
 def test_the_key_table_is_pinned():
-    from app.evidence.numgrammar import equivalents as EQ
-    assert {ord(k): v for k, v in EQ.HEADER_SPELLINGS.items()} == S.HEADER_SPELLING_PIN
+    from app.evidence import letter_tables as LT
+    assert {ord(k): v for k, v in LT.HEADER_SPELLINGS.items()} == S.HEADER_SPELLING_PIN
 
 
 # --------------------------------------------------------------------- the ink pairing ---

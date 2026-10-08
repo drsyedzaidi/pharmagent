@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from app.evidence import gaps
 from app.evidence.numgrammar.alphabet import NUMBER_CHARS as CRITICAL  # every character the reader can resolve
 
 NEIGHBOURS = 3                      # content-order neighbours on each side that set the orientation
@@ -158,7 +159,7 @@ def overlapping_chars(chars: list[dict[str, Any]]) -> set[str]:
         if n % 256 == 0 and time.monotonic() > end:
             return set(CRITICAL)
         text = str(c.get("text", ""))
-        if not text.strip() or float(c["x1"]) <= float(c["x0"]):
+        if gaps.blank(text) or float(c["x1"]) <= float(c["x0"]):
             continue
         gx, gy = int(float(c["x0"]) // 10), int(float(c["top"]) // 10)
         for o in (o for i in range(-3, 4) for j in (-1, 0, 1) for o in grid.get((gx + i, gy + j), [])):

@@ -40,7 +40,7 @@ def _h(value) -> str:
 
 
 def test_parser_version_is_bumped():
-    assert P.PARSER_NAME.endswith("evidence-parse 7")
+    assert P.PARSER_NAME.endswith("evidence-parse 8")
 
 
 def test_parse_pdf_contract_has_no_layout_key(corpus):

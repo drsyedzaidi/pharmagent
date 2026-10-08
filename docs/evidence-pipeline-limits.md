@@ -100,14 +100,16 @@ verification fails, the record is flagged, the reviewer compares with the page i
 defects; each one is listed so a reviewer is not surprised, and none can pass as another number:
 
 - **Mixed numbers and ratios.** `12 3/4`, `12 1/2`, `12 ½` (`½` is outside: it taints the line) are unresolved. Since r7 a
-  ratio of two integers (`3/4`, `140/90 mmHg`, `12 / 15`) is ONE `ratio` token (value n/d, parts n and d): it equals only a
+  ratio of two integers (`3/4`, `140/90`, `12 / 15`) is ONE `ratio` token (value n/d, parts n and d): it equals only a
   claim that prints the same ratio, and citing a part alone (`140` of `140/90`) fails `partial_number`, so a blood pressure
-  is never read as two exact values. Every other slash or colon shape stays unresolved: `0.1/0.2/0.4 mg/kg`, `5/12/2020`,
+  is never read as two exact values. Since r7 round 2 a ratio is dimensionless: a unit or a multiplier after it
+  (`140/90 mmHg`, `150/300 mg`, `12 / 15 x 10^3`), a multiplier before it, or a number before it without a list mark
+  (`12 3/4`; `1/2, 3/4` is a list of two ratios) leaves it unresolved (`fraction`, `mixed_number`). Every other slash or colon shape stays unresolved: `0.1/0.2/0.4 mg/kg`, `5/12/2020`,
   `12 /15`, `12/ 15`, `1 : 2`, `8:00`, a division in running text (`17 / 0.7`), a ratio after a number (`4 12/15`, `2.1)
   404/9696`: a whole part may stand before it) and a keyless proposal of a ratio carries the quotient as its `value_num`.
 - **Split decimals and bracketed scales.** `12 .5` and `12 ,5` (a text layer that split a number at its point; both are
-  unresolved), `5.2 (x10^3 cells/mL)` and `5.2 [× 10^3]` (the scale hides in a bracket), a reference pair `[1,2]` (never a
-  decimal). Since r7 an unmistakable bracketed citation (`efflux [46].`, `studies[47–49]`) is a non-value expression: a record
+  unresolved), `5.2 (x10^3 cells/mL)` and `5.2 [× 10^3]` (the scale hides in a bracket), a reference list `[1,2]` after a
+  number or alone (the `bracket_list` production of r7 round 2: never a decimal). Since r7 an unmistakable bracketed citation (`efflux [46].`, `studies[47–49]`) is a non-value expression: a record
   citing its number fails, and its neighbours read as if it were a word; a bracket after a number (`89 [46]`, `9[4–9]`) or
   alone in a cell keeps its old reading, and a label glued to a bracket group (`AUC[12–24]`) fails closed as a citation. `(4,6)` stays a decimal: in decimal-comma papers a parenthesised decimal is ordinary, so a reference pair in
   parentheses on a comma page is read as 4.6 (a known gap, not closable without losing every parenthesised SD).
@@ -115,7 +117,13 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   text layer cannot say 10^3 from 103), a bare `× 10` (`7.23 ×10 *`), `2 x 10 mg`, `n = 12 x 10`, the Lancet `0·10`, `12·105`;
   a raised ten without a multiplier (`10³`, `per 10⁶ cells`), a detached exponent (`10 ^ 3`, `10 ³`), a spaced exponent
   (`3.4 E-03`), a star run before a power (`12* 10^3`). A multiplier without a number (`2 × daily`, `dosed 2x`, `2×` meaning
-  "twice", `1.2 ×` at a line end, `1.2 × l0³`) is unresolved. The legitimate case fails closed with the illegitimate one.
+  "twice", `1.2 ×` at a line end, `1.2 × l0³`) is unresolved. Since r7 round 2 a bare power next to a number (`1.2 10^3`,
+  `WBC 1.2\n10^9 cells`, `5.6 10^-4 cm/s`: a multiplier glyph the text layer dropped) is one unresolved expression
+  (`detached_exponent`), and so is a word of one letter, a sign and digits after a number (`1.2 é-3`, `ε-03`, `ë3`, but
+  also a table's next-row label `703±425.6\nF1`: 8 value-like records of the corpus) unless the letter is a unit symbol with
+  a unit exponent (`h-1`, `L-1`, `m2`), and a neighbour word with a power that follows no unit symbol (`l0³`, `lO³`,
+  `Cmax²`, `s⁻¹`, `day⁻¹`: `s` and `day` are no unit terminals). A thousands-grouped mantissa never carries an exponent
+  (`1.234.567 x 10^3`, `1,234,567e3`). The legitimate case fails closed with the illegitimate one.
 - **Non-ASCII digits.** Arabic-Indic, fullwidth, circled, Roman, vulgar fractions and every other non-ASCII digit are outside
   the alphabet; a snippet or a proposed value that holds one (a text field's too) fails verification
   (`unresolved_context`). The superscript digits are readable only after a multiplier (`1.2 × 10⁻³`).
@@ -274,12 +282,33 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   an unjoined modifier (`Alcohol+++(daily...)`). Each is the owner's rule applied as written: a sign, multiplier, exponent
   letter, qualifier or percent beside a number that belongs to no production may change the number. What the allow-list does
   NOT judge: the cells beside a cited table cell (they are checked for unreadable characters, qualifiers, range words, a range
-  dash glued to the previous cell, r7 writer 3, and scale words, not by the word allow-list), a number two words away (`1.2 cells
-  ×10^3` reads 1.2: the window is one word), and a bare power next to a number (`1.2 10^3` reads both: a complete production;
-  a lost multiplier glyph between them is not visible). The sweep found a crash the earlier sweeps could not reach: `3/4 x 10^3`
+  dash glued to the previous cell, r7 writer 3, and scale words, not by the word allow-list), and a number two words away
+  (`1.2 cells ×10^3` reads 1.2: the window is one word). (A bare power next to a number is refused since r7 round 2.) The sweep found a crash the earlier sweeps could not reach: `3/4 x 10^3`
   (a ratio as the mantissa of a power) raised `ValueError` in `tokens()` at writer 2's head; a ratio is never a mantissa now.
   The P2 items: the cells `['5.0-', '12.4']` flag `censored_value` on 12.4 and leave 5.0 unresolved; the group keys above. U is
   above the previous value, and the 1.5 % target is further away: the residual causes are those of writer 2 plus the 225 above.
+
+- **r7 round 2: productions instead of detectors (2026-10-08; `pharmagent-evidence-work/r7/corpus_progress.tsv`).** The
+  round-2 review found a taint window narrower than the allow-list window (an outside character one punctuation word away,
+  across a line break, `12.5\n( <U+22C5> 10^3`, left 12.5 resolved for all 1,111,890 outside code points), the detached
+  scale `1.2 10^3`, letter look-alikes of an exponent (`1.2 é-3`, `1.2 l0³`), a ratio carrying a unit (`150/300 mg` stored as
+  0.5 mg), a glued `M` or a scale word after the number (`1.5M patients`, `1.5 million`), a qualifier behind punctuation words
+  (`< , 12`), spaced reference lists (`[12, 13]` read as 12 and 13), grouped mantissas, two-column pages read across the
+  columns, a table neighbour check that skipped an empty or bracket cell, and two quadratic paths (252 s and 57 s on one
+  200 000-glyph page). Each is fixed through the productions and the four lists (see "Number reader" in
+  evidence-pipeline.md); the reject-only multi-word forms are gone. U after the round: 4.32 % -> 4.36 % (1,903 -> 1,923;
+  no record newly passes, so no newly resolved value can be read differently by a human; 0 value disagreements). The 20
+  value-like records it refuses: 8 table cells followed on the next row by a one-letter label (`703±425.6\nF1`: the
+  spaced-exponent rule), 11 reference numbers in spaced lists after a number or a word (`0.5 [46, 96]`, `[96, 102–105]`),
+  1 number whose window holds an outside letter past a comma (`146 5 of 20` with U+1D43E). A colon after a name was tried
+  as a starter (`Cmax:12`) and measured: it made 1,019 corpus records readable, 330 of them read differently by a human
+  (abbreviated page-range ends `258–9` cited as 9, DOI prefixes `doi:10.1016` as a decimal), so it is not a starter; a record
+  citing such a number fails with a sentence that names the colon. Two reported shapes are not closable under decision 3:
+  `AUC0 -24` and `CYP2D\n6` read like `AUCq -24` and `Cmax\n6` (label digits decide nothing), so the number resolves;
+  a word that ends in a hyphen or slash before a number (`AUC0-\n24`, `t1/\n2`, and alike `docu-\n2`) marks the number as
+  a range end (`censored_value`), never a clean pass. The 1.5 % target is not met; the residual causes are those of writer
+  2 and 3 above (lost-space and label words 276, beside-a-refused-word 182, the em dash 167, `(cid:N)` 163, glued letters
+  134, `_` 102, glued symbols 100, resolved-but-failed 93, bad starts 87, fractions 80).
 
 ## Later phases
 

@@ -59,6 +59,7 @@ from tests.evidence_r6_sampling import (  # noqa: F401
 GOLDEN = Path(__file__).with_name("evidence_r6_golden.json")
 _WORDS = re.compile("[^ \t\n\r]+")
 _MULT = frozenset("xX*×·")
+_PUNCT = frozenset("([)],;:.'/=")                     # r7 round 2: the punctuation words the neighbour window skips
 _ASCII_LETTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 _GREEK = frozenset(chr(c) for c in (0x3BC, 0x3C9, 0x3B2, 0x3B1, 0x3C4, 0x3BB, 0x3B7, 0x3B8, 0x3B5, 0x3B3, 0x3C3,
                                     0x3C1, 0x3C0, 0x394, 0x3A9, 0x3A3, 0x3BA))
@@ -154,10 +155,19 @@ def check_taint(e: Expr, b: int, ins: str, got: list[Tok]) -> list[str]:
 
     cws = {i for p in range(b, b + ln) if (i := widx(p)) >= 0}
     region: set[int] = set()
+
+    def punct(i: int) -> bool:
+        return 0 <= i < len(words) and set(s[words[i][0]:words[i][1]]) <= _PUNCT
+
     for cw in cws:
         region |= {cw - 1, cw, cw + 1}
         if cw >= 1 and set(s[words[cw - 1][0]:words[cw - 1][1]]) <= _MULT:
             region.add(cw - 2)                                   # the right operand behind a multiplier word
+        for side in (-1, 1):                                     # r7 round 2: the window walks past punctuation words
+            j = cw + side
+            while punct(j):
+                j += side
+            region.add(j)
     region = {i for i in region if 0 <= i < len(words)}
     line_of = (lambda p: 0) if e.mode == "cell" else (lambda p: s.count("\n", 0, p))
     cline = line_of(b)

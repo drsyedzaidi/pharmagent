@@ -58,7 +58,7 @@ def test_a_number_made_unresolved_by_its_window_keeps_its_value_as_a_part():
     ("Adalat_ 30 mg", "one word before"), ("AUC0–‘ 1234", "one word before"),
     ("-20 ′C", "one word after"), ("$18 years", "inside the number"), ("£150 mg", "inside the number"),
     ("t½ 11.4 h", "one word before"), ("12 ½", "one word after"), ("• 150 mg", "one word before"),
-    ("Mü\u0161ller 2019", "one word before"), ("140 \u212b²", "inside the number"),
+    ("Mü\u0161ller 2019", "one word before"), ("140 \u212b²", "one word after"),
     ("dose — 12", "one word before"), ("CL 12 —", "one word after"), ("ng\u22c5h/mL 1234", "one word before"),
 ])
 def test_a_character_outside_the_context_one_word_away_makes_the_number_unresolved(text, where):

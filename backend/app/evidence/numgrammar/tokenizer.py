@@ -1,25 +1,14 @@
 """``tokens(text, style, mode=...)``: every numeric expression of a text, resolved or not, with native offsets.
 
 Pipeline: the text is folded 1:1 (equivalents.fold: no offset ever moves), split into WORDS (maximal runs of
-non-gap characters), and each word that holds a digit is read by scan.scan_word. The multi-word forms then join
-the words one gap run apart (any length and mix of space, tab, CR, LF: line breaks included):
-
-ACCEPT   ``1.2 x 10^3``  ``1.2 ×10⁻³``  ``1.2× 10^3``  ``1.2 ×\\n10^3``  -> one ``sci`` token
-REJECT   ``2 x 10 mg`` ``1.2 x 10 3`` ``× 103``          ten_after_multiplier
-         ``2 × daily`` ``1.2 ×`` ``1.2 × l0³``            multiplier_operand
-         ``10 ^ 3`` ``10 ³`` ``10^ 3``                    detached_exponent
-         ``12 3/4``                                       mixed_number (a lone ``3/4`` is a ratio, r7)
-         ``12 /15`` ``12 .5``                             fraction, detached_decimal
-ACCEPT   ``12 / 15`` (and the glued ``12/15`` of scan.py)  -> one ``ratio`` token (r7, owner decision 6)
-REJECT   ``10m L`` ``81ng/m L,`` ``15m in``                 split_unit (r7, decision 2: the next word continues a glued
-                                                            unit of units.py; a text layer broke the unit)
-         (the rules live in forms.py)
-
-then the taint tiers (taint.py) turn an expression with an outside character in its word, its neighbouring words
-or its line into ``unresolved_context``, and the neighbour-word allow-list (neighbours.py, r7 writer 3) turns a resolved
-number whose window holds a word that is no accepted production (``3.4 E-03``, ``1.2 e-3.``, ``5.2 ( x 10^3 )``,
-``- ( 12 )``) into one unresolved expression through that word. Decimal style decides only the ``A,BBB`` / ``A.BBB``
-cases.
+non-gap characters), and each word that holds a digit is read by scan.scan_word. The two multi-word productions of
+forms.py then join words one gap run apart (line breaks included): ``1.2 x 10^3`` -> one ``sci`` token and ``12 / 15``
+-> one ``ratio`` token; a glued unit the next word continues is ``split_unit`` (``10m L``). Then the taint tiers
+(taint.py, and the window walk of neighbours.py since r7 round 2) turn an expression with an outside character in its
+word, its window or its line into ``unresolved_context``, and the neighbour-word allow-list (neighbours.py) turns a
+resolved number whose window holds a word that is no accepted production (``2 x 10 mg``, ``12 3/4``, ``10 ^ 3``,
+``1.2 10^3``, ``3.4 E-03``, ``5.2 ( x 10^3 )``, ``- ( 12 )``) into one unresolved expression through that word.
+Decimal style decides only the ``A,BBB`` / ``A.BBB`` cases.
 """
 from __future__ import annotations
 
@@ -29,19 +18,29 @@ from itertools import islice
 
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
+    CARET,
     CID_MARKER,
     DIGITS,
+    EXP_MARKERS,
+    HYPHEN,
     INSIDE_ONLY_RE,
     LETTERS,
+    MULT_LETTERS,
     MULTIPLIERS,
     NUMBER_CLOSERS,
+    OPERATORS,
     RANGE_WORDS,
+    RATIO_MARKS,
+    SEPARATORS,
+    SLASH,
+    SUP_CHARS,
     WORD_RE,
 )
 from app.evidence.numgrammar.body import MAX_DIGITS, to_float
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.forms import Forms
-from app.evidence.numgrammar.neighbours import LEFT, Window
+from app.evidence.numgrammar.glue import PUNCT
+from app.evidence.numgrammar.neighbours import LEFT, NEIGHBOUR, Window, lead_letter, punct_only, qualifier_word
 from app.evidence.numgrammar.productions import Cite, citations, mask_chi_square, mask_citations
 from app.evidence.numgrammar.scan import TAIL_NONE, Scan, scan_word
 from app.evidence.numgrammar.taint import Marks
@@ -51,16 +50,28 @@ from app.evidence.numgrammar.units import splits
 MODES = ("page", "claim", "cell")
 ABSORB_WORDS = 2          # words of INSIDE characters a ten after a multiplier swallows ('1.2 x 10 3', '10 ^ 3')
 # a word led by one of these is a unit or a plain label: no multi-word form starts with it
-_UNIT_LEADS = frozenset(LETTERS - {"e", "E", "x", "X"})
-_SPECIAL_LEADS = frozenset("eE") | MULTIPLIERS
+_UNIT_LEADS = LETTERS - EXP_MARKERS - MULT_LETTERS
+_SPECIAL_LEADS = EXP_MARKERS | MULTIPLIERS
 
 
+# a word that ends in one of these continues into the next word ('12/ 15', '10^ 3'), one that starts with one of these
+# continues the word before ('12 .5', '10 ^3', '12 /15', '12 x3'): the refused words and the number are one expression
+_JOIN_ENDS = RATIO_MARKS | {CARET} | SUP_CHARS
+_QUALIFY_ENDS = OPERATORS | PUNCT              # a word before a qualified number ends in one of these
+_JOINER_END = HYPHEN | SLASH                  # a word led by a letter that ends in one of these may continue over a gap
+_JOIN_STARTS = _JOIN_ENDS | SEPARATORS | MULTIPLIERS
 MASK = "\ufffd"          # stands for a (cid:N) marker, character for character: offsets never move
 _DIGIT_RUN = re.compile("[0-9]+")
 
 
 def _mask(m) -> str:
     return MASK * len(m.group())
+
+
+def _own_parts(tok: Tok) -> tuple[float, ...]:
+    """What citing a piece of *tok* inside a wider expression may cite: its value and parts (a ratio: its numerator and
+    denominator only, never its quotient)."""
+    return tok.parts if tok.value is None or tok.shape == "ratio" else (tok.value, *tok.parts)
 
 
 def _demote(tok: Tok, detail: str) -> Tok:
@@ -71,7 +82,7 @@ def _demote(tok: Tok, detail: str) -> Tok:
 
 class Reader(Forms, Window):
     """The words of one folded text and the forms that read them. One instance per ``tokens`` call."""
-    __slots__ = ("t", "style", "starts", "ends", "words", "n", "marks", "cache", "anchors")
+    __slots__ = ("t", "style", "starts", "ends", "words", "n", "marks", "cache", "anchors", "target")
 
     def __init__(self, folded: str, style: str, whole_line: bool, cid: dict[int, str]) -> None:
         self.t, self.style = folded, style
@@ -86,6 +97,7 @@ class Reader(Forms, Window):
         self.marks = Marks(folded, self.starts, self.ends, whole_line, self.mult_word, cid)
         self.cache: dict[int, Scan] = {}
         self.anchors = self._anchors()
+        self.target: tuple[Tok, ...] = ()           # the tokens the window is judging (neighbours.Window)
 
     # ------------------------------------------------------------------ words ---
     def _anchors(self) -> list[int]:
@@ -118,14 +130,6 @@ class Reader(Forms, Window):
     def clean(self, i: int) -> bool:
         """No tainting character in word *i*."""
         return not self.marks.bad or self.marks.first_bad(self.starts[i], self.ends[i]) < 0
-
-    def numeric_word(self, i: int) -> bool:
-        """Word *i* is clean, NUMERIC-LED (a label word never is: ``2 x n=12``, ``2 x <a>10^3``) and holds
-        resolved numbers: an ordinary numeric word."""
-        if i >= self.n or not self.clean(i) or not self.has_digit(i):
-            return False
-        w = self.text(i)
-        return not W.letter_led(w) and not W.special(w) and self.scan(i).kind == "numeric"
 
     def number_end(self, i: int, drop: int = 0) -> bool:
         """Word *i* (without its last *drop* characters) ends in a NUMBER: its last digit, closers aside, belongs to a
@@ -165,31 +169,60 @@ class Reader(Forms, Window):
     # --------------------------------------------------------------- emission ---
     def put(self, out: list[Tok], fw: int, lw: int, toks: tuple[Tok, ...]) -> int:
         """Emit the resolved (and flagged) tokens of words fw..lw; returns the last word consumed. A tainting character
-        in the words or their window demotes each token; a window word that is no accepted production (r7 writer 3,
-        neighbours.py) turns them into one unresolved expression through that word."""
-        d = self.marks.detail(fw, lw, toks[0].start, toks[-1].end) if self.marks.bad else ""
+        in the words or their window (the words the allow-list judges: r7 round 2) demotes each token (a multiplier
+        right after the number takes its operand into the same expression, as it does when the window refuses it); a
+        window word that is no accepted production (neighbours.py) turns them into one unresolved expression through
+        that word."""
+        d = (self.marks.detail(fw, lw, toks[0].start, toks[-1].end) or self.window_taint(fw, lw)) if self.marks.bad \
+            else ""
         if d:
+            if lw + 1 < self.n and self.text(lw + 1)[:1] in MULTIPLIERS:
+                final = self.consume(lw + 1, lw)
+                parts = tuple(p for x in toks for p in _own_parts(x)) + self.parts_of(lw + 1, final)
+                return self.expr(out, fw, final, toks[0].start, self.ends[final], NEIGHBOUR, parts[:MAX_PARTS])
             out.extend(_demote(x, d) for x in toks)
             return lw
-        last = toks[-1]
         # a range dash ends the word right after its last number or that number's suffix ('5.0-', '45%-'); a dash after
         # letters is the hyphen of a word the line broke ('...complica-'), judged with the rest of the word's glue
+        self.target = toks
         fault = self.window_fault(fw, lw, self.scan(lw).dash)
+        self.target = ()
         if fault is None:
             out.extend(toks)
             return lw
         side, k, why = fault
-        start, end, first, final = toks[0].start, last.end, fw, lw
-        if k != lw and self.scan(k).kind != "numeric" and self.scan(k).kind != "rejected":   # no expression of its own
-            if side == LEFT and (not out or out[-1].end <= self.starts[k]):
-                start, first = self.starts[k], k
-            elif side != LEFT:
-                end, final = self.ends[k], k
-        parts = tuple(p for x in toks for p in (x.value, *x.parts))[:MAX_PARTS]
-        return self.expr(out, first, final, start, end, why, parts)
+        start, end, first, final = toks[0].start, toks[-1].end, fw, lw
+        if side == LEFT:
+            own = self.scan(k).kind in ("numeric", "rejected")
+            if k < fw and not own and (not out or out[-1].end <= self.starts[k]):
+                start, first = self.starts[k], k                       # a refused word with no expression of its own
+            elif k == fw - 1 and out and out[-1].value is None and out[-1].end == self.ends[k] \
+                    and self.t[self.ends[k] - 1] in _JOIN_ENDS:
+                before = out.pop()                                     # '12/ 15', '10^ 3': the refused word's own
+                start, first = before.start, bisect_right(self.starts, before.start) - 1   # expression and the number
+                toks = (before, *toks)                                 # are one expression
+        elif k > lw:
+            final = self.consume(k, lw)
+            end = self.ends[final] if final > lw else end
+        parts = tuple(p for x in toks for p in _own_parts(x))
+        parts += self.parts_of(lw + 1, final)
+        return self.expr(out, first, final, start, end, why, parts[:MAX_PARTS])
+
+    def consume(self, k: int, lw: int) -> int:
+        """The last word of an expression refused at the word *k* after it: the word itself (unless it is a rejected
+        word that no joining character ties to the number: '12 +3/4', '12 5th' keep their own expression), the operand
+        behind a refused multiplier, and the INSIDE words a ten or a detached power absorbs ('1.2 x 10 3', '10 ^ 3')."""
+        w = self.text(k)
+        if W.is_mult_word(w) and k + 1 < self.n:
+            return self.absorb(k + 1) if W.ten_shape(self.text(k + 1)) else k + 1
+        if W.ten_shape(w) or (not self.has_digit(k) and W.CARET_OR_SUP_RE.search(w)):
+            return self.absorb(k)
+        if self.scan(k).kind == "rejected" and w[0] not in _JOIN_STARTS:
+            return lw
+        return k
 
     def expr(self, out: list[Tok], fw: int, lw: int, start: int, end: int, why: str, parts: tuple[float, ...]) -> int:
-        d = self.marks.detail(fw, lw, start, end)
+        d = (self.marks.detail(fw, lw, start, end) or self.window_taint(fw, lw)) if self.marks.bad else ""
         out.append(Tok(start, end, None, REASON_CONTEXT if d else f"{REASON_SHAPE}:{why}", parts, detail=d or why))
         return lw
 
@@ -219,16 +252,12 @@ class Reader(Forms, Window):
                 return a
             if sp == W.MULT_TEN:
                 return self._ten(out, a, a, s0, consumed_from=a)
-        if a - 1 > consumed and a >= 1 and W.ten_shape(w) and self.mult_word(a - 1):   # '× 103', no mantissa
-            return self._ten(out, a - 1, a, self.starts[a - 1], consumed_from=a)
         sc = self.cache.get(a)
         if sc is None:
             sc = self.cache[a] = scan_word(w, s0, self.style)
         if sc.kind == "rejected":
             if sc.why == "ten_after_multiplier":
                 return self._ten(out, a, a, s0, consumed_from=a)
-            if w.endswith("/") and sc.why == "glued_symbol" and a + 1 < self.n and W.digit_led(self.text(a + 1)):
-                return self.ratio_run(out, a, a + 1, s0, sc.parts)              # '12/ 15'
             return self._word_expr(out, a, sc.why, sc.parts)
         if sc.kind != "numeric":
             return a
@@ -241,36 +270,33 @@ class Reader(Forms, Window):
         return self.expr(out, fw, last, start, self.ends[last], "ten_after_multiplier", parts)
 
     def numeric(self, a: int, sc: Scan, consumed: int, out: list[Tok]) -> int:
-        """The forms read first (a tainted neighbour can never complete one: its characters match no form), and the
-        expression they produce is tainted as a whole; a plain word is tainted by its own window."""
+        """The two multi-word productions read first (a tainted neighbour can never complete one: its characters match
+        neither), and the token they produce is tainted and judged as a whole; a plain word by its own window."""
         toks = sc.toks
         n, t, starts, ends = self.n, self.t, self.starts, self.ends
         nxt = t[starts[a + 1]:ends[a + 1]] if a + 1 < n else ""
-        prev = t[starts[a - 1]:ends[a - 1]] if a else ""
         if sc.unit and nxt and splits(sc.unit, nxt):                       # '10m L': the next word continues the unit
             return self.expr(out, a, a + 1, toks[0].start, ends[a + 1], "split_unit", self.parts_of(a, a))
-        if toks[0].shape == "ratio" and toks[0].start == starts[a] and a and self.number_end(a - 1):
-            return self._word_expr(out, a, "mixed_number", toks[0].parts)   # '...12 3/4': a whole part may stand before
-        if sc.tail or (nxt and nxt[0] not in _UNIT_LEADS) or (prev and prev[0] not in LETTERS):
-            done = self.forms(a, sc, consumed, out, nxt, prev)
+        if sc.tail or (nxt and nxt[0] not in _UNIT_LEADS):
+            done = self.forms(a, sc, out, nxt)
             if done is not None:
                 return done
         return self.put(out, a, a, self.flagged(toks, a))
 
-
     def with_citations(self, out: list[Tok], cites: list[Cite]) -> list[Tok]:
-        """The citations (r7, decision 7) as unresolved expressions of their own, tainted like any expression, merged
-        in order; one inside a wider unresolved expression (its word holds an outside character) is part of that."""
+        """The citations (r7, decision 7) and bracket lists (r7 round 2) as unresolved expressions of their own, tainted
+        like any expression, merged in order; one inside a wider unresolved expression (its word holds an outside
+        character) is part of that."""
         starts = [t.start for t in out]
         extra: list[Tok] = []
         for c in cites:
             k = bisect_left(starts, c.end)
             if (k > 0 and out[k - 1].end > c.start) or (k < len(out) and out[k].start < c.end):
                 continue
-            wi = bisect_right(self.starts, c.start) - 1
-            d = self.marks.detail(wi, wi, c.start, c.end)
-            extra.append(Tok(c.start, c.end, None, REASON_CONTEXT if d else f"{REASON_SHAPE}:citation", c.refs,
-                             detail=d or "citation"))
+            wi, wj = bisect_right(self.starts, c.start) - 1, bisect_right(self.starts, c.end - 1) - 1
+            d = self.marks.detail(wi, wj, c.start, c.end)
+            shape = REASON_CONTEXT if d else f"{REASON_SHAPE}:{c.why}"
+            extra.append(Tok(c.start, c.end, None, shape, c.refs[:MAX_PARTS], detail=d or c.why))
         return sorted(out + extra, key=lambda t: t.start) if extra else out
 
     def with_labels(self, out: list[Tok]) -> list[Tok]:
@@ -300,9 +326,24 @@ class Reader(Forms, Window):
                            if m.end() - m.start() <= MAX_DIGITS), MAX_PARTS)
             extra.append(Tok(lo, hi, None, f"{REASON_SHAPE}:label", tuple(runs), detail="label"))
 
+    def continued(self, a: int, first: Tok) -> bool:
+        """r7 round 2: a word led by a letter that ends in '-' or '/' ('AUC0-\\n24', 't1/\\n2', and 'docu-\\n2' alike:
+        decision 3) may continue over the gap into the number that starts word *a*: a range end, never a clean pass."""
+        prev = self.text(a - 1)
+        return prev[-1] in _JOINER_END and first.start == self.starts[a] and lead_letter(prev)
+
     def qualified_before(self, a: int) -> bool:
-        """A qualifier stands right before word *a* (up to three words back; see ``words.qualifies``)."""
-        return W.qualifies([self.text(k) for k in range(max(0, a - 3), a)])
+        """A qualifier stands right before word *a*: up to three words back through operator words (``words.qualifies``:
+        '< = 5'), or as the first word past the punctuation words the window skips (r7 round 2: '< , 12', '< ) 12',
+        '<\n.\n12', 'LLOQ < ( ( ( 0.5' are qualified like '< 12'; the walk is the window's own)."""
+        if a == 0 or self.t[self.ends[a - 1] - 1] not in _QUALIFY_ENDS:
+            return False                                   # the word before ends in no operator or punctuation
+        if W.qualifies([self.text(k) for k in range(max(0, a - 3), a)]):
+            return True
+        k = a - 1
+        while k >= 0 and self.t[self.ends[k] - 1] in PUNCT and punct_only(self.text(k)):
+            k -= 1
+        return 0 <= k < a - 1 and qualifier_word(self.text(k))
 
     def flagged(self, toks: tuple[Tok, ...], a: int, b: int | None = None) -> tuple[Tok, ...]:
         """Tokens of the words a..b with the qualifier and range flags the neighbouring words add. A lone range word
@@ -316,14 +357,14 @@ class Reader(Forms, Window):
         lone = prev in RANGE_WORDS or nxt in RANGE_WORDS
         left = bool(nxt) and ((nxt[0] == "-" and W.signed_digits(nxt) and W.ends_with_number(last))
                               or (last.endswith("-") and W.digit_led(nxt)))
-        right = bool(prev) and ((self.number_end(a - 1) and self.t[toks[0].start] == "-")
-                                or (prev.endswith("-") and self.number_end(a - 1, 1) and W.digit_led(self.text(a))))
+        right = bool(prev) and ((self.t[toks[0].start] == "-" and self.number_end(a - 1))
+                                or (prev.endswith("-") and self.number_end(a - 1, 1) and W.digit_led(self.text(a)))
+                                or self.continued(a, toks[0]))
         if not (q or lone or left or right):
             return toks
         end = len(toks) - 1
         return tuple(t._replace(qualified=t.qualified or q, ranged=t.ranged or lone or (left and k == end)
                                 or (right and k == 0)) for k, t in enumerate(toks))
-
 
 
 def tokens(text: str, style: str = ".", *, mode: str = "page", labels: bool = False) -> list[Tok]:
