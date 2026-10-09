@@ -34,7 +34,7 @@ PLAIN_SHAPES = frozenset({"int", "decimal", "foreign_decimal"})
 _STYLE = "style_dependent"                                  # '1.018': plain only when the page style reads a decimal
 TEN, OPERAND = "ten_after_multiplier", "multiplier_operand"
 _COUNT = re.compile("[1-9][0-9]?")                          # an integer count of one or two digits
-_RAISED_TEN = re.compile("10(?:[1-9][0-9]*)?")              # integer digits '10', '103', '1012'
+RAISED_TEN_RE = re.compile("10(?:[1-9][0-9]*)?")            # integer digits '10', '103', '1012'
 _POWER_DIGITS = re.compile("10*")                           # 1, 10, 100 ... once the point and leading zeros go
 _ONES = (1.0, -1.0)                                         # ten to the zero scales nothing
 
@@ -64,19 +64,20 @@ def pure_power(tok: Tok) -> bool:
     """r7 round 4: the token is a power of ten printed without a mantissa of its own: a bare power ('10^3') or a
     scientific token whose mantissa is a power of ten ('1e3', '10E+03', '1.0E+03', '0.1e4'): a scale, never a value
     beside a number (a detached scale, like '1.2 10^3')."""
-    if tok.shape == "bare_power":
-        return True
-    if tok.shape != "sci" or tok.value is None:
-        return False
-    mantissa = _unsigned(tok.canonical.partition("e")[0]).replace(POINT, "").lstrip(ZERO)
-    return _POWER_DIGITS.fullmatch(mantissa) is not None
+    return tok.shape == "bare_power" or (tok.shape == "sci" and tok.value is not None and _POWER_DIGITS.fullmatch(
+        _unsigned(tok.canonical.partition("e")[0]).replace(POINT, "").lstrip(ZERO)) is not None)
 
 
 def raised_ten(tok: Tok) -> bool:
     """r7 round 4: the token is an unsigned integer whose digits are a ten and then the exponent digits a text layer
     flattened ('10', '103', '109' of '109/L', '1012'): right after a number it is a scale whose multiplier and raised
     exponent the text layer lost ('1.2 10−3', '2.5 109/L', '1.2 10 3'), never a second value."""
-    return tok.shape == "int" and _RAISED_TEN.fullmatch(tok.canonical) is not None
+    return tok.shape == "int" and raised_digits(tok.canonical)
+
+
+def raised_digits(digits: str) -> bool:
+    """The digits are a ten and then the flattened exponent digits ('10', '103', '1012'; never '100', '1100')."""
+    return RAISED_TEN_RE.fullmatch(digits) is not None
 
 
 def scale(amount: Tok) -> bool:
@@ -86,7 +87,7 @@ def scale(amount: Tok) -> bool:
     if pure_power(amount):
         return True
     return plain(amount.shape, amount.decimal) and (
-        _RAISED_TEN.fullmatch(_unsigned(amount.canonical).partition(POINT)[0]) is not None
+        RAISED_TEN_RE.fullmatch(_unsigned(amount.canonical).partition(POINT)[0]) is not None
         or power_of_ten(amount.canonical))
 
 
@@ -98,12 +99,12 @@ def fault(count: Tok, amount: tuple[str, str, str], unit_after: bool) -> str:
     why = name(amount_canonical)
     if not plain(count.shape, count.decimal) or not plain(amount_shape, amount_mark) or count.canonical[:1] in HYPHEN:
         return why
-    if _RAISED_TEN.fullmatch(_unsigned(amount_canonical).partition(POINT)[0]):
+    if RAISED_TEN_RE.fullmatch(_unsigned(amount_canonical).partition(POINT)[0]):
         return why
     if power_of_ten(amount_canonical) and not (_COUNT.fullmatch(count.canonical) and unit_after):
         return why
     return ""
 
 
-__all__ = ["OPERAND", "PLAIN_SHAPES", "TEN", "fault", "name", "plain", "power_of_ten", "pure_power", "raised_ten",
-           "scale"]
+__all__ = ["OPERAND", "PLAIN_SHAPES", "RAISED_TEN_RE", "TEN", "fault", "name", "plain", "power_of_ten", "pure_power",
+           "raised_digits", "raised_ten", "scale"]

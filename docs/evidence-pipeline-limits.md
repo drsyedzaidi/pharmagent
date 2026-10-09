@@ -369,10 +369,11 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   checks, regex terminals, word lists read inside the reader package). Each is fixed through a production or the four
   lists (see "Round 4 of r7" in evidence-pipeline.md). U after the round: 4.43 % -> 4.62 % (1,954 -> 2,036 of 44,072; no
   record newly passes against round 3, so no newly resolved value can be read differently by a human; 0 value
-  disagreements). What it refuses on the corpus (82 value-like): 49 compounds after a dash that are no unit (`10-fold` has
-  101 corpus uses, `3–5-year-olds`, `24-hour`, `17-OHPC`: owner decision 2), 9 split compounds (`10- fold`, `1.1- fold`),
-  7 flattened table rows and axis ticks beside a raised ten (`Tmax 9±6 10 ± 6`), 5 slash or colon shapes (`10/bin`,
-  `0.199/[1−0.226]`), the words beside them and two lost-space words with a times sign before a digit. A stricter
+  disagreements). What it refuses on the corpus (82 value-like records, `r7/newly_r4_final_e09e5a9.tsv`): 49 glued
+  letters after a number's dash or slash that are no unit production (`10-fold` has 101 corpus uses, `3–5-year-olds`,
+  `24-hour`, `17-OHPC`, `10/bin`: owner decision 2), 20 numbers beside a refused word (split compounds `10- fold`,
+  `1.1- fold`, `131- I- albumin`, lost-space words with a times sign before a digit), 5 flattened table rows beside a
+  raised ten (`Tmax 9±6 10 ± 6`), 4 glued symbols (`0.199/[1−0.226]`) and 4 lost-space words. A stricter
   reading of the exponent letters (an `e` glued between a letter and a digit as an exponent: `Table4`, `tobe0.41`,
   `type2` of lost-space layers) was measured and rejected (23 more value-like records, row `r4_a_glue`). The 1.5 % target
   is NOT met and cannot be met by these rules: the residual causes are lost-space and label words 287 (`no_expression`),

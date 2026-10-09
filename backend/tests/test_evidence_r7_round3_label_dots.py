@@ -7,9 +7,9 @@ looked like a name with a joined product dot ('AUC×IOOO'), so a header 'AUC×10
 no scale-free header part.
 
 A product dot BETWEEN LETTERS stays unit glue ('ng·h/mL', 'ng×h'); the star of an allele ('CYP2D6*4', 69 corpus uses)
-is no product dot and stays a label. The Latin letter x glued after letters ('AUCx1000') is a letter of the name
-(decision 3; 'Vmax1', 'Cmax1', 'Prax2001' in the corpus have the same shape) and is left to the page image: a rule for
-it would need a letter-case heuristic, which is a shape detector (docs/evidence-pipeline-limits.md).
+is no product dot and stays a label. r7 round 4: the Latin letter x and the star glued after letters before a digit
+('AUCx1000', 'AUC*1000') are the multiplier production too (glue.scaled_at, judged on the printed text); names of the
+same shape ('Vmax1', 'Cmax1') fail closed (docs/evidence-pipeline-limits.md).
 """
 from __future__ import annotations
 

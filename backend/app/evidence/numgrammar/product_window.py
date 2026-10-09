@@ -16,14 +16,18 @@ from app.evidence.numgrammar import product as P
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
+    CARET,
     CLOSERS_BR,
     CONTEXT_LETTERS,
+    EXP_MARKERS,
     OPENERS_BR,
     PERCENTS,
     SLASH,
+    SUP_CHARS,
     TRAILING,
     char_class,
 )
+from app.evidence.numgrammar.product import RAISED_TEN_RE
 from app.evidence.numgrammar.tok import Tok
 from app.evidence.numgrammar.units import unit_end, unit_led
 
@@ -36,6 +40,8 @@ _SIMPLE = re.compile(char_class(OPENERS_BR, negate=False) + "*"
                      + char_class(ASCII_LETTERS | SLASH, negate=False) + "*" + char_class(ASCII_LETTERS, negate=False)
                      + char_class(TRAILING | CLOSERS_BR, negate=False) + "*")
 LEFT, RIGHT = -1, 1
+POWER_SHAPES = frozenset({"bare_power", "sci"})         # the shapes a power of ten with no mantissa of its own has
+POWER_MARK_RE = re.compile(char_class(EXP_MARKERS | SUP_CHARS | {CARET}, negate=False))   # a power word holds one
 
 
 class ProductWindow:
@@ -46,16 +52,16 @@ class ProductWindow:
     def unit_after(self, k: int, tok_end: int) -> bool:
         """A unit production follows the token ending at *tok_end* in word *k*: glued to it ('100mg'), or, the word
         ending there (closers aside), as the start of the next word ('100 mg', '(2 x 100) mg')."""
-        w, e = self.text(k), tok_end - self.starts[k]
+        w, e = self.words[k], tok_end - self.starts[k]
         if unit_end(w, e) > e:
             return True
-        return all(c in TRAILING for c in w[e:]) and k + 1 < self.n and unit_led(self.text(k + 1))
+        return all(c in TRAILING for c in w[e:]) and k + 1 < self.n and unit_led(self.words[k + 1])
 
     def product_fault(self, count: Tok | None, amount: Tok | None, ak: int) -> str:
         """'' when ``count MULT amount`` (the amount a token of word *ak*) is the product production, else the
         reviewer's name of the refusal."""
         if count is None or amount is None:
-            w = self.text(ak) if 0 <= ak < self.n else ""
+            w = self.words[ak] if 0 <= ak < self.n else ""
             return P.TEN if w and W.ten_shape(w) else P.OPERAND
         unit = P.plain(amount.shape, amount.decimal) and amount.end <= self.ends[ak] and self.unit_after(ak, amount.end)
         return P.fault(count, (amount.shape, amount.canonical, amount.decimal), unit)
@@ -64,23 +70,23 @@ class ProductWindow:
         """The first token of number word *k* when it starts the word (one opener aside): a product's amount."""
         if not (0 <= k < self.n and self.number_word(k)):
             return None
-        tok, w = self.scan(k).toks[0], self.text(k)
+        tok, w = self.scan(k).toks[0], self.words[k]
         return tok if tok.start <= self.starts[k] + (w[0] in OPENERS_BR) else None
 
     def count_of(self, k: int) -> Tok | None:
         """The last token of word *k* when it ends the word (closers aside): the count of a product."""
         if not (0 <= k < self.n and self.number_word(k)):
             return None
-        tok, w = self.scan(k).toks[-1], self.text(k)
+        tok, w = self.scan(k).toks[-1], self.words[k]
         return tok if all(c in TRAILING for c in w[tok.end - self.starts[k]:]) else None
 
     def count_before(self, j: int) -> Tok | None:
         """The count of a product whose multiplier follows word *j*: word *j*'s last token, or, when word *j* is a prose
         word (the count's unit: '8 weeks x 3', '20 mg x 2'), the last token of the word before it."""
         tok = self.count_of(j)
-        if tok is not None or not 0 <= j < self.n or self.has_digit(j) or _PUNCT_RE.fullmatch(self.text(j)):
+        if tok is not None or not 0 <= j < self.n or self.has_digit(j) or _PUNCT_RE.fullmatch(self.words[j]):
             return tok
-        return self.count_of(j - 1) if G.prose(self.text(j)) else None
+        return self.count_of(j - 1) if G.prose(self.words[j]) else None
 
     def refused_amount(self, k: int) -> str:
         """Word *k* stands right after a lone multiplier and is no product's amount: the refusal's name, else ''."""
@@ -94,7 +100,7 @@ class ProductWindow:
         """Word *k* starts with a power of ten that has no mantissa of its own ('10^3', '(10^-4)', '10^9,', '10^6/L',
         r7 round 4: '1e3', '10E+03')."""
         sc = self.scan(k) if 0 <= k < self.n and self.has_digit(k) else None
-        return sc is not None and sc.kind == "numeric" and P.pure_power(sc.toks[0])
+        return sc is not None and sc.kind == "numeric" and sc.toks[0].shape in POWER_SHAPES and P.pure_power(sc.toks[0])
 
     def raised_word(self, k: int) -> bool:
         """r7 round 4: word *k* starts with a raised ten ('10', '103', '109/L', '10-3'; product.raised_ten)."""
@@ -119,14 +125,18 @@ class ProductWindow:
         last = self.scan(k - 1).toks[-1]
         return P.plain(last.shape, last.decimal)
 
-    def _common(self, k: int, side: int) -> bool:
-        """Word *k* is a common neighbour of a plain number that needs no further reading: a simple letter word (not
-        before a power of ten: '1.2 times 10^3') or a plain integer (not a refused amount, no raised ten after it)."""
-        w = self.words[k]
-        if _SIMPLE.fullmatch(w) is not None:
-            return not (side == RIGHT and self.power_word(k + 1))
-        return PLAIN_INT.fullmatch(w) is not None and not (side == LEFT and self.refused_amount(k)) \
-            and not (side == RIGHT and self.raised_word(k))
+    def power_next(self, k: int) -> bool:
+        """The word after word *k* is a power of ten with no mantissa of its own (read at C speed first: it holds a
+        caret, a superscript or an exponent letter): '1.2 times 10^3' is no common window."""
+        if k + 1 >= self.n:
+            return False
+        return POWER_MARK_RE.search(self.words[k + 1]) is not None and self.power_word(k + 1)
+
+    def alone_kind(self, tok: Tok, k: int) -> set[str]:
+        """What a single-token target of word *k* adds to its kind: 'power' (a pure power) or 'raised' (r7 round 4)."""
+        if tok.shape in POWER_SHAPES:
+            return {"power"} if P.pure_power(tok) else set()
+        return {"raised"} if RAISED_TEN_RE.fullmatch(tok.canonical) and self.raised(tok, k) else set()
 
 
-__all__ = ["LEFT", "RIGHT", "ProductWindow"]
+__all__ = ["LEFT", "PLAIN_INT", "POWER_MARK_RE", "POWER_SHAPES", "RIGHT", "ProductWindow"]

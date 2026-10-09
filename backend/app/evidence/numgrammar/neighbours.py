@@ -68,7 +68,16 @@ from app.evidence.numgrammar.alphabet import (
     STARTERS,
     char_class,
 )
-from app.evidence.numgrammar.product_window import LEFT, PLAIN_INT, RIGHT, ProductWindow
+from app.evidence.numgrammar.product import RAISED_TEN_RE
+from app.evidence.numgrammar.product_window import (
+    _SIMPLE,
+    LEFT,
+    PLAIN_INT,
+    POWER_MARK_RE,
+    POWER_SHAPES,
+    RIGHT,
+    ProductWindow,
+)
 from app.evidence.numgrammar.scan import TAIL_MULT, TAIL_STAR
 from app.evidence.numgrammar.units import ATOM_RE, unit_led
 
@@ -141,7 +150,7 @@ class Window(ProductWindow):
         """Word *k* is a number word: not led by a letter, read as resolved tokens, no dangling multiplier."""
         if not 0 <= k < self.n:
             return False
-        w = self.text(k)
+        w = self.words[k]
         if PLAIN_INT.fullmatch(w) is not None:
             return True
         if not self.has_digit(k) or lead_letter(w) or w[0] in RATIO_MARKS:
@@ -165,7 +174,7 @@ class Window(ProductWindow):
         if not self.number_word(k):
             if "ratio" in kind and side == LEFT and self.number_end(k) and not listed:
                 return MIXED                              # '1O5 3/4': a rejected whole part is still a whole part
-            return _why(self.text(k), False)
+            return _why(self.words[k], False)
         if adjacent and (refused := self.refused_amount(k)):
             return refused                                # '1.2 x 10 3': the 3 beside a refused product's amount
         if listed:
@@ -185,7 +194,7 @@ class Window(ProductWindow):
     def far_fault(self, k: int, side: int) -> str:
         """'' when the word beyond the infix word *k* is a plain number, or a prose word (a unit) then a plain
         number."""
-        j, mult = k + side, W.is_mult_word(self.text(k))
+        j, mult = k + side, W.is_mult_word(self.words[k])
         if mult:                                          # the product production: count MULT amount (product.py)
             if side == RIGHT:
                 return self.product_fault(self.target[-1] if self.target else None, self.amount_of(j), j)
@@ -194,8 +203,8 @@ class Window(ProductWindow):
         if 0 <= j < self.n:
             if self.plain_number(j):
                 return ""
-            if not (mult and side == RIGHT) and not self.has_digit(j) and not punct_only(self.text(j)) \
-                    and G.prose(self.text(j)) and self.plain_number(j + side):
+            if not (mult and side == RIGHT) and not self.has_digit(j) and not punct_only(self.words[j]) \
+                    and G.prose(self.words[j]) and self.plain_number(j + side):
                 return ""                                 # '20 mg – 40 mg'; a multiplier's operand: its next word
         return OPERAND if mult and side == RIGHT else NEIGHBOUR
 
@@ -204,7 +213,7 @@ class Window(ProductWindow):
                    listed: bool, lw: int) -> str:
         """'' when word *k* (the first word of the window on *side* that is not punctuation) is an accepted production,
         else the name of the refusal."""
-        w = self.text(k)
+        w = self.words[k]
         if not self.clean(k):
             return NEIGHBOUR                              # never reached: the taint tiers read the same window first
         lo, hi = G.core(w)
@@ -238,7 +247,8 @@ class Window(ProductWindow):
                 return "" if numeric or G.unit_powers(w) else DETACHED
             return NEIGHBOUR if split else self.number_fault(k, side, listed, kind, tight, adjacent)
         if G.prose(w):
-            if adjacent and self._power_across(k, side, kind):
+            if adjacent and ("power" in kind if side == LEFT else k + 1 < self.n and POWER_MARK_RE.search(
+                    self.words[k + 1]) is not None) and self._power_across(k, side, kind):
                 return DETACHED                           # r7 round 4: '1.2 times 10^3', '1.2 by 1e3'
             return "" if G.unit_powers(w) else DETACHED  # 'm²' reads; 'lO³' is a look-alike of a detached power
         return self._operator_fault(k, w, lo, hi, side, adjacent, kind)
@@ -262,7 +272,7 @@ class Window(ProductWindow):
     # ------------------------------------------------------------------ the window ---
     def _walk(self, k: int, side: int) -> int:
         """The first word from *k* on *side* that is not punctuation-only (-1 or n past the text)."""
-        while 0 <= k < self.n and punct_only(self.text(k)):
+        while 0 <= k < self.n and punct_only(self.words[k]):
             k += side
         return k
 
@@ -282,22 +292,22 @@ class Window(ProductWindow):
         *dash*: word lw ends in a dash ('5.0-', '45%-'): a number directly after it (a range) or a prose word (a
         compound the text layer split) completes it, nothing else does."""
         kind = {t.shape for t in self.target}
-        if len(self.target) == 1 and P.pure_power(self.target[0]):
-            kind.add("power")                             # the target is a power of ten standing alone
-        if len(self.target) == 1 and self.raised(self.target[0], fw):
-            kind.add("raised")                            # r7 round 4: a raised ten ('10' of '1.2 10')
-        if self.scan(lw).need_unit and not (lw + 1 < self.n and unit_led(self.text(lw + 1))):
+        if len(self.target) == 1 and (kind & POWER_SHAPES or RAISED_TEN_RE.fullmatch(self.target[0].canonical)):
+            kind |= self.alone_kind(self.target[0], fw)   # a power or a raised ten ('10' of '1.2 10')
+        if self.scan(lw).need_unit and not (lw + 1 < self.n and unit_led(self.words[lw + 1])):
             return RIGHT, lw, P.name(self.target[-1].canonical)   # '2x100': a power-of-ten amount needs its unit
         if (split := self.detached_decimal(fw, lw)) is not None:
             return split
         plain = not kind & {"ratio", "power", "raised"} and not self.scan(lw).tail and not dash
         for side, k0 in ((LEFT, fw - 1), (RIGHT, lw + 1)):
-            if plain and 0 <= k0 < self.n and self._common(k0, side):
+            if plain and 0 <= k0 < self.n and (_SIMPLE.fullmatch(w0 := self.words[k0]) is not None and (
+                    side == LEFT or not self.power_next(k0)) or PLAIN_INT.fullmatch(w0) is not None and (
+                    not self.refused_amount(k0) if side == LEFT else RAISED_TEN_RE.fullmatch(w0) is None)):
                 continue                                  # a common neighbour: 'mg', 'ng/mL', '(CV', 'after', '12'
             k, split, opened, assigned, ratio_mark, listed = k0, False, False, False, False, False
             edge = self.t[self.starts[fw]] if side == LEFT else self.t[self.ends[lw] - 1]
-            while 0 <= k < self.n and punct_only(self.text(k)):
-                w = self.text(k)
+            while 0 <= k < self.n and punct_only(self.words[k]):
+                w = self.words[k]
                 # a lone separator word between two digits splits one number ('12 . 5', '12 , 5'; not '24.5% , 17.8')
                 split = split or (edge in DIGITS and G.SEPARATOR_PUNCT.issuperset(w))
                 opened = opened or not OPENERS_BR.isdisjoint(w)
@@ -336,7 +346,7 @@ class Window(ProductWindow):
             if side == RIGHT and self.scan(lw).tail == TAIL_MULT:
                 return side, lw, OPERAND                  # '1.2 ×' at the end of the text
             return None
-        w = self.text(k)
+        w = self.words[k]
         if need_end:                                      # r7 round 4: a number or a unit production ('5- mg'),
             ok = k == k0 and (self.number_word(k) or unit_led(w[G.core(w)[0]:]))   # never '10- fold', '12- lOO'
             return None if ok else (side, k, _why(w, opened))
@@ -344,7 +354,7 @@ class Window(ProductWindow):
             return side, k, FRACTION                      # '1 : 2', '5 / 12 / 2020': no ratio production took it
         if ratio_mark and side == RIGHT and lead_letter(w) and not unit_led(w[G.core(w)[0]:]):
             return side, k, FRACTION                      # r7 round 4: '12 / lS', '12 : lS'; '12 / kg' is a unit
-        facing = self.text(lw if side == RIGHT else k)[-1]
+        facing = self.words[lw if side == RIGHT else k][-1]
         listed = listed or facing in LIST_MARKS
         why = self.word_fault(k, side, k == k0, split and w[-1 if side == LEFT else 0] in DIGITS,
                               assigned or w[-1] in EQUALS, kind, listed, lw)

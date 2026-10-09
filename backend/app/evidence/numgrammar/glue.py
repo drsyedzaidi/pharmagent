@@ -80,6 +80,7 @@ _AS_LETTER = str.maketrans(dict.fromkeys(sorted(DIGITS), NAME_LETTER))   # a lab
 _PLAIN_PROSE = re.compile(char_class(MODIFIERS | DIGITS | OP_LETTERS, negate=True) + "*")
 _STRETCH = LETTERS | DIGITS | DECIMAL_MARKS              # the characters of a unit stretch before its power
 SCALE_CHARS = MULTIPLIERS | EXP_MARKERS                   # a multiplier or an exponent marker: the SCALE production
+_SCALE_CHAR_RE = re.compile(char_class(SCALE_CHARS, negate=False))
 
 
 def _letter(w: str, i: int) -> bool:
@@ -181,7 +182,10 @@ def _in_name(w: str, j: int) -> bool:
 
 
 def scaled(w: str, start: int = 0) -> bool:
-    """Some character of *w* from *start* on is the SCALE production (linear: the core is found once)."""
+    """Some character of *w* from *start* on is the SCALE production (linear: the core is found once; a word without a
+    multiplier or exponent character is read at C speed)."""
+    if _SCALE_CHAR_RE.search(w, start) is None:
+        return False
     bounds = core(w)
     return any(scaled_at(w, j, bounds) for j in range(start, len(w)))
 
@@ -231,7 +235,7 @@ def glue(run: str) -> bool:
     while b > a and run[b - 1] in PUNCT:
         b -= 1
     mid = run[a:b]
-    if scaled(mid):
+    if mid and scaled(mid):
         return False                                      # r7 round 4: judged on the printed text ('(x10^3)', '(E3)')
     return prose(mid.translate(_AS_LETTER))               # label digits are letters of a name (decision 3)
 
