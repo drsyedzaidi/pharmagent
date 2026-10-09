@@ -1,5 +1,5 @@
 {
- "digest": "f7847800e486c4b3ac16a9f410fd7611d7229cf81b2ee5a9765e9fccfd32ddac",
+ "digest": "ec78cc72e9a5896c53ab6818d3e157dfda0993bffa251c141988895df3d44b76",
  "layer_b": {
   "code_points": {
    "key": 1112064,
@@ -15,25 +15,25 @@
   },
   "dirty": [],
   "errors": 0,
-  "head": "64b26892053ea1f14b585a15c9c5230969ca0e50",
-  "wall_seconds": 986.8
+  "head": "e09e5a946b27e2e3639c01328605ee55811f1b41",
+  "wall_seconds": 1018.5
  },
  "neighbours": {
   "dirty": [],
   "errors": 0,
-  "head": "64b26892053ea1f14b585a15c9c5230969ca0e50",
-  "strict": 9113,
-  "variants": 2530930,
-  "wall_seconds": 62.1,
-  "words": 30865
+  "head": "e09e5a946b27e2e3639c01328605ee55811f1b41",
+  "strict": 9420,
+  "variants": 2903754,
+  "wall_seconds": 91.0,
+  "words": 30891
  },
  "tokens": {
   "dirty": [],
   "errors": 0,
-  "head": "64b26892053ea1f14b585a15c9c5230969ca0e50",
-  "pairs": 401,
-  "variants": 445937664,
-  "wall_seconds": 1748.2,
+  "head": "e09e5a946b27e2e3639c01328605ee55811f1b41",
+  "pairs": 458,
+  "variants": 509325312,
+  "wall_seconds": 2175.6,
   "workers": 12
  }
 }
