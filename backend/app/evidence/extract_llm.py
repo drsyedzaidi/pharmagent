@@ -59,21 +59,30 @@ def pages_tables_first(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(pages, key=lambda p: 0 if p.get("tables") else 1)
 
 
-def find_cell(page: dict[str, Any], snippet: str) -> dict[str, Any] | None:
-    """The first table cell whose text contains the (normalised) snippet, as a cell locator."""
+def find_cell(page: dict[str, Any], snippet: str, group: str = "") -> dict[str, Any] | None:
+    """The ONE table cell the snippet names, as a cell locator (r7 round 4): a cell whose whole normalised text is the
+    snippet, or holds it as a run of whole words ('12.4' of '12.4 (3.1)', never '2.4' of '12.4'); of several, the ones
+    whose row label or column header is the record's *group*; None when no cell or more than one remains (the record
+    then cites the page text). The locator's table is the table's position in the page's tables."""
     ns, _ = normalise(snippet)
     if not ns:
         return None
-    for table in page.get("tables") or []:
+    hits: list[tuple[int, int, int, str, str]] = []
+    for ti, table in enumerate(page.get("tables") or []):
         rows = table.get("rows") or []
         for ri, row in enumerate(rows):
             for ci, cell in enumerate(row):
                 text = str(cell or "")
-                if gaps.strip(text) and ns in normalise(text)[0]:
+                if gaps.strip(text) and f" {ns} " in f" {normalise(text)[0]} ":
                     header = str(rows[0][ci]) if rows and ci < len(rows[0]) else ""
-                    return {"table": int(table.get("index") or 0), "row": ri, "col": ci, "header": header,
-                            "row_label": str(row[0] or "") if row else ""}
-    return None
+                    hits.append((ti, ri, ci, header, str(row[0] or "") if row else ""))
+    ng = normalise(group)[0] if group else ""
+    named = [h for h in hits if ng and ng in (normalise(h[3])[0], normalise(h[4])[0])]
+    hits = named or hits
+    if len(hits) != 1:
+        return None
+    ti, ri, ci, header, row_label = hits[0]
+    return {"table": ti, "row": ri, "col": ci, "header": header, "row_label": row_label}
 
 
 def _to_proposal(rec: dict[str, Any], index: dict[str, dict[str, Any]], doc: dict[str, Any],
@@ -87,7 +96,7 @@ def _to_proposal(rec: dict[str, Any], index: dict[str, dict[str, Any]], doc: dic
     snippet = str(rec["snippet"])
     kind, cell = rec["kind"], None
     if kind == "table":
-        cell = find_cell(page, snippet) if page is not None else None
+        cell = find_cell(page, snippet, str(rec.get("group") or "")) if page is not None else None
         kind = "table" if cell is not None else "text"
     style = decimal_style(spec, doc)
     value = gaps.strip(str(rec["value"]))[:MAX_VALUE]        # the GAP set only: an OUTSIDE character stays (r7 round 3)

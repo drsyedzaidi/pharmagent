@@ -1,5 +1,7 @@
 """Does a label scale the printed number? (r7 round 3: an ALLOW-LIST over the label's words, never a list of scale
 shapes; the round-3 audit found every unlisted scale form passing: '×10−3', 'x100', '×1e3', 'x 10000', '(hundreds)').
+r7 round 4: moved out of the reader package (it reads the scale word list); a word wrapped at a line end is read whole
+(``word_match.join_wrap``) and a scale word is matched through the OCR skeleton (``word_match.loose_in``).
 
 A label (a header cell, a row label, a unit cell, a proposed unit, or a data cell beside the number) is SCALE-FREE only
 when every PART of every word (a word split at its brackets and slashes) is one of these productions::
@@ -10,10 +12,11 @@ when every PART of every word (a word split at its brackets and slashes) is one 
     prose          glue.prose with every power after a unit symbol (glue.unit_powers) and no scale word
     label          glue.label (a letter-led name, its digits letters of the name: 'AUC0-24', 'CYP2E1') with the same two
                    conditions ('AUC10^3' and 'th0usands' are none)
-    number         digit-led, every number resolved, and none a scale: a bare power ('10^3') unless it is a unit
-                   denominator (after a slash or the word 'per': 'cells/10^6', 'per 10^6'), a scientific number or a
-                   written-out power of ten ('1000', '1,000', '0.001'; never '1'); in a DATA cell beside the number
-                   (data=True) every resolved number but a bare power is data
+    number         digit-led, every number resolved, and none a scale: a bare power ('10^3') or a raised ten (r7 round
+                   4: '109', '103', '106' of a flattened '10⁹/L') unless it is a unit denominator (after a slash or the
+                   word 'per': 'cells/10^6', 'per 10^6', 'cells/106'), a scientific number or a written-out power of
+                   ten ('1000', '1,000', '0.001'; never '1'); in a DATA cell beside the number (data=True) every
+                   resolved number but a bare power is data
 
 A sample size ('n = 45', 'N=1208') and a percentage ('95%') are counts, read as names first. Everything else raises the
 flag: a multiplier (lone 'x', '×', glued 'x1000'), an exponent letter before digits ('E3', 'e-3'), a scale word of
@@ -29,20 +32,18 @@ from app.evidence.numgrammar import glue as G
 from app.evidence.numgrammar import product as P
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.alphabet import (
-    ASCII_LETTERS,
     CID_MARKER,
     CLOSERS_BR,
-    CONTEXT_PUNCT,
     DECIMAL_MARKS,
     DIGITS,
+    EQUALS,
     EXP_MARKERS,
     GAP,
-    INSIDE,
-    LETTERS,
     N_LETTERS,
     NAME_LETTER,
     OPENERS_BR,
     OUTSIDE_RE,
+    PER,
     PERCENTS,
     PLUS_MINUS,
     POINT,
@@ -50,7 +51,6 @@ from app.evidence.numgrammar.alphabet import (
     SIGNS,
     SLASH,
     STAR,
-    SUP_CHARS,
     TRAILING,
     WORD_RE,
     char_class,
@@ -58,53 +58,17 @@ from app.evidence.numgrammar.alphabet import (
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.tokenizer import tokens
 from app.evidence.word_lists import SCALE_WORDS
+from app.evidence.word_match import join_wrap, loose_in
 
-# the characters a word list reads as themselves: ASCII letters, numbers and their punctuation, brackets, the CONTEXT
-# punctuation and the gaps; every other character (a Greek or accented letter, a mark, a superscript, a character the
-# reader cannot read) may be a look-alike in a flag word and stands for any one character or for none (``loose_in``)
-_PLAIN = (INSIDE - SUP_CHARS) | ASCII_LETTERS | OPENERS_BR | CLOSERS_BR | CONTEXT_PUNCT | GAP
 _OPERATORS = SIGNS | {PLUS_MINUS} | QUALIFIERS | PERCENTS          # a part of only these is inert ('-', '±', '<', '%')
 _SPLIT = re.compile(char_class(OPENERS_BR | CLOSERS_BR | SLASH, negate=False))
 _STRIP = "".join(sorted(TRAILING))
 _GAPS = char_class(GAP, negate=False) + "*"
-_COUNTS = re.compile(char_class(N_LETTERS, negate=False) + _GAPS + "=" + _GAPS + "[0-9]+|[0-9]+(?:"
-                     + char_class(DECIMAL_MARKS, negate=False) + "[0-9]+)?" + char_class(PERCENTS, negate=False))
+_RUN = char_class(DIGITS, negate=False) + "+"
+_COUNTS = re.compile(char_class(N_LETTERS, negate=False) + _GAPS + char_class(EQUALS, negate=False) + _GAPS + _RUN
+                     + "|" + _RUN + "(?:" + char_class(DECIMAL_MARKS, negate=False) + _RUN + ")?"
+                     + char_class(PERCENTS, negate=False))
 _AS_NAME = str.maketrans(dict.fromkeys(sorted(DIGITS), NAME_LETTER))   # digits read as the letters of a name
-_PER = "per"                                                        # the word that makes the next power a denominator
-
-
-def _foreign(w: str) -> list[bool]:
-    """Per character of *w*: does it stand for any one character (or none) in a word list? A character outside
-    ``_PLAIN``, and (r7 round 3) a digit run with a letter on both sides ('bel0w', 'mi11ions', 'BL0Q'; never 'c1')."""
-    out = [c not in _PLAIN for c in w]
-    i = 0
-    while i < len(w):
-        if w[i] not in DIGITS:
-            i += 1
-            continue
-        j = i
-        while j < len(w) and w[j] in DIGITS:
-            j += 1
-        if i > 0 and w[i - 1] in LETTERS and j < len(w) and w[j] in LETTERS:
-            out[i:j] = [True] * (j - i)
-        i = j
-    return out
-
-
-def loose_in(word: str, targets: frozenset[str]) -> bool:
-    """*word* (the alphabet's capitals lower-cased) is one of the lowercase ASCII *targets* where every FOREIGN
-    character (``_foreign``) stands for any one character (``τo`` is ``to``, ``αbove`` is ``above``, ``bel0w`` is
-    ``below``) or for none (a zero-width character inside ``thousands``). Only ever used to RAISE a flag (a word list
-    of the value checks), never to read a number: a look-alike or padded spelling must flag like the plain one does."""
-    w = casefold_letters(word)
-    if w in targets:
-        return True
-    foreign = _foreign(w)
-    if not any(foreign):
-        return False
-    if "".join(c for c, f in zip(w, foreign, strict=True) if not f) in targets:      # a foreign character inside it
-        return True
-    return any(len(t) == len(w) and all(x == y or f for x, y, f in zip(w, t, foreign, strict=True)) for t in targets)
 
 
 def _mask(t: str, data: bool) -> str:
@@ -130,6 +94,8 @@ def _number_inert(part: str, denominator: bool, data: bool) -> bool:
             return False
         if not data and (tok.shape == "sci" or P.power_of_ten(tok.canonical)):
             return False                    # a scientific number or a written-out power of ten ('1000', '1,000')
+        if not data and not denominator and P.raised_ten(tok):
+            return False                    # r7 round 4: a raised ten the text layer flattened ('109/L', '(103/μL)')
     return True
 
 
@@ -152,9 +118,10 @@ def scale_shapes(label: str, *, data: bool = False) -> bool:
     t = fold(label)
     if OUTSIDE_RE.search(t) is not None or CID_MARKER.search(t) is not None:
         return True
+    t = join_wrap(t)                        # r7 round 4: a word wrapped at a line end ('(thou-' + 'sands)') is one word
     prev = ""
     for m in WORD_RE.finditer(_mask(t, data)):
-        w, at, after_slash = m.group(), 0, casefold_letters(prev) == _PER or prev[-1:] in SLASH
+        w, at, after_slash = m.group(), 0, casefold_letters(prev) == PER or prev[-1:] in SLASH
         for sep in _SPLIT.finditer(w):
             if not _part_inert(w[at:sep.start()], after_slash, data):
                 return True

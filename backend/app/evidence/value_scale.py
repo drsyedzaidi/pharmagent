@@ -3,8 +3,10 @@ round 3).
 
 * right AFTER the number: a glued bare capital M (``1.5M``: the unit production reads it as molar, but it may be
   millions), a scale word (``word_lists.AFTER_SCALE_WORDS``: '1.5 million', '1.5 bn', '1.5 mln'; a look-alike
-  spelling, digits inside the word included, counts: '1.5 mi11ion') or a scale symbol (``SCALE_SYMBOLS``: '1.5 k',
-  '1.5 M', '1.5 B');
+  spelling, digits inside the word or OCR letter shapes included, counts: '1.5 mi11ion', '1.5 rnillion') or a scale
+  symbol (``SCALE_SYMBOLS``: '1.5 k', '1.5 M', '1.5 B'; a lone Greek or accented letter too, '1.5 κ'), read as the
+  leading letter run of the next word ('million[3]', 'million/year', 'M[3]') or of the next table cell, a word broken
+  at a line end read whole ('mil-' + 'lion'; r7 round 4);
 * in a LABEL of the number (the proposed unit, the column header rows above the cell, the row label, a unit-column
   cell): ``numgrammar.scale_shapes``, an allow-list over the label's words (r7 round 3: everything that is no inert
   production raises the flag, a character the reader cannot read too);
@@ -18,14 +20,16 @@ from typing import Any
 from app.evidence import gaps
 from app.evidence import models as M
 from app.evidence.extract_rules import UNIT_HEADERS, norm_key
-from app.evidence.numgrammar import GAP, is_data_cell, loose_in, scale_shapes, words_after
-from app.evidence.numgrammar.alphabet import CLOSERS_BR, GROUP_ONLY, TRAILING
+from app.evidence.numgrammar import GAP, is_data_cell
+from app.evidence.numgrammar.alphabet import ASCII_LETTERS, DIGITS, LETTERS, OPENERS_BR
 from app.evidence.numgrammar.units import UNIT_RE
 from app.evidence.read_cache import cached
-from app.evidence.value_context import flag, verified_token
+from app.evidence.scale_label import scale_shapes
+from app.evidence.value_context import context, flag, verified_token, words_after_joined
 from app.evidence.word_lists import AFTER_SCALE_WORDS, SCALE_SYMBOLS
+from app.evidence.word_match import loose_in
 
-_STRIP = "".join(sorted(TRAILING - GROUP_ONLY | CLOSERS_BR))
+NON_ASCII_LETTERS = LETTERS - ASCII_LETTERS            # a lone one after a number may stand for a scale symbol
 
 
 def _header_rows(rows: list[Any]) -> list[int]:
@@ -36,8 +40,30 @@ def _header_rows(rows: list[Any]) -> list[int]:
                   sum(len(r) for r in rows))
 
 
+def _head(word: str) -> str:
+    """The leading letter run of a word (openers aside; a digit inside it is a look-alike letter, 'mi11ion'): the scale
+    word or symbol however the next word goes on ('million' of 'million[3]', 'million/year', "million's", 'M' of
+    'M[3]': r7 round 4)."""
+    i = 0
+    while i < len(word) and word[i] in OPENERS_BR:
+        i += 1
+    j = i
+    while j < len(word) and (word[j] in LETTERS or word[j] in DIGITS):
+        j += 1
+    return word[i:j]
+
+
+def _scale_word(word: str) -> bool:
+    """A scale symbol (exact, case kept), a lone letter that is no ASCII letter (a look-alike of a symbol: a Greek kappa
+    for k, r7 round 4) or a scale word (loose: look-alike spellings flag too)."""
+    return word in SCALE_SYMBOLS or (len(word) == 1 and word in NON_ASCII_LETTERS) or (
+        bool(word) and loose_in(word, AFTER_SCALE_WORDS))
+
+
 def scale_after(loc: dict[str, Any], page: dict[str, Any]) -> str:
-    """The scale printed right AFTER the verified token, '' when none (see the module docstring)."""
+    """The scale printed right AFTER the verified token, '' when none (see the module docstring): the next word, or for
+    a table cell the first word of the cells after it (r7 round 4: the reading of the bound checks), a word broken at a
+    line end read whole."""
     got = verified_token(loc, page)
     if got is None or got[3] is None:
         return ""
@@ -49,9 +75,10 @@ def scale_after(loc: dict[str, Any], page: dict[str, Any]) -> str:
     m = UNIT_RE.match(glued)
     if m is not None and glued[:m.end()] in SCALE_SYMBOLS:
         return glued[:m.end()]
-    nxt = words_after(text, b, 1)
-    word = nxt[0].rstrip(_STRIP) if nxt else ""
-    return word if word in SCALE_SYMBOLS or (word and loose_in(word, AFTER_SCALE_WORDS)) else ""
+    ctx, off = context(loc, page, text)
+    nxt = words_after_joined(ctx, b + off, 1)
+    word = _head(nxt[0]) if nxt else ""
+    return word if _scale_word(word) else ""
 
 
 def _labels(loc: dict[str, Any], page: dict[str, Any]) -> tuple[list[str], list[str]]:

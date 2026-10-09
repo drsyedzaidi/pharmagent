@@ -146,8 +146,10 @@ def test_the_locator_module_has_no_second_table_and_no_unicode_property():
                                                                           if isinstance(n, ast.Attribute)}
     assert not names & {"unicodedata", "nfkc_char", "nfkc_with_map", "MAX_NFKC_EXPANSION", "isalpha", "isspace",
                         "isupper", "islower", "isdigit", "normalize"}
-    patterns = [c.args[0].value for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
-                and c.func.attr == "compile" and c.args and isinstance(c.args[0], ast.Constant)]
+    # r7 round 4: every compiled pattern of the module (they are built from the lists now, none is a literal), was:
+    # the literal patterns of the module's re.compile calls
+    import re
+    patterns = [v.pattern for v in vars(N).values() if isinstance(v, re.Pattern)]
     assert patterns and not any("\\s" in p or "\\w" in p or "\\b" in p for p in patterns)
 
 

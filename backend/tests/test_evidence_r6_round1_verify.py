@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from app.evidence import models as M
-from app.evidence.numgrammar import scale_shapes
+from app.evidence.scale_label import scale_shapes
 from tests.evidence_r6_round1_support import COMMA_PAGE, POINT_PAGE, Outcome, cell, doc, run
 
 

@@ -17,7 +17,8 @@ import pytest
 
 from app.evidence import models as M
 from app.evidence.numgrammar import glue as G
-from app.evidence.numgrammar import scale_shapes, tokens
+from app.evidence.numgrammar import tokens
+from app.evidence.scale_label import scale_shapes
 from tests.evidence_r6_neighbour_rules import label as oracle_label
 from tests.evidence_r6_round1_support import cell, run
 
@@ -25,14 +26,14 @@ HEAD_ROW = ["Arm", "Cmax"]
 
 
 @pytest.mark.parametrize("word", ["AUC×1000", "AUC·1000", "Count×1000", "AUC×10^3", "AUC×1e3", "Dose×2", "q×1",
-                                  "(AUC×1000)", "AUC0-24×1000"])
+                                  "(AUC×1000)", "AUC0-24×1000", "AUCx1000"])   # r7 round 4: the Latin x too
 def test_a_product_dot_before_a_digit_is_no_label_glue(word):
     assert G.label(word) is False, word
     assert oracle_label(word) is False, word                     # the independent copy of the production agrees
 
 
 @pytest.mark.parametrize("word", ["AUC0-24", "CYP2D6*4", "CYP2C19*1/*1", "ng·h/mL", "ng×h", "L·h⁻¹", "t1/2",
-                                  "Cmax,ss", "C24h", "AUCx1000"])
+                                  "Cmax,ss", "C24h"])
 def test_a_label_without_a_product_dot_before_a_digit_is_still_a_label(word):
     assert G.label(word) is True, word
     assert oracle_label(word) is True, word

@@ -130,6 +130,7 @@ GROUP_ONLY = SEPARATORS - DECIMAL_MARKS - {MIDDOT}       # ' and the thin space:
 EQUALS = CONTEXT_PUNCT & frozenset("=")
 RATIO_MARKS = CONTEXT_PUNCT & frozenset("/:")            # a lone word of one between two numbers: a ratio mark
 SLASH = CONTEXT_PUNCT & frozenset("/")                   # a ratio's, a unit denominator's and a divisor's slash
+COLON = RATIO_MARKS - SLASH                              # r7 round 4: a ratio mark that never joins letters ('12:lS')
 N_LETTERS = CONTEXT_LETTERS & frozenset("nN")            # the 'n' of the sample-size production 'n = 12'
 # a token may start right after one of these in its word ('n=12', '<5', '(12', '±3')
 STARTERS = OPENERS_BR | QUALIFIERS | EQUALS | {PLUS_MINUS}
@@ -154,6 +155,15 @@ LIST_MARKS = (DECIMAL_MARKS & frozenset(",")) | (CONTEXT_PUNCT & frozenset(";"))
 APOSTROPHE = SEPARATORS & frozenset("'")                 # the apostrophe that groups thousands ('24'560')
 THIN_GROUP = GROUP_ONLY - APOSTROPHE                     # the thin space: groups digits only between two digits
 (SUP_TWO,) = SUP_DIGITS & frozenset("\u00b2")             # the superscript two of a square and of chi-square
+# r7 round 4: the remaining terminals the grammar's regexes and the flag modules name (no module types one)
+(SQUARE_CLOSE,) = CLOSERS_BR & frozenset("]")             # the closer of a citation group
+(ROUND_OPEN,) = OPENERS_BR - {SQUARE_OPEN}               # the opener of the chi-square degrees of freedom '(1)'
+(ROUND_CLOSE,) = CLOSERS_BR - {SQUARE_CLOSE}
+(SPACE,) = GAP & frozenset(" ")                           # the ASCII space (a pdfplumber space glyph, a blanked group)
+(DASH,) = HYPHEN                                          # the hyphen-minus as a character ('h-1' of a unit exponent)
+PLAIN_POWERS = DIGITS & frozenset("23")                  # a unit's plain square or cube ('m2', 'cm3')
+PER = "per"                                              # the unit production's word connector ('mg per kg')
+DF = "df"                                                # the degrees-of-freedom name of the chi-square production
 # the chi-square form's letter (owner decision 8): grammar data of the production in productions.py, NOT a member of
 # any list (chi is outside; the form masks it 1:1, every other chi stays outside)
 CHI = "\u03c7"                                           # GREEK SMALL LETTER CHI

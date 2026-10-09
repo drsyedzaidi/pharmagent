@@ -7,12 +7,13 @@ from __future__ import annotations
 import random
 import time
 
+from app.evidence import dose_rule
 from app.evidence import normalize as N
 from app.evidence import read_cache as RC
 from app.evidence import value_checks as VC
 from app.evidence import verify_columns as VCOL
+from app.evidence.dose_rule import find_dose
 from app.evidence.extract_rules import rule_extract
-from app.evidence.numgrammar import api, find_dose
 from app.evidence.proposal_check import check_proposals
 from app.evidence.verify import verify
 from tests.evidence_r6_round1_support import doc, run
@@ -21,8 +22,8 @@ from tests.evidence_timing import limit
 
 def test_find_dose_folds_the_text_once_not_once_per_number(monkeypatch):
     calls = []
-    real = api.fold
-    monkeypatch.setattr(api, "fold", lambda text, **kw: (calls.append(len(text)), real(text, **kw))[1])
+    real = dose_rule.fold
+    monkeypatch.setattr(dose_rule, "fold", lambda text, **kw: (calls.append(len(text)), real(text, **kw))[1])
     text = "1 mg " * 20_000
     t0 = time.perf_counter()
     out = find_dose(text)

@@ -46,7 +46,7 @@ PLAIN = [
     ("(Lee et al. 2011). This", ".", [2011.0]),
     ("37°C and 37 °C and 37◦C", ".", [37.0, 37.0, 37.0]),
     ("CL 12.4 L h-1 and 90 mL/min/1.73m2", ".", [12.4, 90.0]),
-    ("n = 12.", ".", [12.0]), ("12-fold and 24-h", ".", [12.0, 24.0]), ("12.)", ".", [12.0]),
+    ("n = 12.", ".", [12.0]), ("12-fold and 24-h", ".", [None, 24.0]), ("12.)", ".", [12.0]),
     # r7 writer 3: the 1 of 'gsd - 1' is subtracted, no range; r7 round 3: '× 100' with no unit after it is no product
     # (a written-out power of ten behind a multiplier is a scale: product.py), so the 100 is unresolved too
     ("(gsd - 1) × 100 = 41%", ".", [None, None, 41.0]),

@@ -62,6 +62,9 @@ TARGETS = (
     Target("count 10^6 cells/mL", "10^6"), Target("ka 0.12 h-1 rate", "0.12"),       # r7 round 2: a power, a unit
     Target("dose 2 x 100 mg daily", "2"), Target("dose 2 x 100 mg daily", "100"),    # r7 round 3: the product
     Target("count 3.1 x 7 cells", "7"),
+    # r7 round 4: a raised ten as the target (a number inserted before it is its mantissa), a mantissa one prose word
+    # before an inserted power ('1.2 by W'), a pure power in e-notation as the target
+    Target("count 10 cells", "10"), Target("count 1.2 by cells", "1.2"), Target("titre 1e3 copies", "1e3"),
 )
 ALPHABET = "+-*×·^²⁻<~±%015eExXq([)].,;:/='"
 SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL", "%CV", "L/h", "°C", "μg", "daily", "once-daily",
@@ -75,7 +78,11 @@ SAMPLES = ("mg", "ng/mL", "h-1", "(\u03bcL/min/10^6", "h^-1", "m²", "ng·h/mL",
            "1e6", "10000", "1,000,000", "100", "1000", "x1000", "(E3)", "Count(E3)", "0.", "12.", "1,OOO",
            "OOO", "lS", ".OS", "mg[3]", "h[12]", "2.5", "-3",
            # r7 round 3 follow-up: a times sign or middle dot glued before digits in a label word (no label), unit glue
-           "AUC×1000", "Count·5", "ng×h", "CYP2D6*4")
+           "AUC×1000", "Count·5", "ng×h", "CYP2D6*4",
+           # r7 round 4: glued scales and names, raised tens, pure powers, slash and colon words, compounds, a degree
+           "AUC*1000", "AUCx1000", "AUC-E3", "AUC1000x", "Cmax1", "CYP2E1", "CYP2C19*1/*17", "103", "109/L", "10−3",
+           "10%", "1E+03", "10E+03", "1.0E+03", "5e3", "times", "/kg", "/lS", ":lS", "kg", "10-fold",
+           "24-h", "12-lOO", "12/lS", "12/kg", "37°5", "°5")
 
 
 def vocabulary(max_len: int = 3) -> list[str]:

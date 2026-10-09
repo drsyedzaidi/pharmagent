@@ -28,7 +28,7 @@ from pdfminer.pdftypes import PDFStream, resolve1
 from pdfplumber.page import PDFPageAggregatorWithMarkedContent
 
 from app.evidence import gaps
-from app.evidence.numgrammar.alphabet import DIGITS, cls
+from app.evidence.numgrammar.alphabet import DIGITS, SPACE, cls
 from app.evidence.numgrammar.equivalents import THIN, THIN_SOURCES
 
 MAX_PAGE_PT = 20_000.0                 # 7 m: no real page; huge boxes drive per-x allocations
@@ -242,7 +242,7 @@ def close_zero_gaps(page: Any) -> None:
     drop = set()
     for i in range(1, len(chars) - 1):
         c, a, b = chars[i], chars[i - 1], chars[i + 1]
-        if c.get("text") != " " or not (str(a.get("text")) in DIGITS and str(b.get("text")) in DIGITS):
+        if c.get("text") != SPACE or not (str(a.get("text")) in DIGITS and str(b.get("text")) in DIGITS):
             continue
         size = float(c.get("size") or a.get("size") or 0)
         same_line = abs(float(a["bottom"]) - float(b["bottom"])) <= 0.2 * size

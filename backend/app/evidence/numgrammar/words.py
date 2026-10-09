@@ -26,13 +26,13 @@ from app.evidence.numgrammar.alphabet import (
 )
 
 _MULT = char_class(MULTIPLIERS, negate=False)
-_POWER = ("(?:\\^" + char_class(SIGNS, negate=False) + "?[0-9]{1,4}|" + char_class(SUP_SIGNS, negate=False) + "?"
-          + char_class(SUP_DIGITS, negate=False) + "{1,4})")
+_POWER = ("(?:" + re.escape(CARET) + char_class(SIGNS, negate=False) + "?[0-9]{1,4}|"
+          + char_class(SUP_SIGNS, negate=False) + "?" + char_class(SUP_DIGITS, negate=False) + "{1,4})")
 MULT_POWER_RE = re.compile(_MULT + "10" + _POWER)       # '×10^3', 'x10³': a multiplier glued to a power of ten
 MULT_TEN_RE = re.compile(_MULT + "10(?!0)[0-9]*")       # 'x103', '×10': a multiplier glued to a ten, no power
 E_WORD_RE = re.compile(char_class(EXP_MARKERS, negate=False) + char_class(SIGNS, negate=False)
                        + "?[0-9]{1,4}")                     # a spaced exponent: 'E-03', 'e3'
-FRACTION_RE = re.compile("[0-9]{1,3}/[0-9]{1,3}")       # '3/4'
+FRACTION_RE = re.compile("[0-9]{1,3}" + char_class(SLASH, negate=False) + "[0-9]{1,3}")       # '3/4'
 CARET_OR_SUP_RE = re.compile(char_class(SUP_CHARS | {CARET}, negate=False))
 DIGIT_RE = re.compile("[0-9]")
 

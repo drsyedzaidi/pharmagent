@@ -1,78 +1,57 @@
-"""censored_value (error): a verified number that is a bound, an approximation or one end of a printed range (split out
-of value_checks.py in r7 round 3).
+"""censored_value (error): a verified number that is a bound, an approximation, a spelled-out sign or one end of a
+printed range (split out of value_checks.py in r7 round 3; the range half lives in value_ranges.py since r7 round 4).
 
-The words around the token are read (a table cell with the cells one separator away: ``value_context.cell_context``):
+The words around the token are read (a table cell with the cells one separator away: ``value_context.cell_context``,
+whose walk goes on through the cells of a bound or range phrase: r7 round 4):
 
 * a qualifier before it: an operator run ('<0.5', '<= 5', '< ( 5'), the MEDLINE spelling of <= and >= ('< or = 0.5',
   '> or = 18': r7 round 3), a qualifier word (``word_lists.QUALIFIER_WORDS``: 'below', 'approximately', 'around',
-  'NMT' ...), a bound look-back ('less than', 'at least', 'up to'; r7 round 3: any comparative before 'than', 'fewer
-  than', 'lower than') and 'less than or equal to'. A word broken at a line-end hyphen ('approxi-' line break 'mately',
-  a hyphen, a U+2010 or a soft hyphen) is read whole (r7 round 3);
+  'NMT', r7 round 4 'not exceeding', 'maximum', 'beyond', 'GE' ...), a bound look-back ('less than', 'at least', 'up
+  to', 'in excess of'; r7 round 3: any comparative before 'than', 'fewer than', 'lower than') and 'less than or equal
+  to'. A word broken at a line-end hyphen ('approxi-' line break 'mately', a hyphen, a U+2010 or a soft hyphen) is read
+  whole (r7 round 3);
+* a SIGN WORD before it (r7 round 4, ``word_lists.SIGN_WORDS``: 'minus 12%', 'negative 1.5'): the printed digits are
+  not the value;
 * a bound AFTER it (r7 round 3): 'or' or 'and' then a word of ``word_lists.AFTER_BOUNDS`` ('0.5 or less', '18 or older',
-  '12 and above');
-* a range: the reader's range mark (``Tok.ranged``, a unit or percent between the number and the range word included:
-  '20 mg - 40 mg'), a lone '-' or '~' word, 'to' on either side ('12 to 15', '20 mg to 40 mg': r7 round 3) and
-  'between 12 and 24' (r7 round 3), unless the field names an interval.
+  '12 and above'), r7 round 4 also with one unit word between ('18 years or older', '0.5 ng/mL or less');
+* a range (value_ranges.py), unless the field names an interval.
 
-Every word list is matched with ``loose_in``: a look-alike spelling (a Greek letter, a mark, a digit inside the word:
-'bel0w') flags like the plain one.
+Every word list is matched with ``word_match.loose_in``: a look-alike spelling (a Greek letter, a mark, a digit inside
+the word, an OCR letter shape: 'bel0w', 'beIow', 'up t0') flags like the plain one. r7 round 4: a bracketed reference
+group ('[3]', '[3, 4]': the citation production's group) never hides a word: the words are read twice, as printed and
+with every such group that does not hold the token taken out, and either reading raises the flag.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from app.evidence import models as M
-from app.evidence.numgrammar import GAP, Tok, loose_in, tokens, words_after
-from app.evidence.numgrammar import glue as G
+from app.evidence.numgrammar import GAP, Tok, words_after
 from app.evidence.numgrammar import words as W
-from app.evidence.numgrammar.alphabet import (
-    CLOSERS_BR,
-    DIGITS,
-    EQUALS,
-    GROUP_ONLY,
-    HYPHEN,
-    LETTERS,
-    LF,
-    OUTSIDE_RE,
-    PERCENTS,
-    QUALIFIERS,
-    RANGE_WORDS,
-    TRAILING,
-)
+from app.evidence.numgrammar.alphabet import EQUALS, LETTERS, QUALIFIERS, SPACE
 from app.evidence.numgrammar.equivalents import fold
+from app.evidence.numgrammar.productions import bracket_groups
 from app.evidence.qc_flags import is_interval_field
-from app.evidence.value_context import context, flag, verified_token
+from app.evidence.value_context import context, flag, verified_token, wrapped_words
+from app.evidence.value_ranges import TRAIL as _TRAIL
+from app.evidence.value_ranges import ranged, unit_word
 from app.evidence.word_lists import (
     AFTER_BOUNDS,
     AND,
-    BETWEEN,
     BOUND_LEADS,
     BOUND_WORDS,
     COMPARATIVE_END,
     EQUAL,
     OR,
     QUALIFIER_WORDS,
+    SIGN_WORDS,
     THAN,
     TO,
 )
+from app.evidence.word_match import loose_in
 
-_TRAIL = "".join(sorted(TRAILING - CLOSERS_BR - GROUP_ONLY))
-_CLOSE = "".join(sorted(CLOSERS_BR))
 LOOK_BACK = 4                      # words before the token the qualifier look-back reads ('less than or equal to')
-LOOK_AHEAD = 3                     # words after it: 'or less', 'mg to 40'
-
-
-def _numeric_word(word: str, style: str) -> bool:
-    """A word that starts with a resolved number ('15', '15.4', '(15'): the other end of 'to'."""
-    toks = tokens(word.rstrip(_TRAIL + _CLOSE), style, mode="cell")
-    return bool(toks) and toks[0].start <= 1 and toks[0].value is not None
-
-
-def _unit_word(word: str) -> bool:
-    """A word without a digit between a number and a range word: a unit or a noun ('mg', 'h', 'patients') or a lone
-    percent sign."""
-    core = word.rstrip(_TRAIL + _CLOSE)
-    return bool(core) and not any(c in DIGITS for c in core) and (G.prose(core) or all(c in PERCENTS for c in core))
+LOOK_AHEAD = 3                     # words after it: 'or less', 'mg to 40', 'years or older'
 
 
 def _word_spans(t: str, start: int, n: int) -> list[tuple[int, int]]:
@@ -100,30 +79,7 @@ def words_before_joined(text: str, start: int, n: int) -> list[str]:
     word that ends in a letter and a hyphen (or a character the reader cannot read, a soft hyphen) and the word on the
     next line that starts with a letter are one word ('approxi-' + 'mately' is 'approximately'; r7 round 3)."""
     t = fold(text)
-    spans = _word_spans(t, start, n + 2)
-    words: list[str] = []
-    i = 0
-    while i < len(spans):
-        s, e = spans[i]
-        w = t[s:e]
-        if i + 1 < len(spans) and len(w) > 1 and w[-2] in LETTERS and (w[-1] in HYPHEN or OUTSIDE_RE.match(w[-1])) \
-                and LF in t[e:spans[i + 1][0]] and t[spans[i + 1][0]] in LETTERS:
-            words.append(w[:-1] + t[spans[i + 1][0]:spans[i + 1][1]])
-            i += 2
-            continue
-        words.append(w)
-        i += 1
-    return words[-n:]
-
-
-def _own_word(text: str, a: int) -> str:
-    """The whole word of *text* that holds the offset *a*."""
-    k, e = a, a
-    while k > 0 and text[k - 1] not in GAP:
-        k -= 1
-    while e < len(text) and text[e] not in GAP:
-        e += 1
-    return text[k:e]
+    return wrapped_words(t, _word_spans(t, start, n + 2))[-n:]
 
 
 def _own_prefix(text: str, a: int) -> str:
@@ -160,31 +116,49 @@ def _qualifier(tok: Tok, text: str, a: int, prev: list[str]) -> str:
 
 
 def _after(nxt: list[str]) -> str:
-    """A bound printed after the number: 'or less', 'or older', 'and above' (r7 round 3), '' otherwise."""
-    joined = len(nxt) > 1 and (loose_in(nxt[0], OR) or loose_in(nxt[0], AND))
-    if joined and loose_in(nxt[1].rstrip(_TRAIL), AFTER_BOUNDS):
-        return " ".join(nxt[:2])
+    """A bound printed after the number: 'or less', 'or older', 'and above' (r7 round 3), with one unit word between
+    ('18 years or older', '0.5 ng/mL or less': r7 round 4), '' otherwise."""
+    for k in (0, 1):
+        if k and not (nxt and unit_word(nxt[0])):
+            break
+        joined = len(nxt) > k + 1 and (loose_in(nxt[k], OR) or loose_in(nxt[k], AND))
+        if joined and loose_in(nxt[k + 1].rstrip(_TRAIL), AFTER_BOUNDS):
+            return " ".join(nxt[:k + 2])
     return ""
 
 
-def _ranged(tok: Tok, ctx: str, a: int, prev: list[str], nxt: list[str], style: str) -> bool:
-    """One end of a printed range (see the module docstring)."""
-    def is_to(word: str) -> bool:
-        return loose_in(word.rstrip(_TRAIL), TO)
-    to_before = len(prev) > 1 and is_to(prev[-1]) and (_numeric_word(prev[-2], style) or (
-        len(prev) > 2 and _unit_word(prev[-2]) and _numeric_word(prev[-3], style)))
-    to_after = len(nxt) > 1 and ((is_to(nxt[0]) and _numeric_word(nxt[1], style)) or (
-        len(nxt) > 2 and _unit_word(nxt[0]) and is_to(nxt[1]) and _numeric_word(nxt[2], style)))
-    between = (bool(prev) and loose_in(prev[-1], BETWEEN) and len(nxt) > 1 and loose_in(nxt[0], AND)
-               and _numeric_word(nxt[1], style)) or (len(prev) > 2 and loose_in(prev[-1], AND)
-                                                    and _numeric_word(prev[-2], style) and loose_in(prev[-3], BETWEEN))
-    # the tokenizer marks a dash glued to the number, a lone '-' or '~' word before or after it (a unit between them
-    # too); a lone one in the neighbouring table cell is read here, and so is a dash glued to the end of the previous
-    # cell after its number (r7 writer 3: the cells ['5.0-', '12.4'] are one range)
-    glued = bool(prev) and prev[-1][-1] in HYPHEN and W.ends_with_number(prev[-1][:-1]) \
-        and W.digit_led(_own_word(ctx, a))
-    lone = bool(prev) and prev[-1] in RANGE_WORDS or bool(nxt) and nxt[0] in RANGE_WORDS
-    return tok.ranged or glued or lone or to_before or to_after or between
+def _sign(prev: list[str]) -> str:
+    """A sign spelled out before the number ('minus 12%', 'negative 1.5', 'plus 3': r7 round 4), '' otherwise."""
+    return prev[-1] if prev and loose_in(prev[-1].rstrip(_TRAIL), SIGN_WORDS) else ""
+
+
+def _message(tok: Tok, ctx: str, a: int, b: int, style: str, field: Any, literal: Any) -> str:
+    """The censored_value message for one reading of the words around the token at [a, b) of *ctx*, '' when none."""
+    prev, nxt = words_before_joined(ctx, a, LOOK_BACK), words_after(ctx, b, LOOK_AHEAD)
+    if q := _qualifier(tok, ctx, a, prev):
+        return f"{field}: the page prints {q!r} before {literal!r}; a bound or approximation is not an exact value"
+    if s := _sign(prev):
+        return (f"{field}: the page prints the sign word {s!r} before {literal!r}; the printed digits are not the "
+                "value: read it on the PDF")
+    if after := _after(nxt):
+        return f"{field}: the page prints {after!r} after {literal!r}; a bound is not an exact value"
+    if is_interval_field(str(field or "")) or not ranged(tok, ctx, a, prev, nxt, style):
+        return ""
+    return (f"{field}: {literal!r} is one end of a printed range; a range bound is not an exact value (use an "
+            "interval field for it)")
+
+
+def without_groups(text: str, a: int, b: int) -> str | None:
+    """*text* with every bracketed reference group that does not overlap [a, b) blanked 1:1 with spaces (offsets stay),
+    None when there is none (r7 round 4: '[3]' between 'less than' and the number never hides the bound)."""
+    t = fold(text)
+    spans = [(s, e) for s, e in bracket_groups(t) if e <= a or s >= b]
+    if not spans:
+        return None
+    out = list(text)
+    for s, e in spans:
+        out[s:e] = [SPACE] * (e - s)
+    return "".join(out)
 
 
 def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -200,18 +174,10 @@ def censored_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, An
                      "its neighbours, so a qualifier or a range bound cannot be ruled out; read the value on the "
                      "PDF", p)]
     ctx, off = context(loc, page, text)      # a table cell's marks are its own: a cell boundary is structure
-    prev, nxt = words_before_joined(ctx, a + off, LOOK_BACK), words_after(ctx, b + off, LOOK_AHEAD)
-    q = _qualifier(tok, ctx, a + off, prev)
-    if q:
-        return [flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: the page prints {q!r} before {literal!r}; a bound "
-                     "or approximation is not an exact value", p)]
-    if (after := _after(nxt)):
-        return [flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: the page prints {after!r} after {literal!r}; a bound "
-                     "is not an exact value", p)]
-    if is_interval_field(str(field or "")) or not _ranged(tok, ctx, a + off, prev, nxt, style):
-        return []
-    return [flag(M.FLAG_CENSORED_VALUE, "error", f"{field}: {literal!r} is one end of a printed range; a "
-                 "range bound is not an exact value (use an interval field for it)", p)]
+    for reading in (ctx, without_groups(ctx, a + off, b + off)):
+        if reading is not None and (msg := _message(tok, reading, a + off, b + off, style, field, literal)):
+            return [flag(M.FLAG_CENSORED_VALUE, "error", msg, p)]
+    return []
 
 
-__all__ = ["LOOK_BACK", "censored_flags", "words_before_joined"]
+__all__ = ["LOOK_BACK", "censored_flags", "without_groups", "words_before_joined"]

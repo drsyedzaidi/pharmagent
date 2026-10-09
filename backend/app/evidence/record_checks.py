@@ -24,13 +24,23 @@ from app.evidence.numgrammar import GAP, words_after
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
     CARET,
+    CLOSERS_BR,
+    DASH,
     DIGITS,
     GREEK,
+    GROUP_ONLY,
+    HYPHEN,
     LETTERS,
     MULT_LETTERS,
     MULTIPLIERS,
+    OPENERS_BR,
+    PER,
     PERCENTS,
+    POINT,
+    PRODUCT_DOTS,
     SLASH,
+    STAR,
+    TRAILING,
     char_class,
 )
 from app.evidence.numgrammar.equivalents import fold
@@ -42,11 +52,21 @@ from app.evidence.value_checks import token_context, value_flags
 _SPACE = char_class(GAP, negate=False)
 _LETTER = char_class(LETTERS, negate=False)                       # a letter of the alphabet (r7: the accented ones too)
 _WORD = char_class(ASCII_LETTERS | GREEK | DIGITS, negate=False)
-_UNIT_CHARS = "(?:" + _WORD + "|[/\u00b7*.^\\-])*"
+# r7 round 4: the joiners inside a unit symbol from the role sets (a slash, the times sign and the middle dot, a star, a
+# point, a caret, a hyphen: 'ng×h/mL' joins like 'ng·h/mL'), never a hand-typed class
+_UNIT_JOINS = char_class(SLASH | PRODUCT_DOTS | {STAR, POINT, CARET} | HYPHEN, negate=False)
+_EXP_JOINS = char_class({POINT, CARET} | HYPHEN, negate=False)
+_SLASH = char_class(SLASH, negate=False)
+_UNIT_CHARS = "(?:" + _WORD + "|" + _UNIT_JOINS + ")*"
 _UNIT_TOKEN_RE = re.compile("^" + _SPACE + "*(" + char_class(PERCENTS, negate=False) + "|" + _LETTER + _UNIT_CHARS
                             + "(?:" + _SPACE + "+" + _LETTER
-                            + "{1,3}(?:/(?:" + _WORD + "|[.^\\-])+)+)?)")
-_NEXT_TOKEN_RE = re.compile("^" + _SPACE + "*(/|per(?!" + _WORD + ")|" + char_class(GAP, negate=True) + "+)")
+                            + "{1,3}(?:" + _SLASH + "(?:" + _WORD + "|" + _EXP_JOINS + ")+)+)?)")
+_NEXT_TOKEN_RE = re.compile("^" + _SPACE + "*(" + _SLASH + "|" + PER + "(?!" + _WORD + ")|"
+                            + char_class(GAP, negate=True) + "+)")
+_TRAIL = "".join(sorted(TRAILING - CLOSERS_BR - GROUP_ONLY))       # '.,;:' after a unit
+_TRAIL_CLOSE = "".join(sorted(TRAILING - GROUP_ONLY))             # the same and the closers
+_OPEN = "".join(sorted(OPENERS_BR))
+_INVERSE = (DASH + "1", CARET + DASH + "1")                       # a unit's inverse power ('h-1', 'h^-1')
 UNIT_WORDS = 3          # whole words after the token a printed unit may span ('mg kg-1 h-1', 'ng h/mL')
 _JOINERS = SLASH | {CARET} | (MULTIPLIERS - MULT_LETTERS)   # a next token made only of these continues a unit
 # the unit comparison tables are single-sourced in unit_norm.py (r7 round 2): the printed-unit symbols and the words
@@ -66,9 +86,10 @@ def recognised_unit(token: str | None) -> str | None:
     """normalise_unit(token) when every '/'-separated piece is made of known unit symbols, else None."""
     if not token:
         return None
-    unit = normalise_unit(token).rstrip(".,;:")
-    pieces = [p for p in re.split(r"[/]", unit) if p]
-    return unit if pieces and all(_segmentable(p.replace("-1", "").replace("^-1", "")) for p in pieces) else None
+    unit = normalise_unit(token).rstrip(_TRAIL)
+    pieces = [p for p in re.split(_SLASH, unit) if p]
+    return unit if pieces and all(_segmentable(p.replace(_INVERSE[0], "").replace(_INVERSE[1], ""))
+                                  for p in pieces) else None
 
 
 def _continues(tail: str) -> bool:
@@ -76,8 +97,8 @@ def _continues(tail: str) -> bool:
     m = _NEXT_TOKEN_RE.match(tail)
     if m is None:
         return False
-    token = m.group(1).rstrip(".,;:)")
-    if token.lstrip("(") in ("/", "per") or (token and set(token) <= _JOINERS):
+    token = m.group(1).rstrip(_TRAIL_CLOSE)
+    if token.lstrip(_OPEN) in SLASH | {PER} or (token and set(token) <= _JOINERS):
         return True
     return token not in _NOT_CONTINUATIONS and recognised_unit(token) is not None
 

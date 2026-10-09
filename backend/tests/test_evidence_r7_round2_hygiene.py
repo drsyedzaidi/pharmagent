@@ -20,7 +20,7 @@ import pytest
 from app.evidence import gaps
 from app.evidence.extract_rules import split_unit
 from app.evidence.numgrammar import alphabet as A
-from app.evidence.numgrammar import scale_shapes
+from app.evidence.scale_label import scale_shapes
 from app.evidence.screen_rules import stem_phrase
 from app.evidence.unit_norm import unit_resolved
 

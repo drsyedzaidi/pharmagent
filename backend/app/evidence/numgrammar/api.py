@@ -1,16 +1,16 @@
 """The surface the callers use (verify, value_checks, record_checks, extract_rules, qc_flags): thin helpers over
 ``tokens``. None of them reads a number the tokenizer did not resolve, and none keeps a cleaned view of the text.
 
-Every character class here is a role set of alphabet.py (r7 round 2: no ``str.isascii``, no hand-typed set); the word
-lists of the flag checks and of the dose rule are in ``app/evidence/word_lists.py``, outside the reader. The scale
-reading of a label and the loose word-list match live in ``scale.py`` since r7 round 3 (an allow-list over the label).
+Every character class here is a role set of alphabet.py (r7 round 2: no ``str.isascii``, no hand-typed set). r7 round
+4: the package reads no word list and no letter table: the scale reading of a label (``app/evidence/scale_label.py``),
+the loose word-list match (``app/evidence/word_match.py``) and the dose rule's candidates
+(``app/evidence/dose_rule.py``) live outside it.
 """
 from __future__ import annotations
 
 import re
 from decimal import Decimal
 
-from app.evidence.letter_tables import casefold_letters
 from app.evidence.numgrammar.alphabet import (
     CID_MARKER,
     CLOSERS_BR,
@@ -31,9 +31,7 @@ from app.evidence.numgrammar.alphabet import (
 )
 from app.evidence.numgrammar.equivalents import fold
 from app.evidence.numgrammar.productions import mask_chi_square
-from app.evidence.numgrammar.scale import loose_in, scale_shapes
 from app.evidence.numgrammar.tokenizer import tokens
-from app.evidence.word_lists import DOSE_UNITS
 
 _DATA_CELL = re.compile(char_class(INSIDE | GAP | OPENERS_BR | CLOSERS_BR | SLASH, negate=False) + "+")
 
@@ -170,26 +168,6 @@ def find_n_lead(text: str) -> list[tuple[int, int, int, int]]:
     return out
 
 
-def find_dose(text: str, units: frozenset[str] = DOSE_UNITS) -> list[tuple[int, int, float, str]]:
-    """(start, end, value, unit word) of every number of at most 5 integer digits and 3 decimals followed by a unit
-    word of an extraction rule (*units*: mg, ug, g, mg/kg...). A unit glued to the digits (``150mg``) is read by the
-    unit production since r7 but is no candidate here (the rule reads the next word); the caller applies its own context
-    pattern to the surrounding line. The text is folded
-    once: the next word of every number is found by a forward scan, never by folding the page again."""
-    t = fold(text)
-    out: list[tuple[int, int, float, str]] = []
-    for tok in tokens(text, ".", mode="page"):
-        whole, _, frac = tok.canonical.partition(".")
-        if tok.shape not in ("int", "decimal", "foreign_decimal", "style_dependent") or not whole \
-                or len(whole) > 5 or len(frac) > 3 or not all(c in DIGITS for c in whole + frac):
-            continue
-        nxt = _next_word(t, _word_bounds(t, max(tok.end - 1, 0))[1])
-        unit = _strip_trailing(t[nxt[0]:nxt[1]]) if nxt else ""
-        if casefold_letters(unit) in units:
-            out.append((tok.start, tok.end, tok.value, unit))
-    return out
-
-
 # ------------------------------------------------------------ digits, claims ---
 
 def digits_of(text: str) -> str:
@@ -229,5 +207,5 @@ def claim_decimal(value: str, style: str = ".") -> Decimal | None:
     return toks[0].decimal_value if len(toks) == 1 else None
 
 
-__all__ = ["claim_decimal", "digit_group", "digits_of", "find_dose", "find_n_lead", "is_data_cell", "loose_in",
-           "number_spans", "numbers_in", "parse_claim", "scale_shapes", "unreadable", "words_after", "words_before"]
+__all__ = ["claim_decimal", "digit_group", "digits_of", "find_n_lead", "is_data_cell", "number_spans", "numbers_in",
+           "parse_claim", "unreadable", "words_after", "words_before"]

@@ -17,7 +17,7 @@ import re
 
 from app.evidence.letter_tables import CASE_PAIRS, LIGATURES, casefold_letters
 from app.evidence.numgrammar import number_spans, numbers_in
-from app.evidence.numgrammar.alphabet import GAP, LETTERS, char_class
+from app.evidence.numgrammar.alphabet import COMMA, DASH, GAP, LETTERS, LF, POINT, char_class
 from app.evidence.numgrammar.equivalents import THIN, fold
 from app.evidence.numgrammar.style import style_evidence
 from app.evidence.read_cache import cached
@@ -28,7 +28,8 @@ _SPACES = GAP | frozenset({THIN})       # the spaces the locator collapses (the 
 _SPACE_RUN = re.compile(char_class(_SPACES, negate=False) + "+")
 COLLAPSED = " "                          # the one space a run of _SPACES becomes (the word break of a normalised text)
 _WRAP_LETTERS = LETTERS | frozenset(CASE_PAIRS.values())      # a letter, before or after the lower-casing
-_HYPHEN_BREAK = re.compile("-\n")
+_BREAK = DASH + LF                       # a hyphen at a line end: a wrapped word ('approxi-' + 'mately')
+_HYPHEN_BREAK = re.compile(re.escape(_BREAK))
 _LIGATURE = re.compile(char_class(frozenset(LIGATURES), negate=False))
 
 
@@ -41,7 +42,7 @@ def decimal_evidence(text: str) -> tuple[int, int]:
 def infer_decimal_style(text: str) -> str:
     """',' when decimal-comma evidence outweighs decimal-point evidence, else '.'."""
     comma, point = decimal_evidence(text)
-    return "," if comma > point else "."
+    return COMMA if comma > point else POINT
 
 
 # ------------------------------------------------- mapped transforms ---
@@ -74,7 +75,7 @@ def dehyphenate_with_map(text: str, idx_map: IdxMap | None = None) -> tuple[str,
     """Join words wrapped at a hyphen: letter '-' newline [space] letter -> the hyphen and break are dropped. A letter
     is one the alphabet lists (a digit, a Cyrillic or a mathematical letter before the hyphen is a range or a code)."""
     src = _identity(text, idx_map)
-    if "-\n" not in text:
+    if _BREAK not in text:
         return text, src
     out: list[str] = []
     out_map: IdxMap = []

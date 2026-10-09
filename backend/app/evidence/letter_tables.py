@@ -1,6 +1,7 @@
-"""The three explicit tables AROUND the number reader (r6 round 2; moved out of ``numgrammar`` in r7 round 2 so the
-reader package holds only the four permitted lists and the grammar). The reader never reads them: ``tokens`` folds
-through ``numgrammar.equivalents.fold`` alone.
+"""The explicit tables AROUND the number reader (r6 round 2; moved out of ``numgrammar`` in r7 round 2 so the reader
+package holds only the four permitted lists and the grammar). The reader never reads them: ``tokens`` folds through
+``numgrammar.equivalents.fold`` alone, and no module of the ``numgrammar`` package imports this one (r7 round 4: the
+scale label check and the loose word match moved out of the package, ``scale_label.py`` and ``word_match.py``).
 
 The snippet locator (``normalize.py``), the unit comparison (``unit_norm.py``), the header key
 (``extract_rules.norm_key``) and the group key (``qc_flags``) used to carry NFKC and Unicode case folding of their own,
@@ -20,6 +21,12 @@ them lists stays as it is (so it equals nothing else and, in a unit, makes the u
                      Kelvin sign, the long s and the other characters Unicode folds into ASCII letters are not
                      equated with them. (Two lower-case targets, U+03B4 and U+00E5, are not letters of the alphabet: a
                      key or unit holding them compares only with another that folds to them.)
+``OCR_SPELLINGS``,   flag word lists only (r7 round 4, ``word_match.loose_in``): the letter shapes an OCR'd
+``OCR_LETTERS``,     or mis-mapped text layer confuses (``rn`` for m, ``cl`` for d, ``vv`` for w, a capital I
+``OCR_DIGITS``       or a lower-case i for l, c for e, b for h; a digit that ends a letter word, 0 for o and 1
+                     for l), applied to BOTH the word on the page and the list word, so 'beIow', 'rnillion',
+                     'thousancls', 'betvveen', 'abovc' and 'up t0' raise the flag the plain spelling raises. They
+                     only ever RAISE a flag: a number is never read through them.
 """
 from __future__ import annotations
 
@@ -40,6 +47,11 @@ CASE_PAIRS: dict[str, str] = {
     "Ø": "ø", "Ç": "ç",                             # O-stroke C-cedilla
 }
 UPPER_LETTERS = frozenset(CASE_PAIRS)                                   # the capitals of the alphabet's letters
+
+# flag word lists only (word_match.loose_in), after the case fold: multi-letter spellings first, then single letters
+OCR_SPELLINGS: tuple[tuple[str, str], ...] = (("rn", "m"), ("cl", "d"), ("vv", "w"))
+OCR_LETTERS: dict[str, str] = {"i": "l", "e": "c", "h": "b"}               # I and i look like l, c like e, b like h
+OCR_DIGITS: dict[str, str] = {"0": "o", "1": "l"}                          # a digit run that ends a letter word ('t0')
 _CASE_TABLE = str.maketrans(CASE_PAIRS)
 
 
@@ -49,4 +61,5 @@ def casefold_letters(text: str) -> str:
     return text.translate(_CASE_TABLE)
 
 
-__all__ = ["CASE_PAIRS", "HEADER_SPELLINGS", "LIGATURES", "UPPER_LETTERS", "casefold_letters"]
+__all__ = ["CASE_PAIRS", "HEADER_SPELLINGS", "LIGATURES", "OCR_DIGITS", "OCR_LETTERS", "OCR_SPELLINGS", "UPPER_LETTERS",
+           "casefold_letters"]

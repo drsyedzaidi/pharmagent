@@ -17,8 +17,9 @@ from decimal import Decimal
 from typing import Any
 
 from app.evidence import gaps
+from app.evidence.dose_rule import find_dose
 from app.evidence.letter_tables import HEADER_SPELLINGS, casefold_letters
-from app.evidence.numgrammar import GAP, claim_decimal, find_dose, find_n_lead, parse_claim, tokens
+from app.evidence.numgrammar import GAP, claim_decimal, find_n_lead, parse_claim, tokens
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
     CARET,
@@ -26,24 +27,26 @@ from app.evidence.numgrammar.alphabet import (
     DECIMAL_MARKS,
     DIGITS,
     GREEK,
+    HYPHEN,
     LETTERS,
     MULTIPLIERS,
     OPENERS_BR,
     PERCENTS,
+    POINT,
     PRODUCT_DOTS,
     SIGNS,
     SLASH,
     char_class,
 )
-from app.evidence.numgrammar.equivalents import THIN, fold
+from app.evidence.numgrammar.equivalents import THIN_SOURCES, fold
+from app.evidence.word_lists import DISPERSION_HEADERS, UNIT_HEADERS, VALUE_HEADERS
 
 MAX_SNIPPET, MAX_VALUE, MAX_UNMATCHED, WINDOW_HALF = 300, 120, 50, 140
-VALUE_HEADERS = frozenset({"value", "values", "estimate", "estimates", "mean", "result", "results",
-                           "pointestimate", "geometricmean", "median", "typicalvalue", "all", "total", "overall"})
-UNIT_HEADERS = frozenset({"unit", "units"})
-DISPERSION_HEADERS = frozenset({"sd", "se", "sem", "rse", "cv", "cv%", "%cv", "rse%", "%rse", "ci", "95%ci",
-                                "90%ci", "range", "iqr", "min", "max", "p", "pvalue", "n", "shrinkage", "iiv"})
-_KEY_STRIP = re.compile(char_class(GAP | frozenset({THIN, "_", "-", ",", "."}), negate=False) + "+")
+# a header key drops the gaps, the thin space, the hyphen and the decimal marks (role sets), and the template's word
+# joiner '_' ('Cmax_ss'): template syntax, never a number (a named exemption of the round-4 hygiene test)
+_TEMPLATE_JOINER = frozenset("_")
+_KEY_DROPS = GAP | THIN_SOURCES | HYPHEN | DECIMAL_MARKS | _TEMPLATE_JOINER
+_KEY_STRIP = re.compile(char_class(_KEY_DROPS, negate=False) + "+")
 _HEADER_TABLE = str.maketrans(HEADER_SPELLINGS)
 _PAREN_UNIT_RE = re.compile("^(?P<label>.*?)" + char_class(GAP, negate=False) + "*"
                              + char_class(OPENERS_BR, negate=False)
@@ -119,20 +122,20 @@ def match_field(text: str, index: dict[str, dict[str, Any]]) -> dict[str, Any] |
 
 def decimal_style(spec: dict[str, Any] | None, doc: dict[str, Any]) -> str:
     forced = (spec or {}).get("decimal")
-    return forced if forced in (".", ",") else (doc.get("decimal_style") or ".")
+    return forced if forced in DECIMAL_MARKS else (doc.get("decimal_style") or POINT)
 
 
 def value_number(value: str, style: str) -> float | None:
     """Numeric reading of a proposed value in the page's style, else point-decimal, else None."""
     num = parse_claim(value, style)
-    return num if num is not None or style == "." else parse_claim(value, ".")
+    return num if num is not None or style == POINT else parse_claim(value, POINT)
 
 
 def value_decimal(value: str, style: str) -> Decimal | None:
     """The exact decimal of a proposed value in the page's style, else point-decimal, else None (value_number's twin:
     the verifier compares decimals, never floats within a tolerance)."""
     num = claim_decimal(value, style)
-    return num if num is not None or style == "." else claim_decimal(value, ".")
+    return num if num is not None or style == POINT else claim_decimal(value, POINT)
 
 
 def leading_number(cell: str, style: str) -> tuple[str, float, str] | None:
@@ -245,7 +248,8 @@ def table_extract(doc: dict[str, Any], template: dict[str, Any], source_id: str)
     proposals: list[dict[str, Any]] = []
     unmatched: list[str] = []
     for page in doc.get("pages") or []:
-        for table in page.get("tables") or []:
+        for position, listed in enumerate(page.get("tables") or []):
+            table = {**listed, "index": position}           # r7 round 4: a cell locator names the table's position
             rows = [[str(c or "") for c in r] for r in (table.get("rows") or [])
                     if any(gaps.strip(str(c or "")) for c in r)]
             if len(rows) < 2:

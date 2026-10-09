@@ -5,16 +5,16 @@ from __future__ import annotations
 
 import pytest
 
+from app.evidence.dose_rule import find_dose
 from app.evidence.numgrammar import (
-    find_dose,
     is_data_cell,
     number_spans,
     numbers_in,
     parse_claim,
-    scale_shapes,
     tokens,
     words_after,
 )
+from app.evidence.scale_label import scale_shapes
 from tests.evidence_r6_helpers import find_n, token_at, words_around
 
 T = "\u2009"
@@ -118,9 +118,12 @@ def test_every_export_resolves_and_the_package_surface_is_complete():
     import app.evidence.numgrammar as NG
     assert not hasattr(NG, "LINE") and "LINE" not in NG.__all__                 # r7: the LINE list is deleted
     for name in ("INSIDE", "CONTEXT", "GAP", "EQUIV", "CID_MARKER", "cls", "Tok", "tokens", "parse_claim",
-                 "number_spans", "numbers_in", "words_after", "words_before", "scale_shapes", "is_data_cell",
-                 "find_n_lead", "find_dose"):
+                 "number_spans", "numbers_in", "words_after", "words_before", "is_data_cell", "find_n_lead"):
         assert hasattr(NG, name), name
     for gone in ("words_around", "token_at", "find_n", "is_digit_run"):          # no caller in app/: test helpers now
         assert not hasattr(NG, gone) and gone not in NG.__all__, gone
+    # r7 round 4: the helpers that read a word list or a letter table live outside the reader package
+    from app.evidence import dose_rule, scale_label, word_match
+    for gone, home in (("scale_shapes", scale_label), ("loose_in", word_match), ("find_dose", dose_rule)):
+        assert not hasattr(NG, gone) and gone not in NG.__all__ and callable(getattr(home, gone)), gone
     assert tokens("1") and NG.cls("a") == "context"

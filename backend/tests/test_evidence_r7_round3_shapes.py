@@ -16,7 +16,8 @@ from __future__ import annotations
 import pytest
 
 from app.evidence import models as M
-from app.evidence.numgrammar import find_dose, tokens
+from app.evidence.dose_rule import find_dose
+from app.evidence.numgrammar import tokens
 from tests.evidence_r6_round1_support import cell, run
 
 
@@ -45,9 +46,12 @@ def test_a_cell_with_a_look_alike_group_fails():
 
 
 @pytest.mark.parametrize("text, want", [
-    ("10-fold", [10.0]), ("24-h", [24.0]), ("5-mg tablets", [5.0]), ("12-week study", [12.0]), ("3-day", [3.0]),
+    ("10-fold", [None]), ("24-h", [24.0]), ("5-mg tablets", [5.0]), ("12-week study", [None]), ("3-day", [None]),
     ("12.5.", [12.5]), ("12.5,", [12.5]), ("(12.5).", [12.5]), ("150mg,", [150.0]), ("0.5,mg", [0.5])])
 def test_a_compound_or_a_unit_after_the_mark_still_reads(text, want):
+    """r7 round 4 (owner decision 2, the round-4 audit): a number's dash joins letters only as a unit production; the
+    compounds '10-fold', '12-week', '3-day' (read in round 3 through a three-letter minimum, a heuristic) are no
+    production and stay unresolved like '12-lOO'."""
     assert values(text) == want, (text, tokens(text))
 
 

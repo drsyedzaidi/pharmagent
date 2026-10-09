@@ -30,6 +30,7 @@ from typing import NamedTuple
 from app.evidence.numgrammar import product as P
 from app.evidence.numgrammar.alphabet import (
     ASCII_LETTERS,
+    COLON,
     DECIMAL_MARKS,
     DEGREE,
     DIGITS,
@@ -64,7 +65,6 @@ RATIO_INT = re.compile("0|[1-9][0-9]{0,5}")                 # one side of a rati
 OK, PCT, STAR, TAIL, UNIT, BAD = 0, 1, 2, 3, 4, -1
 TAIL_NONE, TAIL_MULT, TAIL_STAR = 0, 1, 2
 _OPEN_SHAPES = frozenset({"int", "grouped", "style_dependent"})   # without a decimal mark, a separator may go on
-COMPOUND_MIN = 3        # letters of the shortest word a number's dash joins in the corpus ('3-day'; units aside)
 
 
 class Scan(NamedTuple):
@@ -105,15 +105,12 @@ def _product(w: str, count: Tok, mult: str, amount: tuple[str, str, str], act: i
     return why, not why and act != UNIT and P.power_of_ten(amount[1])
 
 
-def _scale(t: Tok) -> bool:
-    """A power of ten standing as a token: a bare power ('10^3'), or a scientific token whose mantissa is one."""
-    return t.shape == "bare_power" or (t.shape == "sci" and t.parts[:1] == (1.0,))
-
-
 def post(w: str, e: int, n: int, open_number: bool = False) -> tuple[int, int, str]:
     """The post-boundary of a token ending at *e*: ``(OK|PCT|STAR|TAIL|UNIT, index after the suffix or unit, "")`` or
     ``(BAD, e, reason)``. A letter that starts no complete unit production (units.py), ``=``, ``^``, ``+``, ``:`` +
-    digit, ``/`` + digit, a second sign... glued to the digits reject the word."""
+    digit, ``/`` + digit, a second sign... glued to the digits reject the word. r7 round 4: a number's dash or slash
+    joins letters only as a unit production ('24-h', '12/kg'; never '12-lOO', '10-fold', '12/lS'), a colon none
+    ('12:lS'), and a degree sign no digit ('37°5')."""
     if e >= n:
         return OK, e, ""
     p = w[e]
@@ -121,7 +118,7 @@ def post(w: str, e: int, n: int, open_number: bool = False) -> tuple[int, int, s
     if p in TRAILING:
         if x in DIGITS:
             return BAD, e, "glued_symbol"
-        if open_number and p in SEPARATORS and x in LETTERS and unit_end(w, e + 1) < 0:
+        if (open_number and p in SEPARATORS or p in COLON) and x in LETTERS and (p in COLON or unit_end(w, e + 1) < 0):
             return BAD, e, "glued_letters"      # r7 round 3: '1,OOO', '0.OS', '12.l': a separator that may go on into
         return OK, e, ""                        # digits the text layer spelled with look-alikes ('0.28,and' cannot)
     if p in PERCENTS:
@@ -136,12 +133,12 @@ def post(w: str, e: int, n: int, open_number: bool = False) -> tuple[int, int, s
         if y == "" or y in TRAILING:
             return STAR, k, ""
         return _after_mult(w, e, n, p, y) if k == e + 1 and y in DIGITS else (BAD, e, "glued_symbol")
-    if p == DEGREE or p in OPENERS_BR:
+    if p == DEGREE:                             # '37°C', '37°'; never '37°5' (French 37.5) or '45°30\''
+        return (BAD, e, "glued_symbol") if x in DIGITS else (OK, e, "")
+    if p in OPENERS_BR:
         return OK, e, ""
-    if p in SLASH:
-        return (OK, e, "") if x != "" and x not in DIGITS else (BAD, e, "glued_symbol")
-    if p in HYPHEN:
-        if x == "" or x in DIGITS or (x in LETTERS and _compound(w, e + 1)):
+    if p in SLASH or p in HYPHEN:               # a unit denominator ('12/kg') or compound ('24-h'), a range dash
+        if unit_end(w, e + 1) > e + 1 or (p in HYPHEN and (x == "" or x in DIGITS)):
             return OK, e, ""
         return BAD, e, "glued_letters" if x in LETTERS else "glued_symbol"
     if p == PLUS_MINUS:
@@ -152,18 +149,6 @@ def post(w: str, e: int, n: int, open_number: bool = False) -> tuple[int, int, s
         u = unit_end(w, e)
         return (UNIT, u, "") if u > e else (BAD, e, "glued_letters")
     return BAD, e, "glued_symbol"
-
-
-def _compound(w: str, i: int) -> bool:
-    """r7 round 3: the letters after a number's dash join a compound only as a unit production ('24-h', '5-mg') or a
-    word of COMPOUND_MIN letters or more ('10-fold', '3-day', '12-week'); a shorter run may be a look-alike of digits
-    ('12-lS' for 12-15, '12-l'), so the word is refused."""
-    if unit_end(w, i) > i:
-        return True
-    k = i
-    while k < len(w) and w[k] in LETTERS:
-        k += 1
-    return k - i >= COMPOUND_MIN
 
 
 def lead_power(w: str, i: int) -> int:
@@ -297,7 +282,7 @@ def scan_word(w: str, off: int, style: str) -> Scan:
             unit = w[end:after] if act == UNIT and after == n else ""
     if not toks:
         return LABEL
-    if len(toks) > 1 and any(_scale(t) for t in toks):      # r7 round 3: '1.2(10^3)', '10^3-10^6': a detached scale
+    if len(toks) > 1 and any(P.pure_power(t) for t in toks):    # r7 round 3: '1.2(10^3)', '10^3-10^6': detached scale
         return _rejected("detached_exponent", parts) if numeric_led else LABEL
     rest = w[glue_from:]                                    # r7 writer 3: '12-x', '12(e)', '5/x'; a lone '-' is a range
     if rest and tail != TAIL_MULT and rest not in HYPHEN and not glue(rest):

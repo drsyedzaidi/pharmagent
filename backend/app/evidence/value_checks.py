@@ -22,19 +22,18 @@ from typing import Any
 
 from app.evidence import models as M
 from app.evidence.normalize import decimal_evidence
-from app.evidence.numgrammar import digit_group, words_after, words_before
-from app.evidence.numgrammar.alphabet import CLOSERS_BR, COMMA, DECIMAL_MARKS, GROUP_ONLY, LETTERS, TRAILING
+from app.evidence.numgrammar import GAP, Tok, digit_group, words_after, words_before
+from app.evidence.numgrammar.alphabet import COLON, COMMA, DECIMAL_MARKS, DIGITS, NUMBER_CLOSERS, SIGNS
 from app.evidence.numgrammar.equivalents import THIN_SOURCES
-from app.evidence.numgrammar.units import UNIT_RE
+from app.evidence.numgrammar.glue import core
+from app.evidence.numgrammar.units import unit_led
 from app.evidence.read_cache import read
 from app.evidence.value_bounds import censored_flags
 from app.evidence.value_context import flag, mode, token_context, verified_token
 from app.evidence.value_scale import scaled_flags
 
 DECISIVE_MIN, DECISIVE_RATIO = 3, 3
-GROUP_WIDTH = 3                    # the digits of a thousands group
-_TRAIL = "".join(sorted(TRAILING - CLOSERS_BR - GROUP_ONLY))
-_CLOSE = "".join(sorted(CLOSERS_BR))
+GROUP_WIDTH = 3                    # the digits of a thousands group (and at most of its head)
 
 
 def document_evidence(doc: dict[str, Any]) -> tuple[int, int]:
@@ -47,18 +46,25 @@ def grouped_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any
     """Error when the token is one piece of digit groups the reader splits ('12' of '12 145', '1' and '234.5' of
     '1 234.5', '-1' of '-1 234'): the source may print ONE grouped number. The token is a head of 1-3 digits and the
     word beside it a group of 3 digits (2-3 when bare) that may carry a decimal tail and trailing punctuation, or the
-    token is that group and the word before it the head; an opener, a sign or a closing mark never hides the group, a
-    decimal on the head ('12.4 145') never makes one."""
+    token is that group and the word before it ends in the head; an opener, a sign or a closing mark never hides the
+    group, a decimal on the head ('12.4 145') never makes one. r7 round 4: a scientific token's MANTISSA is the group
+    ('1 234 x 10^3', '1 234e3': a thousands group never carries an exponent), the head is the reader's own token that
+    ends the word before (any prefix production it read aside: 'n=1', '<1', '~1', '(n=1') or the digits after a colon
+    ('n:1'), and a grouping space (thin, narrow or no-break) after a 1-3 digit head is followed only by a unit
+    production ('1 mg'): anything else ('1 OO0', '12 patients') may be a group the text layer spelled with
+    look-alikes."""
     loc = p.get("locator") or {}
     got = verified_token(loc, page)
     if got is None or got[3] is None:
         return []
-    text, a, b, _ = got
-    own, before, after = text[a:b], words_before(text, a, 1), words_after(text, b, 1)
+    text, a, b, tok = got
+    toks = read(text, loc.get("decimal_style") or ".", mode(loc)).toks
+    own, before, after = _group_literal(text, tok), words_before(text, a, 1), words_after(text, b, 1)
+    nxt = _group_literal(text, _token_at(toks, _next_start(text, b))) if after else ""
     head = bool(after) and digit_group(own, 1, 3, lead=True) and (
-        digit_group(after[0], 2, 3) or digit_group(after[0], 3, 3, decimals=True)
-        or (text[b:b + 1] in THIN_SOURCES and _letter_group(after[0])))
-    tail = bool(before) and digit_group(before[0], 1, 3, lead=True) and (
+        digit_group(nxt or after[0], 2, 3) or digit_group(nxt or after[0], 3, 3, decimals=True)
+        or (text[b:b + 1] in THIN_SOURCES and not unit_led(after[0][core(after[0])[0]:])))
+    tail = bool(before) and _ends_in_head(text, a, before[0], toks) and (
         digit_group(own, 2, 3) or digit_group(own, 3, 3, decimals=True))
     if not (head or tail):
         return []
@@ -67,11 +73,54 @@ def grouped_flags(p: dict[str, Any], page: dict[str, Any]) -> list[dict[str, Any
                   "read the value on the PDF", p)]
 
 
-def _letter_group(word: str) -> bool:
-    """r7 round 3: a group of three letters that is no unit production ('OOO', 'lOO'), read after a GROUPING space (a
-    thin or no-break space): the text layer may spell a digit group with look-alike letters ('1 OOO' for 1 000)."""
-    core = word.rstrip(_TRAIL + _CLOSE)
-    return len(core) == GROUP_WIDTH and all(c in LETTERS for c in core) and UNIT_RE.fullmatch(core) is None
+def _group_literal(text: str, tok: Tok | None) -> str:
+    """The printed literal of *tok*; for a scientific token its mantissa ('234' of '234 x 10^3', '234.5' of '234.5e3'):
+    the digits a thousands group would hold."""
+    if tok is None:
+        return ""
+    lit = text[tok.start:tok.end]
+    if tok.shape != "sci":
+        return lit
+    k = 1 if lit[:1] in SIGNS else 0
+    while k < len(lit) and (lit[k] in DIGITS or lit[k] in DECIMAL_MARKS):
+        k += 1
+    return lit[:k]
+
+
+def _next_start(text: str, b: int) -> int:
+    """The offset of the first character of the word after the one that holds b - 1."""
+    i = b
+    while i < len(text) and text[i] not in GAP:
+        i += 1
+    while i < len(text) and text[i] in GAP:
+        i += 1
+    return i
+
+
+def _token_at(toks: tuple[Tok, ...], start: int) -> Tok | None:
+    return next((t for t in toks if t.start == start and t.value is not None), None)
+
+
+def _ends_in_head(text: str, a: int, word: str, toks: tuple[Tok, ...]) -> bool:
+    """The word before the token ends in the head of a group: the word itself is one ('1', '(1', '-1'), or the reader's
+    resolved token ends it, closers aside ('n=1', '<1', '~1', '(n=1'), or 1-3 digits after a colon end it ('n:1')."""
+    if digit_group(word, 1, 3, lead=True):
+        return True
+    e = a
+    while e > 0 and text[e - 1] not in GAP:
+        e -= 1
+    while e > 0 and text[e - 1] in GAP:
+        e -= 1
+    k = e
+    while k > 0 and text[k - 1] in NUMBER_CLOSERS:
+        k -= 1
+    last = next((t for t in toks if t.end == k and t.value is not None), None)
+    if last is not None and digit_group(text[last.start:last.end], 1, 3, lead=True):
+        return True
+    d = k
+    while d > 0 and text[d - 1] in DIGITS:
+        d -= 1
+    return 1 <= k - d <= GROUP_WIDTH and d > 0 and text[d - 1] in COLON
 
 
 def cell_numbers(p: dict[str, Any], doc: dict[str, Any] | None) -> int | None:

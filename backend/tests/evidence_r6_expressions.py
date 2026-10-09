@@ -99,6 +99,16 @@ _TEMPLATES = [
     ("window_before_open", "page", ".", "Dose | \n( 12.5 ) mg"),
     ("window_after_comma", "page", ".", "Cmax 12.5 ,\n | mg"),
     ("window_before_equals", "page", ".", "Cmax | =\n12.5 mg"),
+    # r7 round 4: the productions of the round-4 audit, swept at every boundary: a degree sign before a digit, a unit
+    # after a number's slash or dash, a scale glued to a label, a raised ten after a number (a dropped multiplier), a
+    # pure power in e-notation beside a number, a power one prose word after a mantissa
+    ("degree_digit", "page", ".", "|T|=|37|°|5| |ok|"),
+    ("slash_unit", "page", ".", "|took |12|/|k|g| |ok|"),
+    ("dash_unit", "page", ".", "|a |24|-|h| |rise|"),
+    ("label_scale", "page", ".", "|AUC|x|1000| |12.5| |ng|"),
+    ("raised_ten", "page", ".", "|WBC |2.5| |10|9|/|L|"),
+    ("pure_power", "page", ".", "|titre |1.2| |1|e|3| |ok|"),
+    ("power_across", "page", ".", "|count |1.2| |times| |10^3| |cells|"),
 ]
 
 

@@ -18,9 +18,9 @@ import re
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 
-from app.evidence.numgrammar.alphabet import OUTSIDE_RE
+from app.evidence.numgrammar.alphabet import LF, OUTSIDE_RE
 
-_NEWLINE = re.compile("\n")
+_NEWLINE = re.compile(re.escape(LF))
 INSIDE_THE_NUMBER = "inside the number"
 GLUED_BEFORE = "glued before the digits"
 GLUED_AFTER = "glued after the digits"

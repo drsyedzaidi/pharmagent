@@ -335,7 +335,8 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   words 283 (`no_expression`), words beside a refused word 180, the em dash 167, `(cid:N)` 163, glued letters 155, `_` 102
   (the em dash, `(cid:N)` and `_` are kept fail-closed by owner decisions 4 and 5: 432 records), glued symbols 100,
   resolved-but-failed 92, bad starts 81 and fractions 75.
-  Left by design or for the owner: (1) a multiplier LETTER glued inside a letter run is a letter of the label (`AUCx1000`,
+  Left by design or for the owner (items (1) and (2) are superseded by round 4, below): (1) a multiplier LETTER glued
+  inside a letter run is a letter of the label (`AUCx1000`,
   `Countx1000`; decision 3: the corpus labels `Vmax1`, `Cmax1`, `Prax2001` have the same shape, and telling them apart needs
   a letter-case heuristic, a shape detector), and a star before digits is an allele star (`CYP2D6*4`, 69 corpus uses), so
   `AUC*1000` is a label too; a times sign or middle dot right before a digit is no label glue since the round-3 follow-up
@@ -352,6 +353,45 @@ defects; each one is listed so a reviewer is not surprised, and none can pass as
   `12 +` in text, while a lone `-` or `~` cell is a marker cell (pinned since r6 round 1: `censored_value`), and a cell boundary
   is structure for a list of signed numbers (decision 9: `12` | `-15` passes with no flag); (7) a table row span that two
   lines align equally is no span (`row not located` on the page image).
+
+- **r7 round 4: the remaining carve-outs become productions (2026-10-08; `r7/corpus_progress.tsv`, rows `r4_*`).** The
+  round-4 audit found negative carve-outs and thresholds still deciding readings: a label word read with its digits as
+  letters before the scale test (`AUC*1000`, `AUCx1000`, `AUC:E3`, `CLx10` raised no scale), a three-letter minimum for a
+  compound after a number's dash (`12-lOO` read 12 clean), letters accepted after a number's slash or colon (`12/lS`,
+  `5:lO`), a three-letter shape test for a look-alike group (`1 OO0`), a degree sign that glued `37°5` into a label, a
+  dropped multiplier with a flattened exponent (`1.2 10−3 M`, `2.5 109/L`, `1.2 10 3`), a pure power in e-notation and a
+  spelled-out multiplier beside a mantissa (`1.2 10E+03`, `1.2 times 10^3`), raised tens and wrapped or look-alike scale
+  words in labels (`WBC (109/L)`, `(thou-` + `sands)`, `rnillion`), qualifier and bound words in OCR spellings, behind a
+  citation, after a unit, in their own table cells or simply missing (`beIow`, `less than [3] 1.5`, `18 years or older`,
+  `12 through 15`, `not exceeding`, `minus 12%`), grouped mantissas and heads behind a prefix (`1 234 x 10^3`, `n=1 234`),
+  a power of ten on the row under an unruled table's values, table locators by pdfplumber's numbering, a model's record
+  bound to the first cell containing its snippet, and hygiene gaps (hand-typed sets in the extraction rules and record
+  checks, regex terminals, word lists read inside the reader package). Each is fixed through a production or the four
+  lists (see "Round 4 of r7" in evidence-pipeline.md). U after the round: 4.43 % -> 4.62 % (1,954 -> 2,036 of 44,072; no
+  record newly passes against round 3, so no newly resolved value can be read differently by a human; 0 value
+  disagreements). What it refuses on the corpus (82 value-like): 49 compounds after a dash that are no unit (`10-fold` has
+  101 corpus uses, `3–5-year-olds`, `24-hour`, `17-OHPC`: owner decision 2), 9 split compounds (`10- fold`, `1.1- fold`),
+  7 flattened table rows and axis ticks beside a raised ten (`Tmax 9±6 10 ± 6`), 5 slash or colon shapes (`10/bin`,
+  `0.199/[1−0.226]`), the words beside them and two lost-space words with a times sign before a digit. A stricter
+  reading of the exponent letters (an `e` glued between a letter and a digit as an exponent: `Table4`, `tobe0.41`,
+  `type2` of lost-space layers) was measured and rejected (23 more value-like records, row `r4_a_glue`). The 1.5 % target
+  is NOT met and cannot be met by these rules: the residual causes are lost-space and label words 287 (`no_expression`),
+  words beside a refused word 206, glued letters 204, the em dash 167, `(cid:N)` 163, glued symbols 106, `_` 102 (the em
+  dash, `(cid:N)` and `_` are kept fail-closed by owner decisions 4 and 5: 432 records), resolved-but-failed 87, bad starts
+  81 and fractions 75. The baseline: the owner's 3.60 % (1,588) is the r6 migration measurement and the 3.64 % (1,606)
+  row `r0_head` the same definition one round later: r6 round 1 refused 18 more value-like records (12 divisions with a
+  lone slash word such as `100 / (1 + 10^(pH − pKa))`, 3 detached decimals `0 .25`, 2 records of `150/300 mg`, 1 reference
+  pair `[26,27]`; `r6/corpus_after.tsv` against `r6/round2/corpus_after.tsv`).
+  Left by design or for the owner: (1) names of the shape of a glued scale fail closed (`Cmax1`, `Vmax2` beside a number:
+  a multiplier letter before a digit; an exponent letter inside a letter run stays a letter, so `AUCe3` and `AUCe-3` read
+  as names, like `CYP2E1`); (2) a written-out power one prose word after a mantissa reads (`1.2 times 1000 cells`: its
+  shape is `1 in 10`, `5 to 100`), and a power two prose words away reads (`1.2 multiplied by 10^3`: the window is one
+  word); (3) a TEXT record of a flattened multi-column table row whose scale stands under it on the next line passes
+  (`Cmax (ng/mL) 12.4 15.1` over `×10^3 ×10^3`: the page text has no columns; the table record of the same cell reads
+  12 400 and a mantissa alone fails `partial_number`); (4) a semicolon or an opener glued after a number before letters is
+  prose glue (`12;lS`, `12(lS)`: the number is a list item or stands before a parenthesis, read as printed, unlike a slash
+  or a colon, which may make it one part of a ratio); (5) `ug` (ASCII) is a dose word of the keyless rule though the unit
+  production has no `u` prefix (`5ug` is unresolved, `5 ug` a dose candidate for a human to verify).
 
 ## Later phases
 

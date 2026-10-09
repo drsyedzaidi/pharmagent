@@ -51,7 +51,7 @@ def test_the_expression_set_covers_the_specified_forms_and_397_pairs():
                    "detached", "lookalike_ten", "cid_inside", "cid_lead", "glued_unit", "plus_glued",
                    "cell_thousands", "cell_12_145", "cell_bad_groups", "cell_pm_groups", "cell_lancet", "cell_stars"):
         assert needed in names, needed
-    assert len(O.PAIRS) == 401                     # r7 writer 2: 316 + 81 unit and label pairs; round 2: 4 window pairs
+    assert len(O.PAIRS) == 458                     # r7 writer 2: 316 + 81 unit and label pairs; round 2: 4 window pairs; round 4: 57
     assert sum(1 for e in O.EXPRESSIONS if e.mode == "cell") == 7
     for e in O.EXPRESSIONS:
         assert all(0 <= b <= len(e.text) for b in e.cuts) and e.cuts == tuple(sorted(set(e.cuts))), e.name
@@ -72,7 +72,11 @@ def test_the_clean_expressions_read_as_documented():
             "line_far": [12.5], "ratio_glued": [0.8], "citation": [None, 12.0], "chi_square": [3.84],
             "unit_chain": [2.5], "unit_exponent": [1.73], "unit_per": [5.0], "unit_split": [None], "unit_cell": [20.0],
             "label_range": [-0.5], "label_ratio": [0.75], "label_cite": [None, 20.0], "window_after_open": [12.5],
-            "window_before_open": [12.5], "window_after_comma": [12.5], "window_before_equals": [12.5]}
+            "window_before_open": [12.5], "window_after_comma": [12.5], "window_before_equals": [12.5],
+            # r7 round 4: a degree sign before a digit, units after a slash and a dash, a glued scale, a dropped
+            # multiplier, a pure power and a spelled-out multiplier
+            "degree_digit": [], "slash_unit": [12.0], "dash_unit": [24.0], "label_scale": [None], "raised_ten": [None],
+            "pure_power": [None], "power_across": [None, None]}
     for e in O.EXPRESSIONS:
         assert [t.value for t in O.run(e, e.text)] == want[e.name], e.name
     assert O.EXPRESSIONS[[e.name for e in O.EXPRESSIONS].index("cmax_comma")].style == ","

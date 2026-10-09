@@ -26,6 +26,8 @@ import re
 from app.evidence.numgrammar.alphabet import (
     CARET,
     OPENERS_BR,
+    PER,
+    PLAIN_POWERS,
     PRODUCT_DOTS,
     SIGNS,
     SLASH,
@@ -47,13 +49,13 @@ def _alt(terms: frozenset[str]) -> str:
     return "(?:" + "|".join(re.escape(t) for t in sorted(terms, key=lambda s: (-len(s), s))) + ")"
 
 
-_EXPONENT = ("(?:[23](?![0-9])|\\^" + char_class(SIGNS, negate=False) + "?[0-9]{1,2}(?![0-9])|"
-             + char_class(SUP_SIGNS, negate=False) + "?"
+_EXPONENT = ("(?:" + char_class(PLAIN_POWERS, negate=False) + "(?![0-9])|" + re.escape(CARET)
+             + char_class(SIGNS, negate=False) + "?[0-9]{1,2}(?![0-9])|" + char_class(SUP_SIGNS, negate=False) + "?"
              + char_class(SUP_DIGITS, negate=False) + "{1,2})")
 _ATOM_BODY = ("(?:" + _alt(UNIT_PREFIXES) + "?" + _alt(UNIT_BASES) + "|" + _alt(UNIT_PREFIXES)
               + _alt(UNIT_PREFIXED_BASES) + ")")
 _ATOM = _ATOM_BODY + _EXPONENT + "?"
-_UNIT = _ATOM + "(?:(?:/|per)" + _ATOM + ")*"
+_UNIT = _ATOM + "(?:(?:" + char_class(SLASH, negate=False) + "|" + PER + ")" + _ATOM + ")*"
 _BOUNDARY = ("(?=\\Z|" + char_class(TRAILING, negate=False) + "(?![0-9])|" + char_class(OPENERS_BR, negate=False)
              + ")")
 UNIT_RE = re.compile(_UNIT + _BOUNDARY)

@@ -29,10 +29,11 @@ from __future__ import annotations
 
 from app.evidence.extract_rules import norm_key
 from app.evidence.normalize import decimal_evidence, normalise
-from app.evidence.numgrammar import scale_shapes, unreadable
+from app.evidence.numgrammar import unreadable
 from app.evidence.numgrammar.equivalents import EQUIV, THIN
 from app.evidence.parse_guard import THIN_SPACES, ParseLimitError, protect_thin_spaces
 from app.evidence.record_checks import _UNIT_TOKEN_RE, recognised_unit
+from app.evidence.scale_label import scale_shapes
 from app.evidence.unit_norm import canonical_unit, same_unit, unit_resolved
 from tests import evidence_r6_oracle as O
 from tests import evidence_r6_pins as P

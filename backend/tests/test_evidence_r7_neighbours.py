@@ -79,13 +79,13 @@ def test_the_refused_word_is_named_for_the_reviewer():
 
 # ------------------------------------------------------------------ what the allow-list accepts ---
 @pytest.mark.parametrize("text, want", [
-    ("AUC 12.5 ng·h/mL", [12.5]), ("ka 0.12 h-1", [0.12]), ("BSA 1.73 m²", [1.73]), ("a 10-fold rise", [10.0]),
+    ("AUC 12.5 ng·h/mL", [12.5]), ("ka 0.12 h-1", [0.12]), ("BSA 1.73 m²", [1.73]), ("a 10-h rise", [10.0]),
     ("AUC0-24 120 ng", [120.0]), ("t1/2 4.5 h", [4.5]), ("CL 5.3 ± 0.4 L/h", [5.3, 0.4]), ("12 (25%)", [12.0, 25.0]),
     ("p < 0.05", [0.05]), ("n = 12", [12.0]), ("45 %", [45.0]), ("(16.9 %, 13.1 %)", [16.9, 13.1]),
     ("(E = 0.9)", [0.9]), ("x = 12", [12.0]), ("E0 = 0 and Emax = 8", [None, 8.0]),   # r7 round 3: E0 is no variable
     ("12 - 15 mg", [12.0, 15.0]),
     ("20 mg – 40 mg", [20.0, 40.0]), ("2 x 3 mg", [2.0, 3.0]), ("ratio 1.25 > 1.0", [1.25, 1.0]),
-    ("after a 10- fold reduction", [10.0]), ("150- and 300-mg doses", [150.0, 300.0]), ("efflux [46] 12 mg", [None, 12.0]),
+    ("after a 10- h delay", [10.0]), ("150- and 300-mg doses", [None, 300.0]), ("efflux [46] 12 mg", [None, 12.0]),
     ("30–50% [26,27] 0.66–3.5 [3]", [30.0, 50.0, None, 0.66, 3.5, 3.0]), ("Cmax* 12.5 ng", [12.5]),
     ("(e.g. 12 mg)", [12.0]), ("24.5% , 17.8%", [24.5, 17.8]), ("1.2 x 10^3 cells", [1200.0]), ("0.5-\n1.5 mg", [0.5, 1.5]),
 ])
@@ -94,6 +94,7 @@ def test_a_number_beside_accepted_productions_keeps_its_value(text, want):
 
 
 @pytest.mark.parametrize("text, refused", [
+    ("a 10-fold rise", "10"), ("after a 10- fold reduction", "10"), ("12- lOO mg", "12"),   # r7 round 4: decision 2
     ("12 5th", "12"), ("60mgOD 466 ng", "466"), ("Table 3 - Results", "3"), ("- 90% CI of GMR", "90"),
     ("GMR + 90% CI", "90"), ("12 . 5 ng", "12"), ("E2 12 pg/mL", "12"), ("x 12", "12"), ("12 x3 daily", "12"),
     ("R = 1 + (I/K)", "1"), ("12 <", "12"), ("vitamin E 400 IU", "400"), ("0.693/8 = 0.0866 1/h", "0.0866"),
@@ -106,7 +107,8 @@ def test_a_number_beside_a_word_that_is_no_accepted_production_is_unresolved(tex
 
 @pytest.mark.parametrize("word, ok", [
     ("x(12)", False), ("Cmax-(12)", False), ("12)x(15", False), ("12-x", False), ("12(e)", False), ("3ml,E", False),
-    ("12-fold", True), ("(n=12)", True), ("Cmax=12", True), ("p<0.05", True), ("x=12", True), ("12/day", True),
+    ("12-fold", False), ("(n=12)", True), ("Cmax=12", True), ("p<0.05", True), ("x=12", True), ("12/day", False),
+    ("12-h", True), ("12/kg", True), ("12/lS", False), ("12:lS", False),            # r7 round 4: a unit production only
     ("**p<0.05", True), ("±(1.2)", True),
 ])
 def test_the_glue_of_a_number_inside_its_own_word_is_an_accepted_production(word, ok):

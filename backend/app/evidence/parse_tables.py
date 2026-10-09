@@ -2,9 +2,11 @@
 
 Ruled tables come from pdfplumber's `lines` strategy; when it finds none, a 'Table N' caption starts
 a `layout` fallback that splits each text line on large horizontal gaps and merges continuation rows
-(lower confidence: records from it are flagged `table_low_confidence`). Besides the table dicts that
-land in the parse JSON, every table returns {"row:col": the cell's words}, which the layout sidecar
-(parse_layout) turns into cell boxes; nothing here changes the parse's text.
+(lower confidence: records from it are flagged `table_low_confidence`): a one-cell line, and (r7 round 4) a row
+whose cells hold no number of their own and change the reading of the number above them (a power of ten printed
+under each value). A table's `index` is its position in the page's tables (r7 round 4: an empty ruled grid takes
+none). Besides the table dicts that land in the parse JSON, every table returns {"row:col": the cell's words}, which
+the layout sidecar (parse_layout) turns into cell boxes; nothing here changes the parse's text.
 """
 from __future__ import annotations
 
@@ -12,7 +14,8 @@ import re
 from typing import Any
 
 from app.evidence import gaps
-from app.evidence.numgrammar.alphabet import DIGITS, GAP, char_class
+from app.evidence.numgrammar import tokens
+from app.evidence.numgrammar.alphabet import DIGITS, GAP, POINT, char_class
 from app.evidence.parse_guard import _is_white, tables_affordable
 
 CELL_GAP_FACTOR = 2.0           # horizontal gap (x modal size) that separates layout-table cells
@@ -76,13 +79,13 @@ def _lines_tables(body, lines: list[dict[str, Any]], words: list[dict[str, Any]]
     cells: list[dict[str, list[dict[str, Any]]]] = []
     if not tables_affordable(body):          # dense ruling grid: cell finding would explode
         return out, cells
-    for i, t in enumerate(body.filter(_inked).find_tables()):
+    for t in body.filter(_inked).find_tables():          # r7 round 4: index = position (an empty grid is skipped)
         every = [[_clean_cell(c) for c in row] for row in t.extract()]
         keep = [k for k, r in enumerate(every) if any(r)]
         rows = [every[k] for k in keep]
         if not rows:
             continue
-        out.append({"index": i, "strategy": "lines", "bbox": [round(float(v), 2) for v in t.bbox],
+        out.append({"index": len(out), "strategy": "lines", "bbox": [round(float(v), 2) for v in t.bbox],
                     "caption": _caption_above(lines, t.bbox[1]), "rows": rows})
         cells.append({f"{r}:{c}": _cell_words_in(words, bbox)
                       for r, k in enumerate(keep) for c, bbox in enumerate(t.rows[k].cells) if bbox})
@@ -116,6 +119,22 @@ def _place(cells: list[dict[str, Any]], col_x: list[float]) -> list[dict[str, An
     return out
 
 
+def _resolved(text: str) -> list[tuple[int, int, float | None]]:
+    return [(t.start, t.end, t.value) for t in tokens(text, POINT, mode="cell") if t.value is not None]
+
+
+def continuation(above: list[str], below: list[str]) -> bool:
+    """r7 round 4: the row *below* continues the cells of the row *above* when none of its cells holds a resolved
+    number of its own and, read right after the cell above it, one of them changes that cell's resolved numbers: a
+    power of ten printed under each value of an unruled table ('12.4' over '×10^3' reads '12.4 ×10^3'). A unit row
+    ('mg'), a row of its own numbers or footnote letters change nothing and stay rows."""
+    filled = [(j, c) for j, c in enumerate(below) if gaps.strip(c)]
+    if not filled or any(_resolved(c) for _, c in filled):
+        return False
+    return any(j < len(above) and (num := _resolved(above[j])) and _resolved(above[j] + " " + c)[:len(num)] != num
+               for j, c in filled)
+
+
 def _layout_table(lines: list[dict[str, Any]], start: int, gap: float
                   ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]] | None:
     """Rows below a 'Table N' caption line, split on large gaps; 1-cell rows merge upward. Returns the
@@ -137,8 +156,15 @@ def _layout_table(lines: list[dict[str, Any]], start: int, gap: float
             if not rows:
                 col_x = [c["x0"] for c in cells]
             placed = _place(cells, col_x)
-            rows.append([c["text"] if c else "" for c in placed])
-            words.append([list(c["words"]) if c else [] for c in placed])
+            texts = [c["text"] if c else "" for c in placed]
+            if rows and continuation(rows[-1], texts):    # r7 round 4: '×10^3' under each value continues its cell
+                for j, c in enumerate(placed):
+                    if c and j < len(rows[-1]):
+                        rows[-1][j] = gaps.strip(rows[-1][j] + " " + c["text"])
+                        words[-1][j] = words[-1][j] + c["words"]
+            else:
+                rows.append(texts)
+                words.append([list(c["words"]) if c else [] for c in placed])
         elif rows and col_x and (cells[0]["x1"] - cells[0]["x0"]) < 0.5 * (col_x[-1] - col_x[0] + 1):
             j = min(range(len(col_x)), key=lambda k: abs(col_x[k] - cells[0]["x0"]))
             while len(rows[-1]) <= j:

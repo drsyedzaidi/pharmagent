@@ -19,7 +19,7 @@ multiplier ``2 x 10 mg``, a multiplier without a number ``2 × daily``) is refus
 from __future__ import annotations
 
 from app.evidence.numgrammar import words as W
-from app.evidence.numgrammar.alphabet import MULTIPLIERS, SLASH
+from app.evidence.numgrammar.alphabet import DIGITS, MULTIPLIERS, SLASH
 from app.evidence.numgrammar.body import decimal_mantissa, to_float
 from app.evidence.numgrammar.read import read_power
 from app.evidence.numgrammar.scan import RATIO_INT, TAIL_MULT, Scan, lead_power, ratio_parts
@@ -81,12 +81,13 @@ class Forms:
     def spaced_ratio(self, a: int, sc: Scan, last: int) -> Tok | None:
         """``12 / 15``: one unsigned integer token ending word *a*, a lone ``/`` word, and word *last* an unsigned
         integer (trailing closers allowed) that no further ``/ N`` continues and no whole part precedes; None for any
-        other shape (the allow-list then judges the words one by one)."""
+        other shape (the allow-list then judges the words one by one). r7 round 4: unsigned as PRINTED, like the glued
+        ratio of scan.py ('+12 / 15' is refused: the canonical of '+12' drops its sign)."""
         t = sc.toks[0]
         word = self.text(last)
         den = word.rstrip(W.RATIO_TRAIL)
         if len(sc.toks) != 1 or t.shape != "int" or t.end != self.ends[a] or not RATIO_INT.fullmatch(t.canonical) \
-                or not RATIO_INT.fullmatch(den):
+                or self.t[t.start] not in DIGITS or not RATIO_INT.fullmatch(den):
             return None
         if last + 2 < self.n and self.text(last + 1) in W.RATIO_CHARS and W.digit_led(self.text(last + 2)):
             return None                                              # '5 / 12 / 2020': a date or a list

@@ -5,8 +5,15 @@ Every class is built from the alphabet's lists and role sets; nothing here names
 next to a number only inside one of these productions::
 
     prose   = a word without a digit whose MODIFIER characters are all joined to a letter (below)
-    label   = a word led by a letter (after openers) whose first letter run is not a lone operator letter and that holds
-              no times sign or middle dot right before a digit (a multiplier: 'AUC×1000'; r7 round 3)
+    label   = a word led by a letter (after openers) that holds no SCALE production (below) and that is prose with its
+              digits read as letters (decision 3)
+    scale   = on the PRINTED text (r7 round 4, before any label digit reads as a letter): a multiplier (x X * × ·) right
+              before a digit or a signed digit, unless a label digit stands on its left ('CYP2D6*4'; the allele star
+              also after a slash that follows one, 'CYP2C19*1/*17'; a times sign or middle dot wherever it stands:
+              'AUC0-24×1000'), or a LONE e E x X (no letter beside it) that is an operator letter, unless it stands
+              between label digits ('CYP2E1'): 'AUC×1000', 'AUCx1000', 'AUC*1e3', 'AUC:E3', 'CLx10', 'AUC1000x' and
+              '(x' are scales; it replaces the round-3 carve-outs for a bracket and for the times sign only, and fails
+              closed for names of the same shape ('Cmax1')
     glue    = [PUNCT*] [prose | label] [PUNCT*]                         the text between the tokens of one word
     prefix  = glue [starter run]                                        before the first token of a word
 
@@ -72,6 +79,7 @@ STARTER_RUN = QUALIFIERS | EQUALS | {PLUS_MINUS} | OPENERS_BR   # may stand righ
 _AS_LETTER = str.maketrans(dict.fromkeys(sorted(DIGITS), NAME_LETTER))   # a label digit read as a letter
 _PLAIN_PROSE = re.compile(char_class(MODIFIERS | DIGITS | OP_LETTERS, negate=True) + "*")
 _STRETCH = LETTERS | DIGITS | DECIMAL_MARKS              # the characters of a unit stretch before its power
+SCALE_CHARS = MULTIPLIERS | EXP_MARKERS                   # a multiplier or an exponent marker: the SCALE production
 
 
 def _letter(w: str, i: int) -> bool:
@@ -147,34 +155,48 @@ def prose(w: str) -> bool:
     return True
 
 
-def _bracketed_operator(w: str, start: int) -> bool:
-    """r7 round 3: a lone operator letter right after an opener or a closer inside *w* (from *start*), judged on the
-    PRINTED text, not with the label digits read as letters: 'Count(E3)', 'AUC(x1000)', 'Cmax)x10^3' hold one, so a
-    scale glued to a label after its bracket is never a name ('CYP2E1', 'AUC(0-24)' hold none)."""
-    bounds, brackets = core(w), OPENERS_BR | CLOSERS_BR
-    return any(w[j] in OP_LETTERS and w[j - 1] in brackets and operator_letter(w, j, bounds)
-               for j in range(start + 1, len(w)))
+def scaled_at(w: str, j: int, bounds: tuple[int, int]) -> bool:
+    """w[j] is the SCALE production on the printed text (see the module docstring): a multiplier or an exponent marker
+    right before a digit or a signed digit with no digit on its left, or a lone operator letter. *bounds*:
+    ``core(w)``, computed once per word."""
+    c = w[j]
+    if c not in SCALE_CHARS:
+        return False
+    k = j + 1 if j + 1 < len(w) and w[j + 1] in SIGNS else j
+    number_after = k + 1 < len(w) and w[k + 1] in DIGITS
+    if number_after and c in MULTIPLIERS:                 # MULT [sign] digit: 'AUCx1000', 'AUC*1000', 'AUC×1000'
+        return c in PRODUCT_DOTS or not _in_name(w, j)
+    if c in OP_LETTERS:                                   # a lone e E x X: 'AUC:E3', 'AUC-E3', '(E3)', 'AUC1000x'
+        return operator_letter(w, j, bounds) and not (number_after and _in_name(w, j))
+    return False
 
 
-def _product_before_digit(w: str, start: int) -> bool:
-    """r7 round 3 follow-up: a times sign or a middle dot printed right before a digit inside *w* (from *start*) is the
-    multiplier production ``MULT number`` ('AUC×1000', 'Count·1000'), judged on the PRINTED text: read as letters of a
-    name, the digits made it look joined to a letter on both sides like the unit glue of 'ng·h/mL'."""
-    return any(w[j] in PRODUCT_DOTS and w[j + 1] in DIGITS for j in range(start, len(w) - 1))
+def _in_name(w: str, j: int) -> bool:
+    """The letter or allele star w[j] (e E x X *) before a digit continues a name: a digit of the label stands on its
+    left ('CYP2E1', 'CYP2D6*4'), or for the allele star a slash after such a digit ('CYP2C19*1/*17': a diplotype)."""
+    left = w[j - 1] if j > 0 else ""
+    if left in DIGITS:
+        return True
+    return w[j] == STAR and left in SLASH and j > 1 and w[j - 2] in DIGITS
+
+
+def scaled(w: str, start: int = 0) -> bool:
+    """Some character of *w* from *start* on is the SCALE production (linear: the core is found once)."""
+    bounds = core(w)
+    return any(scaled_at(w, j, bounds) for j in range(start, len(w)))
 
 
 def label(w: str) -> bool:
-    """*w* is a LABEL: led by a letter after a run of openers or starters, that letter is not a lone operator letter
-    ('E-3', 'x10^3', 'e3,', '(x10^3', 'E2' are none), no lone operator letter follows a bracket inside it ('Count(E3)',
-    'AUC(x1000)': r7 round 3), no times sign or middle dot stands right before a digit ('AUC×1000': a multiplier, never
-    part of a name), and with its digits read as the letters of a name (decision 3: label digits never act by
-    themselves) it is prose ('AUC0-24', 'CYP2D6*4', 't1/2', 'h-1', 'L·h⁻¹', '(AUC0-inf'; never 'AUC0^-24')."""
+    """*w* is a LABEL: led by a letter after a run of openers or starters, no SCALE production on its printed text
+    ('E-3', 'x10^3', 'e3,', '(x10^3', 'E2', 'Count(E3)', 'AUC(x1000)', 'AUC×1000', 'AUCx1000', 'AUC*1000', 'AUC1000x'
+    are none: r7 round 4), and with its digits read as the letters of a name (decision 3: label digits never act by
+    themselves) it is prose ('AUC0-24', 'CYP2D6*4', 'CYP2E1', 't1/2', 'h-1', 'L·h⁻¹', '(AUC0-inf'; never 'AUC0^-24')."""
     i = 0
     while i < len(w) and (w[i] in OPENERS_BR or w[i] in STARTERS):
         i += 1
-    if i >= len(w) or w[i] not in LETTERS or operator_letter(w, i) or _bracketed_operator(w, i):
+    if i >= len(w) or w[i] not in LETTERS or scaled(w, i):
         return False
-    return not _product_before_digit(w, i) and prose(w[i:].translate(_AS_LETTER))
+    return prose(w[i:].translate(_AS_LETTER))
 
 
 def unit_powers(w: str) -> bool:
@@ -209,8 +231,8 @@ def glue(run: str) -> bool:
     while b > a and run[b - 1] in PUNCT:
         b -= 1
     mid = run[a:b]
-    if mid and (operator_letter(mid, 0) or _bracketed_operator(mid, 0)):
-        return False                                      # r7 round 3: judged on the printed text ('(x10^3)', '(E3)')
+    if scaled(mid):
+        return False                                      # r7 round 4: judged on the printed text ('(x10^3)', '(E3)')
     return prose(mid.translate(_AS_LETTER))               # label digits are letters of a name (decision 3)
 
 
@@ -251,4 +273,4 @@ def _modifier_joined_at_end(head: str) -> bool:
 
 
 __all__ = ["MODIFIERS", "OP_LETTERS", "PUNCT", "SEPARATOR_PUNCT", "core", "glue", "label", "operator_letter", "prefix",
-           "prose", "unit_powers", "variable"]
+           "prose", "scaled", "unit_powers", "variable"]

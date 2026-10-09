@@ -10,12 +10,12 @@ from app.evidence.numgrammar import (
     claim_decimal,
     digit_group,
     digits_of,
-    loose_in,
     tokens,
 )
 from app.evidence.numgrammar import alphabet as A
 from app.evidence.numgrammar import words as W
 from app.evidence.numgrammar.api import is_digit_run
+from app.evidence.word_match import loose_in
 
 
 def vals(text: str, style: str = ".", mode: str = "page") -> list[float | None]:
@@ -298,10 +298,16 @@ def test_random_text_with_the_round_1_shapes_stays_well_formed_and_gap_invariant
 
 
 def test_the_style_evidence_of_two_texts_is_the_sum_of_their_evidence_when_prose_lies_between():
+    """r7 round 4: a lone slash or colon word after a number needs a unit production after it ('12 / kg'; '12 / ok' is
+    refused: the audit's '12 / lS'), so the prose that ends text a is part of a's reading when a ends in such a word.
+    The sum is taken over a WITH the prose after it (was: over a alone; for every a that does not end in a lone slash
+    or colon the two are the same, which the second assertion pins)."""
     import random
     rnd = random.Random(5)
     for _ in range(300):
         a = "".join(rnd.choice(_ATOMS) for _ in range(rnd.randint(1, 14))).replace("\n", " ")
         b = "".join(rnd.choice(_ATOMS) for _ in range(rnd.randint(1, 14))).replace("\n", " ")
-        ea, eb, both = decimal_evidence(a), decimal_evidence(b), decimal_evidence(a + "\nok ok\n" + b)
+        ea, eb, both = decimal_evidence(a + "\nok ok"), decimal_evidence(b), decimal_evidence(a + "\nok ok\n" + b)
         assert both == (ea[0] + eb[0], ea[1] + eb[1]), (a, b)             # two words of prose end every form
+        if not a.rstrip(" \t").endswith((" /", " :")) and a.rstrip(" \t") not in ("/", ":"):
+            assert ea == decimal_evidence(a), a                            # the prose changes nothing else

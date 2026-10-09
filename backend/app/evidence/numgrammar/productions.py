@@ -49,7 +49,9 @@ from typing import NamedTuple
 from app.evidence.numgrammar.alphabet import (
     CHI,
     DECIMAL_MARKS,
+    DF,
     DIGITS,
+    EQUALS,
     EXP_MARKERS,
     GAP,
     HYPHEN,
@@ -57,6 +59,10 @@ from app.evidence.numgrammar.alphabet import (
     LETTERS,
     MULTIPLIERS,
     REF_SEPARATORS,
+    ROUND_CLOSE,
+    ROUND_OPEN,
+    SQUARE_CLOSE,
+    SQUARE_OPEN,
     STARTERS,
     SUP_TWO,
     TRAILING,
@@ -66,11 +72,13 @@ from app.evidence.numgrammar.body import to_float
 
 MASK_LETTER = "c"                                 # a CONTEXT letter: a masked citation or statistic reads as a label
 _GAPS = char_class(GAP, negate=False) + "*"
-_CHI_SQUARE = re.compile(CHI + "(?:" + SUP_TWO + "|2)(?=(?:\\((?:df" + _GAPS + "=" + _GAPS + ")?[0-9]{1,3}\\))?"
-                         + _GAPS + "=" + _GAPS + "[0-9])")
+_EQ = char_class(EQUALS, negate=False)
+_CHI_SQUARE = re.compile(CHI + "(?:" + SUP_TWO + "|2)(?=(?:" + re.escape(ROUND_OPEN) + "(?:" + DF + _GAPS + _EQ + _GAPS
+                         + ")?[0-9]{1,3}" + re.escape(ROUND_CLOSE) + ")?" + _GAPS + _EQ + _GAPS + "[0-9])")
 _REF_SEP = char_class(REF_SEPARATORS, negate=False)
-_GROUP = re.compile("\\[" + _GAPS + "[1-9][0-9]{0,2}(?:" + _GAPS + _REF_SEP + _GAPS + "[1-9][0-9]{0,2})*" + _GAPS
-                    + "\\](?![0-9])")
+_REF_NUM = "[1-9][0-9]{0,2}"
+_GROUP = re.compile(re.escape(SQUARE_OPEN) + _GAPS + _REF_NUM + "(?:" + _GAPS + _REF_SEP + _GAPS + _REF_NUM + ")*"
+                    + _GAPS + re.escape(SQUARE_CLOSE) + "(?![0-9])")
 _LIST_SEP = (REF_SEPARATORS & DECIMAL_MARKS)                 # the comma that makes a bracket group a list
 _REF = re.compile("[0-9]+")
 _GAP_RE = re.compile(char_class(GAP, negate=False))
@@ -184,6 +192,13 @@ def citations(t: str) -> list[Cite]:
     return out
 
 
+def bracket_groups(t: str) -> list[tuple[int, int]]:
+    """[start, end) of every bracketed reference group of the folded text *t* (the ``group`` of the citation
+    production, whatever stands around it): the flag checks read the words around a number with them taken out (r7
+    round 4: '[3]' between 'less than' and the number never hides the bound)."""
+    return [m.span() for m in _GROUP.finditer(t)]
+
+
 def mask_citations(t: str, cites: list[Cite]) -> str:
     """*t* with every character of every citation but its opening bracket and its gaps replaced 1:1 by ``MASK_LETTER``:
     offsets never move and a line break inside a spaced list stays a line break. r7 round 3: the opener stays, so a
@@ -205,4 +220,4 @@ def mask_chi_square(t: str) -> str:
     return _CHI_SQUARE.sub(MASK_LETTER * 2, t) if CHI in t else t
 
 
-__all__ = ["CHI", "MASK_LETTER", "Cite", "citations", "mask_chi_square", "mask_citations"]
+__all__ = ["CHI", "MASK_LETTER", "Cite", "bracket_groups", "citations", "mask_chi_square", "mask_citations"]

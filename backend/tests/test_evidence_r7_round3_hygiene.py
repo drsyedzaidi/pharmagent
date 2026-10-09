@@ -23,13 +23,18 @@ from app.evidence.numgrammar import alphabet as A
 from app.evidence.numgrammar import unreadable
 from app.evidence.unit_norm import unit_resolved
 from tests.evidence_r6_round1_support import doc
+from tests.evidence_r7_hygiene_scan import NAMED_LITERALS, hits
 
 EVIDENCE = Path(__file__).resolve().parents[1] / "app" / "evidence"
 READER = EVIDENCE / "numgrammar"
 LIST_FILES = {"alphabet.py", "equivalents.py"}
 GUARDED = sorted(p for p in READER.glob("*.py") if p.name not in LIST_FILES) + [
     EVIDENCE / n for n in ("unit_norm.py", "value_checks.py", "verify_messages.py", "value_bounds.py",
-                           "value_scale.py", "value_context.py", "verify_table.py", "verify_columns.py")]
+                           "value_scale.py", "value_context.py", "verify_table.py", "verify_columns.py",
+                           # r7 round 4: the extraction rules and the record checks read the decimal style and units,
+                           # and the modules that left the reader package keep its guard
+                           "extract_rules.py", "record_checks.py", "scale_label.py", "word_match.py", "dose_rule.py",
+                           "value_ranges.py")]
 TEXT_PATHS = ("extract_llm.py", "parse_layout.py", "verify_columns.py", "qc_flags.py", "value_bounds.py",
               "value_scale.py", "value_context.py", "verify_table.py")
 
@@ -84,38 +89,18 @@ def test_a_column_line_of_outside_spaces_is_kept_and_same_value_strips_only_gaps
 # --------------------------------------------------------------------------- hand-typed character sets ---
 def _hand_typed(path: Path) -> list[tuple[int, str]]:
     """frozenset/set over characters, ``in "xy"``, one-character tuples, a Compare against a ONE-character string and
-    ``startswith`` / ``endswith`` of one (round 3: single terminals come from alphabet.py too)."""
-    out = []
-    for n in ast.walk(_tree(path)):
-        if isinstance(n, ast.Call):
-            fn = n.func
-            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else "")
-            if name in ("frozenset", "set") and any(
-                    isinstance(c, ast.Constant) and isinstance(c.value, str) and (c is a or len(c.value) == 1)
-                    for a in n.args for c in ([a] if isinstance(a, ast.Constant) else getattr(a, "elts", []))):
-                out.append((n.lineno, name))
-            if name in ("startswith", "endswith", "strip", "rstrip", "lstrip") and any(
-                    isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value
-                    and (len(c.value) == 1 or name.endswith("strip")) for a in n.args for c in ast.walk(a)):
-                out.append((n.lineno, name))       # a strip argument is a character set; a one-character prefix a terminal
-        if isinstance(n, ast.Set) and any(isinstance(e, ast.Constant) and isinstance(e.value, str) and len(e.value) == 1
-                                          for e in n.elts):
-            out.append((n.lineno, "char-set-display"))
-        if isinstance(n, ast.Compare):
-            for side in (n.left, *n.comparators):
-                if isinstance(side, ast.Constant) and isinstance(side.value, str) and (
-                        len(side.value) == 1 or (len(side.value) > 1 and any(isinstance(o, (ast.In, ast.NotIn))
-                                                                             for o in n.ops) and side is not n.left)):
-                    out.append((n.lineno, "char-literal"))
-                if isinstance(side, (ast.Tuple, ast.Set, ast.List)) and any(
-                        isinstance(e, ast.Constant) and isinstance(e.value, str) and len(e.value) == 1 for e in side.elts):
-                    out.append((n.lineno, "char-tuple"))
-    return out
+    ``startswith`` / ``endswith`` of one (round 3: single terminals come from alphabet.py too). r7 round 4: the scanner
+    lives in ``tests/evidence_r7_hygiene_scan.py`` and judges a strip call by the characters it strips (``gaps.strip``
+    and a dict key inside the argument are no character set); a module may still name an exemption there."""
+    return [(line, kind) for line, kind, _ in hits(path)]
 
 
 @pytest.mark.parametrize("path", GUARDED, ids=lambda p: p.name)
 def test_no_hand_typed_character_or_single_terminal_in_the_reader_and_its_flag_and_unit_modules(path):
-    assert _hand_typed(path) == [], path.name
+    # r7 round 4: a literal the round-4 hygiene names (NAMED_LITERALS, with its reason) is no hit; none of the modules
+    # guarded in round 3 holds one, so for them this is the round-3 assertion unchanged
+    rel = str(path.relative_to(EVIDENCE))
+    assert [h for h in hits(path) if (rel, h[2]) not in NAMED_LITERALS] == [], path.name
 
 
 def test_the_guard_catches_a_single_character_terminal(tmp_path):
@@ -166,7 +151,7 @@ DIGIT_CLASS_EXEMPT = {
     "ingest.py": "file-name sanitising of an upload (never page text)",
     "qc_flags.py": "the identifier shape of a model flag code (never page text)",
     "parse_budget.py": "hex escapes inside the raw PDF bytes (never page text)",
-    "screen_rules.py": "screening keyword tokens (never a value)",
+    # r7 round 4: screen_rules.py builds its keyword tokens from DIGITS (char_class): no exemption any more
     "config_tools.py": "the identifier shape of a template field name (never page text)",
 }
 

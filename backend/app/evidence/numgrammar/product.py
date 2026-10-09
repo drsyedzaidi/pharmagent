@@ -14,6 +14,10 @@ behind a multiplier pass as a clean value)::
     plain   = an int or a decimal token (a one-separator number the page style reads as a decimal included): never a
               thousands-grouped, scientific, power-of-ten or ratio token
 
+r7 round 4: the same two shapes name a detached scale on the window (product_window.py): a PURE power (``pure_power``: a
+bare power or a scientific number whose mantissa is a power of ten, '1E+03') and a RAISED ten (``raised_ten``: '10',
+'103', '109') right after a number.
+
 Every other ``number MULT number`` is one unresolved expression (``1.2 x 10000``, ``2.5 x 1e6``, ``1.2 x 1,000,000``,
 ``3.1 . 1000``, ``2 x 10000 cells``, ``2 x 103``): its name for the reviewer is ``ten_after_multiplier`` when the
 amount's digits start with a ten, else ``multiplier_operand`` (the name only describes; the production decides).
@@ -56,11 +60,30 @@ def plain(shape: str, mark: str) -> bool:
     return shape in PLAIN_SHAPES or (shape == _STYLE and mark != "")
 
 
+def pure_power(tok: Tok) -> bool:
+    """r7 round 4: the token is a power of ten printed without a mantissa of its own: a bare power ('10^3') or a
+    scientific token whose mantissa is a power of ten ('1e3', '10E+03', '1.0E+03', '0.1e4'): a scale, never a value
+    beside a number (a detached scale, like '1.2 10^3')."""
+    if tok.shape == "bare_power":
+        return True
+    if tok.shape != "sci" or tok.value is None:
+        return False
+    mantissa = _unsigned(tok.canonical.partition("e")[0]).replace(POINT, "").lstrip(ZERO)
+    return _POWER_DIGITS.fullmatch(mantissa) is not None
+
+
+def raised_ten(tok: Tok) -> bool:
+    """r7 round 4: the token is an unsigned integer whose digits are a ten and then the exponent digits a text layer
+    flattened ('10', '103', '109' of '109/L', '1012'): right after a number it is a scale whose multiplier and raised
+    exponent the text layer lost ('1.2 10−3', '2.5 109/L', '1.2 10 3'), never a second value."""
+    return tok.shape == "int" and _RAISED_TEN.fullmatch(tok.canonical) is not None
+
+
 def scale(amount: Tok) -> bool:
     """The amount scales what stands before it: a raised ten, a power of ten written out, a bare power or a
     scientific token whose mantissa is one. A FOOTNOTE star run that ends a number's word ('12.4*') is a suffix; one
     such number word before a scale may be a multiplier, so the pair is refused ('12* 10', '12* 1000')."""
-    if amount.shape == "bare_power" or (amount.shape == "sci" and amount.parts[:1] == (1.0,)):
+    if pure_power(amount):
         return True
     return plain(amount.shape, amount.decimal) and (
         _RAISED_TEN.fullmatch(_unsigned(amount.canonical).partition(POINT)[0]) is not None
@@ -82,4 +105,5 @@ def fault(count: Tok, amount: tuple[str, str, str], unit_after: bool) -> str:
     return ""
 
 
-__all__ = ["OPERAND", "PLAIN_SHAPES", "TEN", "fault", "name", "plain", "power_of_ten", "scale"]
+__all__ = ["OPERAND", "PLAIN_SHAPES", "TEN", "fault", "name", "plain", "power_of_ten", "pure_power", "raised_ten",
+           "scale"]

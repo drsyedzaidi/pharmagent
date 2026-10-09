@@ -16,7 +16,8 @@ from __future__ import annotations
 import pytest
 
 from app.evidence import models as M
-from app.evidence.numgrammar import loose_in, scale_shapes
+from app.evidence.scale_label import scale_shapes
+from app.evidence.word_match import loose_in
 from tests.evidence_r6_round1_support import cell, run
 
 SCALED, CENSORED = M.FLAG_SCALED_HEADER, M.FLAG_CENSORED_VALUE
@@ -53,7 +54,7 @@ def test_a_data_cell_beside_the_number_is_data_not_a_scale():
     assert SCALED not in cell(rows, 1, 1, "12.5").flags
     assert cell(rows, 2, 1, "12.5").status == "fail"                   # a bare power beside it: a detached scale
     assert SCALED in cell(rows, 3, 1, "12.5").flags                     # a scale word beside it raises the flag
-    from app.evidence.numgrammar import scale_shapes as S
+    from app.evidence.scale_label import scale_shapes as S
     assert S("1.2 × 10^3", data=True) is False and S("10^3", data=True) is True and S("x1000", data=True) is True
 
 
@@ -95,7 +96,11 @@ def test_no_qualifier_no_flag(page, value):
 
 def test_digits_inside_a_letter_word_stand_for_a_letter_in_a_word_list():
     assert loose_in("bel0w", frozenset({"below"})) and loose_in("mi11ions", frozenset({"millions"}))
-    assert not loose_in("c1", frozenset({"ca"})) and not loose_in("t0", frozenset({"to"}))
+    # r7 round 4: a digit run that ENDS a letter word is read through the OCR skeleton (0 for o, 1 for l): 'up t0' is
+    # 'up to'; a digit with no letter look-alike ('t2') and a digit that reads as another letter ('c1' is 'cl') stay
+    # apart (was: not loose_in("t0", {"to"}))
+    assert not loose_in("c1", frozenset({"ca"})) and loose_in("t0", frozenset({"to"}))
+    assert not loose_in("t2", frozenset({"to"})) and not loose_in("c2", frozenset({"ca"}))
 
 
 # ----------------------------------------------------------------------------- a range with a unit ---
