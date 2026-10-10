@@ -34,6 +34,7 @@ class Tok(NamedTuple):
     canonical: str = ""
     decimal: str = ""
     detail: str = ""
+    ratios: tuple[str, ...] = ()  # ``n/d`` of each valid ratio inside an unresolved expression
 
     @property
     def reason(self) -> str:

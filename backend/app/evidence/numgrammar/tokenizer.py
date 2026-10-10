@@ -157,10 +157,29 @@ class Reader(Forms, Flags, Window):
         """Values of the resolved numbers inside words a..b (what a citation of one of them is a part of)."""
         out: list[float] = []
         for i in range(a, b + 1):
-            if not self.has_digit(i) or not self.clean(i) or W.special(self.text(i)):
+            sp = W.special(self.text(i))
+            if not self.has_digit(i) or not self.clean(i) or (sp and sp != W.FRACTION):
                 continue
             sc = self.scan(i)
-            out.extend(t.value for t in sc.toks[:MAX_PARTS]) if sc.kind == "numeric" else out.extend(sc.parts)
+            if sc.kind == "numeric":                  # a ratio cites its numerator and denominator, never its quotient
+                for t in sc.toks[:MAX_PARTS]:
+                    out.extend(t.parts if t.shape == "ratio" else (t.value,))
+            else:
+                out.extend(sc.parts)
+            if len(out) >= MAX_PARTS:
+                break
+        return tuple(out[:MAX_PARTS])
+
+    def ratios_of(self, a: int, b: int) -> tuple[str, ...]:
+        """Canonical ``n/d`` of the valid ratios read inside words a..b: what an unresolved expression holding them
+        lets a ratio claim cite as a partial number (a ratio key is a string, not one of ``parts``)."""
+        out: list[str] = []
+        for i in range(a, b + 1):
+            if not self.has_digit(i) or not self.clean(i) or SLASH.isdisjoint(self.text(i)):
+                continue
+            sc = self.scan(i)
+            if sc.kind == "numeric":
+                out.extend(t.canonical for t in sc.toks if t.shape == "ratio")
             if len(out) >= MAX_PARTS:
                 break
         return tuple(out[:MAX_PARTS])
@@ -222,7 +241,8 @@ class Reader(Forms, Flags, Window):
 
     def expr(self, out: list[Tok], fw: int, lw: int, start: int, end: int, why: str, parts: tuple[float, ...]) -> int:
         d = (self.marks.detail(fw, lw, start, end) or self.window_taint(fw, lw)) if self.marks.bad else ""
-        out.append(Tok(start, end, None, REASON_CONTEXT if d else f"{REASON_SHAPE}:{why}", parts, detail=d or why))
+        out.append(Tok(start, end, None, REASON_CONTEXT if d else f"{REASON_SHAPE}:{why}", parts, detail=d or why,
+                       ratios=self.ratios_of(fw, lw)))
         return lw
 
     def _word_expr(self, out: list[Tok], a: int, why: str, parts: tuple[float, ...] = ()) -> int:

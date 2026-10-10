@@ -113,3 +113,59 @@ def test_a_ratio_that_may_be_part_of_a_mixed_number_a_product_or_a_signed_shape_
     got = tokens(text)
     assert any(t.why == why for t in got) and not any(t.shape == "ratio" for t in got), (text, got)
     assert not any(t.value is not None and t.start <= text.find("/") < t.end for t in got), (text, got)
+
+
+@pytest.mark.parametrize("part", ["3", "4", "3/4"])
+def test_every_fraction_part_of_a_mixed_number_in_a_table_cell_fails_partial_number(part):
+    rows = [["Arm", "Dose"], ["A", "12 3/4"]]
+    got = cell(rows, 1, 1, part, snippet="12 3/4")
+    assert (got.status, got.reason) == ("fail", M.REASON_PARTIAL_NUMBER), got
+    assert cell(rows, 1, 1, "12", snippet="12 3/4").reason == M.REASON_PARTIAL_NUMBER
+
+
+@pytest.mark.parametrize("printed", ["12 3/4", "12  3/4", "12\n3/4", "AUC=12 3/4"])
+@pytest.mark.parametrize("part", ["3", "4", "3/4", "12"])
+def test_spacing_forms_of_the_mixed_number_cite_partial_number(printed, part):
+    got = run(f"dose was {printed} mg", printed, part)
+    assert (got.status, got.reason) == ("fail", M.REASON_PARTIAL_NUMBER), (printed, part, got)
+
+
+@pytest.mark.parametrize("part", ["6/8", "0.75", "34", "1", "12 3/4", "3 / 4", "75%"])
+def test_negative_controls_a_mixed_number_never_passes_for_any_value(part):
+    got = run("dose was 12 3/4 mg", "12 3/4", part)
+    assert got.status == "fail" and got.value_num is None, got
+
+
+def test_the_quotient_and_equivalent_ratio_of_a_mixed_number_part_do_not_become_partial_or_pass():
+    for part in ("6/8", "0.75"):
+        got = run("dose was 12 3/4 mg", "12 3/4", part)
+        assert got.status == "fail" and got.reason in (M.REASON_NO_NUMBER, M.REASON_NUMBER_MISMATCH), (part, got)
+
+
+def test_an_adjacent_list_item_is_not_a_part_of_a_mixed_number():
+    got = run("doses 5, 12 3/4 and 7 mg", "5, 12 3/4 and 7", "7")
+    assert got.status == "pass" and got.value_num == 7.0, got
+    got = run("doses 5, 12 3/4 and 7 mg", "5, 12 3/4 and 7", "5")
+    assert got.status == "pass" and got.value_num == 5.0, got
+
+
+def test_a_standalone_ratio_beside_a_mixed_number_still_matches_only_itself():
+    page = "n 12 3/4 and 3/4 here"
+    got = run(page, "3/4 here", "3/4")
+    assert got.status == "pass", got
+
+
+def test_mixed_number_offsets_are_native_and_cite_the_ratio_once():
+    text = "dose was 12 3/4 mg"
+    (t,) = tokens(text, mode="claim", labels=True)
+    assert text[t.start:t.end] == "12 3/4" and t.value is None and t.why == "mixed_number"
+    assert t.parts == (12.0, 3.0, 4.0) and t.ratios == ("3/4",)
+
+
+def test_ratio_provenance_is_linear_on_a_long_list_of_mixed_numbers():
+    import time
+    text = " ".join("12 3/4" for _ in range(20000))
+    t0 = time.perf_counter()
+    got = tokens(text, mode="claim", labels=True)
+    assert time.perf_counter() - t0 < 10 and len(got) >= 1
+    assert all(len(x.parts) <= 64 and len(x.ratios) <= 64 for x in got)

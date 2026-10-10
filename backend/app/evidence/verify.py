@@ -95,7 +95,8 @@ def _number_check(value: str, snippet: str, decimal_style: str, integer: bool
             return (t.start, t.end), M.REASON_OK, ""
     floats = [float(x) for x in targets if isinstance(x, Decimal)]
     vdig = digits_of(value)
-    holding = [t for t in toks if any(p in floats for p in t.parts)]
+    keys = [x for x in targets if isinstance(x, str)]      # a ratio claim: its canonical 'n/d'
+    holding = [t for t in toks if any(p in floats for p in t.parts) or any(k in t.ratios for k in keys)]
     tainted = next((t for t in toks if t.reason == M.REASON_UNRESOLVED_CONTEXT
                     and (t in holding or (vdig and vdig in digits_of(snippet[t.start:t.end])))), None)
     if tainted is not None:                       # the cited number touches a character outside the alphabet
