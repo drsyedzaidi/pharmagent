@@ -15,25 +15,25 @@
   },
   "dirty": [],
   "errors": 0,
-  "head": "a14d677db20b1ccfe70665606d0bc338f762f4e5",
-  "wall_seconds": 941.5
+  "head": "2ac7186d4ca40a3d499ef963af91562d7d4317a5",
+  "wall_seconds": 436.1
  },
  "neighbours": {
   "dirty": [],
   "errors": 0,
-  "head": "a14d677db20b1ccfe70665606d0bc338f762f4e5",
+  "head": "2ac7186d4ca40a3d499ef963af91562d7d4317a5",
   "strict": 9420,
   "variants": 2903754,
-  "wall_seconds": 82.0,
+  "wall_seconds": 38.7,
   "words": 30891
  },
  "tokens": {
   "dirty": [],
   "errors": 0,
-  "head": "a14d677db20b1ccfe70665606d0bc338f762f4e5",
+  "head": "2ac7186d4ca40a3d499ef963af91562d7d4317a5",
   "pairs": 458,
   "variants": 509325312,
-  "wall_seconds": 2006.6,
+  "wall_seconds": 895.3,
   "workers": 12
  }
 }
