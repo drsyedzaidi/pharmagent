@@ -67,6 +67,13 @@ def test_a_mixed_number_and_a_ratio_inside_a_label_word_are_never_a_ratio():
     assert tokens("t1/2 was long") == [] and tokens("CL/F 12/kg")[0].value == 12.0
 
 
+@pytest.mark.parametrize("part", ["3", "4", "3/4"])
+def test_every_fraction_part_of_a_mixed_number_fails_partial_number(part):
+    """A rejected mixed number must not make any of its constituent numbers look absent."""
+    got = run("dose was 12 3/4 mg", "12 3/4", part)
+    assert (got.status, got.reason) == ("fail", M.REASON_PARTIAL_NUMBER), got
+
+
 def test_a_ratio_equals_only_the_same_printed_ratio():
     assert parse_claim("12/15") == 0.8 and parse_claim("12 / 15") == 0.8
     for page in ("Responders 12/15 (80%) overall", "Responders 12 / 15 (80%) overall"):
