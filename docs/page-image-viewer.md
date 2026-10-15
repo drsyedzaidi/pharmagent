@@ -45,7 +45,8 @@ Registration in `app/main.py`: one import and one `app.include_router(...)` line
 Status codes: 400 invalid bbox / region too large / bad upload; 404 unknown
 document or page (bad `{n}.png` shape is also 404); 409 per-session document
 quota; 413 upload or output too large; 422 `scale` out of range (FastAPI
-validation) or page could not be rendered; 429 renderer busy (`Retry-After`);
+validation) or page could not be rendered; 429 renderer busy (no `Retry-After`: the app's shared HTTP error handler drops
+exception headers);
 503 renderer unavailable; 504 render timeout. Error bodies use the standard
 envelope with fixed messages: no server path, library text, or traceback.
 

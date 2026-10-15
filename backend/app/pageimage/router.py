@@ -54,8 +54,7 @@ _RENDER_ERRORS = {
 
 def _http(table: dict, kind: str) -> HTTPException:
     status, msg = table.get(kind, (422, "page could not be rendered"))
-    headers = {"Retry-After": "5"} if status == 429 else None
-    return HTTPException(status, msg, headers=headers)
+    return HTTPException(status, msg)
 
 
 def build_documents_router(owned_session: Callable) -> APIRouter:
