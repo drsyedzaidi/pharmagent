@@ -122,6 +122,16 @@ def test_documents_per_session_cap(client, monkeypatch):
 
 
 # ── path traversal ───────────────────────────────────────────────────────────
+def _assert_not_served(resp):
+    """The client (httpx) may normalise some hostile paths onto unrelated routes
+    (and a built frontend/dist adds an SPA fallback that answers 200 text/html).
+    Whatever answers, it must never be document metadata or an image."""
+    ctype = resp.headers.get("content-type", "")
+    assert not ctype.startswith("image/")
+    assert resp.status_code in (404, 405, 422) or (resp.status_code == 200 and ctype.startswith("text/html"))
+    assert "size_bytes" not in resp.text and "\x89PNG" not in resp.text
+
+
 @pytest.mark.parametrize("name", [
     "../../../../etc/passwd.pdf", "..\\..\\windows\\system32\\x.pdf", "/abs/path.pdf",
     "a/b/c.pdf", "x\x00.pdf", "%2e%2e%2fx.pdf", "....//x.pdf",
@@ -142,16 +152,15 @@ def test_hostile_client_filenames_never_reach_the_filesystem(client, tmp_path, n
 ])
 def test_hostile_document_ids_are_404(client, doc_id):
     sid = _sid(client)
-    assert client.get(f"/api/sessions/{sid}/documents/{doc_id}").status_code in (404, 405)
-    assert client.get(f"/api/sessions/{sid}/documents/{doc_id}/pages/0.png").status_code == 404
+    _assert_not_served(client.get(f"/api/sessions/{sid}/documents/{doc_id}"))
+    _assert_not_served(client.get(f"/api/sessions/{sid}/documents/{doc_id}/pages/0.png"))
 
 
 def test_client_cannot_name_a_file_via_page_segment(client, tmp_path):
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()
     for seg in ("../0.png", "..%2f0.png", "0.png%00"):
-        r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/{seg}")
-        assert r.status_code in (404, 405)
+        _assert_not_served(client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/{seg}"))
 
 
 def test_session_dir_confinement_for_odd_session_ids():
