@@ -1,0 +1,42 @@
+/* Page-image viewer. App design tokens only; the bbox overlay is positioned in
+   percentages of the image box so it scales with the image. */
+
+.page-image {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.page-image__img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  user-select: none;
+}
+
+.page-image__bbox {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  background: var(--accent-bg);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.page-image--note {
+  display: block;
+  padding: 16px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.page-image--error {
+  color: var(--text-h);
+  border-color: var(--border-strong);
+}
