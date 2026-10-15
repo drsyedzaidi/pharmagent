@@ -17,6 +17,7 @@ from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
+from app.pageimage.router import build_documents_router
 from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
@@ -135,6 +136,9 @@ def actor_id(owner: str | None = Depends(current_owner)) -> str:
     """The authenticated identity recorded on audit entries; 'anonymous' when
     auth is open. Ready for real per-user identities when auth is added."""
     return owner or "anonymous"
+
+
+app.include_router(build_documents_router(owned_session))  # PDF documents + page images (read-only)
 
 
 # ── request bodies ───────────────────────────────────────────────────────────
