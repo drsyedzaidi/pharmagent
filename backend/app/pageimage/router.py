@@ -13,8 +13,10 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import Match
 
 from app.config import settings
 from app.pageimage import documents, limits
@@ -65,14 +67,31 @@ def _http(table: dict, kind: str) -> HTTPException:
     return HTTPException(status, msg)
 
 
-def _require_enabled() -> None:
-    """The routes do not exist (404) unless switched on, and never in a frozen desktop build."""
-    if not settings.pageimage_enabled or getattr(sys, "frozen", False):
-        raise HTTPException(404, "Not Found")
+def _enabled() -> bool:
+    return bool(settings.pageimage_enabled) and not getattr(sys, "frozen", False)
+
+
+class GatedRoute(APIRoute):
+    """A route that does not exist unless the feature is on. ``matches`` runs before FastAPI reads the body, so a
+    disabled (or frozen) server never parses multipart input or spools it to disk, and the OpenAPI schema omits the
+    routes (``include_in_schema`` follows the same switch)."""
+
+    def matches(self, scope):
+        if not _enabled():
+            return Match.NONE, {}
+        return super().matches(scope)
+
+    @property
+    def include_in_schema(self) -> bool:
+        return _enabled()          # FastAPI re-reads this when it builds /openapi.json (and passes it on at include)
+
+    @include_in_schema.setter
+    def include_in_schema(self, value: bool) -> None:
+        pass                       # the switch alone decides; the declared value is irrelevant
 
 
 def build_documents_router(owned_session: Callable) -> APIRouter:
-    router = APIRouter(tags=["documents"], dependencies=[Depends(_require_enabled)])
+    router = APIRouter(tags=["documents"], route_class=GatedRoute)
 
     @router.post("/api/sessions/{sid}/documents", status_code=201)
     async def upload_document(file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:

@@ -29,55 +29,66 @@ EXIT_LIMIT_UNAVAILABLE = 9  # a resource limit could not be set or confirmed: no
 EXIT_MEMORY = 10         # MemoryError under the address-space limit (not a page/pixel cap: that is EXIT_TOO_LARGE)
 
 
+REPORT_VERSION = 1
+CPU_HARD_SLACK = 2       # RLIMIT_CPU hard = soft + 2: the soft limit raises SIGXCPU first, the hard one SIGKILLs later
+
+
 class LimitUnavailable(Exception):
     """A resource limit could not be set, or getrlimit does not confirm the requested ceiling."""
 
 
-def apply_limits(cpu_seconds: int, address_space: int, allow_weak: bool = False) -> list[dict]:
-    """Set the rlimits, CONFIRM each with getrlimit and return one report entry per limit.
+def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = False, *,
+                 fsize: int = 0, core: int = 0, nofile: int = 64) -> list[dict]:
+    """Lower the rlimits, CONFIRM each with getrlimit and return one report entry per limit.
 
-    Fail-closed: if a limit cannot be set or its effective ceiling is not at or below the request, raise
-    ``LimitUnavailable`` (the caller must not touch the PDF). RLIMIT_AS is not enforced outside Linux, so there it
-    is reported ``enforced: False`` and refused unless ``allow_weak`` (an explicit local-development switch)."""
+    * An inherited tighter SOFT limit is kept (never raised); the soft limit becomes min(current, request).
+    * The HARD limit is lowered to the request (CPU: request + CPU_HARD_SLACK) so worker code cannot restore it.
+    * Fail-closed: a limit that cannot be set, or whose confirmed soft/hard ceiling is not at or below the request,
+      raises ``LimitUnavailable`` (the caller must not touch the PDF).
+    * RLIMIT_AS is not enforced outside Linux: there it is reported ``state: "unenforced"`` and refused unless
+      ``allow_unenforced`` (an UNSAFE operator override)."""
     try:
         import resource
     except ImportError:  # Windows
         raise LimitUnavailable("no resource module") from None
+    inf = resource.RLIM_INFINITY
+
+    def cap(current: int, want: int) -> int:
+        return want if current == inf else min(current, want)
+
     report: list[dict] = []
-    for name, want in (
-        ("RLIMIT_CPU", cpu_seconds),
-        ("RLIMIT_AS", address_space),
-        ("RLIMIT_FSIZE", 0),      # the worker never needs to write a file
-        ("RLIMIT_CORE", 0),
-        ("RLIMIT_NOFILE", 64),
+    for name, want, slack in (
+        ("RLIMIT_CPU", cpu_seconds, CPU_HARD_SLACK),
+        ("RLIMIT_AS", address_space, 0),
+        ("RLIMIT_FSIZE", fsize, 0),      # the worker never needs to write a file
+        ("RLIMIT_CORE", core, 0),
+        ("RLIMIT_NOFILE", nofile, 0),
     ):
         rl = getattr(resource, name, None)
         if rl is None:
             raise LimitUnavailable(name)
         os_enforces = not (name == "RLIMIT_AS" and not sys.platform.startswith("linux"))
-        effective = None
+        soft = hard = None
         try:
-            _, hard = resource.getrlimit(rl)
-            soft = want if hard == resource.RLIM_INFINITY else min(want, hard)
-            resource.setrlimit(rl, (soft, hard))
-            got = resource.getrlimit(rl)[0]
-            if got != resource.RLIM_INFINITY and got <= want:
-                effective = got
+            cur_soft, cur_hard = resource.getrlimit(rl)
+            resource.setrlimit(rl, (cap(cur_soft, want), cap(cur_hard, want + slack)))
+            got_soft, got_hard = resource.getrlimit(rl)
+            if got_soft != inf and got_hard != inf and got_soft <= want and got_hard <= want + slack:
+                soft, hard = got_soft, got_hard
         except (ValueError, OSError):
             pass
-        if effective is None and os_enforces:
+        if soft is None and os_enforces:
             raise LimitUnavailable(name)
-        report.append({"name": name, "requested": want, "effective": effective,
-                       "enforced": os_enforces and effective is not None})
-    if not allow_weak and not all(r["enforced"] for r in report):
+        report.append({"name": name, "requested": want, "soft": soft, "hard": hard,
+                       "state": "enforced" if os_enforces and soft is not None else "unenforced"})
+    if not allow_unenforced and any(r["state"] != "enforced" for r in report):
         raise LimitUnavailable("unenforced")
     return report
 
 
 def _emit_report(ok: bool, report: list[dict]) -> None:
-    """One JSON line on stderr (stdout stays binary-only): what was actually set and confirmed."""
-    sys.stderr.write(json.dumps({"pageimage_limits": {
-        "ok": ok, "enforced": ok and all(r["enforced"] for r in report), "limits": report}}) + "\n")
+    """Exactly one JSON line on stderr (stdout stays binary-only): protocol v1, what was set and confirmed."""
+    sys.stderr.write(json.dumps({"pageimage_limits": {"v": REPORT_VERSION, "ok": ok, "limits": report}}) + "\n")
     sys.stderr.flush()
 
 
@@ -141,8 +152,11 @@ def _parse(raw: str) -> dict:
     for k in ("cpu_seconds", "address_space", "max_dim", "max_pixels", "max_png_bytes", "max_pages"):
         if not _is_int(lim.get(k)) or lim[k] < 0:
             raise ValueError
-    if not isinstance(lim.get("allow_weak"), bool):
+    if not isinstance(lim.get("allow_unenforced"), bool):
         raise ValueError
+    for k in ("nofile", "fsize", "core"):
+        if not _is_int(lim.get(k)) or lim[k] < 0:
+            raise ValueError
     if req["op"] == "render":
         if not _is_int(req.get("page")) or req["page"] < 0:
             raise ValueError
@@ -166,7 +180,8 @@ def main(argv: list[str]) -> int:
         return EXIT_BAD_REQUEST
     lim = req["limits"]
     try:
-        report = apply_limits(lim["cpu_seconds"], lim["address_space"], lim["allow_weak"])
+        report = apply_limits(lim["cpu_seconds"], lim["address_space"], lim["allow_unenforced"],
+                              fsize=lim["fsize"], core=lim["core"], nofile=lim["nofile"])
     except LimitUnavailable:
         _emit_report(False, [])
         return EXIT_LIMIT_UNAVAILABLE

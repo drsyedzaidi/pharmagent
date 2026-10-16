@@ -15,6 +15,7 @@ MAX_PNG_BYTES = 8 * 1024 * 1024       # encoded output (also the stdout read cap
 
 CPU_SECONDS = 10                      # RLIMIT_CPU inside the worker
 ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024  # RLIMIT_AS (not enforced on macOS)
+NOFILE_LIMIT = 64                     # RLIMIT_NOFILE inside the worker
 WALL_SECONDS = 15.0                   # parent kills the worker after this
 QUEUE_WAIT_SECONDS = 5.0              # wait for a render slot before 429
 MAX_CONCURRENT_RENDERS = 2
