@@ -1,0 +1,57 @@
+# mrgsolve cross-check of PharmAgent's PK simulator
+
+Question: for the same model, parameters, doses and time grid, does PharmAgent's ODE simulator
+(`app/compute/pk_simulate.simulate`, scipy) give the concentrations mrgsolve gives?
+
+**Scope and limits.** Ten structural PK models (1-, 2-, 3-compartment IV; 1-compartment oral with and without lag;
+2-compartment oral; three-transit-compartment absorption; Michaelis-Menten IV and oral; mixed linear+MM IV) in 38
+scenarios: single dose, five doses every 12 h, a 100 kg subject, IV infusion, and a saturating dose. Deterministic
+individual simulation only: no IIV, no residual error, no PK/PD (IDR, effect-compartment, lifespan) models, no
+steady-state dosing flag, no covariates beyond weight. A pass shows agreement on these 38 scenarios; it does not validate the
+other eight registry models or the population simulators.
+
+## Two independent checks
+1. **Closed form (no R).** `tests/test_crosscheck_mrgsolve.py` compares PharmAgent with exact solutions: exponential,
+   superposition for multiple doses, the Bateman function, the lagged Bateman function, the bi-exponential, the
+   infusion solution, the allometric weight rule, and the Lambert-W solution of Michaelis-Menten elimination. Run it any time.
+2. **mrgsolve (R, you run it).** The ten models are written in `run_mrgsolve.R` FROM THE EQUATIONS in the registry entry
+   named in each comment, not generated from it; the allometric scaling rule is implemented separately in R from the
+   stated convention. So a gap can come from the simulator, from the registry's scaling, or from my transcription:
+   read it, do not assume.
+
+## Commands (run from `backend/`)
+```bash
+D=scripts/crosscheck_mrgsolve
+
+python3 $D/make_scenarios.py                         # tables are committed; this reproduces them byte for byte
+python3 $D/run_pharmagent_sim.py $D $D/out           # PharmAgent (scipy). No R.
+
+# YOU run this one. It is never run automatically. It compiles ten small mrgsolve models.
+Rscript $D/run_mrgsolve.R $D $D/out
+
+python3 $D/compare_sims.py $D/out/pharmagent_sim.csv $D/out/mrgsolve_sim.csv     # exit 0 / 1 / 2
+```
+`run_mrgsolve.R` was written without being executed (by design: no R is run on your behalf). If it errors, the usual
+suspects are the mrgsolve version's handling of `ALAG_DEPOT`, `obsonly`, or record order at a shared dose/observation time.
+`out/mrgsolve_versions.txt` records what ran.
+
+## Conventions side by side
+| | PharmAgent | mrgsolve script |
+|---|---|---|
+| Integration | exact matrix exponential for linear bolus cases; LSODA (rtol 1e-7, atol 1e-9) otherwise | LSODA, rtol = atol = 1e-10 |
+| Observation at a dose time | state AFTER the dose | dose records sorted before observations |
+| Infusion | zero-order for amt/rate hours | `rate` column, duration amt/rate |
+| Lag | every dose shifted by ALAG | `ALAG_DEPOT = ALAG` |
+| Weight | `p * (wt/70)^exponent` from the registry | same rule, exponent chosen by parameter name |
+| Transit absorption | 3 compartments, ktr = 4/MTT | same |
+
+Metric per scenario (`compare_sims.py`): max|a-b| / max|b|, relative Cmax difference, relative AUC difference;
+default tolerance 1e-5.
+
+## What to look for (stated before any mrgsolve run; hypotheses, not results)
+1. Linear bolus models should agree to roughly 1e-8 or better (exact exponential vs a tightly-toleranced ODE solver).
+2. Infusion and nonlinear models are limited by PharmAgent's own solver tolerance (about 1e-6 against the closed form);
+   expect agreement near 1e-6, inside the 1e-5 tolerance.
+3. A mismatch confined to the single point at a dose time points at the shared-time record convention, not the model.
+4. A mismatch in every `:weight` scenario but no other points at the scaling rule; a mismatch only for the lag model at
+   early times points at how the lag is applied.
