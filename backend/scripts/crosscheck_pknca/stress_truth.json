@@ -1,0 +1,135 @@
+{
+ "seed": 20261016,
+ "dose": 100.0,
+ "V": 20.0,
+ "LLOQ": 0.05,
+ "times": [
+  0.0,
+  0.25,
+  0.5,
+  1,
+  2,
+  3,
+  4,
+  6,
+  8,
+  12,
+  16,
+  24,
+  36,
+  48,
+  72
+ ],
+ "subjects": {
+  "S01_clean": {
+   "ka": 1.5,
+   "ke": 0.1,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "noise-free; terminal slope = ke exactly",
+   "n_obs": 15,
+   "n_blq": 3,
+   "analytic_auc_inf_noise_free": 50.0
+  },
+  "S02_noisy_terminal": {
+   "ka": 1.5,
+   "ke": 0.1,
+   "tlag": 0.0,
+   "cv_noise": 0.25,
+   "design": "25% lognormal noise; the terminal window is ambiguous",
+   "n_obs": 15,
+   "n_blq": 3,
+   "analytic_auc_inf_noise_free": 50.0
+  },
+  "S03_trailing_blq": {
+   "ka": 1.5,
+   "ke": 0.25,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "late samples fall below LLOQ: trailing BLQ",
+   "n_obs": 15,
+   "n_blq": 5,
+   "analytic_auc_inf_noise_free": 20.0
+  },
+  "S04_trailing_blq_noisy": {
+   "ka": 1.5,
+   "ke": 0.25,
+   "tlag": 0.0,
+   "cv_noise": 0.2,
+   "design": "trailing BLQ plus noise",
+   "n_obs": 15,
+   "n_blq": 5,
+   "analytic_auc_inf_noise_free": 20.0
+  },
+  "S05_middle_blq": {
+   "ka": 1.5,
+   "ke": 0.08,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "one assay failure at 16 h between quantifiable values",
+   "n_obs": 15,
+   "n_blq": 3,
+   "analytic_auc_inf_noise_free": 62.5
+  },
+  "S06_leading_blq": {
+   "ka": 1.2,
+   "ke": 0.1,
+   "tlag": 2.5,
+   "cv_noise": 0.0,
+   "design": "absorption lag: BLQ before the first rise",
+   "n_obs": 15,
+   "n_blq": 6,
+   "analytic_auc_inf_noise_free": 50.0
+  },
+  "S07_tmax_last": {
+   "ka": 0.03,
+   "ke": 0.3,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "Tmax at the last sample: no terminal phase to fit",
+   "n_obs": 15,
+   "n_blq": 2,
+   "analytic_auc_inf_noise_free": 16.666666666666668
+  },
+  "S08_two_points_after_tmax": {
+   "ka": 0.35,
+   "ke": 0.3,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "only two samples after Tmax before BLQ",
+   "n_obs": 15,
+   "n_blq": 6,
+   "analytic_auc_inf_noise_free": 16.666666666666668
+  },
+  "S09_all_blq": {
+   "ka": 1.5,
+   "ke": 0.1,
+   "tlag": 0.0,
+   "cv_noise": 0.0,
+   "design": "every sample below LLOQ",
+   "n_obs": 15,
+   "n_blq": 15,
+   "analytic_auc_inf_noise_free": null
+  },
+  "S10_long_halflife": {
+   "ka": 2.0,
+   "ke": 0.02,
+   "tlag": 0.0,
+   "cv_noise": 0.15,
+   "design": "long half-life, noisy, many terminal points",
+   "n_obs": 15,
+   "n_blq": 1,
+   "analytic_auc_inf_noise_free": 250.0
+  },
+  "S11_terminal_bump": {
+   "ka": 1.5,
+   "ke": 0.12,
+   "tlag": 0.0,
+   "cv_noise": 0.05,
+   "design": "secondary peak at 24 h (re-absorption)",
+   "n_obs": 15,
+   "n_blq": 2,
+   "analytic_auc_inf_noise_free": 41.66666666666667
+  }
+ }
+}
