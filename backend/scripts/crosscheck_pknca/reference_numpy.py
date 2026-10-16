@@ -55,6 +55,8 @@ def subject(sid: str, t: np.ndarray, c: np.ndarray) -> dict:
     t, c = t[order], c[order]
     imax = int(np.argmax(c))
     pos = np.where(c > 0)[0]
+    if pos.size == 0:                        # nothing measurable: Cmax/Tmax of the zeros, no AUC, no terminal phase
+        return {"ID": sid, "Cmax": c[imax], "Tmax": t[imax]}
     ilast = int(pos[-1])
     auclast = auc_to(t, c, ilast)
     out = {"ID": sid, "Cmax": c[imax], "Tmax": t[imax], "AUClast": auclast, "tlast": t[ilast], "clast.obs": c[ilast]}

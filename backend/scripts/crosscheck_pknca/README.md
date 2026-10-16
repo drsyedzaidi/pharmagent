@@ -57,3 +57,8 @@ implements its own stated method; only the PKNCA arms say whether that method ma
 ## Result of the first run
 See `RESULTS-2026-10-16.md`: agreement on all 48 values in both PKNCA configurations. Hypothesis 2 was not borne out
 (this table's terminal phase is unambiguous), hypothesis 3 remains untested.
+
+## Stress table
+`make_stress_table.py` builds 11 synthetic subjects with known parameters (noisy terminal phases, trailing/middle/leading
+BLQ, no terminal phase, all-BLQ, a bump) in two BLQ codings. See `STRESS-FINDINGS-2026-10-16.md`: it found that PharmAgent
+integrates AUC_last through BLQ rows coded as zero. The PKNCA arm of the stress run is not done yet.

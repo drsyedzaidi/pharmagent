@@ -23,6 +23,7 @@ d <- read.csv(input, stringsAsFactors = FALSE)
 stopifnot(all(c("ID", "TIME", "DV", "AMT", "EVID") %in% names(d)))
 conc <- d[d$EVID == 0, c("ID", "TIME", "DV")]
 dose <- d[d$EVID == 1, c("ID", "TIME", "AMT")]
+conc <- conc[!is.na(conc$DV), ]                       # a blank concentration is a missing sample, never a zero
 conc <- conc[order(conc$ID, conc$TIME), ]
 
 intervals <- data.frame(start = 0, end = Inf,
