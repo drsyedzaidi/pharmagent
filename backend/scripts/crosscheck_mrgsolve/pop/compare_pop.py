@@ -76,7 +76,8 @@ def main(argv: list[str]) -> int:
         return 2
     design = load_rows(Path(__file__).parent / "design.csv")
     lloq = {d["id"]: float(d["lloq"]) for d in design if d["lloq"]}
-    r = compare(*(load_rows(f) for f in files), lloq=lloq)
+    pa_pop, pa_eta, mr_pop, mr_eta = (load_rows(f) for f in files)
+    r = compare(pa_pop, mr_pop, pa_eta, mr_eta, lloq=lloq)
     print(f"{r['n_obs']} observations, {r['n_eta']} etas")
     print(f"  eta   max abs  {r['max_eta_abs']:.2e}   (tol {ETA_TOL:.0e})")
     w = r["worst"]

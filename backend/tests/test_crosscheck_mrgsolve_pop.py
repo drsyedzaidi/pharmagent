@@ -252,3 +252,22 @@ def test_vpc_band_matches_the_exact_percentiles_for_a_monotone_model():
     assert np.allclose(out["p05"], exact(+z95), rtol=0.04)                         # high eta -> low concentration
     assert np.allclose(out["p95"], exact(-z95), rtol=0.04)
     assert np.all(np.array(out["p05"]) <= np.array(out["p50"])) and np.all(np.array(out["p50"]) <= np.array(out["p95"]))
+
+
+# ───────────────────────────── offline regression vs the committed mrgsolve run ─────────────────────────────
+
+REF = DIR.parent / "reference" / "pop"
+
+
+def test_pharmagent_still_agrees_with_the_committed_mrgsolve_population_run(pa):
+    pop, eta = pa
+    r = cmp.compare(pop, _read(REF / "mrgsolve_pop.csv"), eta, _read(REF / "mrgsolve_eta.csv"),
+                    lloq={"pop_lag_blq": 0.3})
+    assert cmp.passed(r), r
+    assert r["max_ipred_rel"] < 5e-6 and r["max_eta_abs"] < 1e-12
+
+
+def test_comparer_main_passes_on_the_committed_reference(pa, tmp_path):
+    out = tmp_path / "pa"
+    assert run_pa.main(["x", str(DIR), str(out)]) == 0
+    assert cmp.main(["x", str(out), str(REF)]) == 0
