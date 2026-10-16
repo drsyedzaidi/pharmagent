@@ -217,3 +217,23 @@ def test_r_model_equations_name_the_same_parameters_as_the_registry():
         declared = dict(re.findall(r"(\w+)\s*=\s*([0-9.]+)", block.split("$PARAM")[1].split("$")[0]))
         want = {k: v for k, v in REGISTRY[key].defaults.items() if k in REGISTRY[key].params}
         assert {k: float(v) for k, v in declared.items()} == {k: float(v) for k, v in want.items()}, key
+
+
+# ── offline regression against the committed mrgsolve output (no R needed) ──────────────────────
+REF = DIR / "reference" / "mrgsolve_sim.csv"
+
+
+def test_pharmagent_still_agrees_with_the_committed_mrgsolve_reference(sim):
+    ref = cmp.load(REF)
+    res = cmp.compare(sim, ref, 1e-5)
+    assert not res["only_mine"] and not res["only_ref"]
+    bad = [r for r in res["rows"] if r["status"] != "match"]
+    assert not bad, bad
+    assert len(res["rows"]) == 38
+
+
+def test_reference_grid_is_the_scenario_grid():
+    obs = _read(DIR / "obs.csv")
+    ref = _read(REF)
+    assert [(r["id"], round(float(r["time"]), 5)) for r in ref] == [(r["id"], round(float(r["time"]), 5)) for r in obs]
+    assert "mrgsolve" in (DIR / "reference" / "mrgsolve_versions.txt").read_text()

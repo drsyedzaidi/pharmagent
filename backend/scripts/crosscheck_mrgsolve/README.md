@@ -55,3 +55,9 @@ default tolerance 1e-5.
 3. A mismatch confined to the single point at a dose time points at the shared-time record convention, not the model.
 4. A mismatch in every `:weight` scenario but no other points at the scaling rule; a mismatch only for the lag model at
    early times points at how the lag is applied.
+
+## Result of the first run
+See `RESULTS-2026-10-16.md`: all 38 scenarios agree with mrgsolve 1.6.1 within 1e-5 (worst 1.4e-6); hypotheses 1 and 2
+held, 3 and 4 were not triggered. The mrgsolve output is committed in `reference/`, and a test regenerates PharmAgent's side
+and compares it with that reference, so the check runs in CI without R. Re-run mrgsolve only when the scenarios or the R
+models change (`Rscript ...`, then copy `out/mrgsolve_sim.csv` into `reference/` and update the hash in the results file).
