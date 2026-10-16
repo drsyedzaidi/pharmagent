@@ -1,0 +1,6 @@
+id,model,wt,theta,iiv,omega2,error,sigma_prop,sigma_add,lloq,n_subjects
+pop_iv1,iv_1cmt,70,CL=5;V=50,"CL,V",CL=0.09;V=0.04,combined,0.1,0.0001,,30
+pop_oral1,oral_1cmt,70,CL=5;V=50;KA=1,"CL,V,KA",CL=0.09;V=0.04;KA=0.16,proportional,0.15,0,,30
+pop_iv2_infusion_100kg,iv_2cmt,100,CL=5;VC=30;Q=10;VP=50,"CL,VC",CL=0.09;VC=0.04,additive,0,0.0001,,30
+pop_mm,iv_1cmt_mm,70,VMAX=100;KM=5;V=50,"VMAX,V",VMAX=0.09;V=0.04,combined,0.1,0.0001,,30
+pop_lag_blq,oral_1cmt_lag,70,CL=5;V=50;KA=1;ALAG=0.3,CL,CL=0.09,proportional,0.15,0,0.3,30
