@@ -91,3 +91,36 @@ level (1e-9 to 1e-6); (2) the indirect-response and lifespan models agree to abo
 ### Result of the PK/PD run
 See `RESULTS-PD-2026-10-16.md`: all 36 scenarios agree with mrgsolve 1.6.1 within 1e-5 for concentration and response (worst
 1.3e-6); the three hypotheses held. The mrgsolve output is in `reference/pd/` and is regression-tested without R.
+
+## Population arm (`pop/`)
+
+Random numbers cannot be compared across engines (different generators, different draw order), so the population
+check is split in three layers instead of pretending two RNG streams should agree.
+
+**Layer A, shared draws, cross-engine.** `pop/make_pop.py` fixes the standard-normal draws (one per random effect, one per
+observation, clipped to +-2.5, seed in the file) for 5 scenarios x 30 subjects: IV 1-cmt (combined error, IIV on CL and V),
+oral 1-cmt (proportional, IIV on CL/V/KA), IV 2-cmt zero-order infusion in a 100 kg subject (additive), Michaelis-Menten
+(IIV on VMAX and V) and oral with lag and two doses (proportional, LLOQ 0.3, so BLQ flags occur). Both engines consume the same
+`draws.csv`. PharmAgent's real `app.compute.nlme.simulate_replicate_subject` runs with a scripted RNG (`run_pharmagent_pop.py`;
+it fails if a draw is unused, over-requested or resampled). `pop/run_mrgsolve_pop.R` draws nothing and re-implements the
+rest: eta = sqrt(omega2) z, theta exp(eta), weight scaling after the eta, structural solution, residual model, BLQ flag.
+
+```bash
+D=scripts/crosscheck_mrgsolve/pop
+python3 -I $D/make_pop.py          # only if you change the design; the committed tables are tested to match
+python3 $D/run_pharmagent_pop.py $D $D/out
+# YOU run this one:
+Rscript $D/run_mrgsolve_pop.R $D $D/out
+python3 $D/compare_pop.py $D/out $D/out
+```
+Tolerances, stated before the R run: eta 1e-12 absolute; ipred and dv 1e-5 relative; BLQ flags exact (a flip is excused only
+when the value sits within 1e-5 of the LLOQ, and is counted separately).
+
+**Layer B, PharmAgent's own RNG, Python only** (`tests/test_crosscheck_mrgsolve_pop.py`, runs in CI). Through the real
+function with a seeded generator: the eta sample sd matches sqrt(omega2) within 4% (the standard error is about 1%), the eta
+are uncorrelated, the standardised residual is N(0,1) under proportional, additive and combined error, and `vpc_band`
+percentiles equal the exact analytic percentiles of a monotone model (CL-only IIV on an IV bolus: the p-th percentile of C is C at
+the (1-p)-th percentile of eta) within 4% (2% for the median) at 4000 simulated subjects.
+
+**Not covered:** a distributional comparison of mrgsolve's own RNG output against `vpc_band` (it would only test two
+sampling errors against each other), correlated (block) omega, covariate models, and the estimation methods themselves.
