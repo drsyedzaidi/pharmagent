@@ -3,12 +3,14 @@
 Question: for the same model, parameters, doses and time grid, does PharmAgent's ODE simulator
 (`app/compute/pk_simulate.simulate`, scipy) give the concentrations mrgsolve gives?
 
-**Scope and limits.** Ten structural PK models (1-, 2-, 3-compartment IV; 1-compartment oral with and without lag;
+There are two scenario sets: the **PK set** (38 scenarios, first result below) and the **PK/PD set** in `pd/` (36
+scenarios over the nine PK/PD models; added after the first run, see "PK/PD set"). 
+
+**Scope and limits of the PK set.** Ten structural PK models (1-, 2-, 3-compartment IV; 1-compartment oral with and without lag;
 2-compartment oral; three-transit-compartment absorption; Michaelis-Menten IV and oral; mixed linear+MM IV) in 38
 scenarios: single dose, five doses every 12 h, a 100 kg subject, IV infusion, and a saturating dose. Deterministic
-individual simulation only: no IIV, no residual error, no PK/PD (IDR, effect-compartment, lifespan) models, no
-steady-state dosing flag, no covariates beyond weight. A pass shows agreement on these 38 scenarios; it does not validate the
-other eight registry models or the population simulators.
+individual simulation only: no IIV, no residual error, no steady-state dosing flag, no covariates beyond weight. A pass
+shows agreement on these 38 scenarios; the PK/PD models are the second set and the population simulators are not covered.
 
 ## Two independent checks
 1. **Closed form (no R).** `tests/test_crosscheck_mrgsolve.py` compares PharmAgent with exact solutions: exponential,
@@ -61,3 +63,27 @@ See `RESULTS-2026-10-16.md`: all 38 scenarios agree with mrgsolve 1.6.1 within 1
 held, 3 and 4 were not triggered. The mrgsolve output is committed in `reference/`, and a test regenerates PharmAgent's side
 and compares it with that reference, so the check runs in CI without R. Re-run mrgsolve only when the scenarios or the R
 models change (`Rscript ...`, then copy `out/mrgsolve_sim.csv` into `reference/` and update the hash in the results file).
+
+## PK/PD set (`pd/`): nine models, 36 scenarios
+All nine registry PK/PD models share a 1-compartment oral PK base and add a response: three **direct** models (linear,
+Emax, sigmoid), an **effect compartment** (hysteresis), four **indirect response** models (inhibit kin, inhibit kout,
+stimulate kin, stimulate kout, starting at the baseline KIN/KOUT) and a five-compartment **transit/lifespan** chain (cell count =
+BASE x the mean transit amount). Scenarios per model: single dose (100, 96 h), five doses every 24 h (168 h), a 100 kg subject, and
+a high dose (1000, 96 h) that drives the response toward its maximum. Both the concentration and the response (`eff`)
+are compared.
+
+Checks that need no R (already in `tests/test_crosscheck_mrgsolve.py`, all passing): the direct models equal their function
+of the exact concentration; the effect compartment equals its exact convolution solution; the four indirect-response models and the
+lifespan chain equal an independent integration at rtol 1e-12 written from the documented equations. The mrgsolve arm:
+
+```bash
+D=scripts/crosscheck_mrgsolve
+python3 $D/run_pharmagent_sim.py $D/pd $D/out_pd
+# YOU run this one:
+Rscript $D/run_mrgsolve.R $D/pd $D/out_pd
+python3 $D/compare_sims.py $D/out_pd/pharmagent_sim.csv $D/out_pd/mrgsolve_sim.csv
+```
+Hypotheses stated before any mrgsolve PK/PD run: (1) the direct and effect-compartment models agree to about the PK
+level (1e-9 to 1e-6); (2) the indirect-response and lifespan models agree to about 1e-6 (PharmAgent's solver tolerance);
+(3) a gap that appears only in the response and not in the concentration would point at the initial state of the response
+(`RESP_0`, `T1_0..T5_0`) or at the response function, not at the PK.

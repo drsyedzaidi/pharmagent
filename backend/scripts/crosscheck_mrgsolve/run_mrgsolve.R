@@ -3,9 +3,11 @@
 #
 #   Rscript scripts/crosscheck_mrgsolve/run_mrgsolve.R scripts/crosscheck_mrgsolve scripts/crosscheck_mrgsolve/out
 #
-# Reads scenarios.csv / doses.csv / obs.csv (made by make_scenarios.py) and writes mrgsolve_sim.csv
-# (id, time, cp) plus mrgsolve_versions.txt. Installs nothing, uses no network. It compiles ten small
-# mrgsolve models (needs the C++ toolchain mrgsolve already needs).
+# Reads scenarios.csv / doses.csv / obs.csv (made by make_scenarios.py; the PK set in the scenario folder, the PK/PD
+# set in its pd/ subfolder) and writes mrgsolve_sim.csv (id, time, cp, eff) plus mrgsolve_versions.txt. Installs
+# nothing, uses no network. It compiles the small mrgsolve models it needs (the C++ toolchain mrgsolve already needs).
+#
+# PK/PD scenario set:  Rscript .../run_mrgsolve.R .../crosscheck_mrgsolve/pd .../crosscheck_mrgsolve/out_pd
 #
 # Every model below is written FROM THE EQUATIONS of the PharmAgent registry entry named in its comment
 # (app/compute/pk_models.py), not generated from it. Weight scaling is implemented here independently from the
@@ -118,7 +120,132 @@ $ODE
 double C = CENT/V;
 dxdt_CENT = -(CL/V)*CENT - VMAX*C/(KM + C);
 $TABLE double CP = CENT/V;
-$CAPTURE CP'
+$CAPTURE CP',
+
+  # ---- PK/PD: every one has the 1-compartment oral PK base (DEPOT -> CENT); EFF is the response ----
+  # pkpd_direct_linear
+  pkpd_direct_linear = '
+$PARAM CL = 5, V = 50, KA = 1, E0 = 10, SLOPE = 5
+$CMT DEPOT CENT
+$ODE
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+$TABLE
+double CP = CENT/V;
+double EFF = E0 + SLOPE*CP;
+$CAPTURE CP EFF',
+  # pkpd_direct_emax
+  pkpd_direct_emax = '
+$PARAM CL = 5, V = 50, KA = 1, E0 = 10, EMAX = 100, EC50 = 2
+$CMT DEPOT CENT
+$ODE
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+$TABLE
+double CP = CENT/V;
+double EFF = E0 + EMAX*CP/(EC50 + CP);
+$CAPTURE CP EFF',
+  # pkpd_direct_sigmoid
+  pkpd_direct_sigmoid = '
+$PARAM CL = 5, V = 50, KA = 1, E0 = 10, EMAX = 100, EC50 = 2, HILL = 2
+$CMT DEPOT CENT
+$ODE
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+$TABLE
+double CP = CENT/V;
+double EFF = E0 + EMAX*pow(CP, HILL)/(pow(EC50, HILL) + pow(CP, HILL));
+$CAPTURE CP EFF',
+  # pkpd_effect_emax (effect compartment, hysteresis)
+  pkpd_effect_emax = '
+$PARAM CL = 5, V = 50, KA = 1, E0 = 10, EMAX = 100, EC50 = 2, KE0 = 0.3
+$CMT DEPOT CENT CE
+$ODE
+double C = CENT/V;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_CE    =  KE0*(C - CE);
+$TABLE
+double CP = CENT/V;
+double EFF = E0 + EMAX*CE/(EC50 + CE);
+$CAPTURE CP EFF',
+  # pkpd_idr1_inhib_kin (response starts at its baseline KIN/KOUT)
+  pkpd_idr1_inhib_kin = '
+$PARAM CL = 5, V = 50, KA = 1, KIN = 10, KOUT = 1, IMAX = 0.9, IC50 = 2
+$CMT DEPOT CENT RESP
+$MAIN RESP_0 = KIN/KOUT;
+$ODE
+double C = CENT/V;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_RESP  =  KIN*(1 - IMAX*C/(IC50 + C)) - KOUT*RESP;
+$TABLE
+double CP = CENT/V;
+double EFF = RESP;
+$CAPTURE CP EFF',
+  # pkpd_idr2_inhib_kout
+  pkpd_idr2_inhib_kout = '
+$PARAM CL = 5, V = 50, KA = 1, KIN = 10, KOUT = 1, IMAX = 0.9, IC50 = 2
+$CMT DEPOT CENT RESP
+$MAIN RESP_0 = KIN/KOUT;
+$ODE
+double C = CENT/V;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_RESP  =  KIN - KOUT*(1 - IMAX*C/(IC50 + C))*RESP;
+$TABLE
+double CP = CENT/V;
+double EFF = RESP;
+$CAPTURE CP EFF',
+  # pkpd_idr3_stim_kin
+  pkpd_idr3_stim_kin = '
+$PARAM CL = 5, V = 50, KA = 1, KIN = 10, KOUT = 1, EMAX = 4, EC50 = 2
+$CMT DEPOT CENT RESP
+$MAIN RESP_0 = KIN/KOUT;
+$ODE
+double C = CENT/V;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_RESP  =  KIN*(1 + EMAX*C/(EC50 + C)) - KOUT*RESP;
+$TABLE
+double CP = CENT/V;
+double EFF = RESP;
+$CAPTURE CP EFF',
+  # pkpd_idr4_stim_kout
+  pkpd_idr4_stim_kout = '
+$PARAM CL = 5, V = 50, KA = 1, KIN = 10, KOUT = 1, EMAX = 4, EC50 = 2
+$CMT DEPOT CENT RESP
+$MAIN RESP_0 = KIN/KOUT;
+$ODE
+double C = CENT/V;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_RESP  =  KIN - KOUT*(1 + EMAX*C/(EC50 + C))*RESP;
+$TABLE
+double CP = CENT/V;
+double EFF = RESP;
+$CAPTURE CP EFF',
+  # pkpd_transit_lifespan (five transit compartments at relative amount 1; count = BASE x their mean)
+  pkpd_transit_lifespan = '
+$PARAM CL = 5, V = 50, KA = 1, BASE = 100, EMAX = 1.0, EC50 = 5, MTT = 24
+$CMT DEPOT CENT T1 T2 T3 T4 T5
+$MAIN
+T1_0 = 1; T2_0 = 1; T3_0 = 1; T4_0 = 1; T5_0 = 1;
+$ODE
+double C = CENT/V;
+double STIM = EMAX*C/(EC50 + C);
+double KTR = 5.0/MTT;
+dxdt_DEPOT = -KA*DEPOT;
+dxdt_CENT  =  KA*DEPOT - (CL/V)*CENT;
+dxdt_T1 = KTR*(1 + STIM) - KTR*T1;
+dxdt_T2 = KTR*(T1 - T2);
+dxdt_T3 = KTR*(T2 - T3);
+dxdt_T4 = KTR*(T3 - T4);
+dxdt_T5 = KTR*(T4 - T5);
+$TABLE
+double CP = CENT/V;
+double EFF = BASE*(T1 + T2 + T3 + T4 + T5)/5.0;
+$CAPTURE CP EFF'
 )
 
 # allometric exponent from the PARAMETER NAME, implemented here and not read from PharmAgent
@@ -159,8 +286,9 @@ for (i in seq_len(nrow(scen))) {
 
   res <- as.data.frame(mrgsim_d(mod, d, obsonly = TRUE))
   stopifnot(nrow(res) == nrow(oo), all(abs(res$time - oo$time) < 1e-9))
+  eff <- if ("EFF" %in% names(res)) sprintf("%.17g", res$EFF) else rep("", nrow(res))   # PK/PD models only
   rows[[i]] <- data.frame(id = sid, time = sprintf("%.17g", res$time), cp = sprintf("%.17g", res$CP),
-                          stringsAsFactors = FALSE)
+                          eff = eff, stringsAsFactors = FALSE)
   cat(sprintf("%-28s %d points\n", sid, nrow(res)))
 }
 write.csv(do.call(rbind, rows), file.path(outdir, "mrgsolve_sim.csv"), row.names = FALSE)
