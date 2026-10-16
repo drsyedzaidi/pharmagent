@@ -14,8 +14,9 @@ from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
 from app.pageimage import limits, runner
-from tests.pdf_fixtures import make_pdf, make_zero_page_pdf
+from tests.pdf_fixtures import REPORT_OK, make_pdf, make_zero_page_pdf, weak_limits_off_linux
 
+_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)   # macOS: explicit dev opt-in for real renders
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -224,7 +225,7 @@ def test_worker_emitting_html_is_never_served_as_image(client, tmp_path, monkeyp
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()
     fake = tmp_path / "html.py"
-    fake.write_text("import sys; sys.stdout.write('<script>alert(1)</script>')")
+    fake.write_text(REPORT_OK + "import sys; sys.stdout.write('<script>alert(1)</script>')")
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 422

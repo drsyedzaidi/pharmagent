@@ -13,10 +13,12 @@ from app.config import settings
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
-from tests.pdf_fixtures import decode_png, make_pdf
+from tests.pdf_fixtures import decode_png, make_pdf, weak_limits_off_linux
 
 SAMPLE = Path(__file__).parent.parent / "sample_data" / "oral_pk.csv"
 
+
+_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)   # macOS: explicit dev opt-in for real renders
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):

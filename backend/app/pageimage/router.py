@@ -38,6 +38,9 @@ _UPLOAD_ERRORS = {
     "output_too_big": (400, "file is not a readable PDF"),
     "busy": (429, "too many documents being processed; retry shortly"),
     "unavailable": (503, "PDF processing is unavailable on this server"),
+    "limit_unavailable": (503, "PDF processing is unavailable on this server"),
+    "memory_limit": (400, "PDF is too complex to process within the resource limits"),
+    "cpu_limit": (400, "PDF took too long to process"),
 }
 _RENDER_ERRORS = {
     "no_page": (404, "page not found"),
@@ -47,6 +50,9 @@ _RENDER_ERRORS = {
     "timeout": (504, "rendering timed out"),
     "busy": (429, "renderer busy; retry shortly"),
     "unavailable": (503, "PDF rendering is unavailable on this server"),
+    "limit_unavailable": (503, "PDF rendering is unavailable on this server"),
+    "memory_limit": (413, "page is too complex to render within the resource limits"),
+    "cpu_limit": (504, "rendering timed out"),
     "encrypted": (422, "page could not be rendered"),
     "malformed": (422, "page could not be rendered"),
     "failed": (422, "page could not be rendered"),

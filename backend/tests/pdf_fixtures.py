@@ -114,3 +114,18 @@ def decode_png(data: bytes) -> DecodedPng:
         assert raw[y * stride] == 0, "only filter 0 expected"
         rows.append(raw[y * stride + 1:(y + 1) * stride])
     return DecodedPng(w, h, rows)
+
+
+def weak_limits_off_linux(monkeypatch):
+    """Where the OS cannot enforce RLIMIT_AS (macOS) the renderer refuses to run unless a developer opts in. Tests
+    that need a REAL render there opt in; on Linux the full limits are always enforced."""
+    import sys
+
+    from app.config import settings
+    monkeypatch.setattr(settings, "pageimage_allow_weak_limits", sys.platform != "linux")
+
+
+# What a trustworthy worker writes to stderr once its limits are set and confirmed (fake workers that exit 0 need it,
+# otherwise the parent rightly answers limit_unavailable).
+REPORT_OK = ('import json as _j, sys as _s; _s.stderr.write(_j.dumps({"pageimage_limits": '
+             '{"ok": True, "enforced": True, "limits": []}}) + "\\n"); ')

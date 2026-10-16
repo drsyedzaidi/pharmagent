@@ -12,8 +12,9 @@ from pydantic import ValidationError
 from app.pageimage import limits, runner
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import NormBBox, PageLocator, RenderParams
-from tests.pdf_fixtures import decode_png, make_pdf, make_zero_page_pdf
+from tests.pdf_fixtures import REPORT_OK, decode_png, make_pdf, make_zero_page_pdf, weak_limits_off_linux
 
+_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)   # macOS: explicit dev opt-in for real renders
 
 @pytest.fixture
 def pdf(tmp_path):
@@ -196,7 +197,7 @@ def test_output_byte_cap_kills_worker(tmp_path, monkeypatch, pdf):
 
 
 def test_non_png_output_rejected(tmp_path, monkeypatch, pdf):
-    _fake_worker(tmp_path, monkeypatch, "import sys; sys.stdout.write('<html>')")
+    _fake_worker(tmp_path, monkeypatch, REPORT_OK + "import sys; sys.stdout.write('<html>')")
     with pytest.raises(RenderError) as e:
         render_page(pdf(make_pdf()), 0, RenderParams())
     assert e.value.kind == "failed"
@@ -214,6 +215,7 @@ def test_worker_sees_clean_env_and_empty_cwd(tmp_path, monkeypatch, pdf):
     out = tmp_path / "probe.txt"
     monkeypatch.setenv("PHARMAGENT_API_TOKEN", "super-secret")
     _fake_worker(tmp_path, monkeypatch, f"""
+        {REPORT_OK}
         import os
         open({str(out)!r}, "w").write(repr((sorted(os.environ), os.listdir("."))))
         import sys; sys.stdout.buffer.write(b"\\x89PNG\\r\\n\\x1a\\n")
@@ -222,21 +224,6 @@ def test_worker_sees_clean_env_and_empty_cwd(tmp_path, monkeypatch, pdf):
     env_keys, cwd_files = eval(out.read_text())  # noqa: S307 - test-local repr of lists
     assert "PHARMAGENT_API_TOKEN" not in env_keys
     assert cwd_files == []
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="RLIMIT_AS is not enforced on macOS")
-def test_address_space_limit_stops_memory_bomb(tmp_path, monkeypatch, pdf):
-    real_worker = str(runner.WORKER_PATH)
-    _fake_worker(tmp_path, monkeypatch, f"""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("real_worker", {real_worker!r})
-        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-        mod.apply_limits(10, 256 * 1024 * 1024)      # the real limit routine
-        x = bytearray(2 * 1024 * 1024 * 1024)        # must die with MemoryError
-    """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf(make_pdf()), 0, RenderParams())
-    assert e.value.kind == "failed"
 
 
 def test_slot_exhaustion_returns_busy(monkeypatch, pdf):

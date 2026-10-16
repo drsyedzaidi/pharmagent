@@ -17,6 +17,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from app.config import settings
 from app.pageimage import limits
 from app.pageimage.types import RenderParams
 
@@ -34,23 +35,56 @@ _EXIT_KINDS = {
     6: "too_large",
     7: "empty",
     8: "output_too_big",
+    9: "limit_unavailable",
+    10: "memory_limit",
 }
 _SIGXCPU = getattr(signal, "SIGXCPU", None)
+
+_MAX_REPORT_BYTES = 8192
+
+
+def _require_verified_limits(stderr: bytes) -> None:
+    """A success is accepted only if the worker reported the limits it actually set and confirmed. Silence, an
+    unparsable report or ``enforced: false`` (outside weak mode) is ``limit_unavailable``: never a quiet pass."""
+    report = None
+    for line in stderr.decode("utf-8", "replace").splitlines():
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and isinstance(got.get("pageimage_limits"), dict):
+            report = got["pageimage_limits"]
+    if report is None or report.get("ok") is not True:
+        raise RenderError("limit_unavailable")
+    if report.get("enforced") is True:
+        return
+    if not _allow_weak():
+        raise RenderError("limit_unavailable")
+    log.warning("pageimage_weak_limits: rendering WITHOUT every resource limit enforced (development opt-in; "
+                "never enable in production)")
+
 
 _slots = threading.BoundedSemaphore(limits.MAX_CONCURRENT_RENDERS)
 
 
 class RenderError(Exception):
     """``kind`` is one of: bad_request encrypted malformed no_page too_large
-    empty output_too_big timeout failed unavailable busy."""
+    empty output_too_big timeout cpu_limit memory_limit limit_unavailable
+    failed unavailable busy."""
 
     def __init__(self, kind: str) -> None:
         super().__init__(kind)
         self.kind = kind
 
 
+def _allow_weak() -> bool:
+    """Weak limits (a developer's explicit opt-in) are never honoured in a frozen build."""
+    return bool(settings.pageimage_allow_weak_limits) and not getattr(sys, "frozen", False)
+
+
 def _worker_limits() -> dict:
     return {
+        "allow_weak": _allow_weak(),
         "cpu_seconds": limits.CPU_SECONDS,
         "address_space": limits.ADDRESS_SPACE_BYTES,
         "max_dim": limits.MAX_DIM_PX,
@@ -87,7 +121,7 @@ def _spawn_and_collect(request: dict, *, wall_seconds: float, max_output: int) -
             try:
                 proc = subprocess.Popen(
                     [sys.executable, "-I", str(WORKER_PATH), json.dumps(request)],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=cwd, env=_clean_env(), close_fds=True,
                     start_new_session=(os.name == "posix"),
                 )
@@ -111,8 +145,20 @@ def _spawn_and_collect(request: dict, *, wall_seconds: float, max_output: int) -
                         return
                     chunks.append(data)
 
+            err_chunks: list[bytes] = []
+
+            def _err_reader() -> None:
+                assert proc.stderr is not None
+                total = 0
+                while data := proc.stderr.read(4096):
+                    total += len(data)
+                    if total <= _MAX_REPORT_BYTES:     # keep reading (never block the worker), keep little
+                        err_chunks.append(data)
+
             t = threading.Thread(target=_reader, daemon=True)
+            te = threading.Thread(target=_err_reader, daemon=True)
             t.start()
+            te.start()
             try:
                 proc.wait(timeout=wall_seconds)
             except subprocess.TimeoutExpired:
@@ -121,15 +167,17 @@ def _spawn_and_collect(request: dict, *, wall_seconds: float, max_output: int) -
                 t.join(timeout=2)
                 raise RenderError("timeout") from None
             t.join(timeout=5)
+            te.join(timeout=5)
             if state["overflow"]:
                 raise RenderError("output_too_big")
             rc = proc.returncode
             if rc == 0:
+                _require_verified_limits(b"".join(err_chunks))
                 return b"".join(chunks)
             if rc in _EXIT_KINDS:
                 raise RenderError(_EXIT_KINDS[rc])
             if _SIGXCPU is not None and rc == -_SIGXCPU:
-                raise RenderError("timeout")
+                raise RenderError("cpu_limit")
             log.error("pageimage_worker_failed", extra={"returncode": rc})
             raise RenderError("failed")
     finally:
