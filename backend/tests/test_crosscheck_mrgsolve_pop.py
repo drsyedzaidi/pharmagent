@@ -252,3 +252,44 @@ def test_vpc_band_matches_the_exact_percentiles_for_a_monotone_model():
     assert np.allclose(out["p05"], exact(+z95), rtol=0.04)                         # high eta -> low concentration
     assert np.allclose(out["p95"], exact(-z95), rtol=0.04)
     assert np.all(np.array(out["p05"]) <= np.array(out["p50"])) and np.all(np.array(out["p50"]) <= np.array(out["p95"]))
+
+
+# ── the comparer's command line (the real files go through main(), not just compare()) ───────────
+def _write_side(d: Path, prefix: str, scale: float = 1.0) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    pop = [{"id": "pop_iv1", "subject": s, "time": t, "ipred": 2.0 * scale, "dv": 2.1 * scale, "blq": 0}
+           for s in (1, 2) for t in ("0.5", "1.0")]
+    eta = [{"id": "pop_iv1", "subject": s, "param": p, "eta": 0.1 * s} for s in (1, 2) for p in ("CL", "V")]
+    for name, rows in ((f"{prefix}_pop.csv", pop), (f"{prefix}_eta.csv", eta)):
+        with (d / name).open("w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0]), lineterminator="\n")
+            w.writeheader()
+            w.writerows(rows)
+
+
+def test_main_reads_the_four_files_in_the_right_roles(tmp_path, capsys):
+    """Regression: main() once passed (pop, eta, pop, eta) to compare(pa_pop, mr_pop, pa_eta, mr_eta): it crashed with
+    'row counts differ' on the first real run, because only compare() had been tested."""
+    main = _load("compare_pop").main
+    _write_side(tmp_path / "pa", "pharmagent")
+    _write_side(tmp_path / "mr", "mrgsolve")
+    assert main(["x", str(tmp_path / "pa"), str(tmp_path / "mr")]) == 0
+    assert "PASS" in capsys.readouterr().out
+
+
+def test_main_fails_on_a_real_difference_and_reports_a_missing_side(tmp_path):
+    main = _load("compare_pop").main
+    _write_side(tmp_path / "pa", "pharmagent")
+    _write_side(tmp_path / "mr", "mrgsolve", scale=1.01)
+    assert main(["x", str(tmp_path / "pa"), str(tmp_path / "mr")]) == 1
+    assert main(["x", str(tmp_path / "pa"), str(tmp_path / "nowhere")]) == 2
+
+
+def test_pharmagent_matches_the_committed_mrgsolve_population_reference(tmp_path, capsys):
+    """Layer A against the committed mrgsolve output (R was run once by hand; the tests never run it)."""
+    ref = DIR.parent / "reference" / "pop"
+    assert (ref / "mrgsolve_pop.csv").exists() and (ref / "mrgsolve_eta.csv").exists()
+    assert run_pa.main(["x", str(DIR), str(tmp_path)]) == 0
+    assert cmp.main(["x", str(tmp_path), str(ref)]) == 0
+    out = capsys.readouterr().out
+    assert "1200 observations, 300 etas" in out and "BLQ flips 0" in out and "PASS" in out

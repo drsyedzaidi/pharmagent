@@ -94,8 +94,9 @@ See `RESULTS-PD-2026-10-16.md`: all 36 scenarios agree with mrgsolve 1.6.1 withi
 
 ## Population arm (`pop/`)
 
-**Status:** PharmAgent's side of Layer A and all of Layer B run in CI. `pop/run_mrgsolve_pop.R` has been written but **NOT run**, so there is
-no cross-engine population result yet; run it as shown below and compare.
+**Status:** Layer A has been run against mrgsolve 1.6.1 (2026-10-16): 1200 observations and 300 etas agree within the stated
+tolerances, see `RESULTS-POP-2026-10-16.md`. mrgsolve's output is committed under `reference/pop/` so CI compares offline (R is not
+run by the tests). Layer B runs in CI too.
 
 Random numbers cannot be compared across engines (different generators, different draw order), so the population
 check is split in three layers instead of pretending two RNG streams should agree.
