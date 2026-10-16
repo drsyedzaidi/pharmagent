@@ -21,6 +21,7 @@ SAMPLE = Path(__file__).parent.parent / "sample_data" / "oral_pk.csv"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "pageimage_enabled", True)
     main.orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
                              store=SessionStore(":memory:"))
     token = settings.api_token

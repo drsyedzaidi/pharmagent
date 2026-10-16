@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -15,6 +16,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from app.config import settings
 from app.pageimage import documents, limits
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import NormBBox, RenderParams
@@ -57,8 +59,14 @@ def _http(table: dict, kind: str) -> HTTPException:
     return HTTPException(status, msg)
 
 
+def _require_enabled() -> None:
+    """The routes do not exist (404) unless switched on, and never in a frozen desktop build."""
+    if not settings.pageimage_enabled or getattr(sys, "frozen", False):
+        raise HTTPException(404, "Not Found")
+
+
 def build_documents_router(owned_session: Callable) -> APIRouter:
-    router = APIRouter(tags=["documents"])
+    router = APIRouter(tags=["documents"], dependencies=[Depends(_require_enabled)])
 
     @router.post("/api/sessions/{sid}/documents", status_code=201)
     async def upload_document(file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:

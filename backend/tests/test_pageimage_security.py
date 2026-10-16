@@ -20,6 +20,7 @@ from tests.pdf_fixtures import make_pdf, make_zero_page_pdf
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "pageimage_enabled", True)
     main.orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
                              store=SessionStore(":memory:"))
     token = settings.api_token

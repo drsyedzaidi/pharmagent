@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     audit_active_key_id: str | None = None
     audit_anchor_path: Path | None = None
 
+    # Page-image viewer (PDF documents + rendered pages). OFF until a UI reaches it; never active in a frozen
+    # desktop build. ``allow_weak_limits`` lets a developer render where the OS cannot enforce every resource
+    # limit (macOS has no RLIMIT_AS); it is ignored in a frozen build and logs a warning on every render.
+    pageimage_enabled: bool = False
+    pageimage_allow_weak_limits: bool = False
+
     # Behaviour
     app_name: str = "PharmAgent"
     org_name: str = "PmatricsAI"
