@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from app.compute.dosing import extract_ss_intervals, is_multiple_dose
@@ -18,6 +19,25 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
     if state.dataset_metadata and state.dataset_metadata.get("detected_roles"):
         return state.dataset_metadata["detected_roles"]
     return detect_roles(list(df.columns))
+
+
+def _apply_m1(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str) -> pd.DataFrame:
+    """Rule M1 for observations flagged below-LOQ (CENS == 1), per subject in time order: BLQ rows BEFORE the first
+    quantifiable value are a 0 baseline (their value is set to 0, also when it was blank); BLQ rows after it, in the
+    middle or trailing, are excluded. A subject with nothing quantifiable keeps all its rows as zeros (as before)."""
+    flag = pd.to_numeric(obs[cens_col], errors="coerce").fillna(0) == 1
+    work = obs.assign(_blq=flag.to_numpy(), _t=pd.to_numeric(obs[time_col], errors="coerce"))
+    work = work.sort_values([id_col, "_t"], kind="stable")
+    parts = []
+    for _, g in work.groupby(id_col, sort=False):
+        blq = g["_blq"].to_numpy()
+        quantified = np.flatnonzero(~blq)
+        first_q = int(quantified[0]) if quantified.size else len(g)
+        leading = blq & (np.arange(len(g)) < first_q)
+        g = g.copy()
+        g.loc[g.index[leading], dv_col] = 0.0
+        parts.append(g[(~blq) | leading])
+    return pd.concat(parts).drop(columns=["_blq", "_t"]) if parts else obs
 
 
 def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -108,16 +128,21 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     else:
         n_blq = int((obs[dv_col] <= 0).sum())
 
+    if cens_col is not None:
+        obs = _apply_m1(obs, id_col, time_col, dv_col, cens_col)
     obs = obs.dropna(subset=[time_col, dv_col])
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
                   dose_by_subject=dose_by_subject, is_iv=is_iv)
     out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
+    vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."
     out["nca_summary"]["blq"] = {
         "n_below_loq": n_blq,
-        "rule": ("M1: BLQ records excluded from lambda_z and AUC (leading BLQ count "
-                 "toward 0 baseline). Vss/MRT" + (" reported (IV)." if is_iv
-                 else " not reported for extravascular data.")),
+        "rule": (("M1: BLQ-flagged records before the first quantifiable value count as a 0 baseline; later BLQ "
+                  "records (middle or trailing) are excluded from AUC and lambda_z. AUC_last ends at Tlast. Vss/MRT"
+                  + vss_note) if cens_col is not None else
+                 ("No BLQ flag in the data: concentrations are used as given (a 0 is a measured zero), except that "
+                  "AUC_last ends at Tlast, the last positive concentration. Vss/MRT" + vss_note)),
     }
 
     n = len(out["nca_parameters"])
