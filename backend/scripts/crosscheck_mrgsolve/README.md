@@ -10,7 +10,7 @@ scenarios over the nine PK/PD models; added after the first run, see "PK/PD set"
 2-compartment oral; three-transit-compartment absorption; Michaelis-Menten IV and oral; mixed linear+MM IV) in 38
 scenarios: single dose, five doses every 12 h, a 100 kg subject, IV infusion, and a saturating dose. Deterministic
 individual simulation only: no IIV, no residual error, no steady-state dosing flag, no covariates beyond weight. A pass
-shows agreement on these 38 scenarios; the PK/PD models are the second set and the population simulators are not covered.
+shows agreement on these 38 scenarios; the PK/PD models are the second set (36 scenarios, `pd/`) and the population simulator has its own arm (`pop/`, below).
 
 ## Two independent checks
 1. **Closed form (no R).** `tests/test_crosscheck_mrgsolve.py` compares PharmAgent with exact solutions: exponential,
@@ -93,6 +93,9 @@ See `RESULTS-PD-2026-10-16.md`: all 36 scenarios agree with mrgsolve 1.6.1 withi
 1.3e-6); the three hypotheses held. The mrgsolve output is in `reference/pd/` and is regression-tested without R.
 
 ## Population arm (`pop/`)
+
+**Status:** PharmAgent's side of Layer A and all of Layer B run in CI. `pop/run_mrgsolve_pop.R` has been written but **NOT run**, so there is
+no cross-engine population result yet; run it as shown below and compare.
 
 Random numbers cannot be compared across engines (different generators, different draw order), so the population
 check is split in three layers instead of pretending two RNG streams should agree.
