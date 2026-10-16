@@ -1,0 +1,43 @@
+{
+  "sources": {
+    "pc": {
+      "repo": "pharmaverse/pharmaversesdtm",
+      "commit": "7ec53ea88dfe1c168f9efbef59233c4426813b89",
+      "path": "inst/extdata/pc.csv",
+      "sha256": "ccbab6faf771b05b10b830b73b0141e44a50f87604689e2dfba91f75ae33dcc5",
+      "rows": 4572
+    },
+    "adppk": {
+      "repo": "pharmaverse/pharmaverseadam",
+      "commit": "c7d3881173b01504286cf6784622420401ddaa41",
+      "path": "inst/extdata/adppk.csv",
+      "sha256": "b0122ba56259d38c6f59719a237074fd37bb84547718d67421dacc3c4b375bb1",
+      "rows": 2850
+    }
+  },
+  "selection": {
+    "rule": "documented, not tuned): subjects present in BOTH files, ordered by USUBJID; from each COHORT (1, 2) the\nfirst 3 with >= 14 quantifiable pc rows go into BOTH subsets. In addition, the pc subject with the FEWEST quantifiable\nrows over the whole of pc (ties: first by USUBJID) goes into pc_subset.csv only, as the all-BLQ edge case (such\nsubjects exist only in pc; adppk has none).",
+    "subjects_in_both": [
+      "01-701-1028",
+      "01-701-1033",
+      "01-701-1034",
+      "01-701-1097",
+      "01-701-1111",
+      "01-701-1133"
+    ],
+    "pc_only_all_blq_subject": "01-701-1015",
+    "min_quantifiable_pc_rows": 14,
+    "per_cohort": 3
+  },
+  "subset": {
+    "pc_subset.csv": {
+      "sha256": "0f29135f72ed1e35b7d1457a40244ed9439f2eefa2f306eb99023e5e5f1fd11c",
+      "rows": 126
+    },
+    "adppk_subset.csv": {
+      "sha256": "dfa7853aeed080b83e842f4c9becbadc37e1aee3df03865a5abaa3bca2d009b6",
+      "rows": 102
+    }
+  },
+  "modifications": "row subsetting by USUBJID only; every kept row is byte-identical to the source row"
+}
