@@ -87,3 +87,7 @@ Hypotheses stated before any mrgsolve PK/PD run: (1) the direct and effect-compa
 level (1e-9 to 1e-6); (2) the indirect-response and lifespan models agree to about 1e-6 (PharmAgent's solver tolerance);
 (3) a gap that appears only in the response and not in the concentration would point at the initial state of the response
 (`RESP_0`, `T1_0..T5_0`) or at the response function, not at the PK.
+
+### Result of the PK/PD run
+See `RESULTS-PD-2026-10-16.md`: all 36 scenarios agree with mrgsolve 1.6.1 within 1e-5 for concentration and response (worst
+1.3e-6); the three hypotheses held. The mrgsolve output is in `reference/pd/` and is regression-tested without R.

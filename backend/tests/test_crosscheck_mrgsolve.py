@@ -429,3 +429,22 @@ def test_r_script_has_every_pkpd_model_with_its_initial_state_and_response():
     assert src.count("RESP_0 = KIN/KOUT") == 4                        # the four indirect-response models start at baseline
     assert "T1_0 = 1; T2_0 = 1; T3_0 = 1; T4_0 = 1; T5_0 = 1;" in src
     assert "KTR = 5.0/MTT" in src and "BASE*(T1 + T2 + T3 + T4 + T5)/5.0" in src
+
+
+# ── offline regression against the committed PK/PD mrgsolve output (no R needed) ───────────────
+PD_REF = DIR / "reference" / "pd" / "mrgsolve_sim.csv"
+
+
+def test_pharmagent_pd_still_agrees_with_the_committed_mrgsolve_reference(pd_sim):
+    cp, eff = pd_sim
+    for mine, ref in ((cp, cmp.load(PD_REF)), (eff, cmp.load_eff(PD_REF))):
+        res = cmp.compare(mine, ref, 1e-5)
+        assert not res["only_mine"] and not res["only_ref"]
+        assert len(res["rows"]) == 36
+        assert not [r for r in res["rows"] if r["status"] != "match"]
+
+
+def test_pd_reference_grid_is_the_pd_scenario_grid():
+    obs, ref = _read(PD / "obs.csv"), _read(PD_REF)
+    assert [(r["id"], round(float(r["time"]), 5)) for r in ref] == [(r["id"], round(float(r["time"]), 5)) for r in obs]
+    assert all(r["eff"] != "" for r in ref)
