@@ -12,9 +12,9 @@ from pydantic import ValidationError
 from app.pageimage import limits, runner
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import NormBBox, PageLocator, RenderParams
-from tests.pdf_fixtures import REPORT_OK, decode_png, make_pdf, make_zero_page_pdf, weak_limits_off_linux
+from tests.pdf_fixtures import REPORT_OK, decode_png, make_pdf, make_zero_page_pdf, unenforced_limits_off_linux
 
-_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)   # macOS: explicit dev opt-in for real renders
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)   # macOS: the explicit UNSAFE operator override
 
 @pytest.fixture
 def pdf(tmp_path):
@@ -161,7 +161,7 @@ def test_missing_file_is_malformed(tmp_path):
 # ── sandbox behaviour (fake workers) ─────────────────────────────────────────
 def _fake_worker(tmp_path, monkeypatch, body: str):
     w = tmp_path / "fake_worker.py"
-    w.write_text(textwrap.dedent(body))
+    w.write_text(REPORT_OK + "\n" + textwrap.dedent(body))     # a trustworthy worker attests its limits first
     monkeypatch.setattr(runner, "WORKER_PATH", w)
 
 
@@ -197,7 +197,7 @@ def test_output_byte_cap_kills_worker(tmp_path, monkeypatch, pdf):
 
 
 def test_non_png_output_rejected(tmp_path, monkeypatch, pdf):
-    _fake_worker(tmp_path, monkeypatch, REPORT_OK + "import sys; sys.stdout.write('<html>')")
+    _fake_worker(tmp_path, monkeypatch, "import sys; sys.stdout.write('<html>')")
     with pytest.raises(RenderError) as e:
         render_page(pdf(make_pdf()), 0, RenderParams())
     assert e.value.kind == "failed"
@@ -215,7 +215,6 @@ def test_worker_sees_clean_env_and_empty_cwd(tmp_path, monkeypatch, pdf):
     out = tmp_path / "probe.txt"
     monkeypatch.setenv("PHARMAGENT_API_TOKEN", "super-secret")
     _fake_worker(tmp_path, monkeypatch, f"""
-        {REPORT_OK}
         import os
         open({str(out)!r}, "w").write(repr((sorted(os.environ), os.listdir("."))))
         import sys; sys.stdout.buffer.write(b"\\x89PNG\\r\\n\\x1a\\n")

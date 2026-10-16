@@ -14,9 +14,9 @@ from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
 from app.pageimage import limits, runner
-from tests.pdf_fixtures import REPORT_OK, make_pdf, make_zero_page_pdf, weak_limits_off_linux
+from tests.pdf_fixtures import REPORT_OK, make_pdf, make_zero_page_pdf, unenforced_limits_off_linux
 
-_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)   # macOS: explicit dev opt-in for real renders
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)   # macOS: the explicit UNSAFE operator override
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -192,7 +192,7 @@ def test_render_timeout_kills_worker_and_returns_504(client, tmp_path, monkeypat
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()  # upload with the REAL worker first
     fake = tmp_path / "hang.py"
-    fake.write_text(textwrap.dedent(f"""
+    fake.write_text(REPORT_OK + textwrap.dedent(f"""
         import os, time
         open({str(pidfile)!r}, "w").write(str(os.getpid()))
         time.sleep(120)
@@ -213,7 +213,7 @@ def test_crashing_worker_is_422_without_details(client, tmp_path, monkeypatch):
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()
     fake = tmp_path / "crash.py"
-    fake.write_text("import sys; sys.stderr.write('/secret/path/boom'); import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
+    fake.write_text(REPORT_OK + "import sys; sys.stderr.write('/secret/path/boom'); import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 422

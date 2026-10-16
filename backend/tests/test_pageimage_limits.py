@@ -1,8 +1,10 @@
-"""Resource-limit controls of the page renderer: fail-closed setup, observable enforcement, paired controls.
+"""Resource-limit controls of the page renderer: one versioned attestation protocol, fail-closed setup, inherited
+limits kept, paired controls under the SAME ceiling.
 
-Each test runs the REAL worker routines in a child process (setting rlimits in the pytest process would cripple it).
-Three false-green cases are closed on purpose: limits silently ignored, a worker that always fails, and invalid
-output mistaken for enforcement. So every 'over the limit' test has an 'under the limit' twin that must succeed."""
+Each test that sets rlimits runs the REAL worker routines in a child process (setting them in the pytest process
+would cripple it). Three false-green cases are closed on purpose: limits silently ignored, a worker that always
+fails, and invalid output mistaken for enforcement. So every 'over the limit' test has an 'under the limit' twin
+that must succeed under the same ceiling."""
 from __future__ import annotations
 
 import sys
@@ -14,11 +16,19 @@ from app.config import settings
 from app.pageimage import limits, runner
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import RenderParams
-from tests.pdf_fixtures import decode_png, make_pdf, weak_limits_off_linux
+from tests.pdf_fixtures import (
+    REPORT_OK,
+    decode_png,
+    make_pdf,
+    report_snippet,
+    unenforced_limits_off_linux,
+    valid_report,
+)
 
-_weak = pytest.fixture(autouse=True)(weak_limits_off_linux)
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)
 LINUX = sys.platform.startswith("linux")
 POSIX = sys.platform != "win32"
+PNG_MAGIC = '"\\x89PNG\\r\\n\\x1a\\n"'
 
 
 @pytest.fixture
@@ -40,7 +50,19 @@ def _worker(tmp_path, monkeypatch, body: str):
     monkeypatch.setattr(runner, "WORKER_PATH", w)
 
 
-# ── limit setup is fail-closed and observable ────────────────────────────────
+def _fake(tmp_path, monkeypatch, source: str):
+    w = tmp_path / "fake_worker.py"
+    w.write_text(source)
+    monkeypatch.setattr(runner, "WORKER_PATH", w)
+
+
+def _kind(pdf, **kw) -> str:
+    with pytest.raises(RenderError) as e:
+        render_page(pdf, 0, RenderParams(), **kw)
+    return e.value.kind
+
+
+# ── setup is fail-closed ─────────────────────────────────────────────────────
 @pytest.mark.skipif(not POSIX, reason="needs the resource module")
 def test_a_rejected_setrlimit_is_limit_unavailable_not_failed(tmp_path, monkeypatch, pdf):
     _worker(tmp_path, monkeypatch, """
@@ -49,66 +71,193 @@ def test_a_rejected_setrlimit_is_limit_unavailable_not_failed(tmp_path, monkeypa
         resource.setrlimit = refuse
         sys.exit(mod.main(sys.argv))
     """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "limit_unavailable"
+    assert _kind(pdf) == "limit_unavailable"
 
 
 @pytest.mark.skipif(not POSIX, reason="needs the resource module")
 def test_a_ceiling_that_getrlimit_does_not_confirm_is_limit_unavailable(tmp_path, monkeypatch, pdf):
     _worker(tmp_path, monkeypatch, """
         import resource
-        real_get = resource.getrlimit
         resource.getrlimit = lambda r: (resource.RLIM_INFINITY, resource.RLIM_INFINITY)   # never confirms
         sys.exit(mod.main(sys.argv))
     """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "limit_unavailable"
-
-
-def test_a_worker_that_reports_no_limits_is_not_trusted(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, """
-        sys.stdout.buffer.write(b"\\x89PNG\\r\\n\\x1a\\n")      # valid-looking output, no verified limits
-    """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "limit_unavailable"
-
-
-def test_a_report_that_says_not_enforced_is_refused_unless_weak_mode(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, """
-        import json
-        sys.stderr.write(json.dumps({"pageimage_limits": {"ok": True, "enforced": False, "limits": []}}) + "\\n")
-        sys.stdout.buffer.write(b"\\x89PNG\\r\\n\\x1a\\n")
-    """)
-    monkeypatch.setattr(settings, "pageimage_allow_weak_limits", False)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "limit_unavailable"
-    monkeypatch.setattr(settings, "pageimage_allow_weak_limits", True)
-    assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
+    assert _kind(pdf) == "limit_unavailable"
 
 
 @pytest.mark.skipif(LINUX or not POSIX, reason="macOS has no RLIMIT_AS: the real worker must refuse by default")
-def test_without_weak_mode_the_real_worker_refuses_where_rlimit_as_is_not_enforced(pdf, monkeypatch):
-    monkeypatch.setattr(settings, "pageimage_allow_weak_limits", False)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "limit_unavailable"
+def test_without_the_unsafe_override_the_real_worker_refuses_where_rlimit_as_is_not_enforced(pdf, monkeypatch):
+    monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", False)
+    assert _kind(pdf) == "limit_unavailable"
 
 
-def test_weak_mode_renders_and_warns_loudly(pdf, monkeypatch, caplog):
-    monkeypatch.setattr(settings, "pageimage_allow_weak_limits", True)
+def test_the_unsafe_override_renders_and_logs_loudly(pdf, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", True)
     with caplog.at_level("WARNING", logger="pharmagent.pageimage"):
         png = render_page(pdf, 0, RenderParams())
     assert png.startswith(b"\x89PNG")
-    assert LINUX or any("weak" in r.getMessage().lower() for r in caplog.records)
+    assert LINUX or any("UNSAFE" in r.getMessage() for r in caplog.records)
 
 
-# ── paired controls: enforcement is distinguishable from always-failing ──────
+def test_the_cpu_slack_is_the_same_in_the_worker_and_the_parent():
+    from app.pageimage import worker
+    assert worker.CPU_HARD_SLACK == runner.CPU_HARD_SLACK and worker.REPORT_VERSION == runner.REPORT_VERSION
+
+
+def test_the_unsafe_override_is_ignored_in_a_frozen_build(pdf, monkeypatch):
+    monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", True)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert runner._allow_unenforced() is False
+    assert _kind(pdf) == "unavailable"
+
+
+# ── the attestation protocol is exact ────────────────────────────────────────
+def _report_with(mutate) -> dict:
+    rep = valid_report()
+    mutate(rep["pageimage_limits"])
+    return rep
+
+
+BAD_REPORTS = {
+    "no report": None,
+    "empty limits": _report_with(lambda r: r.update(limits=[])),
+    "one limit missing": _report_with(lambda r: r["limits"].pop()),
+    "unknown extra limit": _report_with(lambda r: r["limits"].append(
+        {"name": "RLIMIT_STACK", "requested": 1, "soft": 1, "hard": 1, "state": "enforced"})),
+    "duplicate limit": _report_with(lambda r: r["limits"].append(dict(r["limits"][0]))),
+    "wrong version": _report_with(lambda r: r.update(v=99)),
+    "ok false": _report_with(lambda r: r.update(ok=False)),
+    "wrong requested value": _report_with(lambda r: r["limits"][1].update(requested=1 << 40)),
+    "soft above the request": _report_with(lambda r: r["limits"][1].update(soft=1 << 40)),
+    "hard above the request": _report_with(lambda r: r["limits"][1].update(hard=1 << 40)),
+    "hard missing": _report_with(lambda r: r["limits"][2].pop("hard")),
+    "soft is a string": _report_with(lambda r: r["limits"][2].update(soft="0")),
+    "unknown state": _report_with(lambda r: r["limits"][0].update(state="sure")),
+}
+
+
+@pytest.mark.parametrize("name", list(BAD_REPORTS))
+def test_an_incomplete_or_wrong_report_never_passes(tmp_path, monkeypatch, pdf, name):
+    report = BAD_REPORTS[name]
+    prefix = report_snippet(report) if report is not None else ""
+    _fake(tmp_path, monkeypatch, prefix + f"import sys; sys.stdout.buffer.write(b{PNG_MAGIC})")
+    assert _kind(pdf) == "limit_unavailable"
+
+
+def test_two_reports_are_not_one_report(tmp_path, monkeypatch, pdf):
+    _fake(tmp_path, monkeypatch, REPORT_OK + REPORT_OK + f"sys.stdout.buffer.write(b{PNG_MAGIC})")
+    assert _kind(pdf) == "limit_unavailable"
+
+
+def test_a_complete_valid_report_passes(tmp_path, monkeypatch, pdf):
+    _fake(tmp_path, monkeypatch, REPORT_OK + f"import sys; sys.stdout.buffer.write(b{PNG_MAGIC})")
+    assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
+
+
+def test_an_unenforced_state_is_refused_unless_the_unsafe_override(tmp_path, monkeypatch, pdf):
+    rep = _report_with(lambda r: r["limits"][1].update(state="unenforced", soft=None, hard=None))
+    _fake(tmp_path, monkeypatch, report_snippet(rep) + f"import sys; sys.stdout.buffer.write(b{PNG_MAGIC})")
+    monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", False)
+    assert _kind(pdf) == "limit_unavailable"
+    monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", True)
+    assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
+
+
+def test_probe_uses_the_same_fail_closed_path(tmp_path, monkeypatch, pdf):
+    _fake(tmp_path, monkeypatch, "import sys; sys.stdout.write('{\"pages\": 1}\\n')")     # plausible output, no report
+    with pytest.raises(RenderError) as e:
+        probe_pdf(pdf)
+    assert e.value.kind == "limit_unavailable"
+
+
+# ── attestation is required for EVERY outcome after limits were applied ──────
+AFTER_PARSE = [
+    ("import sys; sys.exit(3)", "encrypted"),
+    ("import sys; sys.exit(4)", "malformed"),
+    ("import sys; sys.exit(5)", "no_page"),
+    ("import sys; sys.exit(6)", "too_large"),
+    ("import sys; sys.exit(7)", "empty"),
+    ("import sys; sys.exit(8)", "output_too_big"),
+    ("import sys; sys.exit(10)", "memory_limit"),
+    ("import sys; sys.exit(77)", "failed"),
+    ("import os, signal; os.kill(os.getpid(), signal.SIGSEGV)", "failed"),
+]
+
+
+@pytest.mark.parametrize("body, kind", AFTER_PARSE)
+def test_an_outcome_after_parsing_needs_an_attestation(tmp_path, monkeypatch, pdf, body, kind):
+    _fake(tmp_path, monkeypatch, body)
+    assert _kind(pdf) == "limit_unavailable"                   # same exit, no valid report: not trusted
+    _fake(tmp_path, monkeypatch, REPORT_OK + body)
+    assert _kind(pdf) == kind                                  # with the report the real kind comes through
+
+
+@pytest.mark.skipif(not POSIX, reason="SIGXCPU")
+def test_a_cpu_limit_signal_needs_an_attestation(tmp_path, monkeypatch, pdf):
+    body = "import os, signal; os.kill(os.getpid(), signal.SIGXCPU)"
+    _fake(tmp_path, monkeypatch, body)
+    assert _kind(pdf) == "limit_unavailable"
+    _fake(tmp_path, monkeypatch, REPORT_OK + body)
+    assert _kind(pdf) == "cpu_limit"
+
+
+def test_a_wall_clock_kill_needs_an_attestation(tmp_path, monkeypatch, pdf):
+    _fake(tmp_path, monkeypatch, "import time; time.sleep(60)")
+    assert _kind(pdf, wall_seconds=1.0) == "limit_unavailable"
+    _fake(tmp_path, monkeypatch, REPORT_OK + "import time; time.sleep(60)")
+    assert _kind(pdf, wall_seconds=1.0) == "timeout"
+
+
+def test_an_output_overflow_needs_an_attestation(tmp_path, monkeypatch, pdf):
+    flood = ("import sys\nb = b'x' * 65536\nwhile True:\n    sys.stdout.buffer.write(b); sys.stdout.buffer.flush()\n")
+    _fake(tmp_path, monkeypatch, flood)
+    assert _kind(pdf, wall_seconds=20) == "limit_unavailable"
+    _fake(tmp_path, monkeypatch, REPORT_OK + "\n" + flood)
+    assert _kind(pdf, wall_seconds=20) == "output_too_big"
+
+
+def test_setup_failure_and_pre_parse_bad_request_stay_distinct(tmp_path, monkeypatch, pdf):
+    _fake(tmp_path, monkeypatch, "import sys; sys.exit(2)")                         # before any limit: bad_request
+    assert _kind(pdf) == "bad_request"
+    _fake(tmp_path, monkeypatch, "import sys; sys.exit(9)")                         # setup failure
+    assert _kind(pdf) == "limit_unavailable"
+
+
+# ── inherited limits are kept; hard limits are lowered ───────────────────────
+@pytest.mark.skipif(not POSIX, reason="needs the resource module")
+def test_inherited_tighter_soft_limits_are_never_raised_and_hard_limits_are_lowered(tmp_path, monkeypatch, pdf):
+    # RLIMIT_FSIZE is 0 in the worker, so the result travels on stdout behind the PNG magic, not through a file
+    _worker(tmp_path, monkeypatch, f"""
+        import resource, json
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 4096))       # tighter soft than the request (64), loose hard
+        rep = mod.apply_limits(10, {limits.ADDRESS_SPACE_BYTES}, True)
+        nofile = [r for r in rep if r["name"] == "RLIMIT_NOFILE"][0]
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096)); restored = True
+        except (ValueError, OSError):
+            restored = False
+        {REPORT_OK}
+        sys.stdout.buffer.write(b{PNG_MAGIC} + json.dumps([nofile, resource.getrlimit(resource.RLIMIT_NOFILE), restored]).encode())
+    """)
+    import json
+    nofile, now, restored = json.loads(render_page(pdf, 0, RenderParams())[8:])
+    assert nofile["soft"] == 32 and nofile["hard"] == 64            # soft kept at 32, hard lowered from 4096 to 64
+    assert now == [32, 64] and restored is False                    # worker code cannot restore the ceiling
+
+
+@pytest.mark.skipif(not POSIX, reason="SIGXCPU")
+def test_cpu_limit_is_cpu_limit_and_its_hard_limit_does_not_pre_empt_sigxcpu(tmp_path, monkeypatch, pdf):
+    _worker(tmp_path, monkeypatch, f"""
+        mod.apply_limits(1, {limits.ADDRESS_SPACE_BYTES}, True)
+        {REPORT_OK}
+        while True:
+            pass
+    """)
+    assert _kind(pdf, wall_seconds=30) == "cpu_limit"                # SIGXCPU at the soft limit, SIGKILL only later
+
+
+# ── paired controls under the SAME ceiling ───────────────────────────────────
 def _alloc_in_render(mb: int) -> str:
-    """Run the real main(), but allocate ``mb`` MiB inside its guarded section (via plan_output_size)."""
+    """Run the real main(), allocating ``mb`` MiB inside its guarded section (via plan_output_size)."""
     return f"""
         real_plan = mod.plan_output_size
         def plan(*a, **k):
@@ -120,57 +269,21 @@ def _alloc_in_render(mb: int) -> str:
     """
 
 
-def test_under_the_limit_the_real_render_completes_and_emits_a_valid_png(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, _alloc_in_render(32))
+CEILING = limits.ADDRESS_SPACE_BYTES
+
+
+def test_under_the_ceiling_the_real_render_completes_and_emits_a_valid_png(tmp_path, monkeypatch, pdf):
+    _worker(tmp_path, monkeypatch, _alloc_in_render(64))
     img = decode_png(render_page(pdf, 0, RenderParams()))
     assert img.width > 0 and img.height > 0
 
 
 @pytest.mark.skipif(not LINUX, reason="RLIMIT_AS is enforced only on Linux")
-def test_over_the_limit_is_memory_limit_not_generic_failed(tmp_path, monkeypatch, pdf):
-    monkeypatch.setattr(limits, "ADDRESS_SPACE_BYTES", 256 * 1024 * 1024)
-    _worker(tmp_path, monkeypatch, _alloc_in_render(2048))
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams())
-    assert e.value.kind == "memory_limit"
+def test_over_the_same_ceiling_is_memory_limit_not_generic_failed(tmp_path, monkeypatch, pdf):
+    _worker(tmp_path, monkeypatch, _alloc_in_render(CEILING // (1024 * 1024) + 256))
+    assert _kind(pdf) == "memory_limit"
 
 
 @pytest.mark.skipif(not LINUX, reason="RLIMIT_AS is enforced only on Linux")
-def test_a_normal_page_renders_with_headroom_under_the_production_limits(pdf):
-    import resource
+def test_the_unmodified_real_render_succeeds_under_that_same_ceiling(pdf):
     assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
-    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024     # KiB on Linux
-    print(f"pageimage peak RSS {peak / 1e6:.0f} MB of {limits.ADDRESS_SPACE_BYTES / 1e6:.0f} MB limit")
-    assert peak < limits.ADDRESS_SPACE_BYTES / 2, "the address-space ceiling leaves too little headroom"
-
-
-@pytest.mark.skipif(not POSIX, reason="RLIMIT_CPU / SIGXCPU")
-def test_cpu_limit_is_cpu_limit_not_timeout_or_failed(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, """
-        mod.apply_limits(1, 1024 * 1024 * 1024, allow_weak=True)
-        while True:
-            pass
-    """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams(), wall_seconds=30)
-    assert e.value.kind == "cpu_limit"
-
-
-def test_wall_clock_timeout_is_still_its_own_kind(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, """
-        import time
-        mod.apply_limits(10, 1024 * 1024 * 1024, allow_weak=True)
-        time.sleep(60)
-    """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf, 0, RenderParams(), wall_seconds=1.0)
-    assert e.value.kind == "timeout"
-
-
-def test_probe_uses_the_same_fail_closed_path(tmp_path, monkeypatch, pdf):
-    _worker(tmp_path, monkeypatch, """
-        sys.stdout.write('{"pages": 1}\\n')            # plausible output, no verified limits
-    """)
-    with pytest.raises(RenderError) as e:
-        probe_pdf(pdf)
-    assert e.value.kind == "limit_unavailable"
