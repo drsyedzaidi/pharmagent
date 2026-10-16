@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Simulate every scenario with PharmAgent's own ODE simulator (app.compute.pk_simulate.simulate).
 
-    python3 run_pharmagent_sim.py <dir with scenarios.csv/doses.csv/obs.csv> <outdir>      # writes pharmagent_sim.csv
+    python3 run_pharmagent_sim.py <scenario dir> <outdir>     # reads scenarios/doses/obs.csv, writes pharmagent_sim.csv
 
 Deterministic; scipy only; no R, no network, no LLM. Unrounded concentrations (the plotting helper rounds them).
 """
@@ -36,10 +36,13 @@ def main(argv: list[str]) -> int:
         d = [{"time": float(r["time"]), "amt": float(r["amt"]), "rate": float(r["rate"])}
              for r in doses if r["id"] == s["id"]]
         times = [float(r["time"]) for r in obs if r["id"] == s["id"]]
-        cp = simulate(model, params, d, times, wt=float(s["wt"]))["cp"]
-        rows += [{"id": s["id"], "time": repr(t), "cp": repr(float(c))} for t, c in zip(times, cp, strict=True)]
+        sim = simulate(model, params, d, times, wt=float(s["wt"]))
+        eff = sim.get("eff")                                   # PK/PD models only
+        rows += [{"id": s["id"], "time": repr(t), "cp": repr(float(c)),
+                  "eff": "" if eff is None else repr(float(eff[i]))}
+                 for i, (t, c) in enumerate(zip(times, sim["cp"], strict=True))]
     with (out / "pharmagent_sim.csv").open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["id", "time", "cp"], lineterminator="\n")
+        w = csv.DictWriter(fh, fieldnames=["id", "time", "cp", "eff"], lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     print(f"{len(scen)} scenarios, {len(rows)} points -> {out / 'pharmagent_sim.csv'}")

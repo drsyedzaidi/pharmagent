@@ -3,8 +3,10 @@
 
     python3 compare_sims.py out/pharmagent_sim.csv out/mrgsolve_sim.csv [--tol 1e-5]
 
-Per scenario: normalised maximum absolute difference max|a-b| / max|b| over the profile, the relative difference in
-Cmax, and the relative difference in AUC (trapezoid on the shared grid). A scenario is OUT when any exceeds --tol.
+Files carry id, time, cp and (PK/PD scenarios) eff. The concentration is always compared; the response (eff) is
+compared as well, as a second block, when either file holds it. Per scenario: the normalised maximum absolute
+difference max|a-b| / max|b| over the profile, the relative difference in Cmax, and the relative difference in AUC
+(trapezoid on the shared grid). A scenario is OUT when any exceeds --tol.
 Exit 0 all within tolerance, 1 at least one scenario out, 2 an input is missing, unreadable or does not line up.
 """
 from __future__ import annotations
@@ -23,6 +25,16 @@ def load(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     with path.open(encoding="utf-8", newline="") as fh:
         for r in csv.DictReader(fh):
             by.setdefault(r["id"], []).append((float(r["time"]), float(r["cp"])))
+    return {k: (np.array([t for t, _ in v]), np.array([c for _, c in v])) for k, v in by.items()}
+
+
+def load_eff(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """The response series (scenarios whose eff column is filled); empty for a PK-only file."""
+    by: dict[str, list[tuple[float, float]]] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("eff") not in (None, ""):
+                by.setdefault(r["id"], []).append((float(r["time"]), float(r["eff"])))
     return {k: (np.array([t for t, _ in v]), np.array([c for _, c in v])) for k, v in by.items()}
 
 
@@ -76,6 +88,10 @@ def main(argv: list[str]) -> int:
             return 2
     try:
         text, ok = report(compare(load(paths[0]), load(paths[1]), tol), tol)
+        eff_a, eff_b = load_eff(paths[0]), load_eff(paths[1])
+        if eff_a or eff_b:
+            text_e, ok_e = report(compare(eff_a, eff_b, tol), tol)
+            text, ok = f"CONCENTRATION\n{text}\n\nRESPONSE (eff)\n{text_e}", ok and ok_e
     except (OSError, KeyError, ValueError) as exc:
         print(f"cannot read the inputs: {exc}")
         return 2
