@@ -139,6 +139,7 @@ def test_r_script_installs_nothing_and_pins_the_conventions():
     for forbidden in ("install.packages", "download.file", "system(", "system2(", "url(", "Sys.setenv", "source(",
                       "eval(", "library(devtools", "remotes::"):
         assert forbidden not in src, forbidden
-    for needed in ("lin up/log down", "adj.r.squared.factor = 0", "min.hl.points = 3", "allow.tmax.in.half.life = FALSE",
-                   'route = "extravascular"', "pknca_default", "pknca_matched", "packageVersion"):
+    for needed in ("lin up/log down", "adj.r.squared.factor = 1e-12", "min.hl.points = 3", "allow.tmax.in.half.life = FALSE",
+                   'route = "extravascular"', "pknca_default", "pknca_matched", "packageVersion",
+                   "data.frame(as.data.frame(pk.nca", 'cmax = "Cmax"', 'auclast = "AUClast"', 'aucinf.obs = "AUCinf.obs"'):
         assert needed in src, needed

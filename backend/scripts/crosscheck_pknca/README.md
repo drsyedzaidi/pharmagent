@@ -38,7 +38,7 @@ Tolerances are at the top of `compare.py`.
 | AUC rule | linear-up / log-down | linear-up / log-down | same |
 | AUClast | integrates all observation rows given | up to Tlast | same |
 | BLQ | rows are used as given (zeros included) | first keep, middle drop, last keep | all kept |
-| lambda_z | windows of >= 3 points after Tmax, strict max adjusted R^2 | tolerance 1e-4 favours more points | factor 0, >= 3 points, Tmax excluded |
+| lambda_z | windows of >= 3 points after Tmax, strict max adjusted R^2 | tolerance 1e-4 favours more points | factor 1e-12 (PKNCA requires (0,1), so this stands for 0), >= 3 points, Tmax excluded |
 | route | extravascular | extravascular | same |
 
 ## What to look for (stated before the run; hypotheses, not results)
@@ -53,3 +53,7 @@ Tolerances are at the top of `compare.py`.
 `numpy_reference` already agrees with PharmAgent on all 48 values (worst relative difference 2.5e-06, rounding), and
 `tests/test_crosscheck_pknca.py` pins PharmAgent to the analytic mono-exponential solution. Those say PharmAgent
 implements its own stated method; only the PKNCA arms say whether that method matches an independent engine.
+
+## Result of the first run
+See `RESULTS-2026-10-16.md`: agreement on all 48 values in both PKNCA configurations. Hypothesis 2 was not borne out
+(this table's terminal phase is unambiguous), hypothesis 3 remains untested.
