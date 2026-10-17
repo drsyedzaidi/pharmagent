@@ -144,10 +144,9 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
         # No ``UploadFile = File(...)`` parameter on purpose: FastAPI would parse (and spool to disk) the multipart body
         # BEFORE running ``owned_session`` or any quota check. Here the order is: authenticate/own the session, reserve
         # quota, and only then read the form.
-        declared = request.headers.get("content-length")
-        reserve = limits.MAX_PDF_BYTES                   # unknown length: reserve the largest file we would accept
-        if declared is not None and declared.isdigit():
-            reserve = min(int(declared), limits.MAX_PDF_BYTES)
+        # Worst case, always: the client chooses Content-Length, so it must never size the reservation (a declared 0
+        # followed by 50 MiB would otherwise bypass both byte budgets). The header only matters to the route gate's cap.
+        reserve = limits.MAX_PDF_BYTES
         try:
             doc_id, part = await run_in_threadpool(documents.new_slot, sess.id, reserve)
         except documents.DocumentLimitError:
@@ -175,8 +174,6 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                     size += len(chunk)
                     if size > limits.MAX_PDF_BYTES:
                         raise HTTPException(413, f"file exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
-                    if size > reserve:
-                        raise HTTPException(413, "file is larger than the request declared")
                     out.write(chunk)
                     await run_in_threadpool(documents.touch, part)
             if size == 0:

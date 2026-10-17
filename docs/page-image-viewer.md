@@ -162,7 +162,7 @@ only cover one process). Where `fcntl` does not exist, or the lock cannot be tak
 - **Budgets:** 20 documents and 200 MiB per session, 2 GiB across all sessions (open mode allows unlimited sessions).
   Constants in `limits.py`.
 - **Reservation:** an upload first writes `<id>.resv` (JSON: id, session, bytes, pid, created) holding a document slot and
-  `min(Content-Length, 50 MiB)` of both byte budgets; the stream may not exceed that. A document's cost is
+  50 MiB (always the worst case, never the client-declared length) of both byte budgets; the file may not exceed that. A document's cost is
   `max(reserved, .part + .pdf)`, a complete document costs its PDF, so nothing is counted twice. If creating the
   reservation fails part-way, the partial file is removed before the upload is refused.
 - **Heartbeat:** each chunk refreshes the reservation under the same lock cleanup uses, so cleanup cannot classify an

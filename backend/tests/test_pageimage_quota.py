@@ -285,16 +285,17 @@ def test_failed_uploads_do_not_consume_the_quota(client, store):
 
 
 def test_api_reports_byte_quotas_distinctly(client, monkeypatch):
+    """Every upload reserves the worst case (MAX_PDF_BYTES) while it is read, then costs its real size once committed."""
     sid, other = (client.post("/api/sessions").json()["id"] for _ in range(2))
     size = len(make_pdf())
-    monkeypatch.setattr(limits, "MAX_SESSION_BYTES", size * 2 + 400)
-    assert _up(client, sid).status_code == 201
-    assert _up(client, sid).status_code == 201
-    assert _up(client, sid).status_code == 409                         # session byte budget: a client-side limit
+    monkeypatch.setattr(limits, "MAX_SESSION_BYTES", limits.MAX_PDF_BYTES + 2 * size)      # room for three documents
+    assert [_up(client, sid).status_code for _ in range(3)] == [201, 201, 201]
+    assert _up(client, sid).status_code == 409                          # session byte budget: a client-side limit
     monkeypatch.setattr(limits, "MAX_SESSION_BYTES", 10 * limits.MAX_PDF_BYTES)
-    monkeypatch.setattr(limits, "MAX_GLOBAL_BYTES", size * 2 + 400)
-    r = _up(client, other)
-    assert r.status_code == 503
+    monkeypatch.setattr(limits, "MAX_GLOBAL_BYTES", limits.MAX_PDF_BYTES + 3 * size - 1)   # one byte short for another
+    assert _up(client, other).status_code == 503                        # global budget: a server-side condition
+    monkeypatch.setattr(limits, "MAX_GLOBAL_BYTES", limits.MAX_PDF_BYTES + 3 * size)
+    assert _up(client, other).status_code == 201
 
 
 def test_api_refuses_when_accounting_is_unavailable(client, monkeypatch):
