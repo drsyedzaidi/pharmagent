@@ -11,7 +11,7 @@ import re
 import sys
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
@@ -71,6 +71,29 @@ def _enabled() -> bool:
     return bool(settings.pageimage_enabled) and not getattr(sys, "frozen", False)
 
 
+class BodyTooLarge(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(413, f"request body exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
+
+
+def _capped(request: Request) -> Request:
+    """The same request with a receive channel that raises once more than MAX_BODY_BYTES have been read. This is what
+    stops a client that sends no Content-Length, or understates it, from being buffered without bound."""
+    seen = 0
+    original = request.receive
+
+    async def receive():
+        nonlocal seen
+        msg = await original()
+        if msg["type"] == "http.request":
+            seen += len(msg.get("body", b""))
+            if seen > limits.MAX_BODY_BYTES:
+                raise BodyTooLarge()
+        return msg
+
+    return Request(request.scope, receive, request._send)
+
+
 class GatedRoute(APIRoute):
     """A route that does not exist unless the feature is on. ``matches`` runs before FastAPI reads the body, so a
     disabled (or frozen) server never parses multipart input or spools it to disk, and the OpenAPI schema omits the
@@ -80,6 +103,28 @@ class GatedRoute(APIRoute):
         if not _enabled():
             return Match.NONE, {}
         return super().matches(scope)
+
+    def get_route_handler(self):
+        inner = super().get_route_handler()
+
+        async def handler(request: Request):
+            # Before FastAPI reads the body: parsing spools the upload to disk and runs ahead of every dependency
+            # (auth and ownership included), so the size gate has to be here, not in the endpoint.
+            if request.method in ("POST", "PUT", "PATCH"):
+                declared = request.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        n = int(declared)
+                    except ValueError:
+                        raise HTTPException(400, "invalid Content-Length") from None
+                    if n < 0:
+                        raise HTTPException(400, "invalid Content-Length")
+                    if n > limits.MAX_BODY_BYTES:
+                        raise BodyTooLarge()
+                request = _capped(request)
+            return await inner(request)
+
+        return handler
 
     @property
     def include_in_schema(self) -> bool:

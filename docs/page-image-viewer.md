@@ -66,6 +66,14 @@ accepted); 50 MiB cap (413); page count measured IN THE SANDBOX, 1..2000;
 password-protected, malformed, truncated and zero-page PDFs refused (400);
 20 documents per session.
 
+**Request-body gate (step-5 item 1).** The whole request body is capped at 50 MiB + 256 KiB before FastAPI parses it
+and before any dependency (auth, ownership) runs: a declared `Content-Length` over the cap is refused with 413, a
+non-numeric or negative one with 400, and a body that has no length or understates it is cut off once the bytes
+received pass the cap. Without this, FastAPI spools the multipart body to disk ahead of its dependencies, so a caller
+that would fail auth could still make the server buffer an arbitrarily large upload. Side effect, intended: an
+oversize request is answered 413 even when it would have been 401/403. The gate lives in `GatedRoute` in
+`pageimage/router.py` (new code); auth and ownership code are untouched. Tests: `test_pageimage_bodycap.py`.
+
 ### Render sandbox
 `python -I worker.py '<json>'` via `subprocess.Popen`: argv carries one JSON
 object of typed, pre-validated values (no shell); cleared environment (no

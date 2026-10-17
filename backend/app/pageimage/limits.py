@@ -3,8 +3,10 @@ process; the worker receives them in its request and re-checks them)."""
 from __future__ import annotations
 
 MAX_PDF_BYTES = 50 * 1024 * 1024      # same cap as the CSV upload
+MULTIPART_OVERHEAD_BYTES = 256 * 1024  # boundary lines, part headers and filename around the file bytes
 MAX_PAGES = 2000                      # page-count cap and page-index ceiling
 MAX_DOCS_PER_SESSION = 20
+MAX_BODY_BYTES = MAX_PDF_BYTES + MULTIPART_OVERHEAD_BYTES  # whole request body, checked before auth and parsing
 
 MIN_SCALE = 0.5
 MAX_SCALE = 3.0
