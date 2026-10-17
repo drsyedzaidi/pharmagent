@@ -6,6 +6,10 @@ MAX_PDF_BYTES = 50 * 1024 * 1024      # same cap as the CSV upload
 MULTIPART_OVERHEAD_BYTES = 256 * 1024  # boundary lines, part headers and filename around the file bytes
 MAX_PAGES = 2000                      # page-count cap and page-index ceiling
 MAX_DOCS_PER_SESSION = 20
+MAX_SESSION_BYTES = 200 * 1024 * 1024        # committed + in-flight PDF bytes per session
+MAX_GLOBAL_BYTES = 2 * 1024 * 1024 * 1024    # the same across ALL sessions (open mode allows unlimited sessions)
+STALE_SECONDS = 3600                         # an in-flight upload idle this long (no chunk, no heartbeat) is abandoned
+LOCK_WAIT_SECONDS = 5.0                      # wait for the storage lock before failing closed
 MAX_BODY_BYTES = MAX_PDF_BYTES + MULTIPART_OVERHEAD_BYTES  # whole request body, checked before auth and parsing
 
 MIN_SCALE = 0.5

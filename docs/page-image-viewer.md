@@ -148,6 +148,28 @@ parent maps to a fixed message.
 | Cache leakage | `private, no-store` |
 | Secrets via worker env | cleared environment |
 
+### Storage quotas and stale-file cleanup (step-5 item 2)
+All admission and cleanup decisions run under one `flock` on `<data_dir>/documents/.quota.lock`
+(`pageimage/quota.py`), so several workers sharing a data directory cannot jointly exceed a quota (a thread lock would
+only cover one process). Where `fcntl` does not exist, or the lock cannot be taken within 5 s, uploads are refused.
+- **Budgets:** 20 documents and 200 MiB per session, 2 GiB across all sessions (open mode allows unlimited sessions).
+  Constants in `limits.py`.
+- **Reservation:** an upload first writes `<id>.resv` (JSON: id, session, bytes, pid, created) holding a document slot and
+  `min(Content-Length, 50 MiB)` of both byte budgets; the stream may not exceed that. A document's cost is
+  `max(reserved, .part + .pdf)`, so a reservation, its growing `.part` and the committed PDF are counted once.
+- **States:** active (fresh reservation; each chunk is a heartbeat), stale (reservation idle > 1 h), committed (`.pdf` +
+  `.json`), abandoned (`.part` / `.json.tmp` with no reservation).
+- **Cleanup** runs inside every reservation and removes only stale `.resv` with their `.part`, and abandoned `.part` /
+  `.json.tmp` older than 1 h. It never removes a committed `.pdf`/`.json` or an orphan `.pdf`/`.json` (no retention policy
+  has been chosen), never follows a symlink, and ignores any name that is not `<32 hex>.<ext>` inside a plain-named,
+  non-link session directory.
+- **Fail closed:** if usage cannot be read (I/O error, unreadable reservation counted at 50 MiB, lock busy) the upload is
+  refused with 503; nothing is deleted to make room. An upload idle for over an hour loses its reservation and its
+  commit is refused (409 "upload expired").
+- **Status codes:** 409 document count or session byte budget; 503 global byte budget or accounting unavailable.
+- **Not done:** retention of committed PDFs, per-session render queues, and narrowing the unenforced-limits override to
+  `RLIMIT_AS` (remaining step-5 items).
+
 ## Residual risk (read this)
 The subprocess + rlimits limit blast radius; they are NOT a sandbox. A native
 PDFium vulnerability (memory corruption) in the worker would run with the API

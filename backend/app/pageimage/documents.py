@@ -18,15 +18,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
-from app.pageimage import limits
+from app.pageimage import limits, quota
+from app.pageimage.quota import (  # noqa: F401  (re-exported)
+    DocumentLimitError,
+    QuotaExceeded,
+    QuotaUnavailable,
+    ReservationLostError,
+)
 
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DOC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
-
-class DocumentLimitError(Exception):
-    """Per-session document quota reached."""
 
 
 @dataclass(frozen=True)
@@ -66,34 +68,51 @@ def _session_dir(sid: str) -> Path | None:
     return d if d.is_relative_to(root) and d != root else None
 
 
-def new_slot(sid: str) -> tuple[str, Path]:
-    """Reserve a server-generated id and a ``.part`` path for a streaming upload."""
+def new_slot(sid: str, reserve_bytes: int = limits.MAX_PDF_BYTES) -> tuple[str, Path]:
+    """Reserve a server-generated id, a document slot and ``reserve_bytes`` of both byte budgets (atomically, across
+    processes), and return the id with the ``.part`` path for the streaming upload. Raises DocumentLimitError,
+    QuotaExceeded or QuotaUnavailable; every failure leaves nothing reserved."""
     d = _session_dir(sid)
     if d is None:
         raise ValueError("invalid session id")
-    d.mkdir(parents=True, exist_ok=True)
-    if len(list(d.glob("*.json"))) >= limits.MAX_DOCS_PER_SESSION:
-        raise DocumentLimitError
     doc_id = uuid.uuid4().hex
+    quota.reserve(_root(), sid, doc_id, min(int(reserve_bytes), limits.MAX_PDF_BYTES))
     return doc_id, d / f"{doc_id}.part"
 
 
+def _resv_of(part: Path) -> Path:
+    return part.with_suffix(".resv")
+
+
+def touch(part: Path) -> None:
+    """Heartbeat for an in-flight upload."""
+    quota.heartbeat(_resv_of(part))
+
+
 def commit(sid: str, doc_id: str, part: Path, *, filename: str | None, size: int, pages: int) -> DocumentMeta:
-    """Promote a validated ``.part`` file to its final name and write metadata."""
+    """Promote a validated ``.part`` file to its final name and write metadata, then drop the reservation. Runs under
+    the storage lock so it cannot interleave with cleanup; refuses if the reservation was reclaimed meanwhile."""
     d = _session_dir(sid)
     if d is None or not valid_doc_id(doc_id) or part != d / f"{doc_id}.part":
         raise ValueError("invalid document slot")
     meta = DocumentMeta(id=doc_id, filename=sanitize_filename(filename), size_bytes=size, pages=pages,
                         created_at=datetime.now(UTC).isoformat(timespec="seconds"))
-    os.replace(part, d / f"{doc_id}.pdf")
-    tmp = d / f"{doc_id}.json.tmp"
-    tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
-    os.replace(tmp, d / f"{doc_id}.json")
+    resv = _resv_of(part)
+    with quota.locked(_root()):
+        if not resv.is_file() or not part.is_file():
+            raise ReservationLostError
+        os.replace(part, d / f"{doc_id}.pdf")
+        tmp = d / f"{doc_id}.json.tmp"
+        tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
+        os.replace(tmp, d / f"{doc_id}.json")
+        quota.release(resv)
     return meta
 
 
 def discard(part: Path) -> None:
+    """Abandon an upload: delete its ``.part`` and release its reservation."""
     part.unlink(missing_ok=True)
+    quota.release(_resv_of(part))
 
 
 def _read_meta(p: Path) -> DocumentMeta | None:

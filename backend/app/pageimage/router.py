@@ -139,11 +139,22 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
     router = APIRouter(tags=["documents"], route_class=GatedRoute)
 
     @router.post("/api/sessions/{sid}/documents", status_code=201)
-    async def upload_document(file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:
+    async def upload_document(request: Request, file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:
+        declared = request.headers.get("content-length")
+        reserve = limits.MAX_PDF_BYTES                   # unknown length: reserve the largest file we would accept
+        if declared is not None and declared.isdigit():
+            reserve = min(int(declared), limits.MAX_PDF_BYTES)
         try:
-            doc_id, part = documents.new_slot(sess.id)
+            doc_id, part = documents.new_slot(sess.id, reserve)
         except documents.DocumentLimitError:
             raise HTTPException(409, f"document limit reached ({limits.MAX_DOCS_PER_SESSION} per session)") from None
+        except documents.QuotaExceeded as e:
+            if e.scope == "session":
+                raise HTTPException(409, "storage quota for this session reached") from None
+            raise HTTPException(503, "document storage is full on this server; retry later") from None
+        except documents.QuotaUnavailable:
+            log.warning("document storage accounting unavailable; upload refused")
+            raise HTTPException(503, "document storage is unavailable; retry later") from None
         except ValueError:
             raise HTTPException(400, "invalid session") from None
         try:
@@ -155,7 +166,10 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                     size += len(chunk)
                     if size > limits.MAX_PDF_BYTES:
                         raise HTTPException(413, f"file exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
+                    if size > reserve:
+                        raise HTTPException(413, "file is larger than the request declared")
                     out.write(chunk)
+                    documents.touch(part)
             if size == 0:
                 raise HTTPException(400, "file is not a PDF")
             try:
@@ -166,7 +180,12 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                 raise HTTPException(400, "PDF has no pages")
             if pages > limits.MAX_PAGES:
                 raise _http(_UPLOAD_ERRORS, "too_large")
-            meta = documents.commit(sess.id, doc_id, part, filename=file.filename, size=size, pages=pages)
+            try:
+                meta = documents.commit(sess.id, doc_id, part, filename=file.filename, size=size, pages=pages)
+            except documents.ReservationLostError:
+                raise HTTPException(409, "upload expired; please retry") from None
+            except documents.QuotaUnavailable:
+                raise HTTPException(503, "document storage is unavailable; retry later") from None
         except BaseException:
             documents.discard(part)
             raise

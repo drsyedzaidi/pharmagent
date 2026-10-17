@@ -144,7 +144,8 @@ def test_hostile_client_filenames_never_reach_the_filesystem(client, tmp_path, n
     assert r.status_code == 201
     meta = r.json()
     assert "/" not in meta["filename"] and "\\" not in meta["filename"] and "\x00" not in meta["filename"]
-    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()}
+    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
+               if p.is_file() and p.name != ".quota.lock"}       # the storage lock file is the one permanent extra
     assert created == {f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json"}
 
 
