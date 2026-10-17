@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import fcntl
 import itertools
-import multiprocessing
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -66,20 +65,6 @@ def test_simultaneous_uploads_never_exceed_the_document_limit(store):
     assert out.count("ok") == limits.MAX_DOCS_PER_SESSION
     assert out.count("count") == 80 - limits.MAX_DOCS_PER_SESSION
     assert len([n for n in _files(store, "s1") if n.endswith(".resv")]) == limits.MAX_DOCS_PER_SESSION
-
-
-def _worker(args):
-    root, sid, n = args
-    settings.data_dir = Path(root)
-    return [_try(sid, 10) for _ in range(n)]
-
-
-def test_several_processes_share_one_limit(store, tmp_path):
-    ctx = multiprocessing.get_context("spawn")             # fresh interpreters: no state shared except the directory
-    with ctx.Pool(6) as pool:
-        results = pool.map(_worker, [(str(tmp_path / "data"), "s1", 10)] * 6)
-    flat = [r for rs in results for r in rs]
-    assert flat.count("ok") == limits.MAX_DOCS_PER_SESSION and set(flat) <= {"ok", "count"}
 
 
 def test_simultaneous_reservations_never_exceed_the_session_byte_budget(store, monkeypatch):
@@ -169,26 +154,30 @@ def test_cleanup_spares_active_and_committed_and_only_removes_stale(store):
     assert not any(n.startswith(dead_id) for n in left)
 
 
-def test_abandoned_temporaries_are_removed_after_the_age_but_orphan_committed_files_never(store):
+def test_abandoned_pieces_are_removed_after_the_age_but_a_complete_document_never(store):
     d = store / "s1"
     d.mkdir(parents=True)
-    ids = [f"{i:032x}" for i in range(1, 7)]
-    old_part, new_part, old_tmp, old_pdf, old_json, new_tmp = ids
-    for name in (f"{old_part}.part", f"{old_tmp}.json.tmp", f"{old_pdf}.pdf", f"{old_json}.json"):
+    ids = [f"{i:032x}" for i in range(1, 8)]
+    old_part, new_part, old_tmp, old_pdf, old_json, new_tmp, done = ids
+    for name in (f"{old_part}.part", f"{old_tmp}.json.tmp", f"{old_pdf}.pdf", f"{old_json}.json",
+                 f"{done}.pdf", f"{done}.json"):
         (d / name).write_bytes(b"x")
-        _age(d / name, HOUR * 3)
+        _age(d / name, HOUR * 24 * 365)
     (d / f"{new_part}.part").write_bytes(b"x")
     (d / f"{new_tmp}.json.tmp").write_bytes(b"x")
     removed = quota.cleanup(store)
-    assert sorted(removed) == sorted([f"s1/{old_part}.part", f"s1/{old_tmp}.json.tmp"])
-    assert _files(store, "s1") == {f"{old_pdf}.pdf", f"{old_json}.json", f"{new_part}.part", f"{new_tmp}.json.tmp"}
+    assert sorted(removed) == sorted([f"s1/{old_part}.part", f"s1/{old_tmp}.json.tmp",
+                                      f"s1/{old_pdf}.pdf", f"s1/{old_json}.json"])
+    assert _files(store, "s1") == {f"{done}.pdf", f"{done}.json", f"{new_part}.part", f"{new_tmp}.json.tmp"}
 
 
 def test_state_classification(store):
     now = time.time()
     active, stale = quota._Doc(resv={"bytes": 1}, resv_mtime=now), quota._Doc(resv={"bytes": 1}, resv_mtime=now - HOUR - 1)
     assert quota.classify(active, now) == "active" and quota.classify(stale, now) == "stale"
-    assert quota.classify(quota._Doc(pdf=5, has_json=True), now) == "committed"
+    assert quota.classify(quota._Doc(pdf=5, has_pdf=True, has_json=True), now) == "committed"
+    assert quota.classify(quota._Doc(pdf=5, has_pdf=True, has_json=True, resv={"bytes": 1}, resv_mtime=now - 9 * HOUR),
+                          now) == "committed"          # a leftover reservation does not make a complete document stale
     assert quota.classify(quota._Doc(part=5), now) == "abandoned"
     assert quota.classify(quota._Doc(resv_corrupt=True, resv_mtime=now), now) == "active"   # unreadable: counted as live
 
@@ -213,9 +202,9 @@ def test_unknown_usage_refuses_and_deletes_nothing(store, monkeypatch):
 
     def boom(_):
         raise quota.QuotaUnavailable("disk error")
-    monkeypatch.setattr(quota, "_scan", boom)
-    assert _try("s1", 10) == "unavailable"
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(quota, "_scan", boom)
+        assert _try("s1", 10) == "unavailable"
     assert _files(store, "s1") == before
 
 

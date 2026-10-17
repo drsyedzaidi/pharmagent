@@ -9,6 +9,7 @@ inside its own session directory.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -64,6 +65,8 @@ def _session_dir(sid: str) -> Path | None:
     if not _SID_RE.match(sid):
         return None
     root = _root().resolve()
+    if (root / sid).is_symlink():            # a link is never a session directory, whatever it points at
+        return None
     d = (root / sid).resolve()
     return d if d.is_relative_to(root) and d != root else None
 
@@ -85,8 +88,8 @@ def _resv_of(part: Path) -> Path:
 
 
 def touch(part: Path) -> None:
-    """Heartbeat for an in-flight upload."""
-    quota.heartbeat(_resv_of(part))
+    """Heartbeat for an in-flight upload (serialised with cleanup by the storage lock)."""
+    quota.heartbeat(_root(), _resv_of(part))
 
 
 def commit(sid: str, doc_id: str, part: Path, *, filename: str | None, size: int, pages: int) -> DocumentMeta:
@@ -98,21 +101,34 @@ def commit(sid: str, doc_id: str, part: Path, *, filename: str | None, size: int
     meta = DocumentMeta(id=doc_id, filename=sanitize_filename(filename), size_bytes=size, pages=pages,
                         created_at=datetime.now(UTC).isoformat(timespec="seconds"))
     resv = _resv_of(part)
+    tmp, js, pdf = d / f"{doc_id}.json.tmp", d / f"{doc_id}.json", d / f"{doc_id}.pdf"
     with quota.locked(_root()):
         if not resv.is_file() or not part.is_file():
             raise ReservationLostError
-        os.replace(part, d / f"{doc_id}.pdf")
-        tmp = d / f"{doc_id}.json.tmp"
-        tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
-        os.replace(tmp, d / f"{doc_id}.json")
-        quota.release(resv)
+        try:
+            tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
+            os.replace(tmp, js)               # metadata first: a document is not visible until its PDF exists
+            os.replace(part, pdf)             # the commit point
+        except BaseException:
+            _rollback(tmp, js)
+            raise
+        with contextlib.suppress(OSError):    # committed; a leftover reservation holds nothing and is reclaimed later
+            quota.release(resv)
     return meta
+
+
+def _rollback(*paths: Path) -> None:
+    """Best effort. Anything this misses is an unreserved or stale piece that cleanup reclaims."""
+    for p in paths:
+        with contextlib.suppress(OSError):
+            p.unlink(missing_ok=True)
 
 
 def discard(part: Path) -> None:
     """Abandon an upload: delete its ``.part`` and release its reservation."""
     part.unlink(missing_ok=True)
     quota.release(_resv_of(part))
+    _rollback(part.with_suffix(".json.tmp"))
 
 
 def _read_meta(p: Path) -> DocumentMeta | None:

@@ -77,7 +77,7 @@ def test_bad_content_length_is_a_400(client):
     sid = client.post("/api/sessions").json()["id"]
     r = client.post(f"/api/sessions/{sid}/documents", content=b"x",
                     headers={"content-type": "multipart/form-data; boundary=b", "content-length": "abc"})
-    assert r.status_code in (400, 413)
+    assert r.status_code == 400
 
 
 def test_normal_upload_still_works(client):
@@ -86,9 +86,10 @@ def test_normal_upload_still_works(client):
     assert r.status_code == 201
 
 
-def test_understated_or_chunked_body_is_cut_off_at_the_cap():
-    """Drive the ASGI app directly with a body that never ends and no Content-Length: the server must stop reading near
-    the cap and answer 413, not keep consuming (and spooling) the stream."""
+def test_understated_or_chunked_body_is_cut_off_at_the_cap(client):
+    """Drive the ASGI app directly with a body that never ends and no Content-Length, for a session the caller owns: the
+    server must stop reading near the cap and answer 413, not keep consuming (and spooling) the stream."""
+    sid = client.post("/api/sessions").json()["id"]
     chunk = b"x" * (1 << 20)
     head = (b'--b\r\nContent-Disposition: form-data; name="file"; filename="a.pdf"\r\n'
             b"Content-Type: application/pdf\r\n\r\n%PDF-")                     # a real file part that never ends
@@ -103,15 +104,12 @@ def test_understated_or_chunked_body_is_cut_off_at_the_cap():
     async def send(msg):
         state["sent"].append(msg)
 
+    path = f"/api/sessions/{sid}/documents"
     scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
-             "path": "/api/sessions/s1/documents", "raw_path": b"/api/sessions/s1/documents", "query_string": b"",
+             "path": path, "raw_path": path.encode(), "query_string": b"",
              "headers": [(b"content-type", b"multipart/form-data; boundary=b")], "server": ("t", 80),
              "client": ("c", 1), "root_path": ""}
-    settings.pageimage_enabled = True
-    try:
-        asyncio.run(main.app(scope, receive, send))
-    finally:
-        settings.pageimage_enabled = False
+    asyncio.run(main.app(scope, receive, send))
     status = next(m["status"] for m in state["sent"] if m["type"] == "http.response.start")
     assert status == 413
     assert state["reads"] * len(chunk) <= CAP + 2 * len(chunk)

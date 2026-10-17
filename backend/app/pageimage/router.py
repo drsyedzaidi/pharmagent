@@ -11,11 +11,12 @@ import re
 import sys
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 from starlette.routing import Match
 
 from app.config import settings
@@ -139,13 +140,16 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
     router = APIRouter(tags=["documents"], route_class=GatedRoute)
 
     @router.post("/api/sessions/{sid}/documents", status_code=201)
-    async def upload_document(request: Request, file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:
+    async def upload_document(request: Request, sess=Depends(owned_session)) -> dict:
+        # No ``UploadFile = File(...)`` parameter on purpose: FastAPI would parse (and spool to disk) the multipart body
+        # BEFORE running ``owned_session`` or any quota check. Here the order is: authenticate/own the session, reserve
+        # quota, and only then read the form.
         declared = request.headers.get("content-length")
         reserve = limits.MAX_PDF_BYTES                   # unknown length: reserve the largest file we would accept
         if declared is not None and declared.isdigit():
             reserve = min(int(declared), limits.MAX_PDF_BYTES)
         try:
-            doc_id, part = documents.new_slot(sess.id, reserve)
+            doc_id, part = await run_in_threadpool(documents.new_slot, sess.id, reserve)
         except documents.DocumentLimitError:
             raise HTTPException(409, f"document limit reached ({limits.MAX_DOCS_PER_SESSION} per session)") from None
         except documents.QuotaExceeded as e:
@@ -157,7 +161,12 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             raise HTTPException(503, "document storage is unavailable; retry later") from None
         except ValueError:
             raise HTTPException(400, "invalid session") from None
+        form = None
         try:
+            form = await request.form()
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(400, "file is not a PDF")
             size = 0
             with part.open("wb") as out:
                 while chunk := await file.read(1 << 20):
@@ -169,7 +178,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                     if size > reserve:
                         raise HTTPException(413, "file is larger than the request declared")
                     out.write(chunk)
-                    documents.touch(part)
+                    await run_in_threadpool(documents.touch, part)
             if size == 0:
                 raise HTTPException(400, "file is not a PDF")
             try:
@@ -180,16 +189,20 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                 raise HTTPException(400, "PDF has no pages")
             if pages > limits.MAX_PAGES:
                 raise _http(_UPLOAD_ERRORS, "too_large")
-            try:
-                meta = documents.commit(sess.id, doc_id, part, filename=file.filename, size=size, pages=pages)
-            except documents.ReservationLostError:
+            meta = await run_in_threadpool(documents.commit, sess.id, doc_id, part,
+                                           filename=file.filename, size=size, pages=pages)
+        except BaseException as exc:
+            documents.discard(part)           # every failure releases the reservation and removes its pieces
+            if isinstance(exc, documents.ReservationLostError):
                 raise HTTPException(409, "upload expired; please retry") from None
-            except documents.QuotaUnavailable:
+            if isinstance(exc, documents.QuotaUnavailable):
                 raise HTTPException(503, "document storage is unavailable; retry later") from None
-        except BaseException:
-            documents.discard(part)
             raise
-        return meta.to_dict()
+        else:
+            return meta.to_dict()
+        finally:
+            if form is not None:
+                await form.close()
 
     @router.get("/api/sessions/{sid}/documents")
     def list_documents(sess=Depends(owned_session)) -> dict:

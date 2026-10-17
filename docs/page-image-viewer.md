@@ -71,7 +71,8 @@ and before any dependency (auth, ownership) runs: a declared `Content-Length` ov
 non-numeric or negative one with 400, and a body that has no length or understates it is cut off once the bytes
 received pass the cap. Without this, FastAPI spools the multipart body to disk ahead of its dependencies, so a caller
 that would fail auth could still make the server buffer an arbitrarily large upload. Side effect, intended: an
-oversize request is answered 413 even when it would have been 401/403. The gate lives in `GatedRoute` in
+oversize request is answered 413 even when it would have been 401/403. The body is cut off here only while it is being
+read, which now happens after authentication and reservation (see the next section). The gate lives in `GatedRoute` in
 `pageimage/router.py` (new code); auth and ownership code are untouched. Tests: `test_pageimage_bodycap.py`.
 
 ### Render sandbox
@@ -149,26 +150,42 @@ parent maps to a fixed message.
 | Secrets via worker env | cleared environment |
 
 ### Storage quotas and stale-file cleanup (step-5 item 2)
-All admission and cleanup decisions run under one `flock` on `<data_dir>/documents/.quota.lock`
+**Order of an upload.** (1) the route gate caps the whole body (above); (2) `owned_session` authenticates and checks
+ownership; (3) quota is reserved; (4) only then is the multipart form read (`await request.form()`). The endpoint has no
+`UploadFile` parameter, because FastAPI would parse and spool such a body before steps 2 and 3. A request refused at
+step 2 or 3 reads none of its body and creates no temporary file, and concurrent bodies are bounded by quota because
+each one holds a reservation while it is parsed.
+
+All admission, heartbeat, commit and cleanup decisions run under one `flock` on `<data_dir>/documents/.quota.lock`
 (`pageimage/quota.py`), so several workers sharing a data directory cannot jointly exceed a quota (a thread lock would
 only cover one process). Where `fcntl` does not exist, or the lock cannot be taken within 5 s, uploads are refused.
 - **Budgets:** 20 documents and 200 MiB per session, 2 GiB across all sessions (open mode allows unlimited sessions).
   Constants in `limits.py`.
 - **Reservation:** an upload first writes `<id>.resv` (JSON: id, session, bytes, pid, created) holding a document slot and
   `min(Content-Length, 50 MiB)` of both byte budgets; the stream may not exceed that. A document's cost is
-  `max(reserved, .part + .pdf)`, so a reservation, its growing `.part` and the committed PDF are counted once.
-- **States:** active (fresh reservation; each chunk is a heartbeat), stale (reservation idle > 1 h), committed (`.pdf` +
-  `.json`), abandoned (`.part` / `.json.tmp` with no reservation).
-- **Cleanup** runs inside every reservation and removes only stale `.resv` with their `.part`, and abandoned `.part` /
-  `.json.tmp` older than 1 h. It never removes a committed `.pdf`/`.json` or an orphan `.pdf`/`.json` (no retention policy
-  has been chosen), never follows a symlink, and ignores any name that is not `<32 hex>.<ext>` inside a plain-named,
-  non-link session directory.
-- **Fail closed:** if usage cannot be read (I/O error, unreadable reservation counted at 50 MiB, lock busy) the upload is
+  `max(reserved, .part + .pdf)`, a complete document costs its PDF, so nothing is counted twice. If creating the
+  reservation fails part-way, the partial file is removed before the upload is refused.
+- **Heartbeat:** each chunk refreshes the reservation under the same lock cleanup uses, so cleanup cannot classify an
+  upload stale and delete it after a heartbeat. A heartbeat for a reservation that was already reclaimed fails (409)
+  instead of recreating its timestamp.
+- **States:** active (fresh reservation), stale (reservation idle > 1 h), committed (`.pdf` AND `.json`), abandoned
+  (pieces with no reservation).
+- **Commit order:** metadata first (`.json.tmp` → `.json`), then `.part` → `.pdf` as the commit point, then the
+  reservation is released (a failure there is ignored: the document is complete). A document is not visible until its
+  PDF exists, so every crash point leaves either a complete document or pieces cleanup reclaims, never an inaccessible
+  PDF holding quota. On a failed commit the endpoint discards the upload (reservation, `.part`, `.json.tmp`).
+- **Cleanup** runs inside every reservation. It removes the pieces of an upload that never became a complete document: a
+  stale reservation together with its `.part`/`.json.tmp`/`.pdf`/`.json`, and such pieces with no reservation once older than
+  1 h. It never removes a complete document (`.pdf` + `.json`) and has no retention policy for those. It never follows
+  a symlink and ignores any name that is not `<32 hex>.<ext>` inside a plain-named, non-link session directory.
+- **Links:** a session directory that is a symlink is rejected everywhere (also when it points elsewhere inside the
+  documents root); it is neither read, written, counted nor cleaned.
+- **Fail closed:** if usage cannot be read (I/O error, lock busy; an unreadable reservation counts as 50 MiB) the upload is
   refused with 503; nothing is deleted to make room. An upload idle for over an hour loses its reservation and its
   commit is refused (409 "upload expired").
 - **Status codes:** 409 document count or session byte budget; 503 global byte budget or accounting unavailable.
-- **Not done:** retention of committed PDFs, per-session render queues, and narrowing the unenforced-limits override to
-  `RLIMIT_AS` (remaining step-5 items).
+- **Not done:** retention of complete documents, per-session render queues, and narrowing the unenforced-limits override to
+  `RLIMIT_AS` (remaining step-5 items; this PR stays DO NOT MERGE until then).
 
 ## Residual risk (read this)
 The subprocess + rlimits limit blast radius; they are NOT a sandbox. A native
