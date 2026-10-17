@@ -26,6 +26,8 @@ jobs:
         run: pip-audit -r requirements.txt || true   # advisory; don't block on transitive CVEs
       - name: Tests (keyless — MockLLM)
         run: pytest -q -p no:cacheprovider
+      - name: Page-image resource limits (visible diagnostics)
+        run: pytest -vv -rs -s -p no:cacheprovider tests/test_pageimage_limits.py
 
   frontend:
     name: Frontend (typecheck + build)

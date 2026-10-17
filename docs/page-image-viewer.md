@@ -66,13 +66,37 @@ accepted); 50 MiB cap (413); page count measured IN THE SANDBOX, 1..2000;
 password-protected, malformed, truncated and zero-page PDFs refused (400);
 20 documents per session.
 
+**Request-body gate (step-5 item 1).** The whole request body is capped at 50 MiB + 256 KiB before FastAPI parses it
+and before any dependency (auth, ownership) runs: a declared `Content-Length` over the cap is refused with 413, a
+non-numeric or negative one with 400, and a body that has no length or understates it is cut off once the bytes
+received pass the cap. Without this, FastAPI spools the multipart body to disk ahead of its dependencies, so a caller
+that would fail auth could still make the server buffer an arbitrarily large upload. Side effect, intended: an
+oversize request is answered 413 even when it would have been 401/403. The body is cut off here only while it is being
+read, which now happens after authentication and reservation (see the next section). The gate lives in `GatedRoute` in
+`pageimage/router.py` (new code); auth and ownership code are untouched. Tests: `test_pageimage_bodycap.py`.
+
 ### Render sandbox
 `python -I worker.py '<json>'` via `subprocess.Popen`: argv carries one JSON
 object of typed, pre-validated values (no shell); cleared environment (no
-tokens leak in); cwd = fresh empty temp dir; stdin closed; stderr discarded;
-own process group. Limits:
-- `RLIMIT_CPU` 10 s, `RLIMIT_AS` 1 GiB, `RLIMIT_FSIZE` 0, `RLIMIT_CORE` 0,
-  `RLIMIT_NOFILE` 64 (applied inside the worker before pypdfium2 is imported).
+tokens leak in); cwd = fresh empty temp dir; stdin closed; stderr carries ONE
+attestation line (below), nothing else is kept; own process group. Limits:
+- `RLIMIT_CPU` 10 s (hard limit 12 s, so `SIGXCPU` arrives first), `RLIMIT_AS` 1 GiB,
+  `RLIMIT_FSIZE` 0, `RLIMIT_CORE` 0, `RLIMIT_NOFILE` 64, applied inside the worker before
+  pypdfium2 is imported. An inherited tighter SOFT limit is kept, never raised; the HARD
+  limit is lowered to the request so worker code cannot restore it.
+- **Attestation (protocol v1).** After lowering each limit the worker confirms it with
+  `getrlimit` and writes exactly one JSON line to stderr: `{"pageimage_limits": {"v": 1,
+  "ok": true, "limits": [{name, requested, soft, hard, state}, ...]}}`. The parent accepts an
+  outcome only if there is exactly one report, version 1, `ok` true, exactly the five
+  expected limits once each with the requested value we asked for, and every `enforced`
+  entry confirmed (soft <= request, soft <= hard <= request, CPU hard <= request + 2). This
+  is required for EVERY outcome after limits were applied and parsing began (success,
+  malformed, too large, memory, crash signal, `SIGXCPU`, wall-clock kill, output overflow).
+  Only a pre-parse bad request (exit 2) and a setup failure (exit 9) are mapped without it.
+  Anything else is `limit_unavailable` (503). The report is an honesty check against our own
+  mistakes, not a defence against a compromised worker.
+- Kinds: `memory_limit` (413 on render, 400 on upload), `cpu_limit` (504 / 400), `timeout`
+  (504), `limit_unavailable` (503), `failed` (422).
 - Wall clock 15 s then `SIGKILL` of the whole process group.
 - stdout read is capped at 8 MiB; exceeding it kills the worker.
 - Output pixels: each side <= 4096 and area <= 16 Mpx, checked from the page size
@@ -125,6 +149,44 @@ parent maps to a fixed message.
 | Cache leakage | `private, no-store` |
 | Secrets via worker env | cleared environment |
 
+### Storage quotas and stale-file cleanup (step-5 item 2)
+**Order of an upload.** (1) the route gate caps the whole body (above); (2) `owned_session` authenticates and checks
+ownership; (3) quota is reserved; (4) only then is the multipart form read (`await request.form()`). The endpoint has no
+`UploadFile` parameter, because FastAPI would parse and spool such a body before steps 2 and 3. A request refused at
+step 2 or 3 reads none of its body and creates no temporary file, and concurrent bodies are bounded by quota because
+each one holds a reservation while it is parsed.
+
+All admission, heartbeat, commit and cleanup decisions run under one `flock` on `<data_dir>/documents/.quota.lock`
+(`pageimage/quota.py`), so several workers sharing a data directory cannot jointly exceed a quota (a thread lock would
+only cover one process). Where `fcntl` does not exist, or the lock cannot be taken within 5 s, uploads are refused.
+- **Budgets:** 20 documents and 200 MiB per session, 2 GiB across all sessions (open mode allows unlimited sessions).
+  Constants in `limits.py`.
+- **Reservation:** an upload first writes `<id>.resv` (JSON: id, session, bytes, pid, created) holding a document slot and
+  50 MiB (always the worst case, never the client-declared length) of both byte budgets; the file may not exceed that. A document's cost is
+  `max(reserved, .part + .pdf)`, a complete document costs its PDF, so nothing is counted twice. If creating the
+  reservation fails part-way, the partial file is removed before the upload is refused.
+- **Heartbeat:** each chunk refreshes the reservation under the same lock cleanup uses, so cleanup cannot classify an
+  upload stale and delete it after a heartbeat. A heartbeat for a reservation that was already reclaimed fails (409)
+  instead of recreating its timestamp.
+- **States:** active (fresh reservation), stale (reservation idle > 1 h), committed (`.pdf` AND `.json`), abandoned
+  (pieces with no reservation).
+- **Commit order:** metadata first (`.json.tmp` → `.json`), then `.part` → `.pdf` as the commit point, then the
+  reservation is released (a failure there is ignored: the document is complete). A document is not visible until its
+  PDF exists, so every crash point leaves either a complete document or pieces cleanup reclaims, never an inaccessible
+  PDF holding quota. On a failed commit the endpoint discards the upload (reservation, `.part`, `.json.tmp`).
+- **Cleanup** runs inside every reservation. It removes the pieces of an upload that never became a complete document: a
+  stale reservation together with its `.part`/`.json.tmp`/`.pdf`/`.json`, and such pieces with no reservation once older than
+  1 h. It never removes a complete document (`.pdf` + `.json`) and has no retention policy for those. It never follows
+  a symlink and ignores any name that is not `<32 hex>.<ext>` inside a plain-named, non-link session directory.
+- **Links:** a session directory that is a symlink is rejected everywhere (also when it points elsewhere inside the
+  documents root); it is neither read, written, counted nor cleaned.
+- **Fail closed:** if usage cannot be read (I/O error, lock busy; an unreadable reservation counts as 50 MiB) the upload is
+  refused with 503; nothing is deleted to make room. An upload idle for over an hour loses its reservation and its
+  commit is refused (409 "upload expired").
+- **Status codes:** 409 document count or session byte budget; 503 global byte budget or accounting unavailable.
+- **Not done:** retention of complete documents, per-session render queues, and narrowing the unenforced-limits override to
+  `RLIMIT_AS` (remaining step-5 items; this PR stays DO NOT MERGE until then).
+
 ## Residual risk (read this)
 The subprocess + rlimits limit blast radius; they are NOT a sandbox. A native
 PDFium vulnerability (memory corruption) in the worker would run with the API
@@ -138,16 +200,30 @@ consider a seccomp profile / `sandbox-exec` / a dedicated no-network container
 for the worker. Uploaded PDFs from untrusted parties should not be enabled until then.
 
 ### Platform caveats
-- macOS (including the desktop app on a Mac): `RLIMIT_AS` is not enforced by
-  the kernel (setrlimit either errors or is a no-op), so the memory cap does
-  NOT apply there; the CPU limit, the wall-clock kill, the pixel caps and the
-  output cap still do. The address-space test is therefore skipped off Linux
-  (and was not executed in the development environment, which is macOS).
+- macOS (including the desktop app on a Mac): `RLIMIT_AS` is not enforced by the kernel, so
+  the renderer REFUSES to run (`limit_unavailable`) unless an operator sets
+  `PHARMAGENT_PAGEIMAGE_UNSAFE_ALLOW_UNENFORCED_LIMITS=true`. That is an UNSAFE operator
+  override, not a development mode: nothing verifies the server is local. It is default off,
+  ignored in a frozen build, and logged as a warning on every render. With it, the CPU limit,
+  the wall-clock kill, the pixel caps and the output cap still apply, the memory cap does NOT.
 - Frozen/PyInstaller desktop builds: `sys.executable` is the app binary, not a
   Python interpreter, so the worker cannot be spawned. The renderer reports
   "unavailable" (503) rather than trying. Bundling needs a separate decision.
 - Windows: `resource` does not exist, so no rlimits; wall-clock and output caps
   only. Not tested.
+
+## Feature switch
+`PHARMAGENT_PAGEIMAGE_ENABLED` (default false). When off, or in a frozen build, the routes are
+ABSENT: the router's `matches` returns no match before FastAPI reads the body, so a disabled
+server never parses multipart input or spools it to disk, and `/openapi.json` omits them.
+
+## Guarded-file sign-offs required
+- `backend/app/config.py` is a GUARDED file: this branch adds two settings
+  (`pageimage_enabled`, `pageimage_unsafe_allow_unenforced_limits`). It needs human sign-off.
+- `backend/app/main.py` (guarded-adjacent): two lines added earlier (the import and one
+  `include_router`). No existing line was changed.
+- `.github/workflows/ci.yml`: one added step running `tests/test_pageimage_limits.py` with
+  `-vv -rs -s` so executed tests, skips and diagnostics stay visible on Ubuntu.
 
 ## Notes for reviewers
 - Pre-existing, not changed: dataset loading may read any file under `data_dir`;

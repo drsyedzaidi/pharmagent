@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.routing import Match
 
+from app.config import settings
 from app.pageimage import documents, limits
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import NormBBox, RenderParams
@@ -36,6 +41,9 @@ _UPLOAD_ERRORS = {
     "output_too_big": (400, "file is not a readable PDF"),
     "busy": (429, "too many documents being processed; retry shortly"),
     "unavailable": (503, "PDF processing is unavailable on this server"),
+    "limit_unavailable": (503, "PDF processing is unavailable on this server"),
+    "memory_limit": (400, "PDF is too complex to process within the resource limits"),
+    "cpu_limit": (400, "PDF took too long to process"),
 }
 _RENDER_ERRORS = {
     "no_page": (404, "page not found"),
@@ -45,6 +53,9 @@ _RENDER_ERRORS = {
     "timeout": (504, "rendering timed out"),
     "busy": (429, "renderer busy; retry shortly"),
     "unavailable": (503, "PDF rendering is unavailable on this server"),
+    "limit_unavailable": (503, "PDF rendering is unavailable on this server"),
+    "memory_limit": (413, "page is too complex to render within the resource limits"),
+    "cpu_limit": (504, "rendering timed out"),
     "encrypted": (422, "page could not be rendered"),
     "malformed": (422, "page could not be rendered"),
     "failed": (422, "page could not be rendered"),
@@ -57,18 +68,104 @@ def _http(table: dict, kind: str) -> HTTPException:
     return HTTPException(status, msg)
 
 
+def _enabled() -> bool:
+    return bool(settings.pageimage_enabled) and not getattr(sys, "frozen", False)
+
+
+class BodyTooLarge(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(413, f"request body exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
+
+
+def _capped(request: Request) -> Request:
+    """The same request with a receive channel that raises once more than MAX_BODY_BYTES have been read. This is what
+    stops a client that sends no Content-Length, or understates it, from being buffered without bound."""
+    seen = 0
+    original = request.receive
+
+    async def receive():
+        nonlocal seen
+        msg = await original()
+        if msg["type"] == "http.request":
+            seen += len(msg.get("body", b""))
+            if seen > limits.MAX_BODY_BYTES:
+                raise BodyTooLarge()
+        return msg
+
+    return Request(request.scope, receive, request._send)
+
+
+class GatedRoute(APIRoute):
+    """A route that does not exist unless the feature is on. ``matches`` runs before FastAPI reads the body, so a
+    disabled (or frozen) server never parses multipart input or spools it to disk, and the OpenAPI schema omits the
+    routes (``include_in_schema`` follows the same switch)."""
+
+    def matches(self, scope):
+        if not _enabled():
+            return Match.NONE, {}
+        return super().matches(scope)
+
+    def get_route_handler(self):
+        inner = super().get_route_handler()
+
+        async def handler(request: Request):
+            # Before FastAPI reads the body: parsing spools the upload to disk and runs ahead of every dependency
+            # (auth and ownership included), so the size gate has to be here, not in the endpoint.
+            if request.method in ("POST", "PUT", "PATCH"):
+                declared = request.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        n = int(declared)
+                    except ValueError:
+                        raise HTTPException(400, "invalid Content-Length") from None
+                    if n < 0:
+                        raise HTTPException(400, "invalid Content-Length")
+                    if n > limits.MAX_BODY_BYTES:
+                        raise BodyTooLarge()
+                request = _capped(request)
+            return await inner(request)
+
+        return handler
+
+    @property
+    def include_in_schema(self) -> bool:
+        return _enabled()          # FastAPI re-reads this when it builds /openapi.json (and passes it on at include)
+
+    @include_in_schema.setter
+    def include_in_schema(self, value: bool) -> None:
+        pass                       # the switch alone decides; the declared value is irrelevant
+
+
 def build_documents_router(owned_session: Callable) -> APIRouter:
-    router = APIRouter(tags=["documents"])
+    router = APIRouter(tags=["documents"], route_class=GatedRoute)
 
     @router.post("/api/sessions/{sid}/documents", status_code=201)
-    async def upload_document(file: UploadFile = File(...), sess=Depends(owned_session)) -> dict:
+    async def upload_document(request: Request, sess=Depends(owned_session)) -> dict:
+        # No ``UploadFile = File(...)`` parameter on purpose: FastAPI would parse (and spool to disk) the multipart body
+        # BEFORE running ``owned_session`` or any quota check. Here the order is: authenticate/own the session, reserve
+        # quota, and only then read the form.
+        # Worst case, always: the client chooses Content-Length, so it must never size the reservation (a declared 0
+        # followed by 50 MiB would otherwise bypass both byte budgets). The header only matters to the route gate's cap.
+        reserve = limits.MAX_PDF_BYTES
         try:
-            doc_id, part = documents.new_slot(sess.id)
+            doc_id, part = await run_in_threadpool(documents.new_slot, sess.id, reserve)
         except documents.DocumentLimitError:
             raise HTTPException(409, f"document limit reached ({limits.MAX_DOCS_PER_SESSION} per session)") from None
+        except documents.QuotaExceeded as e:
+            if e.scope == "session":
+                raise HTTPException(409, "storage quota for this session reached") from None
+            raise HTTPException(503, "document storage is full on this server; retry later") from None
+        except documents.QuotaUnavailable:
+            log.warning("document storage accounting unavailable; upload refused")
+            raise HTTPException(503, "document storage is unavailable; retry later") from None
         except ValueError:
             raise HTTPException(400, "invalid session") from None
+        form = None
         try:
+            form = await request.form()
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(400, "file is not a PDF")
             size = 0
             with part.open("wb") as out:
                 while chunk := await file.read(1 << 20):
@@ -78,6 +175,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                     if size > limits.MAX_PDF_BYTES:
                         raise HTTPException(413, f"file exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
                     out.write(chunk)
+                    await run_in_threadpool(documents.touch, part)
             if size == 0:
                 raise HTTPException(400, "file is not a PDF")
             try:
@@ -88,11 +186,20 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
                 raise HTTPException(400, "PDF has no pages")
             if pages > limits.MAX_PAGES:
                 raise _http(_UPLOAD_ERRORS, "too_large")
-            meta = documents.commit(sess.id, doc_id, part, filename=file.filename, size=size, pages=pages)
-        except BaseException:
-            documents.discard(part)
+            meta = await run_in_threadpool(documents.commit, sess.id, doc_id, part,
+                                           filename=file.filename, size=size, pages=pages)
+        except BaseException as exc:
+            documents.discard(part)           # every failure releases the reservation and removes its pieces
+            if isinstance(exc, documents.ReservationLostError):
+                raise HTTPException(409, "upload expired; please retry") from None
+            if isinstance(exc, documents.QuotaUnavailable):
+                raise HTTPException(503, "document storage is unavailable; retry later") from None
             raise
-        return meta.to_dict()
+        else:
+            return meta.to_dict()
+        finally:
+            if form is not None:
+                await form.close()
 
     @router.get("/api/sessions/{sid}/documents")
     def list_documents(sess=Depends(owned_session)) -> dict:
