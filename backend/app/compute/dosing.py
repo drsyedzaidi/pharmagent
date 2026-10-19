@@ -40,6 +40,7 @@ class SSProfile:
     tau: float                  # interdose interval
     n_doses: int                # total doses (explicit + ADDL-expanded)
     c0_source: str              # "measured" | "ctau_assumed" | "none"
+    ctau_source: str = "measured"   # "measured" | "c0_assumed" (interval closed with C(tau) = C(0), blq_col path only)
 
 
 def _dose_times(rows: list[dict], *, time_col: str, amt_col: str,
@@ -167,16 +168,20 @@ def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,
 
 def _m1_in_interval(rows: list[tuple[float, bool, float | None]]) -> list[tuple[float, float]]:
     """Rule M1 for one interval's (tad, below-LOQ, dv) records: flagged records before the first quantifiable one
-    (unflagged with a finite DV) become a 0 baseline, later flagged records are dropped; unflagged records without a
-    finite DV carry no measurement and are dropped. With nothing quantifiable, all flagged records stay as zeros."""
+    (unflagged with a finite DV; +-inf is not finite) become a 0 baseline, later flagged records are dropped;
+    unflagged records without a finite DV carry no measurement and are dropped. With nothing quantifiable, all flagged
+    records stay as zeros."""
     rows = sorted(rows, key=lambda r: r[0])
-    first_q = next((i for i, (_, blq, dv) in enumerate(rows) if not blq and dv is not None), len(rows))
+    def finite(dv: float | None) -> bool:
+        return dv is not None and math.isfinite(dv)
+
+    first_q = next((i for i, (_, blq, dv) in enumerate(rows) if not blq and finite(dv)), len(rows))
     out: list[tuple[float, float]] = []
     for i, (tad, blq, dv) in enumerate(rows):
         if blq:
             if i < first_q:
                 out.append((tad, 0.0))
-        elif dv is not None:
+        elif finite(dv):
             out.append((tad, dv))
     return out
 
@@ -194,7 +199,9 @@ def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
 
     With ``blq_col`` (1 = below LOQ), rule M1 is applied WITHIN that last interval only: flagged records before the
     interval's first quantifiable value (unflagged, finite time and DV) are a 0 baseline, later flagged records are
-    excluded. Samples from earlier intervals play no part in that classification.
+    excluded. Samples from earlier intervals play no part in that classification. Dose rows (AMT > 0) only build
+    the schedule and are never concentrations. If the sample at tau is excluded, the interval is closed with the
+    steady-state convention C(tau) = C(0); a subject with neither C(0) nor C(tau) is skipped.
     """
     by_subj: dict[Any, list[dict]] = {}
     for r in records:
@@ -218,6 +225,8 @@ def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
             is_blq = blq_col is not None and _num(r.get(blq_col)) == 1
             if t is None or (dv is None and not is_blq):
                 continue
+            if blq_col is not None and (_num(r.get(amt_col)) or 0) > 0:
+                continue                        # a dose event builds the schedule; it is never a concentration
             tad = t - last_dose
             if -tol <= tad <= tau + tol:
                 if blq_col is None:
@@ -251,8 +260,18 @@ def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
                 conc = [ctau] + conc
                 c0_source = "ctau_assumed"
 
+        # close the interval: if the sample at tau was excluded (BLQ path), use the steady-state periodic
+        # convention C(tau) = C(0) instead of integrating a partial interval and calling it AUC_tau
+        ctau_source = "measured"
+        if blq_col is not None and tad[-1] < tau - tol:
+            if tad[0] > PRE_DOSE_TOL:
+                continue                        # neither end of the interval is known: no AUC_tau can be formed
+            tad = tad + [float(tau)]
+            conc = conc + [conc[0]]
+            ctau_source = "c0_assumed"
+
         out[sid] = SSProfile(
             subject=sid, tad=tuple(tad), conc=tuple(conc), dose=float(dose),
-            tau=float(tau), n_doses=len(times), c0_source=c0_source,
+            tau=float(tau), n_doses=len(times), c0_source=c0_source, ctau_source=ctau_source,
         )
     return out

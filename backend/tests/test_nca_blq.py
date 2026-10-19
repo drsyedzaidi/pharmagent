@@ -180,11 +180,14 @@ def test_steady_state_middle_blq_row_is_excluded_not_integrated_as_zero(run_ss):
     assert flagged["AUC_tau"] > kept_as_zero["AUC_tau"]            # the zero would have cut the area
 
 
-def test_steady_state_trailing_blq_row_is_excluded(run_ss):
+def test_steady_state_trailing_blq_at_tau_still_integrates_the_whole_interval(run_ss):
+    """Dropping the BLQ sample at tau must not shrink AUC_tau to [0, 8]: the interval is closed with the documented
+    steady-state convention C(tau) = C(0), so the reference is the same profile with C(tau) set to C(0) explicitly."""
     pairs = [(t, 0.0 if t == 12.0 else c) for t, c in SS_PROFILE]
     flagged = run_ss(_ss_rows("T", pairs, blq_at=(12.0,)))["params"]["T"]
-    dropped = run_ss(_ss_rows("T", [p for p in pairs if p[0] != 12.0]), with_flag=False)["params"]["T"]
-    assert flagged["AUC_tau"] == dropped["AUC_tau"]
+    c0 = SS_PROFILE[0][1]
+    closed = run_ss(_ss_rows("T", [(t, c0 if t == 12.0 else c) for t, c in pairs]), with_flag=False)["params"]["T"]
+    assert flagged["AUC_tau"] == closed["AUC_tau"] and flagged["CL_F"] == closed["CL_F"]
 
 
 def test_steady_state_leading_blq_row_is_a_zero_baseline_even_when_the_value_is_blank(run_ss):
@@ -266,3 +269,64 @@ def test_the_dose_schedule_and_last_interval_survive_extraction(use_blq_col):
     assert (prof.n_doses, prof.tau, prof.dose) == (4, 12.0, 100.0)          # 1 dose row + ADDL 3, every 12 h
     assert prof.tad == (0.0, 1.0, 2.0, 4.0, 8.0, 12.0)                      # only the 36-48 h interval, earlier samples out
     assert prof.c0_source == "measured"
+
+
+# ── endpoint and row-classification boundaries ────────────────────────────────────────────────────
+def _extract(recs, **kw):
+    from app.compute.dosing import extract_ss_intervals
+
+    return extract_ss_intervals(recs, id_col="ID", time_col="TIME", dv_col="DV", amt_col="AMT",
+                                ii_col="II", addl_col="ADDL", blq_col="BLQ", **kw)
+
+
+def _obs(sid, tad, dv, blq=0):
+    return {"ID": sid, "TIME": 36 + tad, "DV": dv, "AMT": 0, "II": None, "ADDL": None, "BLQ": blq}
+
+
+def test_trailing_blq_profile_spans_exactly_zero_to_tau():
+    recs = [{"ID": "S", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3, "BLQ": 0}]
+    recs += [_obs("S", t, 0.0 if t == 12.0 else c, int(t == 12.0)) for t, c in SS_PROFILE]
+    prof = _extract(recs)["S"]
+    assert prof.tad[0] == 0.0 and prof.tad[-1] == 12.0
+    assert prof.conc[-1] == prof.conc[0]                                   # C(tau) = C(0)
+    assert prof.ctau_source == "c0_assumed"
+
+
+def _physical_doses(last_flag: int):
+    """Four explicit dose rows (0/12/24/36 h, no ADDL); the final one is BLQ-flagged with a blank DV."""
+    return [{"ID": "P", "TIME": t, "DV": None, "AMT": 100, "II": 12, "ADDL": 0, "BLQ": last_flag if t == 36 else 0}
+            for t in (0, 12, 24, 36)]
+
+
+def test_a_flagged_final_dose_row_is_not_a_concentration():
+    obs = [_obs("P", t, c) for t, c in SS_PROFILE if t != 0.0]             # no tad-0 sample: C(0) must come from C(tau)
+    flagged = _extract(_physical_doses(1) + obs)["P"]
+    plain = _extract(_physical_doses(0) + obs)["P"]
+    assert flagged == plain
+    assert flagged.n_doses == 4 and flagged.c0_source == "ctau_assumed" and 0.0 not in flagged.conc
+
+
+def test_a_flagged_final_dose_row_does_not_change_auc_tau(run, tmp_path):
+    path = tmp_path / "phys.csv"
+    lines = ["ID,TIME,DV,AMT,EVID,II,ADDL,BLQ"]
+    for flag in (1, 0):
+        sid = f"P{flag}"
+        lines += [f"{sid},{t},,100,1,12,0,{flag if t == 36 else 0}" for t in (0, 12, 24, 36)]
+        lines += [f"{sid},{36 + t},{c},0,0,,,0" for t, c in SS_PROFILE if t != 0.0]
+    path.write_text("\n".join(lines) + "\n")
+    orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    orch.run_tool(sid, "load_dataset", "data_manager", {"path": str(path)})
+    orch.run_tool(sid, "compute_nca", "nca", {})
+    p = {r["subject"]: r for r in orch.get_session(sid).state.nca_parameters}
+    assert p["P1"]["AUC_tau"] == p["P0"]["AUC_tau"] and p["P1"]["Cmin"] == p["P0"]["Cmin"]
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf")])
+def test_an_infinite_dv_neither_ends_the_leading_phase_nor_enters_the_profile(bad):
+    dose = [{"ID": "I", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3, "BLQ": 0}]
+    rest = [_obs("I", t, c) for t, c in SS_PROFILE if t >= 1.0]
+    with_inf = _extract(dose + [_obs("I", 0.0, bad), _obs("I", 0.5, None, 1)] + rest)["I"]
+    reference = _extract(dose + [_obs("I", 0.5, 0.0)] + rest)["I"]
+    assert with_inf == reference
+    assert all(math.isfinite(c) for c in with_inf.conc) and 0.0 in with_inf.conc   # the 0.5 h BLQ became a 0 baseline
