@@ -18,7 +18,7 @@ import threading
 from pathlib import Path
 
 from app.config import settings
-from app.pageimage import limits
+from app.pageimage import limits, slots
 from app.pageimage.types import RenderParams
 
 log = logging.getLogger("pharmagent.pageimage")
@@ -111,9 +111,6 @@ def _attest(stderr: bytes) -> bool:
     return all_enforced
 
 
-_slots = threading.BoundedSemaphore(limits.MAX_CONCURRENT_RENDERS)
-
-
 class RenderError(Exception):
     """``kind`` is one of: bad_request encrypted malformed no_page too_large
     empty output_too_big timeout cpu_limit memory_limit limit_unavailable
@@ -161,90 +158,96 @@ def _kill(proc: subprocess.Popen) -> None:
         pass
 
 
-def _spawn_and_collect(request: dict, *, wall_seconds: float, max_output: int) -> bytes:
+def _spawn_and_collect(request: dict, *, wall_seconds: float, max_output: int, session: str | None = None) -> bytes:
     if getattr(sys, "frozen", False):  # PyInstaller bundle: sys.executable is not a Python
         raise RenderError("unavailable")
-    if not _slots.acquire(timeout=limits.QUEUE_WAIT_SECONDS):
-        raise RenderError("busy")
     try:
-        with tempfile.TemporaryDirectory(prefix="pageimage_") as cwd:
-            try:
-                proc = subprocess.Popen(
-                    [sys.executable, "-I", str(WORKER_PATH), json.dumps(request)],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    cwd=cwd, env=_clean_env(), close_fds=True,
-                    start_new_session=(os.name == "posix"),
-                )
-            except OSError:
-                log.exception("pageimage_spawn_failed")
-                raise RenderError("unavailable") from None
-            chunks: list[bytes] = []
-            state = {"overflow": False}
-
-            def _reader() -> None:
-                total = 0
-                assert proc.stdout is not None
-                while True:
-                    data = proc.stdout.read(65536)
-                    if not data:
-                        return
-                    total += len(data)
-                    if total > max_output:
-                        state["overflow"] = True
-                        _kill(proc)
-                        return
-                    chunks.append(data)
-
-            err_chunks: list[bytes] = []
-
-            def _err_reader() -> None:
-                assert proc.stderr is not None
-                total = 0
-                while data := proc.stderr.read(4096):
-                    total += len(data)
-                    if total <= _MAX_REPORT_BYTES:     # keep reading (never block the worker), keep little
-                        err_chunks.append(data)
-
-            t = threading.Thread(target=_reader, daemon=True)
-            te = threading.Thread(target=_err_reader, daemon=True)
-            t.start()
-            te.start()
-            try:
-                proc.wait(timeout=wall_seconds)
-            except subprocess.TimeoutExpired:
-                _kill(proc)
-                proc.wait()
-                t.join(timeout=2)
-                te.join(timeout=2)
-                _attest(b"".join(err_chunks))          # a kill after parsing began still needs the attestation
-                raise RenderError("timeout") from None
-            t.join(timeout=5)
-            te.join(timeout=5)
-            rc = proc.returncode
-            if rc == 2:                                 # before any limit or parse: nothing to attest
-                raise RenderError("bad_request")
-            if rc == 9:                                 # setup failure, reported as such
-                raise RenderError("limit_unavailable")
-            _attest(b"".join(err_chunks))              # EVERY other outcome happened after limits + parsing began
-            if state["overflow"]:
-                raise RenderError("output_too_big")
-            if rc == 0:
-                return b"".join(chunks)
-            if rc in _EXIT_KINDS:
-                raise RenderError(_EXIT_KINDS[rc])
-            if _SIGXCPU is not None and rc == -_SIGXCPU:
-                raise RenderError("cpu_limit")
-            log.error("pageimage_worker_failed", extra={"returncode": rc})
-            raise RenderError("failed")
-    finally:
-        _slots.release()
+        with slots.render_slot(session):
+            return _run_worker(request, wall_seconds=wall_seconds, max_output=max_output)
+    except slots.SlotBusy:
+        raise RenderError("busy") from None
+    except slots.SlotUnavailable:
+        log.warning("render slots unavailable; render refused")
+        raise RenderError("unavailable") from None
 
 
-def probe_pdf(path: Path, *, wall_seconds: float | None = None) -> int:
+def _run_worker(request: dict, *, wall_seconds: float, max_output: int) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="pageimage_") as cwd:
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-I", str(WORKER_PATH), json.dumps(request)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=cwd, env=_clean_env(), close_fds=True,
+                start_new_session=(os.name == "posix"),
+            )
+        except OSError:
+            log.exception("pageimage_spawn_failed")
+            raise RenderError("unavailable") from None
+        chunks: list[bytes] = []
+        state = {"overflow": False}
+
+        def _reader() -> None:
+            total = 0
+            assert proc.stdout is not None
+            while True:
+                data = proc.stdout.read(65536)
+                if not data:
+                    return
+                total += len(data)
+                if total > max_output:
+                    state["overflow"] = True
+                    _kill(proc)
+                    return
+                chunks.append(data)
+
+        err_chunks: list[bytes] = []
+
+        def _err_reader() -> None:
+            assert proc.stderr is not None
+            total = 0
+            while data := proc.stderr.read(4096):
+                total += len(data)
+                if total <= _MAX_REPORT_BYTES:     # keep reading (never block the worker), keep little
+                    err_chunks.append(data)
+
+        t = threading.Thread(target=_reader, daemon=True)
+        te = threading.Thread(target=_err_reader, daemon=True)
+        t.start()
+        te.start()
+        try:
+            proc.wait(timeout=wall_seconds)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            proc.wait()
+            t.join(timeout=2)
+            te.join(timeout=2)
+            _attest(b"".join(err_chunks))          # a kill after parsing began still needs the attestation
+            raise RenderError("timeout") from None
+        t.join(timeout=5)
+        te.join(timeout=5)
+        rc = proc.returncode
+        if rc == 2:                                 # before any limit or parse: nothing to attest
+            raise RenderError("bad_request")
+        if rc == 9:                                 # setup failure, reported as such
+            raise RenderError("limit_unavailable")
+        _attest(b"".join(err_chunks))              # EVERY other outcome happened after limits + parsing began
+        if state["overflow"]:
+            raise RenderError("output_too_big")
+        if rc == 0:
+            return b"".join(chunks)
+        if rc in _EXIT_KINDS:
+            raise RenderError(_EXIT_KINDS[rc])
+        if _SIGXCPU is not None and rc == -_SIGXCPU:
+            raise RenderError("cpu_limit")
+        log.error("pageimage_worker_failed", extra={"returncode": rc})
+        raise RenderError("failed")
+
+
+def probe_pdf(path: Path, *, wall_seconds: float | None = None, session: str | None = None) -> int:
     """Page count of an untrusted PDF, measured inside the sandbox."""
     out = _spawn_and_collect(
         {"op": "info", "path": str(path), "limits": _worker_limits()},
-        wall_seconds=wall_seconds or limits.WALL_SECONDS, max_output=4096)
+        wall_seconds=wall_seconds or limits.WALL_SECONDS, max_output=4096, session=session)
     try:
         pages = int(json.loads(out.decode("ascii"))["pages"])
     except (ValueError, KeyError, TypeError):
@@ -253,7 +256,7 @@ def probe_pdf(path: Path, *, wall_seconds: float | None = None) -> int:
 
 
 def render_page(path: Path, page: int, params: RenderParams, *,
-                wall_seconds: float | None = None) -> bytes:
+                wall_seconds: float | None = None, session: str | None = None) -> bytes:
     """PNG bytes of one page (optionally cropped), rendered inside the sandbox."""
     bbox = None
     if params.bbox is not None:
@@ -262,7 +265,7 @@ def render_page(path: Path, page: int, params: RenderParams, *,
     png = _spawn_and_collect(
         {"op": "render", "path": str(path), "page": page, "scale": params.scale,
          "bbox": bbox, "limits": _worker_limits()},
-        wall_seconds=wall_seconds or limits.WALL_SECONDS, max_output=limits.MAX_PNG_BYTES)
+        wall_seconds=wall_seconds or limits.WALL_SECONDS, max_output=limits.MAX_PNG_BYTES, session=session)
     if not png.startswith(b"\x89PNG\r\n\x1a\n"):
         raise RenderError("failed")
     return png

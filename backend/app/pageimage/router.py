@@ -179,7 +179,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             if size == 0:
                 raise HTTPException(400, "file is not a PDF")
             try:
-                pages = await run_in_threadpool(probe_pdf, part)
+                pages = await run_in_threadpool(lambda: probe_pdf(part, session=sess.id))
             except RenderError as e:
                 raise _http(_UPLOAD_ERRORS, e.kind) from None
             if pages < 1:
@@ -239,7 +239,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
         if path is None:
             raise HTTPException(404, "document not found")
         try:
-            png = render_page(path, page, params)
+            png = render_page(path, page, params, session=sess.id)
         except RenderError as e:
             raise _http(_RENDER_ERRORS, e.kind) from None
         return Response(content=png, media_type="image/png", headers={

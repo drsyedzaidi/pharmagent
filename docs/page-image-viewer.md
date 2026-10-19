@@ -102,7 +102,16 @@ attestation line (below), nothing else is kept; own process group. Limits:
 - Output pixels: each side <= 4096 and area <= 16 Mpx, checked from the page size
   BEFORE rendering (so a 14400 pt page at scale 3 is refused, not allocated) and
   again on the bitmap. A small bbox crop of a huge page is allowed.
-- At most 2 concurrent renders; a third waits 5 s then gets 429.
+- **Render slots (`pageimage/slots.py`).** At most 2 renders run at once across ALL server workers sharing the data
+  directory, and one session may hold at most 1 of them. They are `flock` files in `<data_dir>/.pageimage-locks/`, so
+  the OS frees a slot when its process dies. A render takes its session slot first and a global slot second, so a session
+  waiting behind its own earlier render holds no global slot and cannot starve anyone. Waiting is bounded: at most 8
+  threads per process wait (2 per session); beyond that a request is refused with 429 immediately instead of tying up a
+  thread, and a request that waits 5 s without getting a slot is refused with 429. If the lock directory or `fcntl`
+  is unusable the render is refused (503). Session ids hash into 256 slot groups, so the lock-file count is bounded; two
+  sessions that collide share a slot. This isolates sessions from each other. It does not rank callers (the wait is a
+  poll, not a FIFO queue), and in open mode a client that can create unlimited sessions can still occupy every global
+  slot.
 The worker re-validates its whole request and exits with a coarse code the
 parent maps to a fixed message.
 
@@ -142,7 +151,7 @@ parent maps to a fixed message.
 | Renderer exploit (native PDFium bug) | see "Residual risk" |
 | Path traversal | client never supplies a path; `doc_id` is a server uuid hex validated by regex; session id regex + resolved-path containment; page segment must match `^\d{1,4}\.png$` |
 | Cross-user read | `owned_session` (403) then a lookup confined to that session's own directory (404 for another session's doc id) |
-| Output flooding / DoS | param ranges, stdout byte cap, concurrency semaphore, per-session quota |
+| Output flooding / DoS | param ranges, stdout byte cap, per-session and global render slots, per-session quota |
 | Argv / env injection | one JSON argv element of typed values; empty environment |
 | Content sniffing / XSS | fixed `image/png`, `nosniff`; worker output must start with the PNG signature; frontend uses `<img>` on an object URL, never HTML |
 | PDF JS / external actions / forms | never executed: rasterization only, forms not drawn |

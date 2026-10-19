@@ -116,13 +116,15 @@ def decode_png(data: bytes) -> DecodedPng:
     return DecodedPng(w, h, rows)
 
 
-def unenforced_limits_off_linux(monkeypatch):
+def unenforced_limits_off_linux(monkeypatch, tmp_path):
     """Where the OS cannot enforce RLIMIT_AS (macOS) the renderer refuses to run unless an operator sets the UNSAFE
-    override. Tests that need a REAL render there set it; on Linux the full limits are always enforced."""
+    override. Tests that need a REAL render there set it; on Linux the full limits are always enforced. Also keeps the
+    render-slot lock files (under data_dir) out of the working directory."""
     import sys
 
     from app.config import settings
     monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", sys.platform != "linux")
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
 
 
 def valid_report(**over) -> dict:

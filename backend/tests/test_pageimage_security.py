@@ -145,7 +145,9 @@ def test_hostile_client_filenames_never_reach_the_filesystem(client, tmp_path, n
     meta = r.json()
     assert "/" not in meta["filename"] and "\\" not in meta["filename"] and "\x00" not in meta["filename"]
     lock = tmp_path / "data" / "documents" / ".quota.lock"          # the one permanent extra file, by exact path
-    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file() and p != lock}
+    slot_dir = tmp_path / "data" / ".pageimage-locks"                 # render-slot lock files (exact directory)
+    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
+               if p.is_file() and p != lock and not p.is_relative_to(slot_dir)}
     assert lock.is_file()
     assert created == {f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json"}
 

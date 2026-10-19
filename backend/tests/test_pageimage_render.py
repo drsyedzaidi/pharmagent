@@ -226,18 +226,21 @@ def test_worker_sees_clean_env_and_empty_cwd(tmp_path, monkeypatch, pdf):
 
 
 def test_slot_exhaustion_returns_busy(monkeypatch, pdf):
+    from app.pageimage import slots
     monkeypatch.setattr(limits, "QUEUE_WAIT_SECONDS", 0.05)
-    acquired = []
+    held = []
     try:
-        for _ in range(limits.MAX_CONCURRENT_RENDERS):
-            assert runner._slots.acquire(timeout=1)
-            acquired.append(1)
+        d = slots._lock_dir()
+        for i in range(limits.MAX_CONCURRENT_RENDERS):               # every global slot taken (here by this process)
+            fd = slots._try_lock(d / f"global-{i}")
+            assert fd is not None
+            held.append(fd)
         with pytest.raises(RenderError) as e:
             render_page(pdf(make_pdf()), 0, RenderParams())
         assert e.value.kind == "busy"
     finally:
-        for _ in acquired:
-            runner._slots.release()
+        for fd in held:
+            os.close(fd)
 
 
 def test_frozen_build_reports_unavailable(monkeypatch, pdf):

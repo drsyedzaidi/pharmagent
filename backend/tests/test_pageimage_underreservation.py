@@ -112,7 +112,8 @@ def test_four_declared_zero_uploads_fill_the_session_budget_and_the_fifth_reads_
     used, fifth, held = asyncio.run(go())
     assert used == 4 * 50 * MIB
     assert fifth.status == 409 and fifth.reads == 0                              # refused before any body byte
-    assert all(u.status == 400 for u in held)                                   # their (empty) files are rejected
+    # their (truncated) files are rejected; the per-session render slot may turn some probes away with 429 first
+    assert all(u.status in (400, 429) for u in held) and any(u.status == 400 for u in held)
     assert quota.usage(tmp_path / "data" / "documents") == ({sid: (0, 0)}, 0)    # and every reservation released
 
 
