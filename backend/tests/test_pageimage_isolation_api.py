@@ -72,7 +72,8 @@ def test_a_busy_session_gets_429_while_another_session_still_renders(client):
         assert ok.status_code == 200 and ok.content.startswith(b"\x89PNG")
     finally:
         release.set()
-        t.join()
+        t.join(30)
+        assert not t.is_alive()
     assert client.get(f"/api/sessions/{sa}/documents/{da}/pages/0.png").status_code == 200   # and A recovers
 
 
@@ -85,4 +86,5 @@ def test_one_session_cannot_take_both_global_slots(client):
         assert client.get(f"/api/sessions/{sb}/documents/{db}/pages/0.png").status_code == 200
     finally:
         release.set()
-        t.join()
+        t.join(30)
+        assert not t.is_alive()

@@ -103,13 +103,18 @@ attestation line (below), nothing else is kept; own process group. Limits:
   BEFORE rendering (so a 14400 pt page at scale 3 is refused, not allocated) and
   again on the bitmap. A small bbox crop of a huge page is allowed.
 - **Render slots (`pageimage/slots.py`).** At most 2 renders run at once across ALL server workers sharing the data
-  directory, and one session may hold at most 1 of them. They are `flock` files in `<data_dir>/.pageimage-locks/`, so
-  the OS frees a slot when its process dies. A render takes its session slot first and a global slot second, so a session
-  waiting behind its own earlier render holds no global slot and cannot starve anyone. Waiting is bounded: at most 8
-  threads per process wait (2 per session); beyond that a request is refused with 429 immediately instead of tying up a
-  thread, and a request that waits 5 s without getting a slot is refused with 429. If the lock directory or `fcntl`
-  is unusable the render is refused (503). Session ids hash into 256 slot groups, so the lock-file count is bounded; two
-  sessions that collide share a slot. This isolates sessions from each other. It does not rank callers (the wait is a
+  directory, and one session may hold at most 1 of them. They are `flock` files, so the OS frees a slot when its
+  process dies. The 2 global slots are `<data_dir>/.pageimage-locks/global-<i>`; a session's slot is
+  `<data_dir>/documents/<session id>/.render-<sha256 of the id>-<j>`, beside that session's document storage (no
+  separate namespace; quota and cleanup ignore it). The name carries the full digest of the exact id, so two different
+  sessions never share a lock (an earlier design hashed ids into 256 groups, which let a chosen id keep a victim at 429).
+  A render takes its session slot first and a global slot second, so a session waiting behind its own earlier render
+  holds no global slot and cannot starve anyone. Waiting is bounded: at most 8 threads per process wait (2 per
+  session); beyond that a request is refused with 429 immediately, and a request that waits 5 s without a slot is
+  refused with 429. If `fcntl`, the lock directory, a plain session id or a real (non-link) session directory is
+  unavailable, the render is refused (503). This isolates sessions from each other. It does not rank callers (the wait
+  is a poll, not a FIFO queue), and in open mode a client that can create unlimited sessions can still occupy every
+  global slot. This isolates sessions from each other. It does not rank callers (the wait is a
   poll, not a FIFO queue), and in open mode a client that can create unlimited sessions can still occupy every global
   slot.
 The worker re-validates its whole request and exits with a coarse code the
@@ -233,7 +238,9 @@ server never parses multipart input or spools it to disk, and `/openapi.json` om
 
 ## Guarded-file sign-offs required
 - `backend/app/config.py` is a GUARDED file: this branch adds two settings
-  (`pageimage_enabled`, `pageimage_unsafe_allow_unenforced_limits`). It needs human sign-off.
+  (`pageimage_enabled`, `pageimage_unsafe_allow_unenforced_limits`). It needs human sign-off. The comment above
+  `pageimage_unsafe_allow_unenforced_limits` was corrected to say what the override now does (excuses only a missing
+  `RLIMIT_AS` on a platform without it); that edit is comment-only, no setting or behaviour in this file changed.
 - `backend/app/main.py` (guarded-adjacent): two lines added earlier (the import and one
   `include_router`). No existing line was changed.
 - `.github/workflows/ci.yml`: one added step running `tests/test_pageimage_limits.py` with

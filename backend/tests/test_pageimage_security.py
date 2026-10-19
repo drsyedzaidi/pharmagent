@@ -75,7 +75,9 @@ def test_valid_magic_but_garbage_body_rejected_and_cleaned(client, tmp_path):
     assert r.status_code == 400
     _no_leak(r, tmp_path)
     root = tmp_path / "data" / "documents" / sid
-    assert list(root.iterdir()) == []
+    import hashlib
+    # nothing of the upload is left; the only file is this session's own render lock
+    assert sorted(p.name for p in root.iterdir()) == [f".render-{hashlib.sha256(sid.encode()).hexdigest()}-0"]
 
 
 def test_truncated_pdf_rejected(client):
@@ -144,12 +146,15 @@ def test_hostile_client_filenames_never_reach_the_filesystem(client, tmp_path, n
     assert r.status_code == 201
     meta = r.json()
     assert "/" not in meta["filename"] and "\\" not in meta["filename"] and "\x00" not in meta["filename"]
-    lock = tmp_path / "data" / "documents" / ".quota.lock"          # the one permanent extra file, by exact path
-    slot_dir = tmp_path / "data" / ".pageimage-locks"                 # render-slot lock files (exact directory)
-    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
-               if p.is_file() and p != lock and not p.is_relative_to(slot_dir)}
-    assert lock.is_file()
-    assert created == {f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json"}
+    import hashlib
+    session_lock = f"data/documents/{sid}/.render-{hashlib.sha256(sid.encode()).hexdigest()}-0"
+    created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()}
+    # exactly: the document, its metadata, and the three lock files a single upload legitimately leaves (the storage
+    # lock, the first global render slot, this session's own render lock); nothing else, anywhere
+    assert created == {
+        f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json",
+        "data/documents/.quota.lock", "data/.pageimage-locks/global-0", session_lock,
+    }
 
 
 @pytest.mark.parametrize("doc_id", [

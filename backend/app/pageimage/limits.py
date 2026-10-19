@@ -26,7 +26,6 @@ WALL_SECONDS = 15.0                   # parent kills the worker after this
 QUEUE_WAIT_SECONDS = 5.0              # wait for a render slot before 429
 MAX_CONCURRENT_RENDERS = 2           # across ALL processes sharing the data directory (flock slots)
 MAX_RENDERS_PER_SESSION = 1          # one session never holds more than this many of those slots
-SESSION_BUCKETS = 256                # session ids hash into this many slot groups (bounds the lock files)
 MAX_WAITING_RENDERS = 8              # per process: threads allowed to block waiting for a slot; more get 429 at once
 MAX_WAITING_PER_SESSION = 2          # per process: of those, how many one session may occupy
 SLOT_POLL_SECONDS = 0.01

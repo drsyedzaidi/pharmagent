@@ -78,7 +78,10 @@ def test_stored_under_server_generated_name_in_session_dir(client, tmp_path):
     meta = _upload(client, sid, name="../../evil name.pdf").json()
     root = tmp_path / "data" / "documents" / sid
     assert (root / f"{meta['id']}.pdf").is_file()
-    assert sorted(p.name for p in root.iterdir()) == [f"{meta['id']}.json", f"{meta['id']}.pdf"]
+    import hashlib
+    assert sorted(p.name for p in root.iterdir()) == sorted([
+        f"{meta['id']}.json", f"{meta['id']}.pdf",
+        f".render-{hashlib.sha256(sid.encode()).hexdigest()}-0"])          # document, metadata, this session's lock
     assert meta["filename"] == "evil name.pdf"  # display-only, basename'd
 
 

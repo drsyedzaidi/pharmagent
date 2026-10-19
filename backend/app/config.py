@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     # Page-image viewer (PDF documents + rendered pages). OFF until a UI reaches it; when off, or in a frozen
     # desktop build, the routes do not exist (not matched, not in OpenAPI, bodies never parsed).
     # ``pageimage_unsafe_allow_unenforced_limits`` is an UNSAFE OPERATOR OVERRIDE, not a development mode: it lets
-    # the renderer run where the OS cannot enforce every resource limit (macOS has no RLIMIT_AS). Default off,
+    # the renderer run on a platform that cannot enforce RLIMIT_AS (macOS), and excuses NOTHING else: the CPU,
+    # file-size, core and open-file limits are always required, and on Linux RLIMIT_AS is required too. Default off,
     # ignored in a frozen build, logged loudly on every render.
     pageimage_enabled: bool = False
     pageimage_unsafe_allow_unenforced_limits: bool = False

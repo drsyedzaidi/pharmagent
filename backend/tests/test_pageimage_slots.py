@@ -3,6 +3,7 @@ waiters, and fail-closed behaviour. One session cannot use more than its share; 
 another; and the global cap holds across server workers, not just inside one process."""
 from __future__ import annotations
 
+import itertools
 import multiprocessing
 import os
 import signal
@@ -31,6 +32,38 @@ def locks(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
     monkeypatch.setattr(limits, "QUEUE_WAIT_SECONDS", 0.2)
     return tmp_path / "data" / ".pageimage-locks"
+
+
+def _wait_until(cond, timeout=10.0):
+    """Poll an observable condition instead of sleeping and hoping."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.005)
+    return cond()
+
+
+def _join(*threads, timeout=30):
+    for t in threads:
+        t.join(timeout)
+    assert not any(t.is_alive() for t in threads), "a thread did not terminate"
+
+
+def _old_bucket(session: str) -> int:
+    """The scheme this replaced: first 4 digest bytes modulo 256. Two sessions with the same value shared a lock."""
+    import hashlib
+    return int.from_bytes(hashlib.sha256(session.encode("utf-8")).digest()[:4], "big") % 256
+
+
+def _colliding_pair() -> tuple[str, str]:
+    seen: dict[int, str] = {}
+    for i in itertools.count():
+        sid = f"sess_{i:06d}"
+        b = _old_bucket(sid)
+        if b in seen:
+            return seen[b], sid
+        seen[b] = sid
 
 
 def _hold(session, started, release, results):
@@ -71,7 +104,7 @@ def test_the_global_cap_is_never_exceeded_under_concurrency(locks):
             pass
     threads = [threading.Thread(daemon=True, target=work, args=(i,)) for i in range(12)]
     [t.start() for t in threads]
-    [t.join(30) for t in threads]
+    _join(*threads)
     assert 1 <= peak <= limits.MAX_CONCURRENT_RENDERS
 
 
@@ -86,7 +119,7 @@ def test_one_session_cannot_hold_more_than_its_share_and_cannot_block_another(lo
     t2, release2, res2 = _in_thread("bob")                      # bob is unaffected: a global slot is still free
     assert res2 == [("ok", "bob")]
     release.set(), release2.set()
-    t.join(), t2.join()
+    _join(t, t2)
 
 
 def test_a_session_waiting_does_not_consume_a_global_slot(locks):
@@ -104,11 +137,11 @@ def test_a_session_waiting_does_not_consume_a_global_slot(locks):
         waiter_done.set()
     w = threading.Thread(daemon=True, target=alice_again)
     w.start()
-    time.sleep(0.15)
+    assert _wait_until(lambda: slots.waiting_counts()[1].get("alice") == 1)      # registered and blocked at her gate
     with slots.render_slot("bob", wait=0.2):                    # global slot 2 free for bob
         pass
     release.set()
-    t.join(), w.join()
+    _join(t, w)
     assert waiter_done.is_set()
 
 
@@ -122,15 +155,14 @@ def test_the_number_of_waiting_threads_is_bounded_and_refusal_is_immediate(locks
         th = threading.Thread(daemon=True, target=lambda i=i: _swallow(f"w{i}", 2.0))
         th.start()
         waiters.append(th)
-    time.sleep(0.2)                                             # both are now blocked in the queue
+    assert _wait_until(lambda: slots.waiting_counts()[0] == 2)  # both are registered waiters
     started = time.monotonic()
     with pytest.raises(slots.SlotBusy):
         with slots.render_slot("late", wait=5):
             pass
     assert time.monotonic() - started < 0.5                     # refused at once, not after the 5 s wait
     release.set()
-    [w.join(10) for w in waiters]
-    t.join()
+    _join(*waiters, t)
 
 
 def test_one_session_cannot_fill_the_waiting_room(locks, monkeypatch):
@@ -139,7 +171,7 @@ def test_one_session_cannot_fill_the_waiting_room(locks, monkeypatch):
     t, release, _ = _in_thread("alice")
     th = threading.Thread(daemon=True, target=lambda: _swallow("alice", 2.0))
     th.start()
-    time.sleep(0.2)
+    assert _wait_until(lambda: slots.waiting_counts()[1].get("alice") == 1)
     started = time.monotonic()
     with pytest.raises(slots.SlotBusy):
         with slots.render_slot("alice", wait=5):
@@ -148,7 +180,7 @@ def test_one_session_cannot_fill_the_waiting_room(locks, monkeypatch):
     with slots.render_slot("bob", wait=1):                      # bob still gets in: the room is not alice's to fill
         pass
     release.set()
-    th.join(10), t.join()
+    _join(th, t)
 
 
 def _swallow(session, wait):
@@ -166,35 +198,78 @@ def test_counters_do_not_leak_after_refusals(locks):
             with slots.render_slot("alice", wait=0.01):
                 pass
     release.set()
-    t.join()
+    _join(t)
     for _ in range(5):                                          # every counter went back to zero: nothing stays refused
         with slots.render_slot("alice", wait=1):
             pass
-    assert slots._waiting_total == 0 and not slots._waiting_by_session
+    assert slots.waiting_counts() == (0, {})
 
 
-def test_lock_files_are_bounded_whatever_the_number_of_sessions(locks):
-    for i in range(1000):
+def test_lock_files_live_with_the_sessions_storage_and_stay_bounded(locks, tmp_path):
+    for i in range(300):
         with slots.render_slot(f"session-{i}", wait=1):
             pass
-    names = [p.name for p in locks.iterdir()]
-    assert len(names) <= limits.SESSION_BUCKETS * limits.MAX_RENDERS_PER_SESSION + limits.MAX_CONCURRENT_RENDERS
+    docs = tmp_path / "data" / "documents"
+    assert len(list(locks.iterdir())) <= limits.MAX_CONCURRENT_RENDERS                 # global slots only
+    per_session = [sorted(p.name for p in d.iterdir()) for d in docs.iterdir()]
+    assert len(per_session) == 300                                                      # one directory per session...
+    assert all(len(names) == limits.MAX_RENDERS_PER_SESSION for names in per_session)   # ...with its own lock file(s)
+    assert all(n.startswith(".render-") for names in per_session for n in names)
+
+
+def test_two_sessions_that_collided_under_the_old_scheme_render_concurrently(locks):
+    a, b = _colliding_pair()
+    assert a != b and _old_bucket(a) == _old_bucket(b)                  # a deterministic collision under modulo 256
+    t, release, res = _in_thread(a)                                      # a's one slot is in use
+    started = time.monotonic()
+    with slots.render_slot(b, wait=0.5):                                 # b is not blocked by it
+        pass
+    assert time.monotonic() - started < 0.4
+    assert res == [("ok", a)]
+    release.set()
+    _join(t)
+
+
+def test_ids_that_differ_only_by_case_never_share_a_lock(locks):
+    """Directories 'Abc' and 'abc' are one directory on a case-insensitive filesystem; the lock files must still differ."""
+    t, release, _ = _in_thread("Session_A")
+    with slots.render_slot("session_a", wait=0.5):
+        pass
+    release.set()
+    _join(t)
+
+
+def test_a_session_directory_that_is_a_link_or_an_invalid_id_is_refused(locks, tmp_path):
+    docs = tmp_path / "data" / "documents"
+    (docs / "real").mkdir(parents=True)
+    (docs / "alias").symlink_to(docs / "real", target_is_directory=True)
+    for bad in ("alias", "../escape", "a/b", "", "x" * 65):
+        with pytest.raises(slots.SlotUnavailable):
+            with slots.render_slot(bad, wait=0.1):
+                pass
+    assert list((docs / "real").iterdir()) == []                          # nothing was written through the link
 
 
 def test_a_killed_holder_frees_its_slot(locks, tmp_path):
     ctx = multiprocessing.get_context("spawn")
     from tests import _slot_workers
     ready = ctx.Event()
-    p = ctx.Process(target=_slot_workers.hold_forever, args=(str(tmp_path / "data"), "alice", ready))
+    p = ctx.Process(target=_slot_workers.hold_forever, args=(str(tmp_path / "data"), "alice", ready), daemon=True)
     p.start()
-    assert ready.wait(60)
-    with pytest.raises(slots.SlotBusy):
-        with slots.render_slot("alice", wait=0.1):
+    try:
+        assert ready.wait(60)
+        with pytest.raises(slots.SlotBusy):
+            with slots.render_slot("alice", wait=0.1):
+                pass
+        os.kill(p.pid, signal.SIGKILL)
+        p.join(30)
+        assert not p.is_alive()
+        with slots.render_slot("alice", wait=2):                # the OS released the flock when the process died
             pass
-    os.kill(p.pid, signal.SIGKILL)
-    p.join(30)
-    with slots.render_slot("alice", wait=2):                    # the OS released the flock when the process died
-        pass
+    finally:
+        if p.is_alive():                                        # a failing assertion must not leave a 10-minute sleeper
+            p.kill()
+            p.join(30)
 
 
 def _race(tmp_path, sessions, bypass, overrides=None):
