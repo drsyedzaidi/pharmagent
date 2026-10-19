@@ -14,6 +14,10 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: tests/test_routing_baseline.py and test_routing_overlap.py compare against commit 54bc72d and
+          # silently skip (384 tests) when it is not present, which a default depth-1 checkout guarantees.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
