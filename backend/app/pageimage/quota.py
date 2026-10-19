@@ -96,7 +96,7 @@ class _Doc:
 
 
 @contextlib.contextmanager
-def locked(root: Path) -> Iterator[None]:
+def locked(root: Path, wait: float | None = None) -> Iterator[None]:
     if fcntl is None:
         raise QuotaUnavailable("no interprocess lock on this platform")
     try:
@@ -105,7 +105,7 @@ def locked(root: Path) -> Iterator[None]:
     except OSError as exc:
         raise QuotaUnavailable(str(exc)) from exc
     try:
-        deadline = time.monotonic() + limits.LOCK_WAIT_SECONDS
+        deadline = time.monotonic() + (limits.LOCK_WAIT_SECONDS if wait is None else wait)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -138,7 +138,31 @@ def _session_dirs(root: Path) -> list[Path]:
     return out
 
 
+SCAN_ATTEMPTS = 3      # fresh listings tried before a directory that keeps changing fails closed
+
+
+class _Vanished(Exception):
+    """An entry listed by scandir was gone before it could be read."""
+
+
 def _scan(d: Path) -> dict[str, _Doc]:
+    """Every document in one session directory, from ONE consistent listing.
+
+    App deletions run under the storage lock (as scans do), so within the app nothing disappears mid-scan. If
+    something else removes a file between the listing and its stat, that listing is discarded and the directory is
+    listed again: one vanished entry must never turn into "this session is empty". A directory that will not hold
+    still fails closed (QuotaUnavailable) rather than be guessed at. A missing directory is genuinely empty."""
+    for _ in range(SCAN_ATTEMPTS):
+        try:
+            return _scan_once(d)
+        except _Vanished:
+            continue
+        except FileNotFoundError:                              # the directory itself is absent
+            return {}
+    raise QuotaUnavailable(f"{d.name}: directory kept changing during {SCAN_ATTEMPTS} scans")
+
+
+def _scan_once(d: Path) -> dict[str, _Doc]:
     docs: dict[str, _Doc] = {}
     try:
         with os.scandir(d) as it:
@@ -146,9 +170,20 @@ def _scan(d: Path) -> dict[str, _Doc]:
                 m = _NAME_RE.match(e.name)
                 if m is None or e.is_symlink() or not e.is_file(follow_symlinks=False):
                     continue                                   # foreign names, links and directories are ignored
-                st = e.stat(follow_symlinks=False)
-                doc = docs.setdefault(m.group(1), _Doc())
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    raise _Vanished from None
                 kind = m.group(2)
+                raw = None
+                if kind == "resv":
+                    try:
+                        raw = Path(e.path).read_text(encoding="utf-8")
+                    except FileNotFoundError:
+                        raise _Vanished from None
+                    except (OSError, ValueError):               # unreadable or not UTF-8: counted as corrupt (worst
+                        raw = None                             # case) below, never an error that blocks every upload
+                doc = docs.setdefault(m.group(1), _Doc())
                 if kind == "pdf":
                     doc.pdf, doc.has_pdf, doc.pdf_mtime = st.st_size, True, st.st_mtime
                 elif kind == "json":
@@ -160,14 +195,14 @@ def _scan(d: Path) -> dict[str, _Doc]:
                 else:
                     doc.resv_mtime = st.st_mtime
                     try:
-                        raw = json.loads(Path(e.path).read_text(encoding="utf-8"))
-                        if not isinstance(raw, dict) or int(raw["bytes"]) < 0:
+                        parsed = json.loads(raw) if raw is not None else None
+                        if not isinstance(parsed, dict) or int(parsed["bytes"]) < 0:
                             raise ValueError
-                        doc.resv = raw
-                    except (OSError, ValueError, KeyError, TypeError):
+                        doc.resv = parsed
+                    except (ValueError, KeyError, TypeError):
                         doc.resv_corrupt = True
-    except FileNotFoundError:
-        return {}
+    except (_Vanished, FileNotFoundError):
+        raise
     except OSError as exc:
         raise QuotaUnavailable(str(exc)) from exc
     return docs
@@ -237,8 +272,9 @@ def reserve(root: Path, sid: str, doc_id: str, nbytes: int, now: float | None = 
         return path
 
 
-def release(resv: Path) -> None:
-    """Drop a reservation (upload failed or finished). Idempotent; lowers usage, so no lock is needed."""
+def _release_locked(resv: Path) -> None:
+    """Drop a reservation. The callers (commit, documents.discard) hold the storage lock already: flock is not
+    re-entrant per open, so taking it again from the same thread through a new descriptor would wait for itself."""
     resv.unlink(missing_ok=True)
 
 

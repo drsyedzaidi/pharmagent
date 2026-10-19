@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import uuid
@@ -28,6 +29,8 @@ from app.pageimage.quota import (  # noqa: F401  (re-exported)
 )
 
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+log = logging.getLogger("pharmagent.pageimage")
+
 _DOC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -113,7 +116,7 @@ def commit(sid: str, doc_id: str, part: Path, *, filename: str | None, size: int
             _rollback(tmp, js)
             raise
         with contextlib.suppress(OSError):    # committed; a leftover reservation holds nothing and is reclaimed later
-            quota.release(resv)
+            quota._release_locked(resv)       # we already hold the lock
     return meta
 
 
@@ -125,10 +128,32 @@ def _rollback(*paths: Path) -> None:
 
 
 def discard(part: Path) -> None:
-    """Abandon an upload: delete its ``.part`` and release its reservation."""
-    part.unlink(missing_ok=True)
-    quota.release(_resv_of(part))
-    _rollback(part.with_suffix(".json.tmp"))
+    """Abandon an upload: delete its ``.part``, ``.json.tmp`` and reservation.
+
+    Normally under the storage lock, so a concurrent scan never sees them half-removed. Runs on the upload's failure
+    path, so it never raises and never waits long: if the lock is not free within DISCARD_LOCK_WAIT_SECONDS it deletes
+    the pieces without the lock. That is safe because the scan re-lists when an entry vanishes, and it keeps a failed
+    upload from holding a document slot and 50 MiB of quota for an hour just because the store is busy."""
+    try:
+        with quota.locked(_root(), wait=limits.DISCARD_LOCK_WAIT_SECONDS):
+            discard_unlocked(part)
+    except quota.QuotaUnavailable:
+        log.warning("storage lock busy; failed upload removed without it")
+        discard_unlocked(part)
+
+
+def discard_unlocked(part: Path) -> None:
+    """Best-effort, lock-free deletion of an upload's pieces; never raises. Used under the lock by ``discard`` and,
+    without it, as the last-resort fallback (lock busy, or the request is being cancelled)."""
+    for piece in (part, part.with_suffix(".json.tmp")):
+        try:
+            piece.unlink(missing_ok=True)
+        except OSError:
+            log.warning("upload piece left for stale cleanup: could not delete")
+    try:
+        quota._release_locked(_resv_of(part))
+    except OSError:
+        log.warning("reservation left for stale cleanup: could not delete")
 
 
 def _read_meta(p: Path) -> DocumentMeta | None:

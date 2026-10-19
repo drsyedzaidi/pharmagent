@@ -207,7 +207,7 @@ def test_render_timeout_kills_worker_and_returns_504(client, tmp_path, monkeypat
         time.sleep(120)
     """))
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
-    monkeypatch.setattr(limits, "WALL_SECONDS", 1.0)
+    monkeypatch.setattr(limits, "WALL_SECONDS", 3.0)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 504
     _no_leak(r, tmp_path)

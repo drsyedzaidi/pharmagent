@@ -203,7 +203,7 @@ def test_render_limit_outcomes_map_to_distinct_statuses(client, tmp_path, monkey
     from app.pageimage import limits as pi_limits
     sid = _sid(client)
     doc = _upload(client, sid).json()                                                         # uploaded with the real worker
-    monkeypatch.setattr(pi_limits, "WALL_SECONDS", 1.0)
+    monkeypatch.setattr(pi_limits, "WALL_SECONDS", 3.0)
     _fake_worker_file(tmp_path, monkeypatch, source)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == status

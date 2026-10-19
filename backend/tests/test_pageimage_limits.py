@@ -132,6 +132,14 @@ BAD_REPORTS = {
     "hard missing": _report_with(lambda r: r["limits"][2].pop("hard")),
     "soft is a string": _report_with(lambda r: r["limits"][2].update(soft="0")),
     "unknown state": _report_with(lambda r: r["limits"][0].update(state="sure")),
+    # limits are ordered CPU, AS, FSIZE, CORE, NOFILE (runner.expected_limits); the CPU hard limit may exceed the request
+    # by exactly CPU_HARD_SLACK (2 s) and no more
+    "cpu hard limit beyond its slack": _report_with(lambda r: r["limits"][0].update(hard=limits.CPU_SECONDS + 3)),
+    "soft above hard, both within the request": _report_with(
+        lambda r: r["limits"][4].update(soft=limits.NOFILE_LIMIT, hard=limits.NOFILE_LIMIT - 1)),
+    "negative soft": _report_with(lambda r: r["limits"][2].update(soft=-1)),
+    "soft is a bool": _report_with(lambda r: r["limits"][3].update(soft=False)),
+    "slack on a limit other than cpu": _report_with(lambda r: r["limits"][4].update(hard=limits.NOFILE_LIMIT + 2)),
 }
 
 
@@ -205,9 +213,9 @@ def test_a_cpu_limit_signal_needs_an_attestation(tmp_path, monkeypatch, pdf):
 
 def test_a_wall_clock_kill_needs_an_attestation(tmp_path, monkeypatch, pdf):
     _fake(tmp_path, monkeypatch, "import time; time.sleep(60)")
-    assert _kind(pdf, wall_seconds=1.0) == "limit_unavailable"
+    assert _kind(pdf, wall_seconds=3.0) == "limit_unavailable"
     _fake(tmp_path, monkeypatch, REPORT_OK + "import time; time.sleep(60)")
-    assert _kind(pdf, wall_seconds=1.0) == "timeout"
+    assert _kind(pdf, wall_seconds=3.0) == "timeout"   # 3 s: room to write the report on a loaded runner
 
 
 def test_an_output_overflow_needs_an_attestation(tmp_path, monkeypatch, pdf):

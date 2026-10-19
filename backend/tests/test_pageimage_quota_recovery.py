@@ -146,7 +146,7 @@ def test_a_failure_to_release_the_reservation_does_not_undo_a_committed_document
     def boom(_):
         raise Boom("release")
     with monkeypatch.context() as m:
-        m.setattr(quota, "release", boom)
+        m.setattr(quota, "_release_locked", boom)                  # commit releases with the lock already held
         meta = documents.commit("s1", doc_id, part, filename="a.pdf", size=n, pages=1)
     assert documents.get("s1", doc_id) == meta
     assert quota.usage(store)[1] == n                        # a complete document counts its PDF, not the reservation

@@ -116,13 +116,13 @@ def test_a_reservation_exists_while_the_form_is_parsed(client, monkeypatch, tmp_
     """Concurrent request bodies are bounded by quota because the reservation is taken first."""
     sid = client.post("/api/sessions").json()["id"]
     seen = {}
-    real_form = requests.Request._get_form
+    real_parse = formparsers.MultiPartParser.parse                  # the parser the endpoint drives directly
 
     async def spy(self, *a, **k):
         d = tmp_path / "data" / "documents" / sid
-        seen["resv"] = sorted(p.suffix for p in d.iterdir())
-        return await real_form(self, *a, **k)
-    monkeypatch.setattr(requests.Request, "_get_form", spy)
+        seen["resv"] = sorted(p.suffix for p in d.iterdir() if not p.name.startswith(".render-"))
+        return await real_parse(self, *a, **k)
+    monkeypatch.setattr(formparsers.MultiPartParser, "parse", spy)
     r = client.post(f"/api/sessions/{sid}/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")})
     assert r.status_code == 201
     assert seen["resv"] == [".resv"]

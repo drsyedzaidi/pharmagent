@@ -11,12 +11,16 @@ import re
 import sys
 from collections.abc import Callable
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
+from python_multipart.exceptions import FormParserError
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.requests import ClientDisconnect
 from starlette.routing import Match
 
 from app.config import settings
@@ -61,6 +65,65 @@ _RENDER_ERRORS = {
     "failed": (422, "page could not be rendered"),
     "bad_request": (400, "invalid render request"),
 }
+
+
+_MALFORMED = "upload must be a well-formed multipart/form-data body with one 'file' part"
+_INTERRUPTED = "upload was interrupted"
+# Client-caused parser failures: bad framing or headers, too many parts, an unknown or broken charset.
+_CLIENT_PARSE_ERRORS = (MultiPartException, FormParserError, UnicodeError, LookupError)
+
+
+async def _read_form(request: Request) -> FormData:
+    """Parse the upload's multipart body. Done by hand (not ``request.form()``) because the route reads the body only
+    after authentication and the quota reservation, so FastAPI's own parse-error handling does not apply.
+
+    Limits: exactly the media type multipart/form-data, at most one file part, at most 4 other fields of at most
+    64 KiB each. Every parser complaint (no boundary, bad framing or part headers, too many parts, an unknown charset)
+    is the client's mistake: a fixed 400 in the standard envelope, not a 500 and not an ERROR traceback; a client that
+    disconnects mid-body gets the same quiet treatment. Every temp file the parser spooled is closed here, on failure
+    (including the body cap firing mid-parse) and also on success for a file part that never reached the form (an
+    unterminated body), instead of being left to the garbage collector."""
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "multipart/form-data":
+        raise HTTPException(400, _MALFORMED)
+    parser = MultiPartParser(request.headers, request.stream(), max_files=1, max_fields=4, max_part_size=64 * 1024)
+    spooled = getattr(parser, "_files_to_close_on_error", [])          # Starlette's own list of opened spools
+    try:
+        form = await parser.parse()
+    except BaseException as exc:
+        _close_all(spooled)
+        if isinstance(exc, _CLIENT_PARSE_ERRORS):
+            raise HTTPException(400, _MALFORMED) from None
+        if isinstance(exc, ClientDisconnect):
+            raise HTTPException(400, _INTERRUPTED) from None
+        raise
+    in_form = {id(v.file) for v in form.values() if isinstance(v, UploadFile)}
+    _close_all([f for f in spooled if id(f) not in in_form])
+    return form
+
+
+def _close_all(files) -> None:
+    for f in files:
+        try:
+            f.close()
+        except Exception:                                               # noqa: BLE001 - closing must not mask exc
+            pass
+
+
+async def _discard_quietly(part) -> None:
+    """Release a failed upload's reservation and pieces without blocking the event loop and without ever replacing the
+    error that caused the failure. ``documents.discard`` may wait briefly for the storage lock, so it runs in a worker
+    thread, shielded from cancellation. If even that cannot run (the request is being cancelled before a thread is
+    available, or anything else goes wrong), the pieces are deleted directly, without the lock (fast, never raises).
+    A cancellation is then re-raised; any other failure of the cleanup is only logged."""
+    try:
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(documents.discard, part)
+    except BaseException as exc:
+        documents.discard_unlocked(part)
+        if not isinstance(exc, Exception):
+            raise
+        log.warning("upload cleanup fell back to an unlocked delete")
 
 
 def _http(table: dict, kind: str) -> HTTPException:
@@ -162,10 +225,10 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             raise HTTPException(400, "invalid session") from None
         form = None
         try:
-            form = await request.form()
+            form = await _read_form(request)
             file = form.get("file")
             if not isinstance(file, UploadFile):
-                raise HTTPException(400, "file is not a PDF")
+                raise HTTPException(400, _MALFORMED)
             size = 0
             with part.open("wb") as out:
                 while chunk := await file.read(1 << 20):
@@ -189,7 +252,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             meta = await run_in_threadpool(documents.commit, sess.id, doc_id, part,
                                            filename=file.filename, size=size, pages=pages)
         except BaseException as exc:
-            documents.discard(part)           # every failure releases the reservation and removes its pieces
+            await _discard_quietly(part)      # every failure releases the reservation and removes its pieces
             if isinstance(exc, documents.ReservationLostError):
                 raise HTTPException(409, "upload expired; please retry") from None
             if isinstance(exc, documents.QuotaUnavailable):

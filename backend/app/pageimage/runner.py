@@ -2,8 +2,10 @@
 an empty temp cwd, a wall-clock kill and a hard cap on bytes read from stdout.
 
 Only typed, pre-validated values reach the worker (one JSON argv element, no
-shell). Failures surface as ``RenderError`` carrying a coarse ``kind``; the
-worker's stderr is discarded and no path or exception text ever reaches a caller.
+shell). Failures surface as ``RenderError`` carrying a coarse ``kind``. The
+worker's stderr is drained, but only its first ``_MAX_REPORT_BYTES`` are kept,
+and only to find its one limit-attestation line (``_attest``); no path or
+exception text ever reaches a caller.
 """
 from __future__ import annotations
 

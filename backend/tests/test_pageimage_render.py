@@ -175,7 +175,7 @@ def test_wall_clock_timeout_kills_worker(tmp_path, monkeypatch, pdf):
     p = pdf(make_pdf())
     t0 = time.monotonic()
     with pytest.raises(RenderError) as e:
-        render_page(p, 0, RenderParams(), wall_seconds=1.0)
+        render_page(p, 0, RenderParams(), wall_seconds=3.0)
     assert e.value.kind == "timeout"
     assert time.monotonic() - t0 < 10
     pid = int(pidfile.read_text())
