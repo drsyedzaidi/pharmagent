@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.compute.dosing import extract_ss_intervals, is_multiple_dose
+from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose
 from app.compute.nca import run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.core.pharmstate import PharmState
@@ -76,11 +76,20 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     if amt_col and ii_col and is_multiple_dose(
             records_all, time_col=time_col, amt_col=amt_col, ii_col=ii_col,
             addl_col=addl_col, id_col=id_col):
-        profiles = extract_ss_intervals(
+        profiles, skipped = extract_ss_intervals_checked(
             records_all, id_col=id_col, time_col=time_col, dv_col=dv_col,
             amt_col=amt_col, ii_col=ii_col, addl_col=addl_col, blq_col=cens_col)
+        # fail closed: a repeated-dose dataset is never re-analysed as single-dose NCA, and no subject is dropped
+        if skipped or not profiles:
+            detail = "; ".join(f"{sid!r}: {why}" for sid, why in skipped.items()) or "no subject profiles"
+            raise ValueError("steady-state NCA stopped: these subject profiles could not form a complete dosing "
+                             f"interval: {detail}")
         if profiles:
             out = run_nca_ss(profiles)
+            for p in out["nca_parameters"]:      # endpoint provenance: was C(0) or C(tau) assumed?
+                prof = profiles[p["subject"]]
+                p["c0_source"], p["ctau_source"] = prof.c0_source, prof.ctau_source
+            assumed = sorted((str(s) for s, prof in profiles.items() if prof.ctau_source == "c0_assumed"))
             n = len(out["nca_parameters"])
             taus = {round(p.tau, 3) for p in profiles.values()}
             if evid_col:
@@ -93,10 +102,11 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
             else:
                 n_blq = int((pd.to_numeric(obs_ss[dv_col], errors="coerce") <= 0).sum())
             out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
-            out["nca_summary"]["blq"] = {"n_below_loq": n_blq, "rule": (
+            out["nca_summary"]["blq"] = {"n_below_loq": n_blq, "ctau_assumed_c0": assumed, "rule": (
                 ("M1 applied within the final steady-state dosing interval: BLQ-flagged records before that interval's "
                  "first quantifiable value count as a 0 baseline; later BLQ records (middle or trailing) are excluded "
-                 "from AUC_tau.") if cens_col is not None else
+                 "from AUC_tau. Where the tau sample was excluded the interval is closed with C(tau) = C(0) "
+                 "(listed in ctau_assumed_c0).") if cens_col is not None else
                 ("No BLQ flag in the data: concentrations are used as given in the steady-state interval analysis "
                  "(a 0 is a measured zero)."))}
             return ToolResult(

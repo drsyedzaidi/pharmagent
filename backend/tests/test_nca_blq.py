@@ -330,3 +330,39 @@ def test_an_infinite_dv_neither_ends_the_leading_phase_nor_enters_the_profile(ba
     reference = _extract(dose + [_obs("I", 0.5, 0.0)] + rest)["I"]
     assert with_inf == reference
     assert all(math.isfinite(c) for c in with_inf.conc) and 0.0 in with_inf.conc   # the 0.5 h BLQ became a 0 baseline
+
+
+# ── near-tau samples, unclosable subjects, endpoint provenance ────────────────────────────────────
+@pytest.mark.parametrize("eps", [-0.2, 0.2])                     # tolerance is 2% of tau = 0.24 h
+def test_a_sample_within_the_tau_tolerance_is_placed_exactly_at_tau(eps, run_ss):
+    dose = [{"ID": "N", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3, "BLQ": 0}]
+    near = [_obs("N", 12.0 + eps if t == 12.0 else t, c) for t, c in SS_PROFILE]
+    prof = _extract(dose + near)["N"]
+    assert prof.tad[0] == 0.0 and prof.tad[-1] == 12.0 and prof.ctau_source == "measured"
+    shifted = run_ss(_ss_rows("N", [(12.0 + eps if t == 12.0 else t, c) for t, c in SS_PROFILE]))["params"]["N"]
+    exact = run_ss(_ss_rows("N", SS_PROFILE))["params"]["N"]
+    assert shifted["AUC_tau"] == exact["AUC_tau"]
+
+
+UNCLOSABLE = [(1.0, 6.0), (2.0, 8.0), (4.0, 5.0)]                # no sample at 0 or near tau: no interval end known
+
+
+def test_one_unclosable_subject_is_not_silently_omitted(run_ss):
+    rows = _ss_rows("V", SS_PROFILE) + _ss_rows("U", UNCLOSABLE)
+    with pytest.raises(ValueError, match=r"U") as err:
+        run_ss(rows)
+    assert "complete" in str(err.value) and "'V'" not in str(err.value)
+
+
+def test_all_unclosable_subjects_fail_closed_never_single_dose_nca(run_ss):
+    with pytest.raises(ValueError, match=r"steady-state"):
+        run_ss(_ss_rows("U", UNCLOSABLE))
+
+
+def test_the_public_result_records_the_c_tau_equals_c0_assumption(run_ss):
+    pairs = [(t, 0.0 if t == 12.0 else c) for t, c in SS_PROFILE]
+    out = run_ss(_ss_rows("T", pairs, blq_at=(12.0,)) + _ss_rows("M", SS_PROFILE))
+    assert out["params"]["T"]["ctau_source"] == "c0_assumed" and out["params"]["M"]["ctau_source"] == "measured"
+    assert out["params"]["T"]["c0_source"] == "measured"
+    assert out["summary"]["blq"]["ctau_assumed_c0"] == ["T"]
+    assert "C(tau) = C(0)" in out["summary"]["blq"]["rule"]
