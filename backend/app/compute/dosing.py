@@ -40,7 +40,7 @@ class SSProfile:
     tau: float                  # interdose interval
     n_doses: int                # total doses (explicit + ADDL-expanded)
     c0_source: str              # "measured" | "ctau_assumed" | "none"
-    ctau_source: str = "measured"   # "measured" | "c0_assumed" (interval closed with C(tau) = C(0), blq_col path only)
+    ctau_source: str = "measured"   # "measured" | "c0_assumed" (closed with C(tau) = C(0); require_complete_interval)
 
 
 def _dose_times(rows: list[dict], *, time_col: str, amt_col: str,
@@ -189,19 +189,20 @@ def _m1_in_interval(rows: list[tuple[float, bool, float | None]]) -> list[tuple[
 def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
                          dv_col: str, amt_col: str, ii_col: str | None = None,
                          addl_col: str | None = None, blq_col: str | None = None,
-                         tol_frac: float = 0.02) -> dict[Any, SSProfile]:
+                         tol_frac: float = 0.02, require_complete_interval: bool = False) -> dict[Any, SSProfile]:
     """Per-subject last-interval profiles; subjects that cannot form one are left out (see
     ``extract_ss_intervals_checked`` for the reasons)."""
     profiles, _skipped = extract_ss_intervals_checked(
         records, id_col=id_col, time_col=time_col, dv_col=dv_col, amt_col=amt_col, ii_col=ii_col,
-        addl_col=addl_col, blq_col=blq_col, tol_frac=tol_frac)
+        addl_col=addl_col, blq_col=blq_col, tol_frac=tol_frac, require_complete_interval=require_complete_interval)
     return profiles
 
 
 def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: str,
                                  dv_col: str, amt_col: str, ii_col: str | None = None,
                                  addl_col: str | None = None, blq_col: str | None = None,
-                                 tol_frac: float = 0.02) -> tuple[dict[Any, SSProfile], dict[Any, str]]:
+                                 tol_frac: float = 0.02, require_complete_interval: bool = False,
+                                 ) -> tuple[dict[Any, SSProfile], dict[Any, str]]:
     """Build one steady-state interval profile per subject (last dose interval).
 
     For each subject: expand the dose schedule, take the last dose, and collect
@@ -213,8 +214,12 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
     interval's first quantifiable value (unflagged, finite time and DV) are a 0 baseline, later flagged records are
     excluded. Samples from earlier intervals play no part in that classification. Dose rows (AMT > 0) only build
     the schedule and are never concentrations. If the sample at tau is excluded, the interval is closed with the
-    steady-state convention C(tau) = C(0); a subject with neither C(0) nor C(tau) is skipped. An accepted sample
-    within the tau tolerance is placed at exactly tau, so the profile spans exactly [0, tau].
+    steady-state convention C(tau) = C(0).
+
+    With ``require_complete_interval`` (NCA), with or without ``blq_col``: an accepted sample within the tau tolerance
+    is placed at exactly tau; if C(tau) is absent but C(0) is known, the interval is closed with C(tau) = C(0)
+    (``ctau_source="c0_assumed"``); a subject with neither end is skipped with that reason. Without it (legacy callers
+    such as the compartmental tools) profiles are returned as sampled.
 
     Returns ``(profiles, skipped)``: ``skipped`` maps each subject that could not form a complete interval to why.
     """
@@ -246,11 +251,12 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
                 continue                        # a dose event builds the schedule; it is never a concentration
             tad = t - last_dose
             if -tol <= tad <= tau + tol:
+                near_tau = require_complete_interval and tad >= tau - tol   # within tolerance: this IS the tau sample
+                tad = float(tau) if near_tau else max(tad, 0.0)
                 if blq_col is None:
-                    pts.append((max(tad, 0.0), dv))
+                    pts.append((tad, dv))
                 else:
-                    near_tau = tad >= tau - tol         # within the tolerance of tau: this IS the tau sample
-                    flagged.append((float(tau) if near_tau else max(tad, 0.0), is_blq, dv))
+                    flagged.append((tad, is_blq, dv))
         if blq_col is not None:
             pts = _m1_in_interval(flagged)
         if len(pts) < 3:
@@ -282,7 +288,7 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
         # close the interval: if the sample at tau was excluded (BLQ path), use the steady-state periodic
         # convention C(tau) = C(0) instead of integrating a partial interval and calling it AUC_tau
         ctau_source = "measured"
-        if blq_col is not None and tad[-1] < tau:
+        if require_complete_interval and tad[-1] < tau:
             if tad[0] > PRE_DOSE_TOL:
                 skipped[sid] = "neither C(0) nor C(tau) is available, so no complete [0, tau] interval can be formed"
                 continue

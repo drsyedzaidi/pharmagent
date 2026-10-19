@@ -276,7 +276,7 @@ def _extract(recs, **kw):
     from app.compute.dosing import extract_ss_intervals
 
     return extract_ss_intervals(recs, id_col="ID", time_col="TIME", dv_col="DV", amt_col="AMT",
-                                ii_col="II", addl_col="ADDL", blq_col="BLQ", **kw)
+                                ii_col="II", addl_col="ADDL", blq_col="BLQ", require_complete_interval=True, **kw)
 
 
 def _obs(sid, tad, dv, blq=0):
@@ -366,3 +366,44 @@ def test_the_public_result_records_the_c_tau_equals_c0_assumption(run_ss):
     assert out["params"]["T"]["c0_source"] == "measured"
     assert out["summary"]["blq"]["ctau_assumed_c0"] == ["T"]
     assert "C(tau) = C(0)" in out["summary"]["blq"]["rule"]
+
+
+# ── the complete-interval contract holds without a BLQ column too ─────────────────────────────────
+@pytest.mark.parametrize("eps", [-0.2, 0.2])
+def test_no_flag_sample_within_the_tau_tolerance_is_placed_exactly_at_tau(eps, run_ss):
+    from app.compute.dosing import extract_ss_intervals_checked
+
+    recs = [{"ID": "N", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3}]
+    recs += [{"ID": "N", "TIME": 36 + (12.0 + eps if t == 12.0 else t), "DV": c, "AMT": 0, "II": None, "ADDL": None}
+             for t, c in SS_PROFILE]
+    prof = extract_ss_intervals_checked(recs, id_col="ID", time_col="TIME", dv_col="DV", amt_col="AMT", ii_col="II",
+                                        addl_col="ADDL", require_complete_interval=True)[0]["N"]
+    assert prof.tad[0] == 0.0 and prof.tad[-1] == 12.0 and prof.ctau_source == "measured"
+    shifted = run_ss(_ss_rows("N", [(12.0 + eps if t == 12.0 else t, c) for t, c in SS_PROFILE]), with_flag=False)
+    exact = run_ss(_ss_rows("N", SS_PROFILE), with_flag=False)
+    assert shifted["params"]["N"]["AUC_tau"] == exact["params"]["N"]["AUC_tau"]
+
+
+def test_no_flag_one_unclosable_subject_is_not_silently_omitted(run_ss):
+    with pytest.raises(ValueError, match=r"'U'") as err:
+        run_ss(_ss_rows("V", SS_PROFILE) + _ss_rows("U", UNCLOSABLE), with_flag=False)
+    assert "neither C(0) nor C(tau)" in str(err.value) and "'V'" not in str(err.value)
+
+
+def test_no_flag_all_unclosable_subjects_fail_closed(run_ss):
+    with pytest.raises(ValueError, match=r"steady-state"):
+        run_ss(_ss_rows("U", UNCLOSABLE), with_flag=False)
+
+
+def test_no_flag_result_records_truthful_endpoint_provenance(run_ss):
+    missing_tau = [(t, c) for t, c in SS_PROFILE if t != 12.0]
+    out = run_ss(_ss_rows("T", missing_tau) + _ss_rows("M", SS_PROFILE), with_flag=False)
+    t, m = out["params"]["T"], out["params"]["M"]
+    assert (t["c0_source"], t["ctau_source"]) == ("measured", "c0_assumed")
+    assert (m["c0_source"], m["ctau_source"]) == ("measured", "measured")
+    c0 = SS_PROFILE[0][1]
+    closed = run_ss(_ss_rows("T", missing_tau + [(12.0, c0)]), with_flag=False)["params"]["T"]
+    assert t["AUC_tau"] == closed["AUC_tau"]                                # integrated over the whole [0, 12]
+    assert out["summary"]["blq"]["ctau_assumed_c0"] == ["T"]
+    rule = out["summary"]["blq"]["rule"]
+    assert "No BLQ flag" in rule and "C(tau) = C(0)" in rule and "T" in rule

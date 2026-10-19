@@ -78,7 +78,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
             addl_col=addl_col, id_col=id_col):
         profiles, skipped = extract_ss_intervals_checked(
             records_all, id_col=id_col, time_col=time_col, dv_col=dv_col,
-            amt_col=amt_col, ii_col=ii_col, addl_col=addl_col, blq_col=cens_col)
+            amt_col=amt_col, ii_col=ii_col, addl_col=addl_col, blq_col=cens_col, require_complete_interval=True)
         # fail closed: a repeated-dose dataset is never re-analysed as single-dose NCA, and no subject is dropped
         if skipped or not profiles:
             detail = "; ".join(f"{sid!r}: {why}" for sid, why in skipped.items()) or "no subject profiles"
@@ -108,7 +108,9 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                  "from AUC_tau. Where the tau sample was excluded the interval is closed with C(tau) = C(0) "
                  "(listed in ctau_assumed_c0).") if cens_col is not None else
                 ("No BLQ flag in the data: concentrations are used as given in the steady-state interval analysis "
-                 "(a 0 is a measured zero)."))}
+                 "(a 0 is a measured zero)."
+                 + (f" C(tau) = C(0) was assumed to close the interval for: {', '.join(assumed)}." if assumed else
+                    " Every interval ends at a measured C(tau).")))}
             return ToolResult(
                 summary=(f"Steady-state NCA: {n} subjects over a {sorted(taus)} h dosing "
                          f"interval (AUC_tau, Cmax/Cmin, Cavg, CL/F=Dose/AUC_tau, "
