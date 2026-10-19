@@ -241,6 +241,9 @@ server never parses multipart input or spools it to disk, and `/openapi.json` om
   (`pageimage_enabled`, `pageimage_unsafe_allow_unenforced_limits`). It needs human sign-off. The comment above
   `pageimage_unsafe_allow_unenforced_limits` was corrected to say what the override now does (excuses only a missing
   `RLIMIT_AS` on a platform without it); that edit is comment-only, no setting or behaviour in this file changed.
+  **Signed off by the owner (2026-10-19)**: "I approve the guarded `backend/app/config.py` comment change in `f0ce584`."
+  The two settings themselves (`pageimage_enabled`, `pageimage_unsafe_allow_unenforced_limits`) are covered by the
+  earlier review of this branch; this sign-off covers only the corrected comment.
 - `backend/app/main.py` (guarded-adjacent): two lines added earlier (the import and one
   `include_router`). No existing line was changed.
 - `.github/workflows/ci.yml`: one added step running `tests/test_pageimage_limits.py` with
