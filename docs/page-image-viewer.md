@@ -193,8 +193,8 @@ only cover one process). Where `fcntl` does not exist, or the lock cannot be tak
   refused with 503; nothing is deleted to make room. An upload idle for over an hour loses its reservation and its
   commit is refused (409 "upload expired").
 - **Status codes:** 409 document count or session byte budget; 503 global byte budget or accounting unavailable.
-- **Not done:** retention of complete documents, per-session render queues, and narrowing the unenforced-limits override to
-  `RLIMIT_AS` (remaining step-5 items; this PR stays DO NOT MERGE until then).
+- **Not done:** retention of complete documents. (Per-session render slots and the narrowed override are described in
+  "Render sandbox" and "Platform caveats".)
 
 ## Residual risk (read this)
 The subprocess + rlimits limit blast radius; they are NOT a sandbox. A native
@@ -215,6 +215,11 @@ for the worker. Uploaded PDFs from untrusted parties should not be enabled until
   override, not a development mode: nothing verifies the server is local. It is default off,
   ignored in a frozen build, and logged as a warning on every render. With it, the CPU limit,
   the wall-clock kill, the pixel caps and the output cap still apply, the memory cap does NOT.
+  **The override excuses exactly one thing: a missing `RLIMIT_AS`, on a platform that cannot enforce it.** The worker
+  and the parent both refuse (`limit_unavailable`) if the CPU-time, file-size, core-size or open-file limit is not
+  set and confirmed, whatever the override says, and on Linux, where `RLIMIT_AS` exists, a missing `RLIMIT_AS` is
+  refused even with the override. (The skipped test in the dedicated Linux CI step is the macOS-only "refuses by
+  default" test; it applies only to platforms where `RLIMIT_AS` is unavailable, so it is expected to skip on Linux.)
 - Frozen/PyInstaller desktop builds: `sys.executable` is the app binary, not a
   Python interpreter, so the worker cannot be spawned. The renderer reports
   "unavailable" (503) rather than trying. Bundling needs a separate decision.

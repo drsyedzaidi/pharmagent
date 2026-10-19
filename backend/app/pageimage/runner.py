@@ -56,6 +56,11 @@ def expected_limits() -> dict[str, tuple[int, int]]:
     }
 
 
+def _as_is_enforceable() -> bool:
+    """RLIMIT_AS limits address space only on Linux. Mirrors ``worker._as_is_enforceable`` (a test pins the pair)."""
+    return sys.platform.startswith("linux")
+
+
 def _is_int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
@@ -66,7 +71,8 @@ def _attest(stderr: bytes) -> bool:
     Fail-closed: exactly one report line; version 1; ``ok`` true; exactly the expected limits, once each, with the
     requested value we asked for; an enforced limit needs a confirmed soft <= request and soft <= hard <= request
     (CPU: + slack). Anything else raises ``limit_unavailable``: silence, an empty or partial list, a duplicate, a
-    wrong value. Unenforced limits are accepted only under the UNSAFE operator override (and logged loudly)."""
+    wrong value. An unenforced RLIMIT_AS on a platform with no such limit is accepted only under the UNSAFE operator
+    override (and logged loudly); any other unenforced limit is always refused."""
     reports = []
     for line in stderr.decode("utf-8", "replace").splitlines():
         try:
@@ -96,6 +102,10 @@ def _attest(stderr: bytes) -> bool:
             if not (_is_int(soft) and _is_int(hard) and 0 <= soft <= request and soft <= hard <= request + slack):
                 raise RenderError("limit_unavailable")
         elif e["state"] == "unenforced":
+            # The override excuses a missing RLIMIT_AS on a platform that cannot enforce it, and nothing else: another
+            # limit reported unenforced (a buggy or hostile worker), or RLIMIT_AS unenforced on Linux, is refused.
+            if name != "RLIMIT_AS" or _as_is_enforceable():
+                raise RenderError("limit_unavailable")
             all_enforced = False
             if any(v is not None and not _is_int(v) for v in (e["soft"], e["hard"])):
                 raise RenderError("limit_unavailable")

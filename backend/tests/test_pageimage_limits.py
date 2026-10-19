@@ -84,7 +84,7 @@ def test_a_ceiling_that_getrlimit_does_not_confirm_is_limit_unavailable(tmp_path
     assert _kind(pdf) == "limit_unavailable"
 
 
-@pytest.mark.skipif(LINUX or not POSIX, reason="macOS has no RLIMIT_AS: the real worker must refuse by default")
+@pytest.mark.skipif(LINUX or not POSIX, reason="applies only on platforms where RLIMIT_AS is unavailable (e.g. macOS); this platform enforces it")
 def test_without_the_unsafe_override_the_real_worker_refuses_where_rlimit_as_is_not_enforced(pdf, monkeypatch):
     monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", False)
     assert _kind(pdf) == "limit_unavailable"
@@ -159,7 +159,10 @@ def test_an_unenforced_state_is_refused_unless_the_unsafe_override(tmp_path, mon
     monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", False)
     assert _kind(pdf) == "limit_unavailable"
     monkeypatch.setattr(settings, "pageimage_unsafe_allow_unenforced_limits", True)
-    assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
+    if LINUX:                                       # RLIMIT_AS exists here, so the override cannot excuse its absence
+        assert _kind(pdf) == "limit_unavailable"
+    else:
+        assert render_page(pdf, 0, RenderParams()).startswith(b"\x89PNG")
 
 
 def test_probe_uses_the_same_fail_closed_path(tmp_path, monkeypatch, pdf):

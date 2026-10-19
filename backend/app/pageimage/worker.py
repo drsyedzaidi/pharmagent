@@ -37,6 +37,12 @@ class LimitUnavailable(Exception):
     """A resource limit could not be set, or getrlimit does not confirm the requested ceiling."""
 
 
+def _as_is_enforceable() -> bool:
+    """RLIMIT_AS limits address space only on Linux; elsewhere (macOS) the OS cannot enforce it. Kept in step with
+    ``runner._as_is_enforceable`` (a test pins the pair)."""
+    return sys.platform.startswith("linux")
+
+
 def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = False, *,
                  fsize: int = 0, core: int = 0, nofile: int = 64) -> list[dict]:
     """Lower the rlimits, CONFIRM each with getrlimit and return one report entry per limit.
@@ -46,7 +52,8 @@ def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = 
     * Fail-closed: a limit that cannot be set, or whose confirmed soft/hard ceiling is not at or below the request,
       raises ``LimitUnavailable`` (the caller must not touch the PDF).
     * RLIMIT_AS is not enforced outside Linux: there it is reported ``state: "unenforced"`` and refused unless
-      ``allow_unenforced`` (an UNSAFE operator override)."""
+      ``allow_unenforced`` (an UNSAFE operator override). The override excuses NOTHING else: CPU, file size, core and
+      open-file limits are always required, and on Linux RLIMIT_AS is required too."""
     try:
         import resource
     except ImportError:  # Windows
@@ -67,7 +74,7 @@ def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = 
         rl = getattr(resource, name, None)
         if rl is None:
             raise LimitUnavailable(name)
-        os_enforces = not (name == "RLIMIT_AS" and not sys.platform.startswith("linux"))
+        os_enforces = not (name == "RLIMIT_AS" and not _as_is_enforceable())
         soft = hard = None
         try:
             cur_soft, cur_hard = resource.getrlimit(rl)
@@ -81,8 +88,12 @@ def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = 
             raise LimitUnavailable(name)
         report.append({"name": name, "requested": want, "soft": soft, "hard": hard,
                        "state": "enforced" if os_enforces and soft is not None else "unenforced"})
-    if not allow_unenforced and any(r["state"] != "enforced" for r in report):
-        raise LimitUnavailable("unenforced")
+    for r in report:
+        if r["state"] == "enforced":
+            continue
+        # the only thing the override may excuse: RLIMIT_AS, on a platform that has no way to enforce it
+        if not (allow_unenforced and r["name"] == "RLIMIT_AS" and not _as_is_enforceable()):
+            raise LimitUnavailable("unenforced")
     return report
 
 
