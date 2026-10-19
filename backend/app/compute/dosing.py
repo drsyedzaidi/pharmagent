@@ -165,9 +165,25 @@ def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,
     return False
 
 
+def _m1_in_interval(rows: list[tuple[float, bool, float | None]]) -> list[tuple[float, float]]:
+    """Rule M1 for one interval's (tad, below-LOQ, dv) records: flagged records before the first quantifiable one
+    (unflagged with a finite DV) become a 0 baseline, later flagged records are dropped; unflagged records without a
+    finite DV carry no measurement and are dropped. With nothing quantifiable, all flagged records stay as zeros."""
+    rows = sorted(rows, key=lambda r: r[0])
+    first_q = next((i for i, (_, blq, dv) in enumerate(rows) if not blq and dv is not None), len(rows))
+    out: list[tuple[float, float]] = []
+    for i, (tad, blq, dv) in enumerate(rows):
+        if blq:
+            if i < first_q:
+                out.append((tad, 0.0))
+        elif dv is not None:
+            out.append((tad, dv))
+    return out
+
+
 def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
                          dv_col: str, amt_col: str, ii_col: str | None = None,
-                         addl_col: str | None = None,
+                         addl_col: str | None = None, blq_col: str | None = None,
                          tol_frac: float = 0.02) -> dict[Any, SSProfile]:
     """Build one steady-state interval profile per subject (last dose interval).
 
@@ -175,6 +191,10 @@ def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
     measured concentrations with time-after-dose in [0, tau]. If no sample is
     taken exactly at tad=0, the trough is set to C(tau) (the steady-state
     assumption C_ss(0) = C_ss(tau)).
+
+    With ``blq_col`` (1 = below LOQ), rule M1 is applied WITHIN that last interval only: flagged records before the
+    interval's first quantifiable value (unflagged, finite time and DV) are a 0 baseline, later flagged records are
+    excluded. Samples from earlier intervals play no part in that classification.
     """
     by_subj: dict[Any, list[dict]] = {}
     for r in records:
@@ -191,14 +211,21 @@ def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
 
         # measured observations in the last interval, as time-after-dose
         pts: list[tuple[float, float]] = []
+        flagged: list[tuple[float, bool, float | None]] = []   # (tad, below-LOQ, dv); used when blq_col is given
         for r in rows:
             t = _num(r.get(time_col))
             dv = _num(r.get(dv_col))
-            if t is None or dv is None:
+            is_blq = blq_col is not None and _num(r.get(blq_col)) == 1
+            if t is None or (dv is None and not is_blq):
                 continue
             tad = t - last_dose
             if -tol <= tad <= tau + tol:
-                pts.append((max(tad, 0.0), dv))
+                if blq_col is None:
+                    pts.append((max(tad, 0.0), dv))
+                else:
+                    flagged.append((max(tad, 0.0), is_blq, dv))
+        if blq_col is not None:
+            pts = _m1_in_interval(flagged)
         if len(pts) < 3:
             continue
         pts.sort(key=lambda x: x[0])

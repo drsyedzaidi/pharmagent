@@ -143,14 +143,14 @@ def run_ss(tmp_path, monkeypatch):
     (id, tad in the last interval, dv, blq); times are written as 36 + tad."""
     monkeypatch.setattr(settings, "data_dir", tmp_path)
 
-    def _run(rows: list[tuple], with_flag: bool = True) -> dict:
+    def _run(rows: list[tuple], with_flag: bool = True, dose_blq: int = 0, dose_dv: object = "") -> dict:
         cols = ["ID", "TIME", "DV", "AMT", "EVID", "II", "ADDL"] + (["BLQ"] if with_flag else [])
         path = tmp_path / "ss.csv"
         with path.open("w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(cols)
             for sid in dict.fromkeys(r[0] for r in rows):
-                w.writerow([sid, 0, "", 100, 1, 12, 3] + ([0] if with_flag else []))
+                w.writerow([sid, 0, dose_dv, 100, 1, 12, 3] + ([dose_blq] if with_flag else []))
             for sid, tad, dv, blq in rows:
                 w.writerow([sid, 36 + tad, "" if dv is None else dv, 0, 0, "", ""] + ([blq] if with_flag else []))
         orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
@@ -202,5 +202,67 @@ def test_steady_state_keeps_the_dose_schedule(run_ss):
 def test_steady_state_rule_text_describes_what_was_applied(run_ss):
     flagged = run_ss(_ss_rows("S", SS_PROFILE, blq_at=(12.0,)))["summary"]["blq"]["rule"]
     assert "0 baseline" in flagged and "excluded" in flagged and "steady-state" in flagged.lower()
+    assert "lambda_z" not in flagged                      # no lambda_z claim: the SS terminal slope is not part of this rule
     unflagged = run_ss(_ss_rows("S", SS_PROFILE), with_flag=False)["summary"]["blq"]["rule"]
     assert "No BLQ flag" in unflagged and "M1" not in unflagged
+
+
+# ── M1 is scoped to the selected final interval ──────────────────────────────────────────────────
+def test_steady_state_m1_is_scoped_to_the_final_interval_not_the_whole_history(run_ss):
+    """Quantifiable earlier-interval samples must not turn a BLQ at the start of the final interval into a 'middle'
+    record: within the final interval it is leading, so it is a 0 baseline (here the value is blank)."""
+    earlier = [(-10.0, 3.0), (-6.0, 2.5)]                      # 26 h and 30 h: an earlier dosing interval
+    flagged = run_ss(_ss_rows("W", earlier + SS_PROFILE, blq_at=(0.0,), value_at={0.0: None}))["params"]["W"]
+    reference = run_ss(_ss_rows("W", earlier + SS_PROFILE, value_at={0.0: 0.0}), with_flag=False)["params"]["W"]
+    assert flagged["AUC_tau"] == reference["AUC_tau"]
+
+
+def test_steady_state_earlier_interval_samples_do_not_change_the_final_interval_result(run_ss):
+    earlier = [(-10.0, 3.0), (-6.0, 2.5)]
+    with_history = run_ss(_ss_rows("H", earlier + SS_PROFILE, blq_at=(12.0,), value_at={12.0: 0.0}))["params"]["H"]
+    alone = run_ss(_ss_rows("H", SS_PROFILE, blq_at=(12.0,), value_at={12.0: 0.0}))["params"]["H"]
+    assert with_history["AUC_tau"] == alone["AUC_tau"]
+
+
+# ── quantifiable needs a finite TIME as well as a finite DV ───────────────────────────────────────
+def test_a_row_without_a_finite_time_does_not_count_as_quantifiable():
+    import pandas as pd
+
+    from app.tools.nca_tools import _apply_m1
+
+    obs = pd.DataFrame({"ID": ["A", "A", "A"], "TIME": [1.0, float("nan"), float("nan")],
+                        "DV": [float("nan"), 5.0, float("nan")], "BLQ": [1, 0, 1]})
+    out = _apply_m1(obs, "ID", "TIME", "DV", "BLQ")
+    # nothing here is quantifiable (the only finite DV has no time), so both BLQ rows are baseline zeros
+    assert sorted(out.loc[out["BLQ"] == 1, "DV"].tolist()) == [0.0, 0.0]
+
+
+# ── BLQ records are counted from observation rows only ───────────────────────────────────────────
+def test_steady_state_blq_count_ignores_dose_rows_with_a_flag(run_ss):
+    out = run_ss(_ss_rows("C", SS_PROFILE, blq_at=(12.0,), value_at={12.0: 0.0}), dose_blq=1)
+    assert out["summary"]["blq"]["n_below_loq"] == 1
+
+
+def test_steady_state_unflagged_zero_count_ignores_dose_rows(run_ss):
+    out = run_ss(_ss_rows("C", SS_PROFILE, value_at={12.0: 0.0}), with_flag=False, dose_dv=0)
+    assert out["summary"]["blq"]["n_below_loq"] == 1
+
+
+# ── the dose schedule survives extraction ────────────────────────────────────────────────────────
+def _ss_records(blq: bool):
+    recs = [{"ID": "S", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3, "BLQ": 0}]
+    for tad, dv in [(-10.0, 3.0), (-6.0, 2.5)] + SS_PROFILE:
+        recs.append({"ID": "S", "TIME": 36 + tad, "DV": dv, "AMT": 0, "II": None, "ADDL": None, "BLQ": 0})
+    return recs
+
+
+@pytest.mark.parametrize("use_blq_col", [False, True])
+def test_the_dose_schedule_and_last_interval_survive_extraction(use_blq_col):
+    from app.compute.dosing import extract_ss_intervals
+
+    kw = {"blq_col": "BLQ"} if use_blq_col else {}
+    prof = extract_ss_intervals(_ss_records(use_blq_col), id_col="ID", time_col="TIME", dv_col="DV", amt_col="AMT",
+                                ii_col="II", addl_col="ADDL", **kw)["S"]
+    assert (prof.n_doses, prof.tau, prof.dose) == (4, 12.0, 100.0)          # 1 dose row + ADDL 3, every 12 h
+    assert prof.tad == (0.0, 1.0, 2.0, 4.0, 8.0, 12.0)                      # only the 36-48 h interval, earlier samples out
+    assert prof.c0_source == "measured"

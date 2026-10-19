@@ -24,16 +24,17 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
 def _apply_m1(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str) -> pd.DataFrame:
     """Rule M1 for observations flagged below-LOQ (CENS == 1), per subject in time order: BLQ rows BEFORE the first
     quantifiable value are a 0 baseline (their value is set to 0, also when it was blank); BLQ rows after it, in the
-    middle or trailing, are excluded. Quantifiable means unflagged WITH a finite numeric DV: a blank unflagged row
-    carries no measurement and does not end the baseline. A subject with nothing quantifiable keeps all its rows as
-    zeros (as before)."""
+    middle or trailing, are excluded. Quantifiable means unflagged WITH a finite numeric TIME and DV: a row without
+    either carries no usable measurement and does not end the baseline. A subject with nothing quantifiable keeps
+    all its rows as zeros (as before)."""
     flag = pd.to_numeric(obs[cens_col], errors="coerce").fillna(0) == 1
     work = obs.assign(_blq=flag.to_numpy(), _t=pd.to_numeric(obs[time_col], errors="coerce"))
     work = work.sort_values([id_col, "_t"], kind="stable")
     parts = []
     for _, g in work.groupby(id_col, sort=False):
         blq = g["_blq"].to_numpy()
-        measured = np.isfinite(pd.to_numeric(g[dv_col], errors="coerce").to_numpy(dtype=float))
+        measured = (np.isfinite(pd.to_numeric(g[dv_col], errors="coerce").to_numpy(dtype=float))
+                    & np.isfinite(g["_t"].to_numpy(dtype=float)))
         quantified = np.flatnonzero(~blq & measured)
         first_q = int(quantified[0]) if quantified.size else len(g)
         leading = blq & (np.arange(len(g)) < first_q)
@@ -75,33 +76,27 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     if amt_col and ii_col and is_multiple_dose(
             records_all, time_col=time_col, amt_col=amt_col, ii_col=ii_col,
             addl_col=addl_col, id_col=id_col):
-        records_ss = records_all
-        if cens_col is not None:
-            # M1 on observation rows only; dosing rows (so the AMT/II/ADDL schedule) pass through untouched
-            ss_df = df.assign(**{dv_col: pd.to_numeric(df[dv_col], errors="coerce")})
-            if evid_col:
-                is_obs = pd.to_numeric(ss_df[evid_col], errors="coerce").fillna(0) == 0
-            else:
-                is_obs = pd.to_numeric(ss_df[amt_col], errors="coerce").fillna(0) <= 0
-            ss_df = pd.concat([ss_df[~is_obs], _apply_m1(ss_df[is_obs], id_col, time_col, dv_col, cens_col)])
-            records_ss = ss_df.sort_index().to_dict("records")
         profiles = extract_ss_intervals(
-            records_ss, id_col=id_col, time_col=time_col, dv_col=dv_col,
-            amt_col=amt_col, ii_col=ii_col, addl_col=addl_col)
+            records_all, id_col=id_col, time_col=time_col, dv_col=dv_col,
+            amt_col=amt_col, ii_col=ii_col, addl_col=addl_col, blq_col=cens_col)
         if profiles:
             out = run_nca_ss(profiles)
             n = len(out["nca_parameters"])
             taus = {round(p.tau, 3) for p in profiles.values()}
-            dv_num = pd.to_numeric(df[dv_col], errors="coerce")
-            if cens_col is not None:
-                n_blq = int((pd.to_numeric(df[cens_col], errors="coerce").fillna(0) == 1).sum())
+            if evid_col:
+                is_obs = pd.to_numeric(df[evid_col], errors="coerce").fillna(0) == 0
             else:
-                n_blq = int((dv_num <= 0).sum())
+                is_obs = pd.to_numeric(df[amt_col], errors="coerce").fillna(0) <= 0
+            obs_ss = df[is_obs]                      # BLQ records are counted on observation rows only
+            if cens_col is not None:
+                n_blq = int((pd.to_numeric(obs_ss[cens_col], errors="coerce").fillna(0) == 1).sum())
+            else:
+                n_blq = int((pd.to_numeric(obs_ss[dv_col], errors="coerce") <= 0).sum())
             out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
             out["nca_summary"]["blq"] = {"n_below_loq": n_blq, "rule": (
-                ("M1 applied before the last-interval extraction (steady-state): BLQ-flagged records before the first "
-                 "quantifiable value count as a 0 baseline; later BLQ records (middle or trailing) are excluded from "
-                 "AUC_tau and lambda_z.") if cens_col is not None else
+                ("M1 applied within the final steady-state dosing interval: BLQ-flagged records before that interval's "
+                 "first quantifiable value count as a 0 baseline; later BLQ records (middle or trailing) are excluded "
+                 "from AUC_tau.") if cens_col is not None else
                 ("No BLQ flag in the data: concentrations are used as given in the steady-state interval analysis "
                  "(a 0 is a measured zero)."))}
             return ToolResult(
