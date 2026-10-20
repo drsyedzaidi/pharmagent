@@ -55,7 +55,9 @@ def _roles(df: pd.DataFrame, meta: dict | None) -> dict[str, str]:
 
 def load_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     from app.core.provenance import file_sha256  # local: keep core deps light
-    path = args["path"]
+    path = args.get("path")
+    if not path:
+        raise ValueError("dataset path is required")
     df = _read(path)
     dataset_id = args.get("dataset_id") or f"ds_{uuid.uuid4().hex[:8]}"
     ctx.dataset_store[dataset_id] = df  # raw df stays server-side

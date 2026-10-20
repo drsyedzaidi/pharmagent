@@ -78,26 +78,36 @@ class SSProfile:
 
 def _dose_times(rows: list[dict], *, time_col: str, amt_col: str,
                 ii_col: str | None, addl_col: str | None) -> tuple[list[float], float | None, float | None]:
-    """Expand ADDL/II into the full list of dose times; return (times, dose, tau)."""
+    """Expand ADDL/II into the full list of dose times; return (times, dose, tau).
+
+    When explicit repeated dose rows are given without a positive II column, tau is
+    inferred if and only if consecutive dose administrations have a constant positive
+    spacing (within 1e-6 relative / 1e-9 absolute tolerance).
+    """
     times: list[float] = []
     dose_amt: float | None = None
     tau: float | None = None
     for r in rows:
         amt = _num(r.get(amt_col))
         t = _num(r.get(time_col))
-        if amt is None or amt <= 0 or t is None:
+        if amt is None or amt <= 0 or t is None or not (math.isfinite(amt) and math.isfinite(t)):
             continue
         dose_amt = amt  # assume constant regimen; last seen wins
         ii = _num(r.get(ii_col)) if ii_col else None
         addl = _num(r.get(addl_col)) if addl_col else None
-        n_extra = int(addl) if addl is not None and addl > 0 else 0
-        step = ii if (ii is not None and ii > 0) else 0.0
+        n_extra = int(addl) if addl is not None and addl > 0 and math.isfinite(addl) else 0
+        step = ii if (ii is not None and ii > 0 and math.isfinite(ii)) else 0.0
         if step > 0:
             tau = step
         times.append(t)
         for k in range(1, n_extra + 1):
             times.append(t + k * step)
-    return sorted(times), dose_amt, tau
+    times = sorted(times)
+    if tau is None and len(times) > 1:
+        diffs = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+        if all(d > 0 and math.isclose(d, diffs[0], rel_tol=1e-6, abs_tol=1e-9) for d in diffs):
+            tau = float(diffs[0])
+    return times, dose_amt, tau
 
 
 def dose_events(rows: list[dict], *, time_col: str, amt_col: str,
@@ -192,9 +202,9 @@ def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,
     for r in records:
         by_subj.setdefault(r.get(id_col), []).append(r)
     for rows in by_subj.values():
-        times, _dose, tau = _dose_times(rows, time_col=time_col, amt_col=amt_col,
-                                        ii_col=ii_col, addl_col=addl_col)
-        if len(times) > 1 and tau:
+        times, _dose, _tau = _dose_times(rows, time_col=time_col, amt_col=amt_col,
+                                         ii_col=ii_col, addl_col=addl_col)
+        if len(times) > 1:
             return True
     return False
 
@@ -380,7 +390,11 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
         times, dose, tau = _dose_times(rows, time_col=time_col, amt_col=amt_col,
                                        ii_col=ii_col, addl_col=addl_col)
         if not times or dose is None or not tau:
-            skipped[sid] = "no repeated-dose schedule (dose amount and interdose interval)"
+            skipped[sid] = (
+                "multiple dose administrations without a constant interdose interval (tau)"
+                if len(times) > 1 else
+                "no repeated-dose schedule (dose amount and interdose interval)"
+            )
             continue
         tol = tol_frac * tau
         recs = _interval_records(rows, time_col=time_col, dv_col=dv_col, amt_col=amt_col, blq_col=blq_col,

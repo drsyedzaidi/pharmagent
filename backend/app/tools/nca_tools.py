@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose, parse_blq_flag
-from app.compute.nca import run_nca
+from app.compute.nca import _round_sig, run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
@@ -44,9 +44,10 @@ def _blq_flags(values: pd.Series, col: str) -> pd.Series:
 def _from_dose_time(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str | None,
                     dose_times: dict[Any, float]) -> pd.DataFrame:
     """Records before the dose add no area. Per subject (dose time = its first dose record, else TIME 0), rows before
-    the dose are removed. When no usable record (BLQ-flagged, or a finite DV) is AT the dose time, the pre-dose
-    record(s) closest to it supply C = 0 there if they are BLQ-flagged or a measured 0 (no drug before the dose); a
-    positive pre-dose value is not carried to the dose time."""
+    the dose are removed and remaining times are expressed as time since that dose (t - t_dose). When no usable record
+    (BLQ-flagged, or a finite DV) is AT the dose time, the pre-dose record(s) closest to it supply C = 0 there if they
+    are BLQ-flagged or a measured 0 (no drug before the dose); a positive pre-dose value is not carried to the dose
+    time."""
     flagged = (obs[cens_col].astype(bool) if cens_col is not None
                else pd.Series(False, index=obs.index))
     usable = flagged | np.isfinite(obs[dv_col].to_numpy(dtype=float))
@@ -54,12 +55,14 @@ def _from_dose_time(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, 
     for sid, g in obs.groupby(id_col, sort=False):
         td = dose_times.get(sid, 0.0)
         before = g[time_col] < td
-        post = g[~before]
+        post = g[~before].copy()
         pre = g[before & usable.loc[g.index]]
         if len(pre) and not (usable.loc[post.index] & (post[time_col] == td)).any():
             latest = pre[pre[time_col] == pre[time_col].max()]
             if (flagged.loc[latest.index] | (latest[dv_col] == 0)).all():
                 post = pd.concat([latest.iloc[[0]].assign(**{time_col: td, dv_col: 0.0}), post])
+        if td != 0.0:
+            post[time_col] = post[time_col] - td
         parts.append(post)
     return pd.concat(parts) if parts else obs
 
@@ -84,13 +87,13 @@ def _apply_m1(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_c
         leading = blq & (np.arange(len(g)) < first_q)
         g = g.copy()
         g.loc[g.index[leading], dv_col] = 0.0
-        parts.append(g[(~blq) | leading])
+        parts.append(g[((~blq) & measured) | leading])
     return pd.concat(parts).drop(columns=["_blq", "_t"]) if parts else obs
 
 
 PRE_DOSE_RULE = ("Records before the dose (the subject's first dose record, else TIME 0) add no area: with no sample "
                  "at the dose time, a BLQ-flagged or zero pre-dose record closest to it sets C = 0 there; other "
-                 "pre-dose records are not used.")
+                 "pre-dose records are not used. Times are reported relative to that dose time.")
 
 
 def _ss_endpoint_rule(ctau_assumed: list[str], c0_assumed: list[str]) -> str:
@@ -139,7 +142,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     # Steady-state branch: repeated dosing (ADDL / interdose interval) -> analyze
     # the last dosing interval with interval (tau) exposures.
     records_all = df.to_dict("records")
-    if amt_col and ii_col and is_multiple_dose(
+    if amt_col and is_multiple_dose(
             records_all, time_col=time_col, amt_col=amt_col, ii_col=ii_col,
             addl_col=addl_col, id_col=id_col):
         profiles, skipped = extract_ss_intervals_checked(
@@ -186,10 +189,10 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                 result={"n_subjects": n, "steady_state": True, "nca_summary": out["nca_summary"]},
             )
 
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
+    df[time_col] = pd.to_numeric(df[time_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
     if amt_col:
-        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce")
+        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
 
     # split dosing vs observation rows
     if evid_col:
@@ -251,7 +254,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
         sub = sub.sort_values(time_col)
         pos = sub[sub[dv_col] > 0]
         plot_t = [round(float(v), 4) for v in pos[time_col].tolist()]
-        plot_c = [round(float(v), 6) for v in pos[dv_col].tolist()]
+        plot_c = [_round_sig(float(v), 6) for v in pos[dv_col].tolist()]
 
         lz_t: list = param.get("lambda_z_pts_t") or []
         lz_c: list = param.get("lambda_z_pts_c") or []
@@ -265,13 +268,13 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
             for i in range(30):
                 t = t0 + (t1 - t0) * i / 29
                 fit_x.append(round(t, 3))
-                fit_y.append(round(math.exp(intercept - lz * t), 6))
+                fit_y.append(_round_sig(math.exp(intercept - lz * t), 6))
 
         lz_subjects.append({
             "id": str(sid),
             "x": plot_t, "y": plot_c,
             "lz_x": [round(v, 4) for v in lz_t],
-            "lz_y": [round(v, 6) for v in lz_c],
+            "lz_y": [_round_sig(v, 6) for v in lz_c],
             "fit_x": fit_x, "fit_y": fit_y,
             "lambda_z": param.get("lambda_z"),
             "t_half": param.get("t_half"),

@@ -87,7 +87,7 @@ def fit_compartmental_models(state: PharmState, ctx: ToolContext, args: dict[str
 
     # Steady-state branch: fit SS models over the last dosing interval.
     records_all = df.to_dict("records")
-    if amt_col and ii_col and is_multiple_dose(
+    if amt_col and is_multiple_dose(
             records_all, time_col=time_col, amt_col=amt_col, ii_col=ii_col,
             addl_col=addl_col, id_col=id_col):
         profiles = extract_ss_intervals(
