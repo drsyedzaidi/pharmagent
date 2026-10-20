@@ -137,6 +137,19 @@ def test_run_unknown_skill_raises():
         orch.run_skill("nope", dataset_path=SAMPLE)
 
 
+def test_chat_driven_session_logs_commands_and_captures_skill():
+    """Analyses driven through free chat (Orchestrator.chat) must populate
+    sess.commands so capture_skill works identically to workflow-driven sessions."""
+    orch = _orch()
+    sid = orch.create_session(owner="alice").id
+    orch.chat(sid, f"load {SAMPLE}", actor="alice")
+    orch.chat(sid, "run NCA", actor="alice")
+    orch.chat(sid, "run the QC checklist", actor="alice")
+    out = orch.capture_skill(sid, "chat-nca-skill", actor="alice")
+    tools = [s["tool"] for s in out["skill"]["steps"]]
+    assert tools == ["compute_nca", "run_qc"]
+
+
 # ── HTTP surface ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture()

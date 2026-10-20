@@ -250,3 +250,6 @@ def test_tool_selection_keeps_the_model_default_reasoning(fake_post):
     tools = default_registry().for_agent("clinpharm")
     assert llm.select_tool("clinpharm", "half-life for ke 0.1", tools, {})["name"] == "calc_half_life"
     assert "reasoning_effort" not in calls[0]["json"]
+    # Agent's domain system_prompt is included in the system message sent to the LLM
+    from app.agents.definitions import AGENTS
+    assert AGENTS["clinpharm"].system_prompt in calls[0]["json"]["messages"][0]["content"]

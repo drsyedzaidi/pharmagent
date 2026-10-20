@@ -345,40 +345,67 @@ class Orchestrator:
         # nested get_session is fine), or concurrent chats can corrupt state/audit.
         with self.session_lock(sid):
             sess = self.get_session(sid)
-            agent_name, method = self.supervisor.route(message)
-            sess.state = apply_writes(sess.state, "supervisor", {"last_agent": agent_name})
-            agent = AGENTS[agent_name]
-            res = agent.run_turn(
-                state=sess.state, message=message, llm=self.llm,
-                registry=self.registry, ctx=sess.ctx, audit=sess.audit, clock=self.clock,
-                actor=actor or "",
-            )
-            sess.state = res.state
+            primary_agent, primary_method = self.supervisor.route(message)
+            plan = self.supervisor.route_plan(message)
+            all_messages: list[str] = []
+            all_tool_calls: list[dict[str, Any]] = []
+            agents_executed: list[str] = []
+            observations: list[dict[str, Any]] = []
             pending = None
-            if res.proposal is not None:
-                # A proposable expensive tool the agent selected: record it for a
-                # human decision (tamper-evidently) — nothing was computed.
-                ts = self.clock()
-                previous = sess.state.pending_tool
-                if previous:
-                    # An undecided proposal is being replaced: leave a trace, so the
-                    # chain shows it was abandoned rather than silently vanishing.
+
+            for agent_name, _ in plan:
+                sess.state = apply_writes(sess.state, "supervisor", {"last_agent": agent_name})
+                agent = AGENTS[agent_name]
+                res = agent.run_turn(
+                    state=sess.state, message=message, llm=self.llm,
+                    registry=self.registry, ctx=sess.ctx, audit=sess.audit, clock=self.clock,
+                    actor=actor or "", prior_observations=observations,
+                )
+                sess.state = res.state
+                agents_executed.append(agent_name)
+                for tc in res.tool_calls:
+                    if "summary" in tc:
+                        self._log_command(sess, tc.get("agent", agent_name), tc["tool"], tc.get("args") or {})
+                        observations.append({"agent": agent_name, "tool": tc["tool"],
+                                             "status": "ok", "summary": tc["summary"]})
+                # For multi-agent handoffs, only append idle_hint if no tool ran across the whole turn
+                ran_or_errored = bool(res.tool_calls) or res.proposal is not None
+                if ran_or_errored or len(plan) == 1:
+                    all_messages.extend(res.messages)
+                all_tool_calls.extend(res.tool_calls)
+                if res.proposal is not None:
+                    # A proposable expensive tool the agent selected: record it for a
+                    # human decision (tamper-evidently) — nothing was computed.
+                    ts = self.clock()
+                    previous = sess.state.pending_tool
+                    if previous:
+                        # An undecided proposal is being replaced: leave a trace, so the
+                        # chain shows it was abandoned rather than silently vanishing.
+                        sess.audit.append(
+                            agent="supervisor", tool=previous["tool"], action="supersede_tool",
+                            inputs=previous.get("args") or {},
+                            outputs={"status": "superseded", "by": res.proposal["tool"]},
+                            timestamp=ts, actor=actor or "")
+                    pending = {**res.proposal, "proposed_at": ts, "proposed_by": actor or "",
+                               "message": message}
+                    sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": pending})
                     sess.audit.append(
-                        agent="supervisor", tool=previous["tool"], action="supersede_tool",
-                        inputs=previous.get("args") or {},
-                        outputs={"status": "superseded", "by": res.proposal["tool"]},
+                        agent="supervisor", tool=pending["tool"], action="propose_tool",
+                        inputs=pending["args"],
+                        outputs={"status": "pending_approval", "agent": pending["agent"]},
                         timestamp=ts, actor=actor or "")
-                pending = {**res.proposal, "proposed_at": ts, "proposed_by": actor or "",
-                           "message": message}
-                sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": pending})
-                sess.audit.append(
-                    agent="supervisor", tool=pending["tool"], action="propose_tool",
-                    inputs=pending["args"],
-                    outputs={"status": "pending_approval", "agent": pending["agent"]},
-                    timestamp=ts, actor=actor or "")
+                    break
+                if any("error" in tc or "skipped" in tc for tc in res.tool_calls):
+                    break
+
+            if not all_messages:
+                from app.agents.base import idle_hint
+                all_messages.append(idle_hint(primary_agent, sess.state))
+
             payload = {
-                "agent": agent_name, "routed_by": method,
-                "messages": res.messages, "tool_calls": res.tool_calls,
+                "agent": primary_agent, "routed_by": primary_method,
+                "agents_executed": agents_executed,
+                "messages": all_messages, "tool_calls": all_tool_calls,
                 "pending_tool": pending,
                 "state": sess.state.model_dump(),
             }
@@ -496,17 +523,21 @@ class Orchestrator:
                     "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
 
     def review_loop(self, sid: str, *, goal: str | None = None, max_iter: int = 3,
-                    actor: str | None = None) -> dict[str, Any]:
+                    actor: str | None = None,
+                    auto_remediate: bool = False) -> dict[str, Any]:
         """Run the adversarial reviewer in a loop until the checkable goal is met
         (or no further progress / max_iter). Each pass is an audited tool run.
 
-        The compute is deterministic, so without a remediation that changes inputs a
-        second pass yields the same findings — the loop therefore stops as soon as the
-        goal is met OR a pass produces no fewer findings than the previous one (no
-        progress). Scientific findings escalate to the human of record rather than
-        being auto-resolved; the loop reports the converged finding set and verdict.
+        Scientific findings (e.g. non-convergence, implausible CL/F, tampered
+        untraced numbers) ALWAYS escalate to the pharmacometrician of record.
+        When ``auto_remediate=True``, deterministic non-scientific blockers
+        (such as ``INCOMPLETE`` when a dataset is loaded but NCA has not yet
+        run, or ``memo-stale`` when ``build_briefing_memo`` purely needs a
+        rebuild after an updated analysis) are remediated via audited tool
+        execution between review passes.
         """
         passes: list[dict[str, Any]] = []
+        remediations: list[dict[str, Any]] = []
         prev_n: int | None = None
         last: dict[str, Any] = {}
         for _ in range(max(1, max_iter)):
@@ -515,9 +546,27 @@ class Orchestrator:
             res = out.get("result") or {}
             last = out
             passes.append({"n_findings": res.get("n_findings"),
-                           "counts": res.get("counts"), "goal_met": res.get("goal_met")})
+                           "counts": res.get("counts"), "goal_met": res.get("goal_met"),
+                           "status": res.get("status")})
             n = res.get("n_findings")
-            if res.get("goal_met") or (prev_n is not None and n is not None and n >= prev_n):
+            if res.get("goal_met"):
+                break
+            remediated_this_pass = False
+            if auto_remediate:
+                sess = self.get_session(sid)
+                finding_ids = {f.get("id") for f in (res.get("findings") or [])}
+                # 1. INCOMPLETE with a loaded dataset: run deterministic NCA
+                if res.get("status") == "INCOMPLETE" and sess.state.dataset_id:
+                    self.run_tool(sid, "compute_nca", "nca", {}, actor=actor)
+                    remediations.append({"tool": "compute_nca", "reason": "status=INCOMPLETE"})
+                    remediated_this_pass = True
+                # 2. Purely stale briefing memo (no manually injected untraced numbers):
+                #    rebuild the memo deterministically from the current state + audit trail.
+                elif "memo-stale" in finding_ids and "memo-untraced-numbers" not in finding_ids:
+                    self.run_tool(sid, "build_briefing_memo", "report", {}, actor=actor)
+                    remediations.append({"tool": "build_briefing_memo", "reason": "finding=memo-stale"})
+                    remediated_this_pass = True
+            if not remediated_this_pass and (prev_n is not None and n is not None and n >= prev_n):
                 break
             prev_n = n
         result = last.get("result") or {}
@@ -533,6 +582,7 @@ class Orchestrator:
             "checked": result.get("checked", {}),
             "iterations": len(passes),
             "passes": passes,
+            "remediations": remediations,
             "findings": result.get("findings", []),
             "counts": result.get("counts", {}),
             "state": last.get("state"),

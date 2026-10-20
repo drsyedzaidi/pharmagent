@@ -94,19 +94,86 @@ class Agent:
     name: str
     system_prompt: str
 
-    def _state_summary(self, state: PharmState) -> dict[str, Any]:
-        """Compact, privacy-safe view of state for LLM tool selection."""
+    def _state_summary(self, state: PharmState,
+                       observations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Compact, privacy-safe view of state for LLM tool selection.
+
+        Exposes aggregate diagnostic summaries (never raw patient rows) and the
+        current turn's execution observations so the agent can reason about
+        scientific state, convergence, and quality findings.
+        """
+        meta = state.dataset_metadata or {}
+        nca_params = state.nca_parameters or []
+        pm = state.pk_model_results or {}
+        nl = state.nlme_results or {}
+        rev = state.review_results or {}
+
+        nca_diag = None
+        if nca_params:
+            nca_diag = {
+                "n_subjects": len(nca_params),
+                "missing_lambda_z": sum(1 for p in nca_params if p.get("lambda_z") is None),
+                "high_extrap_gt20pct": sum(
+                    1 for p in nca_params
+                    if (p.get("pct_AUC_extrap") or 0.0) > 20.0
+                ),
+            }
+
+        pk_diag = None
+        if pm.get("status") == "ok":
+            best = (pm.get("best") or {}) if pm.get("mode") == "compare" else pm
+            ranking = pm.get("ranking") or []
+            aic_delta = None
+            if len(ranking) >= 2 and ranking[0].get("aic") is not None and ranking[1].get("aic") is not None:
+                aic_delta = round(abs(float(ranking[1]["aic"]) - float(ranking[0]["aic"])), 3)
+            pk_diag = {
+                "mode": pm.get("mode", "single"),
+                "best_model": best.get("model_key") or best.get("label"),
+                "n_subjects": best.get("n_subjects"),
+                "n_converged": best.get("n_converged"),
+                "aic_delta_runner_up": aic_delta,
+            }
+
+        nlme_diag = None
+        if nl.get("status") == "ok":
+            sh = list((nl.get("shrinkage_pct") or {}).values())
+            rse = list((nl.get("theta_rse_pct") or {}).values())
+            nlme_diag = {
+                "converged": nl.get("converged"),
+                "condition_number": nl.get("condition_number"),
+                "max_shrinkage_pct": max((v for v in sh if v is not None), default=None),
+                "max_theta_rse_pct": max((v for v in rse if v is not None), default=None),
+            }
+
+        rev_diag = None
+        if rev:
+            rev_diag = {
+                "status": rev.get("status"),
+                "goal_met": rev.get("goal_met"),
+                "counts": rev.get("counts"),
+                "blocking_ids": [
+                    f.get("id") for f in (rev.get("findings") or [])
+                    if not f.get("resolved") and f.get("severity") in ("CRITICAL", "HIGH")
+                ],
+            }
+
         return {
             "dataset_id": state.dataset_id,
             "has_metadata": state.dataset_metadata is not None,
+            "n_subjects": meta.get("n_subjects"),
+            "columns": meta.get("columns"),
+            "detected_roles": meta.get("detected_roles"),
             "data_quality": (state.data_quality or {}).get("quality_flags"),
             "nca_parameters": "present" if state.nca_parameters else None,
+            "nca_diagnostics": nca_diag,
             "be_results": "present" if state.be_results else None,
             "dose_prop_results": "present" if state.dose_prop_results else None,
             "compartmental_results": "present" if state.compartmental_results else None,
             "poppk_results": "present" if state.poppk_results else None,
             "pk_model_results": "present" if state.pk_model_results else None,
-            "nlme_results": "present" if (state.nlme_results or {}).get("status") == "ok" else None,
+            "pk_model_diagnostics": pk_diag,
+            "nlme_results": "present" if nl.get("status") == "ok" else None,
+            "nlme_diagnostics": nlme_diag,
             "simest_results": "present" if state.simest_results else None,
             "stats_advice": "present" if state.stats_advice else None,
             "er_fits": sorted((state.er_results or {}).get("fits") or {}) or None,
@@ -114,22 +181,27 @@ class Agent:
             "last_calculation": (state.clinpharm_results or {}).get("tool"),
             "pending_tool": (state.pending_tool or {}).get("tool"),
             "qc_verdict": state.qc_verdict,
+            "review_diagnostics": rev_diag,
             "report_path": state.report_path,
             "memo_path": state.memo_path,
+            "turn_observations": list(observations) if observations else None,
         }
 
     def run_turn(self, *, state: PharmState, message: str, llm, registry: ToolRegistry,
-                 ctx: ToolContext, audit: AuditChain, clock, actor: str = "") -> AgentResult:
+                 ctx: ToolContext, audit: AuditChain, clock, actor: str = "",
+                 prior_observations: list[dict[str, Any]] | None = None) -> AgentResult:
         tools = registry.for_agent(self.name)
         result = AgentResult(state=state)
+        observations: list[dict[str, Any]] = list(prior_observations or [])
         last_call: tuple[str, str] | None = None
         for _ in range(MAX_TOOL_STEPS):
-            choice = llm.select_tool(self.name, message, tools, self._state_summary(result.state))
+            choice = llm.select_tool(
+                self.name, message, tools,
+                self._state_summary(result.state, observations),
+            )
             if not choice:
                 break
-            # select_tool is stateless (no tool results are fed back), so a model
-            # that does not read the state summary re-picks the same call every
-            # step. Every tool is deterministic, so an identical repeat cannot
+            # Every tool is deterministic, so an identical repeat cannot
             # produce anything new: stop instead of burning MAX_TOOL_STEPS.
             this_call = (choice["name"], json.dumps(choice.get("input") or {}, sort_keys=True,
                                                     default=str))
@@ -146,14 +218,15 @@ class Agent:
                 # queue. The registry refuses it (ExpensiveToolError) — enforcing
                 # there, not on `tools`, also covers a tool the LLM names that is not
                 # in this agent's own list.
+                call_args = dict(choice.get("input") or {})
                 new_state, tool_res = registry.execute(
                     choice["name"], state=result.state, ctx=ctx,
-                    args=choice.get("input", {}), audit=audit, timestamp=clock(),
-                    actor=actor,
+                    args=call_args, audit=audit, timestamp=clock(),
+                    actor=actor, caller_agent=self.name,
                 )
             except ExpensiveToolError as exc:
                 tool = registry.get(choice["name"])
-                if tool.proposable:
+                if tool.proposable and tool.agent == self.name:
                     # Reachable from the agent, never run by it: the refused call
                     # is handed back as a PROPOSAL. The human's approval is the
                     # tool's `confirm` (an LLM-supplied confirm is dropped), and
@@ -177,10 +250,15 @@ class Agent:
                 # Surface it as a chat message rather than 500-ing the whole turn.
                 result.messages.append(f"Could not run {choice['name']}: {exc}")
                 result.tool_calls.append({"tool": choice["name"], "error": str(exc)})
+                observations.append({"agent": self.name, "tool": choice["name"],
+                                     "status": "error", "error": str(exc)})
                 break
             result.state = new_state
             result.messages.append(tool_res.summary)
-            result.tool_calls.append({"tool": choice["name"], "summary": tool_res.summary})
+            result.tool_calls.append({"tool": choice["name"], "agent": self.name,
+                                      "args": call_args, "summary": tool_res.summary})
+            observations.append({"agent": self.name, "tool": choice["name"],
+                                 "status": "ok", "summary": tool_res.summary})
         if not result.messages:
             result.messages.append(idle_hint(self.name, result.state))
         return result

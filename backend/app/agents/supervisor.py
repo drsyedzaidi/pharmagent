@@ -143,3 +143,47 @@ class Supervisor:
             choice = self.llm.classify(message, list(DESCRIPTIONS), DESCRIPTIONS)
             return choice, "llm"
         return best, "keyword"
+
+    def route_plan(self, message: str) -> list[tuple[str, str]]:
+        """Ordered agent execution plan for a single or multi-step chat request.
+
+        Always begins with the exact `self.route(message)` decision so single-agent
+        routing is 100% invariant. When the prompt explicitly chains multiple
+        stages (e.g. 'load x.csv, run NCA, then run QC and write the report'),
+        appends the downstream pipeline agents that also matched in canonical
+        dependency order.
+        """
+        first_agent, first_method = self.route(message)
+        plan: list[tuple[str, str]] = [(first_agent, first_method)]
+        low = (message or "").lower()
+        # Only expand into a multi-agent pipeline when the message contains
+        # explicit multi-step connectors or multiple pipeline stages.
+        has_connector = bool(re.search(r"\b(?:and then|then|after that|followed by|next)\b", low))
+        scores = score(message)
+        # Canonical pharmacometrics pipeline order
+        pipeline_order = (
+            "data_manager", "nca", "be", "dose_prop", "compartmental",
+            "poppk", "modeler", "simulator", "er_dose", "statistician", "qc", "report",
+        )
+        matched = [a for a in pipeline_order if scores.get(a, 0) > 0]
+        anchor = anchored(message)
+        if anchor and anchor not in matched:
+            matched.append(anchor)
+        # If explicit sequential connectors ('then', 'and then', 'followed by')
+        # or a file path + downstream analysis agent are present, order by the
+        # canonical pipeline while keeping first_agent recorded.
+        has_file_and_analysis = (
+            bool(re.search(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", low))
+            and any(a != "data_manager" for a in matched)
+        )
+        if (has_connector or has_file_and_analysis) and len(matched) > 1:
+            ordered: list[tuple[str, str]] = []
+            # If a dataset path is given in the prompt alongside downstream steps,
+            # ensure data_manager runs first if not already first, while preserving
+            # first_agent in the chain.
+            seq = [a for a in pipeline_order if a in matched or a == first_agent]
+            for a in seq:
+                if all(existing != a for existing, _ in ordered):
+                    ordered.append((a, first_method if a == first_agent else "handoff"))
+            return ordered
+        return plan

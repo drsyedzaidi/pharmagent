@@ -35,7 +35,9 @@ class LLM(Protocol):
 _PATH_RE = re.compile(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", re.IGNORECASE)
 
 
-_KE_RE = re.compile(r"\bke\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
+_KE_RE = re.compile(
+    r"(?:\bke|(?:elimination\s+)?rate\s+constant)\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)"
+)
 _HL_RE = re.compile(r"half[- ]life\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
 
 
@@ -106,6 +108,9 @@ class MockLLM:
             return None if s.get("poppk_results") else {"name": "run_poppk", "input": {}}
         if agent == "modeler":
             return None if s.get("pk_model_results") else {"name": "fit_pk_model", "input": {"compare": True}}
+        if agent == "reviewer":
+            rev = s.get("review_diagnostics") or {}
+            return None if rev.get("status") else {"name": "adversarial_review", "input": {}}
         if agent == "qc":
             return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
         if agent == "report":
@@ -185,12 +190,17 @@ class RealLLM:
 
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None:
+        from app.agents.definitions import AGENTS
+        domain_prompt = AGENTS[agent].system_prompt if agent in AGENTS else ""
+        system_text = (f"You are the {agent} agent in a pharmacometrics platform. "
+                       f"{domain_prompt}\n" if domain_prompt else
+                       f"You are the {agent} agent in a pharmacometrics platform. ")
+        system_text += ("Use a tool to make progress, or answer directly if the task is done. "
+                        f"Current state: {state_summary}")
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=settings.max_tokens,
-            system=(f"You are the {agent} agent in a pharmacometrics platform. "
-                    "Use a tool to make progress, or answer directly if the task is done. "
-                    f"Current state: {state_summary}"),
+            system=system_text,
             tools=[t.to_anthropic() for t in tools],
             messages=[{"role": "user", "content": message}],
         )
@@ -292,11 +302,15 @@ class OpenAICompatLLM:
 
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None:
+        from app.agents.definitions import AGENTS
+        domain_prompt = AGENTS[agent].system_prompt if agent in AGENTS else ""
+        system_text = (f"You are the {agent} agent in a pharmacometrics platform. "
+                       f"{domain_prompt}\n" if domain_prompt else
+                       f"You are the {agent} agent in a pharmacometrics platform. ")
+        system_text += ("Call a tool to make progress, or answer in plain text if the task is "
+                        f"done. Current state: {state_summary}")
         msg = self._chat([
-            {"role": "system", "content": (
-                f"You are the {agent} agent in a pharmacometrics platform. "
-                "Call a tool to make progress, or answer in plain text if the task is "
-                f"done. Current state: {state_summary}")},
+            {"role": "system", "content": system_text},
             {"role": "user", "content": message},
         ], tools=[t.to_openai() for t in tools], max_tokens=settings.max_tokens)
         known = {t.name for t in tools}

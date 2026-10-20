@@ -28,8 +28,8 @@ lose the dimension it breaks: `no_tool`, `wrong_tool`, `overreach` (expensive to
 `cross_agent`, `unknown_tool`, `bad_args`, `repeat` - `live` (opt-in).
 
 ## What it has found so far (keyless run)
-- **Platform gap:** the registry executes a tool the model names even when it is not in the routed agent's own list
-  (`nca` ran `generate_report`). Pinned as a strict xfail in `tests/test_agent_eval.py`.
+- **Cross-agent guard:** `ToolRegistry.execute` enforces `caller_agent` so a tool named by the model outside the routed
+  agent's own list (`CrossAgentLLM`) is refused (`CrossAgentToolError`, 0 cross-agent executions).
 - **Routing:** `compute NCA for the dataset`, `run a population NLME fit`, `compare structural models` are decided by
   the model's `classify`, not by keywords; the mock defaults to `data_manager`. Only a live run says how a real model does.
 - **Mock:** answers small talk by profiling the loaded dataset; does not parse `elimination rate constant is 0.25`.
