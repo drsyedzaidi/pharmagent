@@ -185,12 +185,17 @@ class RealLLM:
 
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None:
+        from app.agents.definitions import AGENTS
+        domain_prompt = AGENTS[agent].system_prompt if agent in AGENTS else ""
+        system_text = (f"You are the {agent} agent in a pharmacometrics platform. "
+                       f"{domain_prompt}\n" if domain_prompt else
+                       f"You are the {agent} agent in a pharmacometrics platform. ")
+        system_text += ("Use a tool to make progress, or answer directly if the task is done. "
+                        f"Current state: {state_summary}")
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=settings.max_tokens,
-            system=(f"You are the {agent} agent in a pharmacometrics platform. "
-                    "Use a tool to make progress, or answer directly if the task is done. "
-                    f"Current state: {state_summary}"),
+            system=system_text,
             tools=[t.to_anthropic() for t in tools],
             messages=[{"role": "user", "content": message}],
         )
@@ -292,11 +297,15 @@ class OpenAICompatLLM:
 
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None:
+        from app.agents.definitions import AGENTS
+        domain_prompt = AGENTS[agent].system_prompt if agent in AGENTS else ""
+        system_text = (f"You are the {agent} agent in a pharmacometrics platform. "
+                       f"{domain_prompt}\n" if domain_prompt else
+                       f"You are the {agent} agent in a pharmacometrics platform. ")
+        system_text += ("Call a tool to make progress, or answer in plain text if the task is "
+                        f"done. Current state: {state_summary}")
         msg = self._chat([
-            {"role": "system", "content": (
-                f"You are the {agent} agent in a pharmacometrics platform. "
-                "Call a tool to make progress, or answer in plain text if the task is "
-                f"done. Current state: {state_summary}")},
+            {"role": "system", "content": system_text},
             {"role": "user", "content": message},
         ], tools=[t.to_openai() for t in tools], max_tokens=settings.max_tokens)
         known = {t.name for t in tools}

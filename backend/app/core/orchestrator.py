@@ -354,6 +354,9 @@ class Orchestrator:
                 actor=actor or "",
             )
             sess.state = res.state
+            for tc in res.tool_calls:
+                if "summary" in tc:
+                    self._log_command(sess, tc.get("agent", agent_name), tc["tool"], tc.get("args") or {})
             pending = None
             if res.proposal is not None:
                 # A proposable expensive tool the agent selected: record it for a

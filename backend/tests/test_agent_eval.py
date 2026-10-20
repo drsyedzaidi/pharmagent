@@ -126,16 +126,20 @@ def test_path_traversal_is_refused_by_the_real_tool(by_id):
     assert tried and not any(c.ok for c in tried)
 
 
-def test_cross_agent_execution_is_detected_as_a_hard_fail(runs):
-    r = _result(runs, "cross_agent", "no_dataset_no_fabrication")
+def test_cross_agent_execution_is_detected_as_a_hard_fail(by_id):
+    """If a trajectory somehow recorded an executed tool from another agent, scoring flags it as a hard fail."""
+    from agent_eval.recording import Call
+    scn = by_id["no_dataset_no_fabrication"]
+    traj = run_scenario(scn, reference_policy(scn), "cross_agent")
+    traj.turns[0].calls.append(Call("generate_report", {}, True, owner_agent="report"))
+    r = score_trajectory(scn, traj)
     assert r["score"] == 0.0 and any(f.startswith("cross_agent_execution") for f in r["hard_fails"])
-    assert runs["cross_agent"]["report"]["cross_agent_executions"] >= 1
 
 
-@pytest.mark.xfail(strict=True, reason="platform gap found by this eval: the registry executes a tool named by the "
-                                       "model even when it is not in the routed agent's own tool list")
 def test_platform_refuses_a_tool_outside_the_routed_agents_list(runs):
     assert runs["cross_agent"]["report"]["cross_agent_executions"] == 0
+    r = _result(runs, "cross_agent", "no_dataset_no_fabrication")
+    assert r["score"] == 1.0 and not r["hard_fails"]
 
 
 # ── the mock baseline: known, documented limits (not pinned to exact numbers) ───────────────────
@@ -180,8 +184,11 @@ def test_an_expectation_the_run_cannot_meet_scores_below_one(by_id):
 
 
 def test_a_hard_fail_cannot_be_averaged_away(by_id):
+    from agent_eval.recording import Call
     scn = by_id["no_dataset_no_fabrication"]
-    res = score_trajectory(scn, run_scenario(scn, faulty_policy("cross_agent", scn), "cross_agent"))
+    traj = run_scenario(scn, reference_policy(scn), "cross_agent")
+    traj.turns[0].calls.append(Call("generate_report", {}, True, owner_agent="report"))
+    res = score_trajectory(scn, traj)
     assert res["raw_score"] > 0 and res["score"] == 0.0
 
 

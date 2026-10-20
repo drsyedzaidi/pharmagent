@@ -53,6 +53,10 @@ def require_dataset(ctx: ToolContext, state: PharmState,
     raise ValueError("no dataset loaded — upload a CSV (or run the NCA workflow) first")
 
 
+class CrossAgentToolError(RuntimeError):
+    """Raised when an agent attempts to execute a tool owned by another agent."""
+
+
 class ExpensiveToolError(RuntimeError):
     """Raised when a long-running fit is invoked from a path that has no admission
     control. Callers that ARE admission-controlled (the job-backed endpoints via
@@ -128,6 +132,7 @@ class ToolRegistry:
         timestamp: str,
         actor: str = "",
         allow_expensive: bool = False,
+        caller_agent: str | None = None,
     ) -> tuple[PharmState, ToolResult]:
         """Run a tool: compute → audit → apply writes. The only execution path.
 
@@ -146,6 +151,9 @@ class ToolRegistry:
                 f"'{name}' is a long-running fit — launch it from its dedicated "
                 "control (Population NLME / Covariate SCM / Compare engines), which "
                 "runs it as a bounded background job. It cannot run on this path.")
+        if caller_agent is not None and tool.agent != caller_agent:
+            raise CrossAgentToolError(
+                f"Agent '{caller_agent}' may not execute '{name}' (owned by '{tool.agent}').")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
         res = tool.run(state, run_ctx, args)

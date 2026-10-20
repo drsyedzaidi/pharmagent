@@ -146,14 +146,15 @@ class Agent:
                 # queue. The registry refuses it (ExpensiveToolError) — enforcing
                 # there, not on `tools`, also covers a tool the LLM names that is not
                 # in this agent's own list.
+                call_args = dict(choice.get("input") or {})
                 new_state, tool_res = registry.execute(
                     choice["name"], state=result.state, ctx=ctx,
-                    args=choice.get("input", {}), audit=audit, timestamp=clock(),
-                    actor=actor,
+                    args=call_args, audit=audit, timestamp=clock(),
+                    actor=actor, caller_agent=self.name,
                 )
             except ExpensiveToolError as exc:
                 tool = registry.get(choice["name"])
-                if tool.proposable:
+                if tool.proposable and tool.agent == self.name:
                     # Reachable from the agent, never run by it: the refused call
                     # is handed back as a PROPOSAL. The human's approval is the
                     # tool's `confirm` (an LLM-supplied confirm is dropped), and
@@ -180,7 +181,8 @@ class Agent:
                 break
             result.state = new_state
             result.messages.append(tool_res.summary)
-            result.tool_calls.append({"tool": choice["name"], "summary": tool_res.summary})
+            result.tool_calls.append({"tool": choice["name"], "agent": self.name,
+                                      "args": call_args, "summary": tool_res.summary})
         if not result.messages:
             result.messages.append(idle_hint(self.name, result.state))
         return result
