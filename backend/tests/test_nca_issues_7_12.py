@@ -120,12 +120,65 @@ A,40,2.0,0,0
         run_csv(csv_text)
 
 
-# ── Issue #8 (tool layer): load_dataset without path raises ValueError, not KeyError ────
+# ── Issue #8: workflow tool ValueError returns HTTP 400 with per-subject reason ────────
+ISSUE8_CSV = """
+ID,TIME,DV,AMT,EVID,II,ADDL
+1,0,,100,1,12,4
+2,0,,100,1,12,4
+1,48,3.0,0,0,,
+1,49,6,0,0,,
+1,50,8,0,0,,
+1,52,6,0,0,,
+1,56,4,0,0,,
+1,60,3.0,0,0,,
+2,60,3.0,0,0,,
+2,61,5.0,0,0,,
+"""
+
+
 def test_issue8_load_dataset_missing_path_raises_value_error():
     orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
     sid = orch.create_session().id
     with pytest.raises(ValueError, match="path"):
         orch.run_tool(sid, "load_dataset", "data_manager", {})
+
+
+def test_issue8_workflow_start_returns_400_with_per_subject_reason_instead_of_500(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    csv_path = tmp_path / "ss_incomplete.csv"
+    csv_path.write_text(ISSUE8_CSV.strip() + "\n")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    sid = client.post("/api/sessions").json()["id"]
+    resp = client.post(
+        f"/api/sessions/{sid}/workflow/start",
+        json={"workflow": "nca_full", "params": {"path": str(csv_path)}},
+    )
+    assert resp.status_code == 400
+    msg = resp.json()["error"]["message"]
+    assert "steady-state NCA stopped" in msg
+    assert "fewer than 3 usable samples" in msg
+    assert "2" in msg
+
+
+def test_issue8_workflow_start_without_path_returns_400_instead_of_500():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app, raise_server_exceptions=False)
+    sid = client.post("/api/sessions").json()["id"]
+    resp = client.post(
+        f"/api/sessions/{sid}/workflow/start",
+        json={"workflow": "nca_full", "params": {}},
+    )
+    assert resp.status_code == 400
+    msg = resp.json()["error"]["message"]
+    assert "path" in msg.lower()
 
 
 # ── Issue #9: single-dose Tmax, Tlast, and MRT are relative to first dose time ──────────

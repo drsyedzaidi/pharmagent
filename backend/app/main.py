@@ -460,7 +460,10 @@ def _start_workflow(sid: str, name: str, params: dict | None, actor: str) -> dic
             fn=lambda: orch.start_workflow(sid, name, params, actor=actor,
                                            allow_expensive=True))
         return {"job_id": job_id, "status": "running", "kind": "workflow_start"}
-    return orch.start_workflow(sid, name, params, actor=actor)
+    try:
+        return orch.start_workflow(sid, name, params, actor=actor)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.post("/api/sessions/{sid}/workflow/start")
