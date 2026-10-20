@@ -496,6 +496,9 @@ def test_ss_assumed_c_tau_reached_by_log_down_matches_the_analytic_auc(run_ss):
     p = run_ss(_ss_rows("G", pairs), with_flag=False)["params"]["G"]
     assert p["ctau_source"] == "c0_assumed"
     assert p["AUC_tau"] == pytest.approx(LONG_AUC_TAU, rel=0.02)
+    # the same declared rule as a measured C(tau): log-down 8->12 h gives 65.98, a straight line 66.34
+    explicit = run_ss(_ss_rows("G", pairs + [(12.0, pairs[0][1])]), with_flag=False)["params"]["G"]
+    assert p["AUC_tau"] == explicit["AUC_tau"] == pytest.approx(65.980, abs=1e-3)
 
 
 def test_ss_one_sample_never_supplies_both_interval_ends(run_ss):
@@ -652,7 +655,7 @@ def test_an_unknown_blq_flag_value_fails_validation(bad, lines, run_csv):
 # ── pinned guarantees (mutation-sensitive) ─────────────────────────────────────────────────────────
 def test_m1_is_classified_per_subject(run):
     """Subject A's quantifiable samples must not turn subject B's leading BLQ rows into 'middle' rows."""
-    a_rows = [("A", t, c, 0) for t, c in REST]
+    a_rows = [("A", 0.25, 1.0, 0)] + [("A", t, c, 0) for t, c in REST]     # quantifiable before B's 0.5 h BLQ
     b_rows = [("B", 0.0, None, 1), ("B", 0.5, None, 1)] + [("B", t, c, 0) for t, c in REST]
     together = run(a_rows + b_rows)["B"]
     alone = run(b_rows)["B"]
@@ -663,3 +666,45 @@ def test_a_subject_with_fewer_than_3_usable_samples_stops_the_steady_state_run(r
     with pytest.raises(ValueError, match=r"fewer than 3 usable samples") as err:
         run_ss(_ss_rows("V", SS_PROFILE) + _ss_rows("F", [(0.0, 2.0), (12.0, 2.0)]))
     assert "'F'" in str(err.value) and "'V'" not in str(err.value)
+
+
+# ── rule 4 and endpoint selection, pinned in detail ────────────────────────────────────────────────
+@pytest.mark.parametrize("pre,anchored", [
+    ([(-4.0, None, 1), (-1.0, 0.3, 0)], False),          # the closest pre-dose record is positive: no anchor
+    ([(-4.0, 0.3, 0), (-1.0, None, 1)], True),           # the closest is BLQ-flagged: C(dose) = 0
+    ([(-1.0, None, 1), (-1.0, 0.3, 0)], False),          # records at the closest time disagree: no anchor
+    ([(-1.0, None, 1), (-1.0, 0.0, 0)], True),           # flagged and a measured 0 at the closest time: anchor
+])
+def test_only_the_closest_pre_dose_records_can_anchor_c0_at_the_dose(pre, anchored, run):
+    out = run([("P", t, c, b) for t, c, b in pre] + [("P", t, c, 0) for t, c in REST])["P"]
+    assert out["AUC_last"] == pytest.approx(37.854 if anchored else 35.354, abs=1e-3)
+
+
+def test_the_dose_time_is_the_subjects_first_dose_record(run_csv):
+    lines = (["ID,TIME,DV,AMT,EVID,BLQ", "P,10,,100,1,0", "P,8,,0,0,1"]
+             + [f"P,{10 + t:g},{c},0,0,0" for t, c in REST])
+    assert run_csv(lines)["params"]["P"]["AUC_last"] == pytest.approx(37.854, abs=1e-3)
+
+
+def test_a_pre_dose_trough_within_the_tolerance_is_c0(run_ss):
+    trough = run_ss(_ss_rows("R", [(-0.2, 1.8)] + SS_PROFILE[1:]))["params"]["R"]
+    at_zero = run_ss(_ss_rows("R", [(0.0, 1.8)] + SS_PROFILE[1:]))["params"]["R"]
+    assert trough == at_zero and trough["c0_source"] == "measured" and trough["Ctrough"] == 1.8
+
+
+def test_a_pre_dose_sample_that_is_not_c0_is_not_integrated(run_ss):
+    extra = run_ss(_ss_rows("X", [(-0.2, 9.0)] + SS_PROFILE))["params"]["X"]
+    assert extra == run_ss(_ss_rows("X", SS_PROFILE))["params"]["X"]
+
+
+def test_a_flagged_and_an_unflagged_record_at_one_time_conflict(run_ss):
+    with pytest.raises(ValueError, match=r"conflicting") as err:
+        run_ss(_ss_rows("D", SS_PROFILE) + [("D", 12.0, None, 1)])
+    assert "BLQ" in str(err.value)
+
+
+def test_endpoint_distances_within_1e_9_are_ties():
+    from app.compute.dosing import _place_endpoints
+
+    placed = _place_endpoints([(11.9, False, 2.3), (12.1 - 1e-12, False, 1.9)], 12.0, 0.24)
+    assert placed == [(12.0, False, 2.3)]                  # the earlier sample wins a tie; the later one is past tau
