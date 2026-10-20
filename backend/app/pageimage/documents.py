@@ -9,7 +9,9 @@ inside its own session directory.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import re
 import uuid
@@ -18,15 +20,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
-from app.pageimage import limits
+from app.pageimage import limits, quota
+from app.pageimage.quota import (  # noqa: F401  (re-exported)
+    DocumentLimitError,
+    QuotaExceeded,
+    QuotaUnavailable,
+    ReservationLostError,
+)
 
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+log = logging.getLogger("pharmagent.pageimage")
+
 _DOC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
-
-class DocumentLimitError(Exception):
-    """Per-session document quota reached."""
 
 
 @dataclass(frozen=True)
@@ -62,38 +68,83 @@ def _session_dir(sid: str) -> Path | None:
     if not _SID_RE.match(sid):
         return None
     root = _root().resolve()
+    if (root / sid).is_symlink():            # a link is never a session directory, whatever it points at
+        return None
     d = (root / sid).resolve()
     return d if d.is_relative_to(root) and d != root else None
 
 
-def new_slot(sid: str) -> tuple[str, Path]:
-    """Reserve a server-generated id and a ``.part`` path for a streaming upload."""
+def new_slot(sid: str, reserve_bytes: int = limits.MAX_PDF_BYTES) -> tuple[str, Path]:
+    """Reserve a server-generated id, a document slot and ``reserve_bytes`` of both byte budgets (atomically, across
+    processes), and return the id with the ``.part`` path for the streaming upload. Raises DocumentLimitError,
+    QuotaExceeded or QuotaUnavailable; every failure leaves nothing reserved."""
     d = _session_dir(sid)
     if d is None:
         raise ValueError("invalid session id")
-    d.mkdir(parents=True, exist_ok=True)
-    if len(list(d.glob("*.json"))) >= limits.MAX_DOCS_PER_SESSION:
-        raise DocumentLimitError
     doc_id = uuid.uuid4().hex
+    quota.reserve(_root(), sid, doc_id, min(int(reserve_bytes), limits.MAX_PDF_BYTES))
     return doc_id, d / f"{doc_id}.part"
 
 
+def _resv_of(part: Path) -> Path:
+    return part.with_suffix(".resv")
+
+
+def touch(part: Path) -> None:
+    """Heartbeat for an in-flight upload (serialised with cleanup by the storage lock)."""
+    quota.heartbeat(_root(), _resv_of(part))
+
+
 def commit(sid: str, doc_id: str, part: Path, *, filename: str | None, size: int, pages: int) -> DocumentMeta:
-    """Promote a validated ``.part`` file to its final name and write metadata."""
+    """Promote a validated ``.part`` file to its final name and write metadata, then drop the reservation. Runs under
+    the storage lock so it cannot interleave with cleanup; refuses if the reservation was reclaimed meanwhile."""
     d = _session_dir(sid)
     if d is None or not valid_doc_id(doc_id) or part != d / f"{doc_id}.part":
         raise ValueError("invalid document slot")
     meta = DocumentMeta(id=doc_id, filename=sanitize_filename(filename), size_bytes=size, pages=pages,
                         created_at=datetime.now(UTC).isoformat(timespec="seconds"))
-    os.replace(part, d / f"{doc_id}.pdf")
-    tmp = d / f"{doc_id}.json.tmp"
-    tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
-    os.replace(tmp, d / f"{doc_id}.json")
+    resv = _resv_of(part)
+    tmp, js, pdf = d / f"{doc_id}.json.tmp", d / f"{doc_id}.json", d / f"{doc_id}.pdf"
+    with quota.locked(_root()):
+        if not resv.is_file() or not part.is_file():
+            raise ReservationLostError
+        try:
+            tmp.write_text(json.dumps(meta.to_dict()), encoding="utf-8")
+            os.replace(tmp, js)               # metadata first: a document is not visible until its PDF exists
+            os.replace(part, pdf)             # the commit point
+        except BaseException:
+            _rollback(tmp, js)
+            raise
+        with contextlib.suppress(OSError):    # committed; a leftover reservation holds nothing and is reclaimed later
+            quota._release_locked(resv)       # we already hold the lock
     return meta
 
 
+def _rollback(*paths: Path) -> None:
+    """Best effort. Anything this misses is an unreserved or stale piece that cleanup reclaims."""
+    for p in paths:
+        with contextlib.suppress(OSError):
+            p.unlink(missing_ok=True)
+
+
 def discard(part: Path) -> None:
-    part.unlink(missing_ok=True)
+    """Abandon an upload, always under the storage lock: delete its ``.part`` and ``.json.tmp``, then release its
+    reservation only if both are confirmed gone.
+
+    A ``.json`` is included when there is no ``.pdf`` (the upload never committed; a failed rollback can leave one),
+    and never when there is (a cancellation that arrives after a successful commit must not touch the document).
+    Runs on the upload's failure path, so it never raises. If the lock cannot be taken, or any piece cannot be
+    deleted, the reservation stays: the upload stays charged at its worst case (a document slot and 50 MiB), so a
+    failed cleanup can never be used to slip past a quota, and locked stale cleanup reclaims it later."""
+    try:
+        with quota.locked(_root()):
+            pieces = [part, part.with_suffix(".json.tmp")]
+            if not quota._regular_file_present(part.with_suffix(".pdf")):
+                pieces.append(part.with_suffix(".json"))     # never committed: a failed rollback's .json is a piece
+            quota.release_after_pieces(_resv_of(part), pieces)
+    except quota.QuotaUnavailable:
+        log.warning("failed upload left charged for stale cleanup: storage lock unavailable",
+                    extra={"session": part.parent.name, "document": part.stem})
 
 
 def _read_meta(p: Path) -> DocumentMeta | None:

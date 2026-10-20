@@ -13,14 +13,17 @@ from app.config import settings
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
-from tests.pdf_fixtures import decode_png, make_pdf
+from tests.pdf_fixtures import REPORT_OK, decode_png, make_pdf, unenforced_limits_off_linux
 
 SAMPLE = Path(__file__).parent.parent / "sample_data" / "oral_pk.csv"
 
 
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)   # macOS: the explicit UNSAFE operator override
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "pageimage_enabled", True)
     main.orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
                              store=SessionStore(":memory:"))
     token = settings.api_token
@@ -75,7 +78,10 @@ def test_stored_under_server_generated_name_in_session_dir(client, tmp_path):
     meta = _upload(client, sid, name="../../evil name.pdf").json()
     root = tmp_path / "data" / "documents" / sid
     assert (root / f"{meta['id']}.pdf").is_file()
-    assert sorted(p.name for p in root.iterdir()) == [f"{meta['id']}.json", f"{meta['id']}.pdf"]
+    import hashlib
+    assert sorted(p.name for p in root.iterdir()) == sorted([
+        f"{meta['id']}.json", f"{meta['id']}.pdf",
+        f".render-{hashlib.sha256(sid.encode()).hexdigest()}-0"])          # document, metadata, this session's lock
     assert meta["filename"] == "evil name.pdf"  # display-only, basename'd
 
 
@@ -177,3 +183,41 @@ def test_auth_required_and_cross_owner_blocked(client):
     assert client.get(f"/api/sessions/{mine2}/documents/{doc['id']}", headers=h).status_code == 404
     # legit access still works
     assert client.get(_page_url(sid, doc["id"]), headers=h).status_code == 200
+
+
+# ── resource-limit outcomes reach the client as the right status, with no detail ─────────────────────────────
+def _fake_worker_file(tmp_path, monkeypatch, source: str):
+    from app.pageimage import runner
+    w = tmp_path / "fake_api_worker.py"
+    w.write_text(source)
+    monkeypatch.setattr(runner, "WORKER_PATH", w)
+
+
+@pytest.mark.parametrize("source, status, text", [
+    ("import sys; sys.exit(9)", 503, "unavailable"),                                          # limit_unavailable
+    (REPORT_OK + "import sys; sys.exit(10)", 413, "resource limits"),                         # memory_limit
+    (REPORT_OK + "import os, signal; os.kill(os.getpid(), signal.SIGXCPU)", 504, "timed out"),   # cpu_limit
+    (REPORT_OK + "import time; time.sleep(60)", 504, "timed out"),                            # wall-clock timeout
+])
+def test_render_limit_outcomes_map_to_distinct_statuses(client, tmp_path, monkeypatch, source, status, text):
+    from app.pageimage import limits as pi_limits
+    sid = _sid(client)
+    doc = _upload(client, sid).json()                                                         # uploaded with the real worker
+    monkeypatch.setattr(pi_limits, "WALL_SECONDS", 3.0)
+    _fake_worker_file(tmp_path, monkeypatch, source)
+    r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
+    assert r.status_code == status
+    assert text in r.text                       # the fixed public message, whatever the error envelope
+    assert str(tmp_path) not in r.text and "Traceback" not in r.text
+
+
+@pytest.mark.parametrize("source, status", [
+    ("import sys; sys.exit(9)", 503),                                                         # limit_unavailable
+    (REPORT_OK + "import sys; sys.exit(10)", 400),                                            # memory_limit
+])
+def test_upload_limit_outcomes_map_to_distinct_statuses(client, tmp_path, monkeypatch, source, status):
+    sid = _sid(client)
+    _fake_worker_file(tmp_path, monkeypatch, source)
+    r = _upload(client, sid)
+    assert r.status_code == status
+    assert client.get(f"/api/sessions/{sid}/documents").json() == {"documents": []}          # nothing was stored

@@ -1,0 +1,368 @@
+"""Interprocess-safe storage accounting for the document store.
+
+Everything that decides "may this upload start" or "is this file abandoned" runs under ONE advisory file lock
+(``<documents root>/.quota.lock``, ``flock``), so server workers sharing a data directory cannot jointly exceed
+a quota. A ``threading.Lock`` would only cover one process.
+
+Per document id the directory may hold:
+  <id>.resv      reservation: JSON {v, id, sid, bytes, pid, created}; its mtime is the upload's heartbeat
+  <id>.part      the streaming upload
+  <id>.pdf/.json the committed document and its metadata
+  <id>.json.tmp  metadata being written
+States (see ``classify``): active = fresh reservation; stale = reservation older than STALE_SECONDS;
+committed = pdf+json;
+abandoned = .part/.json.tmp with no fresh reservation, or a reservation without an upload that has gone stale.
+Accounting counts every id once: its bytes are max(reserved, part + pdf), so a reservation, its growing .part and the
+committed pdf are never double counted and never under counted. Anything unreadable raises QuotaUnavailable and the
+upload is refused: the store fails closed and never deletes data to make room.
+Cleanup removes only the pieces of an upload that never became a complete document: a stale reservation and whatever
+half-finished .part/.json.tmp/.pdf/.json it left, and such pieces with no reservation once they are older than the
+stale age. A complete document (.pdf AND .json) is never touched (no retention policy yet).
+Commit writes the metadata first and the PDF last, so a half-committed upload is never an inaccessible PDF holding
+quota: it is either complete or made only of pieces cleanup reclaims.
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import re
+import stat
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from app.pageimage import limits
+
+try:                                   # POSIX. Elsewhere the store refuses uploads rather than run unlocked.
+    import fcntl
+except ImportError:                    # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
+
+log = logging.getLogger("pharmagent.pageimage")
+
+SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NAME_RE = re.compile(r"^([0-9a-f]{32})\.(pdf|json|part|resv|json\.tmp)$")
+LOCK_NAME = ".quota.lock"
+
+
+class DocumentLimitError(Exception):
+    """Per-session document count reached (committed + in-flight)."""
+
+
+class QuotaExceeded(Exception):
+    """A byte budget would be exceeded. ``scope`` is "session" or "global"."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(scope)
+        self.scope = scope
+
+
+class ReservationLostError(Exception):
+    """The upload sat idle past the stale age and its reservation was reclaimed before it could commit."""
+
+
+class QuotaUnavailable(Exception):
+    """Usage could not be determined (lock, scan or I/O failure): refuse, never guess."""
+
+
+@dataclass
+class _Doc:
+    pdf: int = 0
+    has_pdf: bool = False
+    part: int = 0
+    has_part: bool = False
+    has_json: bool = False
+    tmp: bool = False
+    resv: dict | None = None
+    resv_mtime: float = 0.0
+    part_mtime: float = 0.0
+    tmp_mtime: float = 0.0
+    pdf_mtime: float = 0.0
+    json_mtime: float = 0.0
+    resv_corrupt: bool = False
+
+    @property
+    def committed(self) -> bool:
+        return self.has_pdf and self.has_json
+
+    def bytes(self) -> int:
+        if self.committed:
+            return self.pdf                                    # a leftover reservation no longer holds anything
+        reserved = 0
+        if self.resv_corrupt:
+            reserved = limits.MAX_PDF_BYTES                     # unreadable reservation: assume the worst
+        elif self.resv is not None:
+            reserved = int(self.resv.get("bytes", limits.MAX_PDF_BYTES))
+        return max(reserved, self.part + self.pdf)
+
+
+@contextlib.contextmanager
+def locked(root: Path, wait: float | None = None) -> Iterator[None]:
+    if fcntl is None:
+        raise QuotaUnavailable("no interprocess lock on this platform")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        fd = os.open(root / LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise QuotaUnavailable(str(exc)) from exc
+    try:
+        deadline = time.monotonic() + (limits.LOCK_WAIT_SECONDS if wait is None else wait)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise QuotaUnavailable("storage lock busy") from None
+                time.sleep(0.005)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _session_dirs(root: Path) -> list[Path]:
+    """Real (non-symlink) directories with a plain session-id name, directly under ``root``."""
+    out = []
+    try:
+        with os.scandir(root) as it:
+            for e in it:
+                if SID_RE.match(e.name) and e.is_dir(follow_symlinks=False):
+                    out.append(Path(e.path))
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise QuotaUnavailable(str(exc)) from exc
+    return out
+
+
+SCAN_ATTEMPTS = 3      # fresh listings tried before a directory that keeps changing fails closed
+
+
+class _Vanished(Exception):
+    """An entry listed by scandir was gone before it could be read."""
+
+
+def _scan(d: Path) -> dict[str, _Doc]:
+    """Every document in one session directory, from ONE consistent listing.
+
+    App deletions run under the storage lock (as scans do), so within the app nothing disappears mid-scan. If
+    something else removes a file between the listing and its stat, that listing is discarded and the directory is
+    listed again: one vanished entry must never turn into "this session is empty". A directory that will not hold
+    still fails closed (QuotaUnavailable) rather than be guessed at. A missing directory is genuinely empty."""
+    for _ in range(SCAN_ATTEMPTS):
+        try:
+            return _scan_once(d)
+        except _Vanished:
+            continue
+        except FileNotFoundError:                              # the directory itself is absent
+            return {}
+    raise QuotaUnavailable(f"{d.name}: directory kept changing during {SCAN_ATTEMPTS} scans")
+
+
+def _scan_once(d: Path) -> dict[str, _Doc]:
+    docs: dict[str, _Doc] = {}
+    try:
+        with os.scandir(d) as it:
+            for e in it:
+                m = _NAME_RE.match(e.name)
+                if m is None or e.is_symlink() or not e.is_file(follow_symlinks=False):
+                    continue                                   # foreign names, links and directories are ignored
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    raise _Vanished from None
+                kind = m.group(2)
+                raw = None
+                if kind == "resv":
+                    try:
+                        raw = Path(e.path).read_text(encoding="utf-8")
+                    except FileNotFoundError:
+                        raise _Vanished from None
+                    except (OSError, ValueError):               # unreadable or not UTF-8: counted as corrupt (worst
+                        raw = None                             # case) below, never an error that blocks every upload
+                doc = docs.setdefault(m.group(1), _Doc())
+                if kind == "pdf":
+                    doc.pdf, doc.has_pdf, doc.pdf_mtime = st.st_size, True, st.st_mtime
+                elif kind == "json":
+                    doc.has_json, doc.json_mtime = True, st.st_mtime
+                elif kind == "part":
+                    doc.part, doc.has_part, doc.part_mtime = st.st_size, True, st.st_mtime
+                elif kind == "json.tmp":
+                    doc.tmp, doc.tmp_mtime = True, st.st_mtime
+                else:
+                    doc.resv_mtime = st.st_mtime
+                    try:
+                        parsed = json.loads(raw) if raw is not None else None
+                        if not isinstance(parsed, dict) or int(parsed["bytes"]) < 0:
+                            raise ValueError
+                        doc.resv = parsed
+                    except (ValueError, KeyError, TypeError):
+                        doc.resv_corrupt = True
+    except (_Vanished, FileNotFoundError):
+        raise
+    except OSError as exc:
+        raise QuotaUnavailable(str(exc)) from exc
+    return docs
+
+
+def classify(doc: _Doc, now: float, stale_after: float | None = None) -> str:
+    """active | stale | committed | abandoned (see module docstring)."""
+    stale_after = limits.STALE_SECONDS if stale_after is None else stale_after
+    if doc.committed:
+        return "committed"
+    if doc.resv is not None or doc.resv_corrupt:
+        return "active" if now - doc.resv_mtime <= stale_after else "stale"
+    return "abandoned"
+
+
+def usage(root: Path) -> tuple[dict[str, tuple[int, int]], int]:
+    """({sid: (documents, bytes)}, total bytes). Caller holds the lock."""
+    per: dict[str, tuple[int, int]] = {}
+    total = 0
+    for d in _session_dirs(root):
+        docs = _scan(d)
+        n, b = len(docs), sum(x.bytes() for x in docs.values())
+        per[d.name] = (n, b)
+        total += b
+    return per, total
+
+
+def reserve(root: Path, sid: str, doc_id: str, nbytes: int, now: float | None = None) -> Path:
+    """Atomically take one document slot and ``nbytes`` of both budgets, or raise. Returns the reservation path."""
+    now = time.time() if now is None else now
+    if not SID_RE.match(sid) or not _NAME_RE.match(f"{doc_id}.resv"):
+        raise ValueError("invalid reservation")
+    nbytes = max(0, int(nbytes))
+    with locked(root):
+        _cleanup_locked(root, now)
+        per, total = usage(root)
+        n, b = per.get(sid, (0, 0))
+        if n >= limits.MAX_DOCS_PER_SESSION:
+            raise DocumentLimitError
+        if b + nbytes > limits.MAX_SESSION_BYTES:
+            raise QuotaExceeded("session")
+        if total + nbytes > limits.MAX_GLOBAL_BYTES:
+            raise QuotaExceeded("global")
+        d = root / sid
+        if d.is_symlink():
+            raise ValueError("session directory is a link")
+        path = d / f"{doc_id}.resv"
+        created = False
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            created = True
+            try:
+                fh = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                raise
+            with fh:
+                json.dump({"v": 1, "id": doc_id, "sid": sid, "bytes": nbytes, "pid": os.getpid(),
+                           "created": now}, fh)
+            os.utime(path, (now, now))
+        except OSError as exc:
+            if created:                                    # never leave a half-made reservation holding quota
+                with contextlib.suppress(OSError):
+                    path.unlink()
+            raise QuotaUnavailable(str(exc)) from exc
+        return path
+
+
+def _release_locked(resv: Path) -> None:
+    """Drop a reservation. The callers (commit, ``release_after_pieces``) hold the storage lock already: flock is not
+    re-entrant per open, so taking it again from the same thread through a new descriptor would wait for itself."""
+    resv.unlink(missing_ok=True)
+
+
+def _regular_file_present(p: Path) -> bool:
+    """Is there still a regular file at ``p`` (what the scan would count)? Undeterminable counts as present."""
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def delete_pieces(pieces: list[Path]) -> bool:
+    """Delete upload pieces (caller holds the lock). Never raises. True only if none of them is left afterwards; a
+    link or other non-file in a piece's place is not deleted and does not count (the scan ignores it too)."""
+    for p in pieces:
+        try:
+            if _regular_file_present(p) and not p.is_symlink():
+                p.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("upload piece could not be deleted; its reservation stays for stale cleanup",
+                        extra={"session": p.parent.name, "piece": p.name, "error": type(exc).__name__})
+    return not any(_regular_file_present(p) for p in pieces)
+
+
+def release_after_pieces(resv: Path, pieces: list[Path]) -> bool:
+    """The one way an upload's reservation is released other than by commit (caller holds the lock): delete every
+    piece first and release the reservation only if all of them are confirmed gone. Otherwise the reservation stays,
+    so the upload remains charged at its worst case and locked stale cleanup retries later. Never raises."""
+    if not delete_pieces(pieces):
+        return False
+    try:
+        _release_locked(resv)
+    except OSError as exc:
+        log.warning("reservation could not be deleted; stale cleanup will retry",
+                    extra={"session": resv.parent.name, "piece": resv.name, "error": type(exc).__name__})
+        return False
+    return True
+
+
+def heartbeat(root: Path, resv: Path) -> None:
+    """Mark the upload alive. Takes the SAME lock as cleanup, so cleanup can never classify an upload stale and delete
+    it after this refresh; if the reservation was already reclaimed it says so instead of resurrecting a timestamp."""
+    with locked(root):
+        if not resv.is_file():
+            raise ReservationLostError
+        try:
+            os.utime(resv, None)
+        except OSError as exc:
+            raise QuotaUnavailable(str(exc)) from exc
+
+
+def _cleanup_locked(root: Path, now: float) -> list[str]:
+    """Reclaim abandoned uploads (caller holds the lock). A stale reservation is released only after every piece of its
+    upload is confirmed deleted; if a delete fails the reservation stays (still charged) and a later cleanup retries.
+    A delete that fails is logged and skipped rather than failing closed for every upload."""
+    removed: list[str] = []
+    cutoff = now - limits.STALE_SECONDS
+    piece_kinds = ("part", "json.tmp", "pdf", "json")
+    for d in _session_dirs(root):
+        for doc_id, doc in _scan(d).items():
+            present = {"part": (doc.has_part, doc.part_mtime), "json.tmp": (doc.tmp, doc.tmp_mtime),
+                       "pdf": (doc.has_pdf, doc.pdf_mtime), "json": (doc.has_json, doc.json_mtime)}
+            has_resv = doc.resv is not None or doc.resv_corrupt
+            if has_resv:
+                if doc.resv_mtime > cutoff:
+                    continue                                               # active upload
+                kinds = [] if doc.committed else [k for k in piece_kinds if present[k][0]]
+                pieces = [d / f"{doc_id}.{k}" for k in kinds]
+                resv = d / f"{doc_id}.resv"
+                if release_after_pieces(resv, pieces):
+                    removed += [f"{d.name}/{p.name}" for p in pieces + [resv]]
+            elif not doc.committed:                                        # no reservation, not a complete document
+                kinds = [k for k in piece_kinds if present[k][0] and present[k][1] <= cutoff]
+                for p in (d / f"{doc_id}.{k}" for k in kinds):
+                    if delete_pieces([p]):
+                        removed.append(f"{d.name}/{p.name}")
+    return removed
+
+
+def cleanup(root: Path, now: float | None = None) -> list[str]:
+    """Remove stale temporary/reservation files only. Returns what was removed ("sid/name")."""
+    with locked(root):
+        return _cleanup_locked(root, time.time() if now is None else now)

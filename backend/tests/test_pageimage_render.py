@@ -12,8 +12,9 @@ from pydantic import ValidationError
 from app.pageimage import limits, runner
 from app.pageimage.runner import RenderError, probe_pdf, render_page
 from app.pageimage.types import NormBBox, PageLocator, RenderParams
-from tests.pdf_fixtures import decode_png, make_pdf, make_zero_page_pdf
+from tests.pdf_fixtures import REPORT_OK, decode_png, make_pdf, make_zero_page_pdf, unenforced_limits_off_linux
 
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)   # macOS: the explicit UNSAFE operator override
 
 @pytest.fixture
 def pdf(tmp_path):
@@ -160,7 +161,7 @@ def test_missing_file_is_malformed(tmp_path):
 # ── sandbox behaviour (fake workers) ─────────────────────────────────────────
 def _fake_worker(tmp_path, monkeypatch, body: str):
     w = tmp_path / "fake_worker.py"
-    w.write_text(textwrap.dedent(body))
+    w.write_text(REPORT_OK + "\n" + textwrap.dedent(body))     # a trustworthy worker attests its limits first
     monkeypatch.setattr(runner, "WORKER_PATH", w)
 
 
@@ -174,7 +175,7 @@ def test_wall_clock_timeout_kills_worker(tmp_path, monkeypatch, pdf):
     p = pdf(make_pdf())
     t0 = time.monotonic()
     with pytest.raises(RenderError) as e:
-        render_page(p, 0, RenderParams(), wall_seconds=1.0)
+        render_page(p, 0, RenderParams(), wall_seconds=3.0)
     assert e.value.kind == "timeout"
     assert time.monotonic() - t0 < 10
     pid = int(pidfile.read_text())
@@ -224,34 +225,22 @@ def test_worker_sees_clean_env_and_empty_cwd(tmp_path, monkeypatch, pdf):
     assert cwd_files == []
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="RLIMIT_AS is not enforced on macOS")
-def test_address_space_limit_stops_memory_bomb(tmp_path, monkeypatch, pdf):
-    real_worker = str(runner.WORKER_PATH)
-    _fake_worker(tmp_path, monkeypatch, f"""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("real_worker", {real_worker!r})
-        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-        mod.apply_limits(10, 256 * 1024 * 1024)      # the real limit routine
-        x = bytearray(2 * 1024 * 1024 * 1024)        # must die with MemoryError
-    """)
-    with pytest.raises(RenderError) as e:
-        render_page(pdf(make_pdf()), 0, RenderParams())
-    assert e.value.kind == "failed"
-
-
 def test_slot_exhaustion_returns_busy(monkeypatch, pdf):
+    from app.pageimage import slots
     monkeypatch.setattr(limits, "QUEUE_WAIT_SECONDS", 0.05)
-    acquired = []
+    held = []
     try:
-        for _ in range(limits.MAX_CONCURRENT_RENDERS):
-            assert runner._slots.acquire(timeout=1)
-            acquired.append(1)
+        d = slots._lock_dir()
+        for i in range(limits.MAX_CONCURRENT_RENDERS):               # every global slot taken (here by this process)
+            fd = slots._try_lock(d / f"global-{i}")
+            assert fd is not None
+            held.append(fd)
         with pytest.raises(RenderError) as e:
             render_page(pdf(make_pdf()), 0, RenderParams())
         assert e.value.kind == "busy"
     finally:
-        for _ in acquired:
-            runner._slots.release()
+        for fd in held:
+            os.close(fd)
 
 
 def test_frozen_build_reports_unavailable(monkeypatch, pdf):

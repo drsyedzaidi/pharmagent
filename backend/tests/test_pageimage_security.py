@@ -14,12 +14,14 @@ from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
 from app.pageimage import limits, runner
-from tests.pdf_fixtures import make_pdf, make_zero_page_pdf
+from tests.pdf_fixtures import REPORT_OK, make_pdf, make_zero_page_pdf, unenforced_limits_off_linux
 
+_weak = pytest.fixture(autouse=True)(unenforced_limits_off_linux)   # macOS: the explicit UNSAFE operator override
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "pageimage_enabled", True)
     main.orch = Orchestrator(llm=MockLLM(), clock=lambda c=itertools.count(): f"t{next(c)}",
                              store=SessionStore(":memory:"))
     token = settings.api_token
@@ -73,7 +75,9 @@ def test_valid_magic_but_garbage_body_rejected_and_cleaned(client, tmp_path):
     assert r.status_code == 400
     _no_leak(r, tmp_path)
     root = tmp_path / "data" / "documents" / sid
-    assert list(root.iterdir()) == []
+    import hashlib
+    # nothing of the upload is left; the only file is this session's own render lock
+    assert sorted(p.name for p in root.iterdir()) == [f".render-{hashlib.sha256(sid.encode()).hexdigest()}-0"]
 
 
 def test_truncated_pdf_rejected(client):
@@ -142,8 +146,15 @@ def test_hostile_client_filenames_never_reach_the_filesystem(client, tmp_path, n
     assert r.status_code == 201
     meta = r.json()
     assert "/" not in meta["filename"] and "\\" not in meta["filename"] and "\x00" not in meta["filename"]
+    import hashlib
+    session_lock = f"data/documents/{sid}/.render-{hashlib.sha256(sid.encode()).hexdigest()}-0"
     created = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()}
-    assert created == {f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json"}
+    # exactly: the document, its metadata, and the three lock files a single upload legitimately leaves (the storage
+    # lock, the first global render slot, this session's own render lock); nothing else, anywhere
+    assert created == {
+        f"data/documents/{sid}/{meta['id']}.pdf", f"data/documents/{sid}/{meta['id']}.json",
+        "data/documents/.quota.lock", "data/.pageimage-locks/global-0", session_lock,
+    }
 
 
 @pytest.mark.parametrize("doc_id", [
@@ -190,13 +201,13 @@ def test_render_timeout_kills_worker_and_returns_504(client, tmp_path, monkeypat
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()  # upload with the REAL worker first
     fake = tmp_path / "hang.py"
-    fake.write_text(textwrap.dedent(f"""
+    fake.write_text(REPORT_OK + textwrap.dedent(f"""
         import os, time
         open({str(pidfile)!r}, "w").write(str(os.getpid()))
         time.sleep(120)
     """))
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
-    monkeypatch.setattr(limits, "WALL_SECONDS", 1.0)
+    monkeypatch.setattr(limits, "WALL_SECONDS", 3.0)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 504
     _no_leak(r, tmp_path)
@@ -211,7 +222,7 @@ def test_crashing_worker_is_422_without_details(client, tmp_path, monkeypatch):
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()
     fake = tmp_path / "crash.py"
-    fake.write_text("import sys; sys.stderr.write('/secret/path/boom'); import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
+    fake.write_text(REPORT_OK + "import sys; sys.stderr.write('/secret/path/boom'); import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 422
@@ -223,7 +234,7 @@ def test_worker_emitting_html_is_never_served_as_image(client, tmp_path, monkeyp
     sid = _sid(client)
     doc = _up(client, sid, make_pdf()).json()
     fake = tmp_path / "html.py"
-    fake.write_text("import sys; sys.stdout.write('<script>alert(1)</script>')")
+    fake.write_text(REPORT_OK + "import sys; sys.stdout.write('<script>alert(1)</script>')")
     monkeypatch.setattr(runner, "WORKER_PATH", fake)
     r = client.get(f"/api/sessions/{sid}/documents/{doc['id']}/pages/0.png")
     assert r.status_code == 422

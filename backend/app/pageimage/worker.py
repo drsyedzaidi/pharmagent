@@ -25,32 +25,82 @@ EXIT_NO_PAGE = 5
 EXIT_TOO_LARGE = 6       # requested pixels / page count exceed the caps
 EXIT_EMPTY = 7           # crop collapses to < 1 pixel
 EXIT_OUTPUT_TOO_BIG = 8  # encoded PNG exceeds the byte cap
+EXIT_LIMIT_UNAVAILABLE = 9  # a resource limit could not be set or confirmed: nothing was parsed
+EXIT_MEMORY = 10         # MemoryError under the address-space limit (not a page/pixel cap: that is EXIT_TOO_LARGE)
 
 
-def apply_limits(cpu_seconds: int, address_space: int) -> None:
-    """Best-effort rlimits. RLIMIT_AS is not enforced on macOS (setrlimit may
-    raise or be a no-op there); the parent's wall-clock kill is the backstop."""
+REPORT_VERSION = 1
+CPU_HARD_SLACK = 2       # RLIMIT_CPU hard = soft + 2: the soft limit raises SIGXCPU first, the hard one SIGKILLs later
+
+
+class LimitUnavailable(Exception):
+    """A resource limit could not be set, or getrlimit does not confirm the requested ceiling."""
+
+
+def _as_is_enforceable() -> bool:
+    """RLIMIT_AS limits address space only on Linux; elsewhere (macOS) the OS cannot enforce it. Kept in step with
+    ``runner._as_is_enforceable`` (a test pins the pair)."""
+    return sys.platform.startswith("linux")
+
+
+def apply_limits(cpu_seconds: int, address_space: int, allow_unenforced: bool = False, *,
+                 fsize: int = 0, core: int = 0, nofile: int = 64) -> list[dict]:
+    """Lower the rlimits, CONFIRM each with getrlimit and return one report entry per limit.
+
+    * An inherited tighter SOFT limit is kept (never raised); the soft limit becomes min(current, request).
+    * The HARD limit is lowered to the request (CPU: request + CPU_HARD_SLACK) so worker code cannot restore it.
+    * Fail-closed: a limit that cannot be set, or whose confirmed soft/hard ceiling is not at or below the request,
+      raises ``LimitUnavailable`` (the caller must not touch the PDF).
+    * RLIMIT_AS is not enforced outside Linux: there it is reported ``state: "unenforced"`` and refused unless
+      ``allow_unenforced`` (an UNSAFE operator override). The override excuses NOTHING else: CPU, file size, core and
+      open-file limits are always required, and on Linux RLIMIT_AS is required too."""
     try:
         import resource
     except ImportError:  # Windows
-        return
-    for name, soft in (
-        ("RLIMIT_CPU", cpu_seconds),
-        ("RLIMIT_AS", address_space),
-        ("RLIMIT_FSIZE", 0),      # the worker never needs to write a file
-        ("RLIMIT_CORE", 0),
-        ("RLIMIT_NOFILE", 64),
+        raise LimitUnavailable("no resource module") from None
+    inf = resource.RLIM_INFINITY
+
+    def cap(current: int, want: int) -> int:
+        return want if current == inf else min(current, want)
+
+    report: list[dict] = []
+    for name, want, slack in (
+        ("RLIMIT_CPU", cpu_seconds, CPU_HARD_SLACK),
+        ("RLIMIT_AS", address_space, 0),
+        ("RLIMIT_FSIZE", fsize, 0),      # the worker never needs to write a file
+        ("RLIMIT_CORE", core, 0),
+        ("RLIMIT_NOFILE", nofile, 0),
     ):
         rl = getattr(resource, name, None)
         if rl is None:
-            continue
+            raise LimitUnavailable(name)
+        os_enforces = not (name == "RLIMIT_AS" and not _as_is_enforceable())
+        soft = hard = None
         try:
-            _, hard = resource.getrlimit(rl)
-            if hard != resource.RLIM_INFINITY:
-                soft = min(soft, hard)
-            resource.setrlimit(rl, (soft, hard))
+            cur_soft, cur_hard = resource.getrlimit(rl)
+            resource.setrlimit(rl, (cap(cur_soft, want), cap(cur_hard, want + slack)))
+            got_soft, got_hard = resource.getrlimit(rl)
+            if got_soft != inf and got_hard != inf and got_soft <= want and got_hard <= want + slack:
+                soft, hard = got_soft, got_hard
         except (ValueError, OSError):
             pass
+        if soft is None and os_enforces:
+            raise LimitUnavailable(name)
+        report.append({"name": name, "requested": want, "soft": soft, "hard": hard,
+                       "state": "enforced" if os_enforces and soft is not None else "unenforced"})
+    for r in report:
+        if r["state"] == "enforced":
+            continue
+        # the only thing the override may excuse: RLIMIT_AS, on a platform that has no way to enforce it
+        if not (allow_unenforced and r["name"] == "RLIMIT_AS" and not _as_is_enforceable()):
+            raise LimitUnavailable("unenforced")
+    return report
+
+
+def _emit_report(ok: bool, report: list[dict]) -> None:
+    """Exactly one JSON line on stderr (stdout stays binary-only): protocol v1, what was set and confirmed."""
+    sys.stderr.write(json.dumps({"pageimage_limits": {"v": REPORT_VERSION, "ok": ok, "limits": report}}) + "\n")
+    sys.stderr.flush()
 
 
 def _chunk(tag: bytes, data: bytes) -> bytes:
@@ -113,6 +163,11 @@ def _parse(raw: str) -> dict:
     for k in ("cpu_seconds", "address_space", "max_dim", "max_pixels", "max_png_bytes", "max_pages"):
         if not _is_int(lim.get(k)) or lim[k] < 0:
             raise ValueError
+    if not isinstance(lim.get("allow_unenforced"), bool):
+        raise ValueError
+    for k in ("nofile", "fsize", "core"):
+        if not _is_int(lim.get(k)) or lim[k] < 0:
+            raise ValueError
     if req["op"] == "render":
         if not _is_int(req.get("page")) or req["page"] < 0:
             raise ValueError
@@ -135,15 +190,25 @@ def main(argv: list[str]) -> int:
     except Exception:
         return EXIT_BAD_REQUEST
     lim = req["limits"]
-    apply_limits(lim["cpu_seconds"], lim["address_space"])
+    try:
+        report = apply_limits(lim["cpu_seconds"], lim["address_space"], lim["allow_unenforced"],
+                              fsize=lim["fsize"], core=lim["core"], nofile=lim["nofile"])
+    except LimitUnavailable:
+        _emit_report(False, [])
+        return EXIT_LIMIT_UNAVAILABLE
+    _emit_report(True, report)
     try:
         import pypdfium2 as pdfium
+    except MemoryError:
+        return EXIT_MEMORY
     except Exception:
         return EXIT_MALFORMED
     try:
         doc = pdfium.PdfDocument(req["path"])
     except pdfium.PdfiumError as e:
         return EXIT_ENCRYPTED if getattr(e, "err_code", None) == pdfium.raw.FPDF_ERR_PASSWORD else EXIT_MALFORMED
+    except MemoryError:
+        return EXIT_MEMORY
     except Exception:
         return EXIT_MALFORMED
     try:
@@ -183,7 +248,7 @@ def main(argv: list[str]) -> int:
     except pdfium.PdfiumError:
         return EXIT_MALFORMED
     except MemoryError:
-        return EXIT_TOO_LARGE
+        return EXIT_MEMORY
     except Exception:
         return EXIT_MALFORMED
 
