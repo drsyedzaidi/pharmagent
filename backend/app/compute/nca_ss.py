@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from app.compute.nca import _auc_intervals, _best_lambda_z, summarize_by_dose
+from app.compute.nca import _auc_intervals, _best_lambda_z, _round_sig, summarize_by_dose
 
 
 def nca_ss_subject(subject: Any, tad, conc, dose: float, tau: float) -> dict[str, Any]:
@@ -39,15 +39,15 @@ def nca_ss_subject(subject: Any, tad, conc, dose: float, tau: float) -> dict[str
         "dose": dose,
         "tau": tau,
         "steady_state": True,
-        "Cmax": round(cmax, 6),
-        "Tmax": round(tmax, 6),
-        "Cmin": round(cmin, 6),
-        "Ctrough": round(ctrough, 6),
-        "AUC_tau": round(auc_tau, 6),
-        "AUC_last": round(auc_tau, 6),   # interval AUC (alias for table reuse)
-        "AUC_inf": None,                 # not defined for steady-state interval
-        "Cavg": round(cavg, 6) if math.isfinite(cavg) else None,
-        "CL_F": round(cl_f, 6) if math.isfinite(cl_f) else None,
+        "Cmax": _round_sig(cmax, 6),
+        "Tmax": _round_sig(tmax, 6),
+        "Cmin": _round_sig(cmin, 6),
+        "Ctrough": _round_sig(ctrough, 6),
+        "AUC_tau": _round_sig(auc_tau, 6),
+        "AUC_last": _round_sig(auc_tau, 6),   # interval AUC (alias for table reuse)
+        "AUC_inf": None,                      # not defined for steady-state interval
+        "Cavg": _round_sig(cavg, 6) if math.isfinite(cavg) else None,
+        "CL_F": _round_sig(cl_f, 6) if math.isfinite(cl_f) else None,
         "fluctuation_pct": round(fluctuation, 4) if fluctuation is not None else None,
         "swing_pct": round(swing, 4) if swing is not None else None,
         "pct_AUC_extrap": None,
@@ -59,9 +59,9 @@ def nca_ss_subject(subject: Any, tad, conc, dose: float, tau: float) -> dict[str
         vz_f = cl_f / lam
         rac = 1.0 / (1.0 - math.exp(-lam * tau)) if tau > 0 else None
         out.update({
-            "lambda_z": round(lam, 6),
-            "t_half": round(math.log(2) / lam, 6),
-            "Vz_F": round(vz_f, 6),
+            "lambda_z": _round_sig(lam, 6),
+            "t_half": _round_sig(math.log(2) / lam, 6),
+            "Vz_F": _round_sig(vz_f, 6),
             "accumulation_ratio": round(rac, 4) if rac is not None else None,
             "lambda_z_r2_adj": lz["lambda_z_r2_adj"],
             "lambda_z_n_points": lz["lambda_z_n_points"],

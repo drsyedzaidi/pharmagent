@@ -45,11 +45,27 @@ def _auc_intervals(time: np.ndarray, conc: np.ndarray) -> tuple[float, float]:
     return auc, aumc
 
 
+_MIN_LAMBDA_Z = 1e-9  # reject floating-point noise on flat terminal phases
+
+
+def _round_sig(x: Any, ndigits: int = 6):
+    """Round to ``ndigits`` decimal places when |x| >= 1, or ``ndigits`` significant
+    figures when 0 < |x| < 1 so small concentration units never lose precision or
+    round positive values to zero."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return x
+    fx = float(x)
+    if not math.isfinite(fx) or fx == 0.0:
+        return 0.0 if fx == 0.0 else fx
+    decimals = max(ndigits, ndigits - 1 - int(math.floor(math.log10(abs(fx)))))
+    return round(fx, decimals)
+
+
 def _best_lambda_z(time: np.ndarray, conc: np.ndarray, tmax: float) -> dict[str, Any]:
     """Best-fit terminal slope over points after Tmax, maximizing adj R^2.
 
-    Tries every contiguous window of >=3 of the last points; requires a positive
-    decline. Returns {} if no acceptable fit.
+    Tries every contiguous window of >=3 of the last points; requires a materially
+    negative slope and positive adjusted R^2. Returns {} if no acceptable fit.
     """
     mask = (time > tmax) & (conc > 0)
     t = time[mask]
@@ -67,13 +83,17 @@ def _best_lambda_z(time: np.ndarray, conc: np.ndarray, tmax: float) -> dict[str,
         if k < 3:
             continue
         slope, intercept = np.polyfit(tt, ll, 1)
-        if slope >= 0:
-            continue  # not declining
+        if -slope <= _MIN_LAMBDA_Z:
+            continue  # not materially declining
         pred = slope * tt + intercept
         ss_res = float(np.sum((ll - pred) ** 2))
         ss_tot = float(np.sum((ll - ll.mean()) ** 2))
-        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        if ss_tot <= 0:
+            continue
+        r2 = 1.0 - ss_res / ss_tot
         adj = 1.0 - (1.0 - r2) * (k - 1) / (k - 2) if k > 2 else r2
+        if adj <= 0:
+            continue  # meaningless terminal fit
         if not best or adj > best["lambda_z_r2_adj"]:
             best = {
                 "lambda_z": float(-slope),
@@ -102,7 +122,7 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
         raise ValueError("All selected concentrations must be > 0")
     lnc = np.log(c)
     slope, intercept = np.polyfit(t, lnc, 1)
-    if slope >= 0:
+    if -slope <= _MIN_LAMBDA_Z:
         raise ValueError("Selected points do not show a declining trend (slope ≥ 0)")
     k = int(len(t))
     pred = slope * t + intercept
@@ -114,15 +134,15 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
     t_half = math.log(2) / lz
     t0, t1 = float(t.min()), float(t.max())
     fit_x = [round(t0 + (t1 - t0) * i / 29, 3) for i in range(30)]
-    fit_y = [round(math.exp(float(intercept) + slope * tx), 6) for tx in fit_x]
+    fit_y = [_round_sig(math.exp(float(intercept) + slope * tx), 6) for tx in fit_x]
     return {
-        "lambda_z": round(lz, 6),
-        "lambda_z_intercept": round(float(intercept), 6),
-        "t_half": round(t_half, 4),
+        "lambda_z": _round_sig(lz, 6),
+        "lambda_z_intercept": _round_sig(float(intercept), 6),
+        "t_half": _round_sig(t_half, 4),
         "r2_adj": round(adj, 6),
         "n_pts": k,
         "lz_x": [round(float(v), 4) for v in times],
-        "lz_y": [round(float(v), 6) for v in concs],
+        "lz_y": [_round_sig(float(v), 6) for v in concs],
         "fit_x": fit_x,
         "fit_y": fit_y,
     }
@@ -136,9 +156,13 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
     data the AUMC-derived MRT includes the mean absorption time, so Vss (= CL·MRT)
     would be biased high — it is therefore suppressed and MRT is flagged.
     """
-    order = np.argsort(p.time)
-    time = np.asarray(p.time, dtype=float)[order]
-    conc = np.asarray(p.conc, dtype=float)[order]
+    raw_t = np.asarray(p.time, dtype=float)
+    raw_c = np.asarray(p.conc, dtype=float)
+    finite = np.isfinite(raw_t) & np.isfinite(raw_c)
+    raw_t, raw_c = raw_t[finite], raw_c[finite]
+    order = np.argsort(raw_t)
+    time = raw_t[order]
+    conc = raw_c[order]
 
     cmax = float(np.max(conc))
     tmax = float(time[int(np.argmax(conc))])
@@ -156,11 +180,11 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {
         "subject": p.subject,
         "dose": p.dose,
-        "Cmax": round(cmax, 6),
-        "Tmax": round(tmax, 6),
-        "AUC_last": round(auc_last, 6),
-        "Clast": round(c_last, 6),
-        "Tlast": round(t_last, 6),
+        "Cmax": _round_sig(cmax, 6),
+        "Tmax": _round_sig(tmax, 6),
+        "AUC_last": _round_sig(auc_last, 6),
+        "Clast": _round_sig(c_last, 6),
+        "Tlast": _round_sig(t_last, 6),
     }
 
     lz = _best_lambda_z(time, conc, tmax)
@@ -175,15 +199,15 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
         vss = cl_f * mrt if (is_iv and not math.isnan(cl_f)) else None
         out.update(
             {
-                "lambda_z": round(lam, 6),
-                "t_half": round(math.log(2) / lam, 6),
-                "AUC_inf": round(auc_inf, 6),
+                "lambda_z": _round_sig(lam, 6),
+                "t_half": _round_sig(math.log(2) / lam, 6),
+                "AUC_inf": _round_sig(auc_inf, 6),
                 "pct_AUC_extrap": round(100.0 * (auc_inf - auc_last) / auc_inf, 4),
-                "MRT": round(mrt, 6),
+                "MRT": _round_sig(mrt, 6),
                 "MRT_note": None if is_iv else "extravascular: MRT includes mean absorption time",
-                "CL_F": round(cl_f, 6),
-                "Vz_F": round(vz_f, 6),
-                "Vss": round(vss, 6) if vss is not None else None,
+                "CL_F": _round_sig(cl_f, 6),
+                "Vz_F": _round_sig(vz_f, 6),
+                "Vss": _round_sig(vss, 6) if vss is not None else None,
                 "route": "IV" if is_iv else "extravascular",
                 "lambda_z_r2_adj": lz["lambda_z_r2_adj"],
                 "lambda_z_n_points": lz["lambda_z_n_points"],
@@ -295,11 +319,12 @@ def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _round(x):
-    return round(x, 4) if isinstance(x, (int, float)) else x
+    return _round_sig(x, 4)
 
 
 def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
             dv_col: str, dose_by_subject: dict[Any, float],
+            dose_time_by_subject: dict[Any, float] | None = None,
             is_iv: bool = False) -> dict[str, Any]:
     """Top-level entry: build per-subject profiles and compute NCA + summary.
 
@@ -314,7 +339,11 @@ def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
         dv = r.get(dv_col)
         if t is None or dv is None:
             continue
-        by_subj.setdefault(sid, []).append((float(t), float(dv)))
+        ft, fdv = float(t), float(dv)
+        if not (math.isfinite(ft) and math.isfinite(fdv)):
+            continue
+        t_dose = float((dose_time_by_subject or {}).get(sid, 0.0))
+        by_subj.setdefault(sid, []).append((ft - t_dose, fdv))
 
     params = []
     for sid, pts in by_subj.items():
