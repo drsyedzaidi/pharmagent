@@ -28,37 +28,44 @@ python3 scripts/crosscheck_pknca/compare.py scripts/crosscheck_pknca/out/pharmag
   scripts/crosscheck_pknca/out/numpy_reference.csv scripts/crosscheck_pknca/out/pknca_default.csv \
   scripts/crosscheck_pknca/out/pknca_matched.csv
 ```
-`run_pknca.R` was written without being executed (by design, no R is run on your behalf). If it errors, the first
-suspects are PKNCA parameter names for your installed version; `out/pknca_versions.txt` records what was used.
+`run_pknca.R` is run only on explicit human instruction (never automatically by the tests); its outputs from PKNCA 0.12.1
+are committed under `reference_results/` with input SHA-256 hashes for offline comparison. If `run_pknca.R` errors on a newer
+install, the first suspects are PKNCA parameter names; `pknca_versions.txt` records what was used.
 Tolerances are at the top of `compare.py`.
 
 ## Conventions side by side
 | | PharmAgent (from `app/compute/nca.py`) | `pknca_default` | `pknca_matched` |
 |---|---|---|---|
 | AUC rule | linear-up / log-down | linear-up / log-down | same |
-| AUClast | integrates all observation rows given | up to Tlast | same |
-| BLQ | rows are used as given (zeros included) | first keep, middle drop, last keep | all kept |
-| lambda_z | windows of >= 3 points after Tmax, strict max adjusted R^2 | tolerance 1e-4 favours more points | factor 1e-12 (PKNCA requires (0,1), so this stands for 0), >= 3 points, Tmax excluded |
+| AUClast | up to Tlast (fixed in PR #3; previously integrated all rows) | up to Tlast | same |
+| BLQ | rule M1 when flagged: leading = 0 baseline, middle and trailing excluded (fixed in PR #3); unflagged rows used as given | first keep, middle drop, last keep | all kept |
+| lambda_z | windows of >= 3 points after Tmax, max adjusted R^2 (6-decimal tie-break favours longest window) | tolerance 1e-4 favours more points | factor 1e-12 (PKNCA requires (0,1), so this stands for 0), >= 3 points, Tmax excluded |
 | route | extravascular | extravascular | same |
 
-## What to look for (stated before the run; hypotheses, not results)
+## What to look for (stated before the first run; hypotheses, not results)
 1. Cmax, Tmax, AUClast should agree to rounding in both configurations.
-2. `pknca_default` may pick a different terminal window than PharmAgent (PharmAgent's strict maximum of adjusted R^2
-   tends to choose the shortest window); if so lambda_z, half-life and AUCinf differ and `lambda.z.n.points` shows why.
+2. `pknca_default` may pick a different terminal window than PharmAgent (PharmAgent's maximum of adjusted R^2
+   tends to choose a shorter window than PKNCA's 1e-4 tolerance); if so lambda_z, half-life and AUCinf differ and `lambda.z.n.points` shows why.
    `pknca_matched` should then agree. A remaining gap there would be a real finding.
-3. Code reading, not yet tested on data: PharmAgent's AUClast integrates every row, so trailing zeros (BLQ coded as 0)
-   after the last measurable value would add area beyond Tlast, and AUCinf would add the extrapolation on top. This
-   table has no trailing zeros inside 0-24 h, so it cannot show it; a table that does is the next test.
+3. Code reading before the PR #3 fix: PharmAgent's AUClast integrated every row, so trailing zeros (BLQ coded as 0)
+   after the last measurable value added area beyond Tlast, and AUCinf added the extrapolation on top. This
+   table has no trailing zeros inside 0-24 h, so it could not show it; the stress table below tested and confirmed it.
 
-`numpy_reference` already agrees with PharmAgent on all 48 values (worst relative difference 2.5e-06, rounding), and
+`numpy_reference` agrees with PharmAgent on all 48 values on `nca_input.csv` (worst relative difference 2.5e-06, rounding), and
 `tests/test_crosscheck_pknca.py` pins PharmAgent to the analytic mono-exponential solution. Those say PharmAgent
 implements its own stated method; only the PKNCA arms say whether that method matches an independent engine.
 
 ## Result of the first run
-See `RESULTS-2026-10-16.md`: agreement on all 48 values in both PKNCA configurations. Hypothesis 2 was not borne out
-(this table's terminal phase is unambiguous), hypothesis 3 remains untested.
+See `RESULTS-2026-10-16.md`: agreement on all 48 values in both PKNCA configurations. Hypothesis 2 was not borne out on
+this table (its terminal phase is unambiguous); hypothesis 3 was tested on the stress table below.
 
 ## Stress table
 `make_stress_table.py` builds 11 synthetic subjects with known parameters (noisy terminal phases, trailing/middle/leading
-BLQ, no terminal phase, all-BLQ, a bump) in two BLQ codings. See `STRESS-FINDINGS-2026-10-16.md`: it found that PharmAgent
-integrates AUC_last through BLQ rows coded as zero. The PKNCA arm of the stress run is not done yet.
+BLQ, no terminal phase, all-BLQ, a bump) in two BLQ codings (`stress_zero.csv` and `stress_dropped.csv`).
+- Initial run (`STRESS-FINDINGS-2026-10-16.md`): confirmed hypothesis 3 (F1) — PharmAgent integrated `AUC_last` through
+  BLQ rows coded as zero.
+- Post-fix PKNCA run (`RESULTS-stress-2026-10-16.md`): after the PR #3 fix (`AUC_last` ends at `Tlast`; BLQ-flagged rows
+  follow rule M1), PharmAgent agrees with PKNCA defaults on `AUClast` and `Cmax` for **11/11 subjects** (worst relative
+  difference 9e-09). Remaining convention differences (terminal-window tie tolerance, no `C(0)=0` imputation when a
+  dose-time sample is absent, all-BLQ reporting) are documented in `RESULTS-stress-2026-10-16.md` and pinned in
+  `tests/test_crosscheck_stress.py`.
