@@ -1,0 +1,7 @@
+id,time,amt,rate
+pop_iv1,0,100,0
+pop_oral1,0,100,0
+pop_iv2_infusion_100kg,0,100,25
+pop_mm,0,1000,0
+pop_lag_blq,0,100,0
+pop_lag_blq,12,100,0
