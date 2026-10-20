@@ -447,3 +447,219 @@ def test_no_flag_a_start_within_the_zero_tolerance_is_placed_exactly_at_zero(sta
     prof = _strict(dose + obs)["Z"]
     assert prof.tad[0] == 0.0 and prof.tad[-1] == 12.0 and prof.c0_source == "measured"
     assert prof == _strict(dose + [_nf_obs("Z", t, c) for t, c in SS_PROFILE])["Z"]
+
+
+# ── correction cycle on d823217: closure, endpoints, tau-sample choice, dose-time anchor, flag codings ──
+TAU = 12.0
+
+
+def _css(t: float, a: float, ka: float, ke: float) -> float:
+    """Exact one-compartment oral steady-state concentration at time-after-dose t (q12h)."""
+    return a * (math.exp(-ke * t) / (1 - math.exp(-ke * TAU)) - math.exp(-ka * t) / (1 - math.exp(-ka * TAU)))
+
+
+# reviewer case 1.1: t1/2 0.5 h, LLOQ 0.5. At steady state AUC_tau equals the single-dose AUC(0-inf) = a (1/ke - 1/ka).
+SHORT = {"a": 28.87248, "ka": 2.99949, "ke": math.log(2) / 0.5}
+SHORT_AUC_TAU = SHORT["a"] * (1 / SHORT["ke"] - 1 / SHORT["ka"])           # 11.20
+SHORT_ROWS = [(0.0, 0.0, 1), (0.25, 6.776, 0), (0.5, 7.992, 0), (1.0, 5.78, 0), (2.0, 1.733, 0),
+              (4.0, 0.0, 1), (8.0, 0.0, 1), (12.0, 0.0, 1)]                   # (tad, dv, blq) exactly as reported
+
+# reviewer case 1.2: dose 100, V 10, ka 1.5, ke 0.15 -> AUC_tau = Dose/CL = 66.67 and C(0) = C(12) = 2.2004
+LONG = {"a": 100 / 9, "ka": 1.5, "ke": 0.15}
+LONG_AUC_TAU = 100 / 1.5
+
+
+def test_the_short_half_life_case_is_the_analytic_profile():
+    for tad, dv, blq in SHORT_ROWS:
+        c = _css(tad, **SHORT)
+        if blq:
+            assert c < 0.5                                                   # flagged exactly where the model is below LLOQ
+        else:
+            assert c == pytest.approx(dv, abs=5e-4)
+    assert SHORT_AUC_TAU == pytest.approx(11.20, abs=0.01)
+
+
+def test_ss_trailing_blq_is_not_bridged_to_an_assumed_zero_c_tau(run_ss):
+    """d823217 dropped the 4/8/12 h BLQ rows, closed the interval with C(tau) = C(0) = 0 and drew one straight line from
+    (2 h, 1.733): AUC_tau 18.13 against the analytic 11.20 (+62%), CL/F -38%. A decline to an assumed zero cannot be
+    integrated by log-down, so the subject must stop the run with that reason instead of returning a number."""
+    with pytest.raises(ValueError, match=r"steady-state") as err:
+        run_ss([("A", t, dv, b) for t, dv, b in SHORT_ROWS])
+    msg = str(err.value)
+    assert "'A'" in msg and "log-down" in msg and "C(tau) = C(0)" in msg
+
+
+def test_ss_assumed_c_tau_reached_by_log_down_matches_the_analytic_auc(run_ss):
+    """Guard: where the assumed end IS integrable under the declared rule (decline to a positive C(0)), the closed
+    interval matches the analytic AUC_tau (the 8->12 h segment is mono-exponential, so log-down is exact there)."""
+    pairs = [(t, round(_css(t, **LONG), 6)) for t in (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)]       # no sample at tau
+    p = run_ss(_ss_rows("G", pairs), with_flag=False)["params"]["G"]
+    assert p["ctau_source"] == "c0_assumed"
+    assert p["AUC_tau"] == pytest.approx(LONG_AUC_TAU, rel=0.02)
+
+
+def test_ss_one_sample_never_supplies_both_interval_ends(run_ss):
+    """Samples at 0.5-11 h only: d823217 took the 11 h sample as C(0) (10%-of-tau window) and copied it to C(tau), so
+    one observation became both ends (Cmin = Ctrough = 2.5565, true 2.2004). Neither end is supported: stop the run."""
+    pairs = [(t, round(_css(t, **LONG), 6)) for t in (0.5, 1.0, 2.0, 4.0, 8.0, 11.0)]
+    for with_flag in (True, False):
+        with pytest.raises(ValueError, match=r"neither C\(0\) nor C\(tau\)") as err:
+            run_ss(_ss_rows("E", pairs), with_flag=with_flag)
+        assert "'E'" in str(err.value)
+
+
+@pytest.mark.parametrize("with_flag", [True, False])
+def test_the_rule_text_names_which_end_was_assumed(with_flag, run_ss):
+    no_c0 = [p for p in SS_PROFILE if p[0] != 0.0]
+    no_ctau = [p for p in SS_PROFILE if p[0] != 12.0]
+    out = run_ss(_ss_rows("Z", no_c0) + _ss_rows("T", no_ctau) + _ss_rows("M", SS_PROFILE), with_flag=with_flag)
+    blq = out["summary"]["blq"]
+    assert blq["c0_assumed_ctau"] == ["Z"] and blq["ctau_assumed_c0"] == ["T"]
+    assert (out["params"]["Z"]["c0_source"], out["params"]["Z"]["ctau_source"]) == ("ctau_assumed", "measured")
+    assert "C(0) = C(tau) was assumed" in blq["rule"] and "C(tau) = C(0) was assumed" in blq["rule"]
+
+
+NEAR_TAU = [(0.0, 2.0), (1.0, 6.0), (2.0, 8.0), (4.0, 5.0), (8.0, 3.0)]
+
+
+def test_the_tau_sample_is_the_one_closest_to_tau_whatever_the_row_order(run_ss):
+    first = run_ss(_ss_rows("O", NEAR_TAU + [(11.8, 2.6), (12.0, 2.0)]))["params"]["O"]
+    second = run_ss(_ss_rows("O", NEAR_TAU + [(12.0, 2.0), (11.8, 2.6)]))["params"]["O"]
+    assert first == second
+    # 12.0 h is C(tau); the 11.8 h sample stays an interior sample at its own time (main's 50.506 in either order)
+    assert first["AUC_tau"] == pytest.approx(50.506, abs=1e-3) and first["Cmin"] == 2.0
+
+
+def test_equidistant_tau_samples_resolve_to_the_earlier_one(run_ss):
+    first = run_ss(_ss_rows("Q", NEAR_TAU + [(11.9, 2.3), (12.1, 1.9)]))["params"]["Q"]
+    second = run_ss(_ss_rows("Q", NEAR_TAU + [(12.1, 1.9), (11.9, 2.3)]))["params"]["Q"]
+    assert first == second
+    at_tau = run_ss(_ss_rows("Q", NEAR_TAU + [(12.0, 2.3)]))["params"]["Q"]  # 11.9 h placed at tau, 12.1 h is past tau
+    assert first["AUC_tau"] == at_tau["AUC_tau"]
+
+
+@pytest.mark.parametrize("tad,dv", [(12.0, 2.6), (4.0, 5.5), (0.0, 2.4)])
+def test_conflicting_duplicate_concentrations_fail_closed(tad, dv, run_ss):
+    with pytest.raises(ValueError, match=r"conflicting") as err:
+        run_ss(_ss_rows("D", SS_PROFILE + [(tad, dv)]))
+    assert "'D'" in str(err.value)
+
+
+def test_identical_duplicate_rows_are_collapsed(run_ss):
+    dup = run_ss(_ss_rows("D", SS_PROFILE + [(12.0, 2.0), (4.0, 5.0)]))["params"]["D"]
+    assert dup == run_ss(_ss_rows("D", SS_PROFILE))["params"]["D"]
+
+
+REST = [(1.0, 5.0), (2.0, 8.0), (4.0, 4.0), (8.0, 2.0), (12.0, 1.0)]
+
+
+def test_a_flagged_pre_dose_sample_adds_no_area_before_the_dose(run):
+    """Dose at t = 0, flagged blank sample at t = -2 h, none at 0: d823217 integrated from -2 h (42.854). The area
+    starts at the dose time with C(0) = 0, the same as a flagged blank at t = 0 (37.854)."""
+    pre = run([("P", -2.0, None, 1)] + [("P", t, c, 0) for t, c in REST])["P"]
+    at_dose = run([("P", 0.0, None, 1)] + [("P", t, c, 0) for t, c in REST])["P"]
+    assert pre["AUC_last"] == at_dose["AUC_last"] == pytest.approx(37.854, abs=1e-3)
+
+
+def test_an_unflagged_pre_dose_zero_adds_no_area_before_the_dose(run):
+    pre = run([("P", -2.0, 0.0, 0)] + [("P", t, c, 0) for t, c in REST], with_flag=False)["P"]
+    at_dose = run([("P", 0.0, 0.0, 0)] + [("P", t, c, 0) for t, c in REST], with_flag=False)["P"]
+    assert pre["AUC_last"] == at_dose["AUC_last"] == pytest.approx(37.854, abs=1e-3)
+
+
+@pytest.mark.parametrize("with_flag", [True, False])
+def test_a_positive_pre_dose_value_is_not_integrated(with_flag, run):
+    with_pre = run([("P", -1.0, 0.3, 0)] + [("P", t, c, 0) for t, c in REST], with_flag=with_flag)["P"]
+    without = run([("P", t, c, 0) for t, c in REST], with_flag=with_flag)["P"]
+    for k in ("AUC_last", "AUC_inf", "Cmax", "Tmax", "lambda_z"):
+        assert with_pre[k] == without[k], k
+
+
+# ── owner's rule: an unflagged 0 is a measured value, not a quantifiable positive concentration ──────
+def test_an_unflagged_measured_zero_does_not_end_the_leading_blq_phase(run):
+    flagged = run([("Z", 0.0, 0.0, 0), ("Z", 0.5, 0.0, 1)] + [("Z", t, c, 0) for t, c in REST])
+    reference = run([("Z", 0.0, 0.0, 0), ("Z", 0.5, 0.0, 0)] + [("Z", t, c, 0) for t, c in REST], with_flag=False)
+    assert flagged["Z"]["AUC_last"] == reference["Z"]["AUC_last"] == pytest.approx(36.604, abs=1e-3)
+
+
+def test_steady_state_unflagged_zero_does_not_end_the_leading_blq_phase(run_ss):
+    flagged = run_ss([("Z", 0.0, 0.0, 0), ("Z", 0.5, None, 1)] + _ss_rows("Z", SS_PROFILE[1:]))["params"]["Z"]
+    reference = run_ss([("Z", 0.0, 0.0, 0), ("Z", 0.5, 0.0, 0)] + _ss_rows("Z", SS_PROFILE[1:]),
+                       with_flag=False)["params"]["Z"]
+    assert flagged["AUC_tau"] == reference["AUC_tau"]
+
+
+def test_the_rule_text_states_the_measured_zero_convention(run, tmp_path):
+    orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    path = tmp_path / "z.csv"
+    path.write_text("ID,TIME,DV,AMT,EVID,BLQ\nA,0,,100,1,0\nA,1,5,0,0,0\nA,2,2,0,0,0\nA,4,1,0,0,0\nA,8,0.5,0,0,0\n")
+    orch.run_tool(sid, "load_dataset", "data_manager", {"path": str(path)})
+    rule = orch.run_tool(sid, "compute_nca", "nca", {})["result"]["nca_summary"]["blq"]["rule"]
+    assert "unflagged 0" in rule and "does not end" in rule and "before the dose" in rule
+
+
+# ── BLQ flag codings ──────────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def run_csv(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    def _run(lines: list[str]) -> dict:
+        path = tmp_path / "flags.csv"
+        path.write_text("\n".join(lines) + "\n")
+        orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
+        sid = orch.create_session().id
+        orch.run_tool(sid, "load_dataset", "data_manager", {"path": str(path)})
+        res = orch.run_tool(sid, "compute_nca", "nca", {})
+        return {"params": {p["subject"]: p for p in orch.get_session(sid).state.nca_parameters},
+                "summary": res["result"]["nca_summary"]}
+
+    return _run
+
+
+def _sd_lines(yes: str, no: str) -> list[str]:
+    """Single dose; middle zero at 6 h and trailing zero at 36 h are flagged."""
+    obs = [(1, 5), (2, 8), (4, 4), (6, 0), (8, 2), (12, 1), (24, 0.25), (36, 0)]
+    return (["ID,TIME,DV,AMT,EVID,BLQ", f"A,0,,100,1,{no}"]
+            + [f"A,{t},{c},0,0,{yes if t in (6, 36) else no}" for t, c in obs])
+
+
+def _ss_lines(yes: str, no: str) -> list[str]:
+    """Steady state q12h; the tau sample is flagged (closed with C(tau) = C(0) = 2)."""
+    return (["ID,TIME,DV,AMT,EVID,II,ADDL,BLQ", f"S,0,,100,1,12,3,{no}"]
+            + [f"S,{36 + t},{0 if t == 12.0 else c},0,0,,,{yes if t == 12.0 else no}" for t, c in SS_PROFILE])
+
+
+CODINGS = [("Y", ""), ("Y", "N"), ("y", "n"), ("YES", "NO"), ("TRUE", "FALSE"), ("true", ""), ("1", "0"), ("1.0", "")]
+
+
+@pytest.mark.parametrize("yes,no", CODINGS)
+@pytest.mark.parametrize("lines", [_sd_lines, _ss_lines])
+def test_supported_blq_flag_codings_mean_the_same_as_1_and_0(yes, no, lines, run_csv):
+    coded, reference = run_csv(lines(yes, no)), run_csv(lines("1", "0"))
+    assert coded["params"] == reference["params"]
+    assert coded["summary"]["blq"]["n_below_loq"] == reference["summary"]["blq"]["n_below_loq"] > 0
+
+
+@pytest.mark.parametrize("bad", ["2", "BLQ", "-1", "<LLOQ"])
+@pytest.mark.parametrize("lines", [_sd_lines, _ss_lines])
+def test_an_unknown_blq_flag_value_fails_validation(bad, lines, run_csv):
+    with pytest.raises(ValueError, match=r"BLQ") as err:
+        run_csv(lines(bad, "0"))
+    assert bad in str(err.value)
+
+
+# ── pinned guarantees (mutation-sensitive) ─────────────────────────────────────────────────────────
+def test_m1_is_classified_per_subject(run):
+    """Subject A's quantifiable samples must not turn subject B's leading BLQ rows into 'middle' rows."""
+    a_rows = [("A", t, c, 0) for t, c in REST]
+    b_rows = [("B", 0.0, None, 1), ("B", 0.5, None, 1)] + [("B", t, c, 0) for t, c in REST]
+    together = run(a_rows + b_rows)["B"]
+    alone = run(b_rows)["B"]
+    assert together["AUC_last"] == alone["AUC_last"] == pytest.approx(36.604, abs=1e-3)
+
+
+def test_a_subject_with_fewer_than_3_usable_samples_stops_the_steady_state_run(run_ss):
+    with pytest.raises(ValueError, match=r"fewer than 3 usable samples") as err:
+        run_ss(_ss_rows("V", SS_PROFILE) + _ss_rows("F", [(0.0, 2.0), (12.0, 2.0)]))
+    assert "'F'" in str(err.value) and "'V'" not in str(err.value)

@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose
+from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose, parse_blq_flag
 from app.compute.nca import run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.core.pharmstate import PharmState
@@ -21,27 +21,91 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
     return detect_roles(list(df.columns))
 
 
+def _blq_flags(values: pd.Series, col: str) -> pd.Series:
+    """The below-LOQ flag column as booleans (``parse_blq_flag``). Unrecognised values stop the analysis: an unknown
+    code must not quietly mean "not BLQ" while the result says M1 was applied."""
+    bad: set[str] = set()
+
+    def parse(v: Any) -> bool:
+        try:
+            return parse_blq_flag(v)
+        except ValueError:
+            bad.add(str(v))
+            return False
+
+    flags = values.map(parse).astype(bool)
+    if bad:
+        raise ValueError(f"below-LOQ flag column {col!r} has unrecognised value(s) "
+                         f"{', '.join(repr(b) for b in sorted(bad))}: use 1/0, Y/N, YES/NO or TRUE/FALSE "
+                         "(blank = not flagged)")
+    return flags
+
+
+def _from_dose_time(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str | None,
+                    dose_times: dict[Any, float]) -> pd.DataFrame:
+    """Records before the dose add no area. Per subject (dose time = its first dose record, else TIME 0), rows before
+    the dose are removed. When no usable record (BLQ-flagged, or a finite DV) is AT the dose time, the pre-dose
+    record(s) closest to it supply C = 0 there if they are BLQ-flagged or a measured 0 (no drug before the dose); a
+    positive pre-dose value is not carried to the dose time."""
+    flagged = (obs[cens_col].astype(bool) if cens_col is not None
+               else pd.Series(False, index=obs.index))
+    usable = flagged | np.isfinite(obs[dv_col].to_numpy(dtype=float))
+    parts = []
+    for sid, g in obs.groupby(id_col, sort=False):
+        td = dose_times.get(sid, 0.0)
+        before = g[time_col] < td
+        post = g[~before]
+        pre = g[before & usable.loc[g.index]]
+        if len(pre) and not (usable.loc[post.index] & (post[time_col] == td)).any():
+            latest = pre[pre[time_col] == pre[time_col].max()]
+            if (flagged.loc[latest.index] | (latest[dv_col] == 0)).all():
+                post = pd.concat([latest.iloc[[0]].assign(**{time_col: td, dv_col: 0.0}), post])
+        parts.append(post)
+    return pd.concat(parts) if parts else obs
+
+
 def _apply_m1(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str) -> pd.DataFrame:
-    """Rule M1 for observations flagged below-LOQ (CENS == 1), per subject in time order: BLQ rows BEFORE the first
-    quantifiable value are a 0 baseline (their value is set to 0, also when it was blank); BLQ rows after it, in the
-    middle or trailing, are excluded. Quantifiable means unflagged WITH a finite numeric TIME and DV: a row without
-    either carries no usable measurement and does not end the baseline. A subject with nothing quantifiable keeps
-    all its rows as zeros (as before)."""
-    flag = pd.to_numeric(obs[cens_col], errors="coerce").fillna(0) == 1
+    """Rule M1 for observations flagged below-LOQ (``parse_blq_flag``), per subject in time order: BLQ rows BEFORE the
+    first quantifiable value are a 0 baseline (their value is set to 0, also when it was blank); BLQ rows after it, in
+    the middle or trailing, are excluded. Quantifiable means unflagged with a finite numeric TIME and a finite,
+    POSITIVE DV: a row without a time or a DV carries no usable measurement, and an unflagged 0 is a measured value
+    that is kept as an observed zero but is not a quantifiable concentration, so neither ends the baseline. A subject
+    with nothing quantifiable keeps all its rows as zeros (as before)."""
+    flag = obs[cens_col].map(parse_blq_flag).astype(bool)
     work = obs.assign(_blq=flag.to_numpy(), _t=pd.to_numeric(obs[time_col], errors="coerce"))
     work = work.sort_values([id_col, "_t"], kind="stable")
     parts = []
     for _, g in work.groupby(id_col, sort=False):
         blq = g["_blq"].to_numpy()
-        measured = (np.isfinite(pd.to_numeric(g[dv_col], errors="coerce").to_numpy(dtype=float))
-                    & np.isfinite(g["_t"].to_numpy(dtype=float)))
-        quantified = np.flatnonzero(~blq & measured)
+        dv = pd.to_numeric(g[dv_col], errors="coerce").to_numpy(dtype=float)
+        measured = np.isfinite(dv) & np.isfinite(g["_t"].to_numpy(dtype=float))
+        quantified = np.flatnonzero(~blq & measured & (dv > 0))
         first_q = int(quantified[0]) if quantified.size else len(g)
         leading = blq & (np.arange(len(g)) < first_q)
         g = g.copy()
         g.loc[g.index[leading], dv_col] = 0.0
         parts.append(g[(~blq) | leading])
     return pd.concat(parts).drop(columns=["_blq", "_t"]) if parts else obs
+
+
+PRE_DOSE_RULE = ("Records before the dose (the subject's first dose record, else TIME 0) add no area: with no sample "
+                 "at the dose time, a BLQ-flagged or zero pre-dose record closest to it sets C = 0 there; other "
+                 "pre-dose records are not used.")
+
+
+def _ss_endpoint_rule(ctau_assumed: list[str], c0_assumed: list[str]) -> str:
+    """How the steady-state interval ends were formed, naming every subject whose end was assumed."""
+    text = (" Each interval end is the sample closest to it (C(0): from 2% of tau before the dose to 0.001 h after "
+            "it; C(tau): within 2% of tau; ties go to the earlier sample); nothing before the dose or after tau is "
+            "integrated. Where only one end has a sample, steady state is assumed for the other end alone and the "
+            "assumed segment is integrated by linear-up/log-down.")
+    if ctau_assumed:
+        text += f" C(tau) = C(0) was assumed to close the interval for: {', '.join(ctau_assumed)}."
+    if c0_assumed:
+        text += f" C(0) = C(tau) was assumed to open the interval for: {', '.join(c0_assumed)}."
+    if not (ctau_assumed or c0_assumed):
+        text += " Both ends of every interval are samples."
+    return text
 
 
 def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -59,6 +123,8 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     route_col = next((c for c, r in roles.items() if r == "ROUTE"), None)
     if not (id_col and time_col and dv_col):
         raise ValueError("dataset missing required ID/TIME/DV roles for NCA")
+    if cens_col is not None:
+        df = df.assign(**{cens_col: _blq_flags(df[cens_col], cens_col)})
 
     # route: IV enables MRT/Vss; default extravascular. Explicit arg wins, else
     # infer from a ROUTE column (values like IV / bolus / infusion).
@@ -90,6 +156,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                 prof = profiles[p["subject"]]
                 p["c0_source"], p["ctau_source"] = prof.c0_source, prof.ctau_source
             assumed = sorted((str(s) for s, prof in profiles.items() if prof.ctau_source == "c0_assumed"))
+            opened = sorted((str(s) for s, prof in profiles.items() if prof.c0_source == "ctau_assumed"))
             n = len(out["nca_parameters"])
             taus = {round(p.tau, 3) for p in profiles.values()}
             if evid_col:
@@ -98,19 +165,18 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                 is_obs = pd.to_numeric(df[amt_col], errors="coerce").fillna(0) <= 0
             obs_ss = df[is_obs]                      # BLQ records are counted on observation rows only
             if cens_col is not None:
-                n_blq = int((pd.to_numeric(obs_ss[cens_col], errors="coerce").fillna(0) == 1).sum())
+                n_blq = int(obs_ss[cens_col].sum())
             else:
                 n_blq = int((pd.to_numeric(obs_ss[dv_col], errors="coerce") <= 0).sum())
             out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
-            out["nca_summary"]["blq"] = {"n_below_loq": n_blq, "ctau_assumed_c0": assumed, "rule": (
-                ("M1 applied within the final steady-state dosing interval: BLQ-flagged records before that interval's "
-                 "first quantifiable value count as a 0 baseline; later BLQ records (middle or trailing) are excluded "
-                 "from AUC_tau. Where the tau sample was excluded the interval is closed with C(tau) = C(0) "
-                 "(listed in ctau_assumed_c0).") if cens_col is not None else
-                ("No BLQ flag in the data: concentrations are used as given in the steady-state interval analysis "
-                 "(a 0 is a measured zero)."
-                 + (f" C(tau) = C(0) was assumed to close the interval for: {', '.join(assumed)}." if assumed else
-                    " Every interval ends at a measured C(tau).")))}
+            out["nca_summary"]["blq"] = {
+                "n_below_loq": n_blq, "ctau_assumed_c0": assumed, "c0_assumed_ctau": opened, "rule": (
+                    ("M1 applied within the final steady-state dosing interval: quantifiable = unflagged with a "
+                     "finite, positive DV. BLQ-flagged records before that interval's first quantifiable value count "
+                     "as a 0 baseline (an unflagged 0 is kept as a measured zero but does not end that phase); later "
+                     "BLQ records (middle or trailing) are excluded from AUC_tau.") if cens_col is not None else
+                    ("No BLQ flag in the data: concentrations are used as given in the steady-state interval "
+                     "analysis (a 0 is a measured zero).")) + _ss_endpoint_rule(assumed, opened)}
             return ToolResult(
                 summary=(f"Steady-state NCA: {n} subjects over a {sorted(taus)} h dosing "
                          f"interval (AUC_tau, Cmax/Cmin, Cavg, CL/F=Dose/AUC_tau, "
@@ -137,21 +203,24 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
         dose_rows = df.iloc[0:0]
         obs = df
 
-    # dose per subject (single-dose: first dosing amount)
+    # dose per subject (single-dose: first dosing amount) and its time (the first dose record's TIME)
     dose_by_subject: dict[Any, float] = {}
     if amt_col and len(dose_rows):
         for sid, g in dose_rows.groupby(id_col):
             amts = g[amt_col].dropna()
             if len(amts):
                 dose_by_subject[sid] = float(amts.iloc[0])
+    timed = dose_rows[np.isfinite(dose_rows[time_col].to_numpy(dtype=float))]
+    dose_times = {sid: float(t) for sid, t in timed.groupby(id_col)[time_col].min().items()}
 
     # BLQ accounting (transparency): count below-LOQ observation records, by an
     # explicit CENS flag if present, else non-positive concentrations.
     if cens_col is not None:
-        n_blq = int((pd.to_numeric(obs[cens_col], errors="coerce").fillna(0) == 1).sum())
+        n_blq = int(obs[cens_col].sum())
     else:
         n_blq = int((obs[dv_col] <= 0).sum())
 
+    obs = _from_dose_time(obs, id_col, time_col, dv_col, cens_col, dose_times)
     if cens_col is not None:
         obs = _apply_m1(obs, id_col, time_col, dv_col, cens_col)
     obs = obs.dropna(subset=[time_col, dv_col])
@@ -162,11 +231,12 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."
     out["nca_summary"]["blq"] = {
         "n_below_loq": n_blq,
-        "rule": (("M1: BLQ-flagged records before the first quantifiable value count as a 0 baseline; later BLQ "
-                  "records (middle or trailing) are excluded from AUC and lambda_z. AUC_last ends at Tlast. Vss/MRT"
-                  + vss_note) if cens_col is not None else
+        "rule": (("M1: quantifiable = unflagged with a finite, positive DV. BLQ-flagged records before the first "
+                  "quantifiable value count as a 0 baseline; later BLQ records (middle or trailing) are excluded from "
+                  "AUC and lambda_z. An unflagged 0 is kept as a measured zero but does not end the leading-BLQ "
+                  f"phase. {PRE_DOSE_RULE} AUC_last ends at Tlast. Vss/MRT" + vss_note) if cens_col is not None else
                  ("No BLQ flag in the data: concentrations are used as given (a 0 is a measured zero), except that "
-                  "AUC_last ends at Tlast, the last positive concentration. Vss/MRT" + vss_note)),
+                  f"AUC_last ends at Tlast, the last positive concentration. {PRE_DOSE_RULE} Vss/MRT" + vss_note)),
     }
 
     n = len(out["nca_parameters"])

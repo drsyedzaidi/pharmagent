@@ -31,6 +31,39 @@ def _num(v: Any) -> float | None:
         return None
 
 
+_BLQ_YES = {"1", "Y", "YES", "TRUE"}
+_BLQ_NO = {"0", "N", "NO", "FALSE"}
+_BLANK = {"", ".", "NA", "NAN"}
+
+
+def parse_blq_flag(v: Any) -> bool:
+    """Below-LOQ flag cell -> True (flagged) / False (not flagged).
+
+    Accepted: booleans; 1/0 as numbers or text ("1.0" too); Y/N, YES/NO, TRUE/FALSE in any case (CDISC ADPC flags are
+    "Y" or blank); a blank or missing cell is not flagged. Anything else raises ValueError, so an unknown code never
+    silently means "not BLQ"."""
+    if v is None:
+        return False
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        f = float(v)
+    else:
+        s = str(v).strip().upper()
+        if s in _BLANK or s in _BLQ_NO:
+            return False
+        if s in _BLQ_YES:
+            return True
+        num = _num(s)
+        f = float("inf") if num is None else num                # not a number: falls through to the error
+    if math.isnan(f):
+        return False
+    if f in (0.0, 1.0):
+        return f == 1.0
+    raise ValueError(f"unrecognised below-LOQ flag value {v!r}: use 1/0, Y/N, YES/NO or TRUE/FALSE "
+                     "(blank = not flagged)")
+
+
 @dataclass(frozen=True)
 class SSProfile:
     subject: Any
@@ -166,16 +199,23 @@ def is_multiple_dose(records: list[dict], *, time_col: str, amt_col: str,
     return False
 
 
-def _m1_in_interval(rows: list[tuple[float, bool, float | None]]) -> list[tuple[float, float]]:
+PRE_DOSE_TOL = 1e-3          # complete-interval mode: a sample this soon after the dose is still the pre-dose trough
+_SAME_TIME = 1e-9            # times closer than this are one time point
+_Rec = tuple[float, bool, float | None]      # (time after dose, below-LOQ flag, dv)
+
+
+def _m1_in_interval(rows: list[_Rec]) -> list[tuple[float, float]]:
     """Rule M1 for one interval's (tad, below-LOQ, dv) records: flagged records before the first quantifiable one
-    (unflagged with a finite DV; +-inf is not finite) become a 0 baseline, later flagged records are dropped;
-    unflagged records without a finite DV carry no measurement and are dropped. With nothing quantifiable, all flagged
-    records stay as zeros."""
+    become a 0 baseline, later flagged records are dropped; unflagged records without a finite DV carry no measurement
+    and are dropped. Quantifiable means unflagged with a finite, POSITIVE DV (+-inf is not finite): an unflagged 0 is a
+    measured value and is kept as an observed zero, but it is not a quantifiable concentration, so it never ends the
+    leading-BLQ phase. With nothing quantifiable, all flagged records stay as zeros."""
     rows = sorted(rows, key=lambda r: r[0])
+
     def finite(dv: float | None) -> bool:
         return dv is not None and math.isfinite(dv)
 
-    first_q = next((i for i, (_, blq, dv) in enumerate(rows) if not blq and finite(dv)), len(rows))
+    first_q = next((i for i, (_, blq, dv) in enumerate(rows) if not blq and finite(dv) and dv > 0), len(rows))
     out: list[tuple[float, float]] = []
     for i, (tad, blq, dv) in enumerate(rows):
         if blq:
@@ -184,6 +224,114 @@ def _m1_in_interval(rows: list[tuple[float, bool, float | None]]) -> list[tuple[
         elif finite(dv):
             out.append((tad, dv))
     return out
+
+
+def _interval_records(rows: list[dict], *, time_col: str, dv_col: str, amt_col: str, blq_col: str | None,
+                      strict: bool, last_dose: float, tau: float, tol: float) -> list[_Rec]:
+    """(time after the last dose, below-LOQ, dv) for the observations within [-tol, tau + tol] of the last dose."""
+    recs: list[_Rec] = []
+    for r in rows:
+        t = _num(r.get(time_col))
+        dv = _num(r.get(dv_col))
+        if strict and dv is not None and not math.isfinite(dv):
+            dv = None                       # +-inf is not a measurement
+        is_blq = blq_col is not None and parse_blq_flag(r.get(blq_col))
+        if t is None or (dv is None and not is_blq):
+            continue
+        if strict and (_num(r.get(amt_col)) or 0) > 0:
+            continue                        # a dose event builds the schedule; it is never a concentration
+        tad = t - last_dose
+        if -tol <= tad <= tau + tol:
+            recs.append((tad, is_blq, dv))
+    return recs
+
+
+def _place_endpoints(recs: list[_Rec], tau: float, tol: float) -> list[_Rec]:
+    """Complete-interval mode: the sample closest to each interval end is placed AT that end. The tad-0 end takes
+    samples from tol before the dose (the pre-dose trough) to PRE_DOSE_TOL after it; the tau end takes samples within
+    tol of tau. Ties go to the earlier sample, so the choice never depends on row order. Every other sample keeps its
+    own time if that lies inside (0, tau) and is dropped otherwise: nothing before the dose or after tau is
+    integrated."""
+    ends: dict[float, float] = {}
+    for end, lo, hi in ((0.0, -tol, PRE_DOSE_TOL), (float(tau), tau - tol, tau + tol)):
+        near = [t for t, _, _ in recs if lo <= t <= hi]
+        if near:
+            ends[end] = min(near, key=lambda t, e=end: (round(abs(t - e), 9), t))
+    placed: list[_Rec] = []
+    for t, blq, dv in recs:
+        end = next((e for e, best in ends.items() if abs(t - best) <= _SAME_TIME), None)
+        if end is not None:
+            placed.append((end, blq, dv))
+        elif 0.0 < t < tau:
+            placed.append((t, blq, dv))
+    return placed
+
+
+def _agree(a: _Rec, b: _Rec) -> bool:
+    """Two records at one time agree when both are BLQ-flagged, or both carry the same concentration (1 part in 1e6)."""
+    if a[1] or b[1]:
+        return a[1] == b[1]
+    return a[2] is not None and b[2] is not None and math.isclose(a[2], b[2], rel_tol=1e-6, abs_tol=1e-12)
+
+
+def _unique_times(recs: list[_Rec]) -> tuple[list[_Rec], str | None]:
+    """One record per time point. Agreeing duplicates collapse to one; conflicting ones reject the subject, because
+    keeping either would depend on the order of the rows in the file."""
+    out: list[_Rec] = []
+    for rec in sorted(recs, key=lambda r: (r[0], r[1], -math.inf if r[2] is None else r[2])):   # total order
+        if out and abs(rec[0] - out[-1][0]) <= _SAME_TIME:
+            if not _agree(out[-1], rec):
+                def show(r: _Rec) -> str:
+                    return "BLQ" if r[1] else f"{r[2]:g}"
+                return out, (f"conflicting duplicate concentrations at time after dose {rec[0]:g} "
+                             f"({show(out[-1])} vs {show(rec)}); the interval cannot be formed without choosing one")
+            continue
+        out.append(rec)
+    return out, None
+
+
+def _close_interval(pts: list[tuple[float, float]], tau: float) -> tuple[list[float], list[float], str, str] | str:
+    """Complete-interval mode: both ends need their own support, a sample placed at tad 0 (measured, or a BLQ record
+    normalised to a 0 baseline) and one at tau. Where exactly one end has it, steady-state periodicity is assumed for
+    the other end only: C(0) = C(tau) or C(tau) = C(0). One sample never supplies both ends. The assumed closing
+    segment must be integrable by linear-up/log-down: a decline to an assumed C(tau) of 0 has no log-down area, so it
+    rejects the subject rather than drawing a straight line across excluded BLQ records. Returns (tad, conc,
+    c0_source, ctau_source), or the reason no complete [0, tau] interval can be formed."""
+    has_c0, has_ctau = pts[0][0] == 0.0, pts[-1][0] == tau
+    if not (has_c0 or has_ctau):
+        return ("neither C(0) nor C(tau) is available (no sample within the tolerance of either interval end), "
+                "so no complete [0, tau] interval can be formed")
+    if not has_c0:
+        pts = [(0.0, pts[-1][1])] + pts
+    if not has_ctau:
+        (t_last, c_last), c0 = pts[-1], pts[0][1]
+        if c0 < c_last and c0 <= 0:
+            return (f"C(tau) = C(0) = {c0:g} is assumed for the missing tau sample, but the decline to it from "
+                    f"{c_last:g} at time after dose {t_last:g} cannot be integrated by linear-up/log-down "
+                    "(log-down needs a positive end)")
+        pts = pts + [(float(tau), c0)]
+    return ([t for t, _ in pts], [c for _, c in pts],
+            "measured" if has_c0 else "ctau_assumed", "measured" if has_ctau else "c0_assumed")
+
+
+def _legacy_anchor(pts: list[tuple[float, float]], tau: float, tol: float) -> tuple[list[float], list[float], str]:
+    """Profiles as sampled (callers without require_complete_interval): keep the first record at a repeated time; if no
+    sample is essentially at the dose, anchor C(0) to a sample in the last 10% of tau."""
+    pts = sorted(pts, key=lambda x: x[0])
+    seen: set[float] = set()
+    uniq = [(t, c) for t, c in pts if not (t in seen or seen.add(t))]
+    tad = [t for t, _ in uniq]
+    conc = [c for _, c in uniq]
+    c0_source = "none"
+    if tad[0] <= PRE_DOSE_TOL:
+        c0_source = "measured"
+    else:
+        ctau = next((c for t, c in zip(reversed(tad), reversed(conc)) if t >= tau - max(tol, 0.1 * tau)), None)
+        if ctau is not None:
+            tad = [0.0] + tad
+            conc = [ctau] + conc
+            c0_source = "ctau_assumed"
+    return tad, conc, c0_source
 
 
 def extract_ss_intervals(records: list[dict], *, id_col: str, time_col: str,
@@ -205,21 +353,20 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
                                  ) -> tuple[dict[Any, SSProfile], dict[Any, str]]:
     """Build one steady-state interval profile per subject (last dose interval).
 
-    For each subject: expand the dose schedule, take the last dose, and collect
-    measured concentrations with time-after-dose in [0, tau]. If no sample is
-    taken exactly at tad=0, the trough is set to C(tau) (the steady-state
-    assumption C_ss(0) = C_ss(tau)).
+    For each subject: expand the dose schedule, take the last dose, and collect measured concentrations with
+    time-after-dose in [0, tau].
 
-    With ``blq_col`` (1 = below LOQ), rule M1 is applied WITHIN that last interval only: flagged records before the
-    interval's first quantifiable value (unflagged, finite time and DV) are a 0 baseline, later flagged records are
-    excluded. Samples from earlier intervals play no part in that classification. Dose rows (AMT > 0) only build
-    the schedule and are never concentrations. If the sample at tau is excluded, the interval is closed with the
-    steady-state convention C(tau) = C(0).
+    With ``blq_col`` (flag values as ``parse_blq_flag`` reads them), rule M1 is applied WITHIN that last interval only:
+    flagged records before the interval's first quantifiable value (unflagged, finite and positive DV; an unflagged 0
+    is kept as a measured zero but does not end this phase) are a 0 baseline, later flagged records are excluded.
+    Samples from earlier intervals play no part in that classification. Dose rows (AMT > 0) only build the schedule
+    and are never concentrations.
 
-    With ``require_complete_interval`` (NCA), with or without ``blq_col``: an accepted sample within the tau tolerance
-    is placed at exactly tau; if C(tau) is absent but C(0) is known, the interval is closed with C(tau) = C(0)
-    (``ctau_source="c0_assumed"``); a subject with neither end is skipped with that reason. Without it (legacy callers
-    such as the compartmental tools) profiles are returned as sampled.
+    With ``require_complete_interval`` (NCA), with or without ``blq_col``: the sample closest to each interval end is
+    placed exactly at it (``_place_endpoints``), conflicting duplicates reject the subject, and the interval is closed
+    as ``_close_interval`` describes (each end needs its own sample; at most one end is assumed by periodicity). A
+    subject that cannot form a complete interval is skipped with the reason. Without it (legacy callers such as the
+    compartmental tools) profiles are returned as sampled, with C(0) anchored to a late sample when none is at the dose.
 
     Returns ``(profiles, skipped)``: ``skipped`` maps each subject that could not form a complete interval to why.
     """
@@ -235,70 +382,29 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
         if not times or dose is None or not tau:
             skipped[sid] = "no repeated-dose schedule (dose amount and interdose interval)"
             continue
-        last_dose = times[-1]
         tol = tol_frac * tau
-        PRE_DOSE_TOL = 1e-3                     # a sample this close to the dose is the measured pre-dose trough
-        strict = blq_col is not None or require_complete_interval
-
-        # measured observations in the last interval, as time-after-dose
-        pts: list[tuple[float, float]] = []
-        flagged: list[tuple[float, bool, float | None]] = []   # (tad, below-LOQ, dv); used when blq_col is given
-        for r in rows:
-            t = _num(r.get(time_col))
-            dv = _num(r.get(dv_col))
-            if strict and dv is not None and not math.isfinite(dv):
-                dv = None                       # +-inf is not a measurement
-            is_blq = blq_col is not None and _num(r.get(blq_col)) == 1
-            if t is None or (dv is None and not is_blq):
+        recs = _interval_records(rows, time_col=time_col, dv_col=dv_col, amt_col=amt_col, blq_col=blq_col,
+                                 strict=blq_col is not None or require_complete_interval,
+                                 last_dose=times[-1], tau=tau, tol=tol)
+        if require_complete_interval:
+            recs, conflict = _unique_times(_place_endpoints(recs, tau, tol))
+            if conflict:
+                skipped[sid] = conflict
                 continue
-            if strict and (_num(r.get(amt_col)) or 0) > 0:
-                continue                        # a dose event builds the schedule; it is never a concentration
-            tad = t - last_dose
-            if -tol <= tad <= tau + tol:
-                near_tau = require_complete_interval and tad >= tau - tol   # within tolerance: this IS the tau sample
-                near_zero = require_complete_interval and tad <= PRE_DOSE_TOL  # ... and this IS the tad-0 sample
-                tad = float(tau) if near_tau else 0.0 if near_zero else max(tad, 0.0)
-                if blq_col is None:
-                    pts.append((tad, dv))
-                else:
-                    flagged.append((tad, is_blq, dv))
-        if blq_col is not None:
-            pts = _m1_in_interval(flagged)
+        else:
+            recs = [(max(t, 0.0), blq, dv) for t, blq, dv in recs]
+        pts = _m1_in_interval(recs) if blq_col is not None else [(t, dv) for t, _, dv in recs]
         if len(pts) < 3:
             skipped[sid] = f"fewer than 3 usable samples in the final dosing interval ({len(pts)})"
             continue
-        pts.sort(key=lambda x: x[0])
-        # dedup identical tad (keep first)
-        seen: set[float] = set()
-        uniq = [(t, c) for t, c in pts if not (t in seen or seen.add(t))]
-        tad = [t for t, _ in uniq]
-        conc = [c for _, c in uniq]
-
-        # establish C(0). Only an essentially-at-dose sample counts as the
-        # measured pre-dose trough; a first sample partway up the absorption
-        # limb (e.g. 0.25 h) is NOT the trough, so anchor C(0) = C(tau)
-        # (steady-state assumption C_ss(0) = C_ss(tau)).
-        c0_source = "none"
-        if tad[0] <= PRE_DOSE_TOL:
-            c0_source = "measured"
-        else:
-            ctau = next((c for t, c in zip(reversed(tad), reversed(conc))
-                         if t >= tau - max(tol, 0.1 * tau)), None)
-            if ctau is not None:
-                tad = [0.0] + tad
-                conc = [ctau] + conc
-                c0_source = "ctau_assumed"
-
-        # close the interval: if the sample at tau was excluded (BLQ path), use the steady-state periodic
-        # convention C(tau) = C(0) instead of integrating a partial interval and calling it AUC_tau
-        ctau_source = "measured"
-        if require_complete_interval and tad[-1] < tau:
-            if tad[0] > PRE_DOSE_TOL:
-                skipped[sid] = "neither C(0) nor C(tau) is available, so no complete [0, tau] interval can be formed"
+        if require_complete_interval:
+            closed = _close_interval(sorted(pts, key=lambda x: x[0]), tau)
+            if isinstance(closed, str):
+                skipped[sid] = closed
                 continue
-            tad = tad + [float(tau)]
-            conc = conc + [conc[0]]
-            ctau_source = "c0_assumed"
+            tad, conc, c0_source, ctau_source = closed
+        else:
+            (tad, conc, c0_source), ctau_source = _legacy_anchor(pts, tau, tol), "measured"
 
         out[sid] = SSProfile(
             subject=sid, tad=tuple(tad), conc=tuple(conc), dose=float(dose),
