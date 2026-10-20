@@ -407,3 +407,43 @@ def test_no_flag_result_records_truthful_endpoint_provenance(run_ss):
     assert out["summary"]["blq"]["ctau_assumed_c0"] == ["T"]
     rule = out["summary"]["blq"]["rule"]
     assert "No BLQ flag" in rule and "C(tau) = C(0)" in rule and "T" in rule
+
+
+# ── strict (complete-interval) path without a BLQ column: same row validations as the BLQ path ────
+def _strict(recs):
+    from app.compute.dosing import extract_ss_intervals_checked
+
+    return extract_ss_intervals_checked(recs, id_col="ID", time_col="TIME", dv_col="DV", amt_col="AMT", ii_col="II",
+                                        addl_col="ADDL", require_complete_interval=True)[0]
+
+
+def _nf_obs(sid, tad, dv):
+    return {"ID": sid, "TIME": 36 + tad, "DV": dv, "AMT": 0, "II": None, "ADDL": None}
+
+
+def test_no_flag_a_final_dose_row_with_dv_zero_is_not_a_concentration():
+    doses = [{"ID": "P", "TIME": t, "DV": 0.0 if t == 36 else None, "AMT": 100, "II": 12, "ADDL": 0}
+             for t in (0, 12, 24, 36)]
+    blank = [{**d, "DV": None} for d in doses]
+    obs = [_nf_obs("P", t, c) for t, c in SS_PROFILE if t != 0.0]
+    with_zero, plain = _strict(doses + obs)["P"], _strict(blank + obs)["P"]
+    assert with_zero == plain
+    assert with_zero.n_doses == 4 and with_zero.c0_source == "ctau_assumed" and 0.0 not in with_zero.conc
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf")])
+def test_no_flag_an_infinite_dv_never_enters_the_profile(bad):
+    dose = [{"ID": "I", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3}]
+    obs = [_nf_obs("I", t, c) for t, c in SS_PROFILE]
+    with_inf = _strict(dose + obs + [_nf_obs("I", 0.5, bad)])["I"]
+    reference = _strict(dose + obs)["I"]
+    assert with_inf == reference and all(math.isfinite(c) for c in with_inf.conc)
+
+
+@pytest.mark.parametrize("start", [0.0005, 0.001])                 # PRE_DOSE_TOL = 1e-3
+def test_no_flag_a_start_within_the_zero_tolerance_is_placed_exactly_at_zero(start):
+    dose = [{"ID": "Z", "TIME": 0, "DV": None, "AMT": 100, "II": 12, "ADDL": 3}]
+    obs = [_nf_obs("Z", start if t == 0.0 else t, c) for t, c in SS_PROFILE]
+    prof = _strict(dose + obs)["Z"]
+    assert prof.tad[0] == 0.0 and prof.tad[-1] == 12.0 and prof.c0_source == "measured"
+    assert prof == _strict(dose + [_nf_obs("Z", t, c) for t, c in SS_PROFILE])["Z"]

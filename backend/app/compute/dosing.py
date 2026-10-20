@@ -237,6 +237,8 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
             continue
         last_dose = times[-1]
         tol = tol_frac * tau
+        PRE_DOSE_TOL = 1e-3                     # a sample this close to the dose is the measured pre-dose trough
+        strict = blq_col is not None or require_complete_interval
 
         # measured observations in the last interval, as time-after-dose
         pts: list[tuple[float, float]] = []
@@ -244,15 +246,18 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
         for r in rows:
             t = _num(r.get(time_col))
             dv = _num(r.get(dv_col))
+            if strict and dv is not None and not math.isfinite(dv):
+                dv = None                       # +-inf is not a measurement
             is_blq = blq_col is not None and _num(r.get(blq_col)) == 1
             if t is None or (dv is None and not is_blq):
                 continue
-            if blq_col is not None and (_num(r.get(amt_col)) or 0) > 0:
+            if strict and (_num(r.get(amt_col)) or 0) > 0:
                 continue                        # a dose event builds the schedule; it is never a concentration
             tad = t - last_dose
             if -tol <= tad <= tau + tol:
                 near_tau = require_complete_interval and tad >= tau - tol   # within tolerance: this IS the tau sample
-                tad = float(tau) if near_tau else max(tad, 0.0)
+                near_zero = require_complete_interval and tad <= PRE_DOSE_TOL  # ... and this IS the tad-0 sample
+                tad = float(tau) if near_tau else 0.0 if near_zero else max(tad, 0.0)
                 if blq_col is None:
                     pts.append((tad, dv))
                 else:
@@ -273,7 +278,6 @@ def extract_ss_intervals_checked(records: list[dict], *, id_col: str, time_col: 
         # measured pre-dose trough; a first sample partway up the absorption
         # limb (e.g. 0.25 h) is NOT the trough, so anchor C(0) = C(tau)
         # (steady-state assumption C_ss(0) = C_ss(tau)).
-        PRE_DOSE_TOL = 1e-3
         c0_source = "none"
         if tad[0] <= PRE_DOSE_TOL:
             c0_source = "measured"
