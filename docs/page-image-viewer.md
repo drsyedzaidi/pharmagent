@@ -183,12 +183,17 @@ only cover one process). Where `fcntl` does not exist, or the lock cannot be tak
   50 MiB (always the worst case, never the client-declared length) of both byte budgets; the file may not exceed that. A document's cost is
   `max(reserved, .part + .pdf)`, a complete document costs its PDF, so nothing is counted twice. If creating the
   reservation fails part-way, the partial file is removed before the upload is refused.
-- **Heartbeat:** each 1 MiB chunk copied to the `.part` refreshes the reservation under the same lock cleanup uses, so
+- **Heartbeat:** each 1 MiB chunk is preceded by a refresh of the reservation under the same lock cleanup uses, so
   cleanup cannot classify an upload stale and delete it after a heartbeat. A heartbeat for a reservation that was
-  already reclaimed fails (409) instead of recreating its timestamp. KNOWN GAP: the copy starts only after the whole
-  multipart body has been received, so nothing refreshes the reservation while the body is still arriving. A body
-  slower than the stale age can lose its reservation if any other upload starts (and so runs cleanup) after that age;
-  the slow upload is then refused with 409 at the first chunk of its copy. With no other upload in between it completes.
+  already reclaimed fails (409) instead of recreating its timestamp. While the multipart body is still arriving (before
+  the copy starts), every body message received at least `HEARTBEAT_SECONDS` (60 s) after the last heartbeat
+  refreshes the reservation the same way, in a worker thread so a wait for the lock never blocks the event loop. A
+  slow body that keeps sending therefore keeps its reservation through other uploads' cleanup. The heartbeat follows
+  what arrives, not a timer: a body that sends nothing for over the stale age (minus up to one heartbeat interval)
+  goes stale and can be reclaimed, and its next message is then refused with 409 without the rest of the body being
+  read. The copy also heartbeats before every write, the first included, so a reclaimed upload (also one whose
+  receive-time heartbeat was not yet due, e.g. after a sleep that stopped the monotonic clock) is refused with 409
+  before it creates its `.part`. A refused or cancelled upload leaves nothing behind.
 - **States:** active (fresh reservation), stale (reservation idle > 1 h), committed (`.pdf` AND `.json`), abandoned
   (pieces with no reservation).
 - **Commit order:** metadata first (`.json.tmp` → `.json`), then `.part` → `.pdf` as the commit point, then the
@@ -210,8 +215,8 @@ only cover one process). Where `fcntl` does not exist, or the lock cannot be tak
   the upload stays charged at its worst case (a document slot and 50 MiB), and a later stale cleanup (also locked)
   retries. No cleanup path can lower the charge below what was reserved; a failed delete is logged (session, piece,
   error type) and skipped rather than failing every upload. Discard treats a `.json` as a piece only when there is no
-  `.pdf`, so it never touches a committed document. (The upload heartbeat gap below is separate: a slow upload whose
-  reservation was reclaimed can still write its first chunk to a `.part` before it is refused.) Failure-path cleanup never raises, runs in a worker thread, and is shielded from cancellation
+  `.pdf`, so it never touches a committed document. (An upload whose reservation was reclaimed never writes a
+  `.part`: see Heartbeat above.) Failure-path cleanup never raises, runs in a worker thread, and is shielded from cancellation
   so a cancelled request still cleans up; if it cannot run at all, the upload simply stays charged until stale cleanup.
 - **Scans re-list:** if a file disappears mid-scan (only possible from outside the app, since every app deletion holds
   the lock the scan holds), that listing is thrown away and the directory is listed again; a directory that keeps

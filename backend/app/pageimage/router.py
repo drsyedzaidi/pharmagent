@@ -6,10 +6,13 @@ leaves auth code untouched). Rendering is read-only and is NOT audited.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import sys
+import time
 from collections.abc import Callable
+from pathlib import Path
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -157,6 +160,27 @@ def _capped(request: Request) -> Request:
     return Request(request.scope, receive, request._send)
 
 
+def _heartbeating(request: Request, part: Path, clock: Callable[[], float] = time.monotonic) -> Request:
+    """The same request with a receive channel that keeps the upload's reservation alive while its body is still
+    arriving: a body message received at least HEARTBEAT_SECONDS after the reservation or the last heartbeat refreshes
+    it through the locked ``documents.touch``, in a worker thread (it may wait for the storage lock). Paced by time,
+    not bytes, and driven by what arrives: a body that sends nothing gets no heartbeat and goes stale. If the
+    reservation was already reclaimed, the heartbeat raises ReservationLostError and the rest of the body is never
+    read."""
+    last = clock()
+    original = request.receive
+
+    async def receive():
+        nonlocal last
+        msg = await original()
+        if msg["type"] == "http.request" and clock() - last >= limits.HEARTBEAT_SECONDS:
+            await run_in_threadpool(documents.touch, part)
+            last = clock()
+        return msg
+
+    return Request(request.scope, receive, request._send)
+
+
 class GatedRoute(APIRoute):
     """A route that does not exist unless the feature is on. ``matches`` runs before FastAPI reads the body, so a
     disabled (or frozen) server never parses multipart input or spools it to disk, and the OpenAPI schema omits the
@@ -224,20 +248,25 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             raise HTTPException(400, "invalid session") from None
         form = None
         try:
-            form = await _read_form(request)
+            form = await _read_form(_heartbeating(request, part))
             file = form.get("file")
             if not isinstance(file, UploadFile):
                 raise HTTPException(400, _MALFORMED)
             size = 0
-            with part.open("wb") as out:
+            with contextlib.ExitStack() as stack:
+                out = None
                 while chunk := await file.read(1 << 20):
                     if size == 0 and not chunk.startswith(_PDF_MAGIC):
                         raise HTTPException(400, "file is not a PDF")
                     size += len(chunk)
                     if size > limits.MAX_PDF_BYTES:
                         raise HTTPException(413, f"file exceeds {limits.MAX_PDF_BYTES // (1024 * 1024)} MB limit")
-                    out.write(chunk)
+                    # Before every write, the first included: refresh the reservation and confirm it still exists, so
+                    # an upload whose reservation was reclaimed never creates or writes its .part (409 instead).
                     await run_in_threadpool(documents.touch, part)
+                    if out is None:
+                        out = stack.enter_context(part.open("wb"))
+                    out.write(chunk)
             if size == 0:
                 raise HTTPException(400, "file is not a PDF")
             try:
