@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
+import stat
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -38,6 +40,8 @@ try:                                   # POSIX. Elsewhere the store refuses uplo
     import fcntl
 except ImportError:                    # pragma: no cover
     fcntl = None  # type: ignore[assignment]
+
+log = logging.getLogger("pharmagent.pageimage")
 
 SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _NAME_RE = re.compile(r"^([0-9a-f]{32})\.(pdf|json|part|resv|json\.tmp)$")
@@ -273,9 +277,49 @@ def reserve(root: Path, sid: str, doc_id: str, nbytes: int, now: float | None = 
 
 
 def _release_locked(resv: Path) -> None:
-    """Drop a reservation. The callers (commit, documents.discard) hold the storage lock already: flock is not
+    """Drop a reservation. The callers (commit, ``release_after_pieces``) hold the storage lock already: flock is not
     re-entrant per open, so taking it again from the same thread through a new descriptor would wait for itself."""
     resv.unlink(missing_ok=True)
+
+
+def _regular_file_present(p: Path) -> bool:
+    """Is there still a regular file at ``p`` (what the scan would count)? Undeterminable counts as present."""
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def delete_pieces(pieces: list[Path]) -> bool:
+    """Delete upload pieces (caller holds the lock). Never raises. True only if none of them is left afterwards; a
+    link or other non-file in a piece's place is not deleted and does not count (the scan ignores it too)."""
+    for p in pieces:
+        try:
+            if _regular_file_present(p) and not p.is_symlink():
+                p.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("upload piece could not be deleted; its reservation stays for stale cleanup",
+                        extra={"session": p.parent.name, "piece": p.name, "error": type(exc).__name__})
+    return not any(_regular_file_present(p) for p in pieces)
+
+
+def release_after_pieces(resv: Path, pieces: list[Path]) -> bool:
+    """The one way an upload's reservation is released other than by commit (caller holds the lock): delete every
+    piece first and release the reservation only if all of them are confirmed gone. Otherwise the reservation stays,
+    so the upload remains charged at its worst case and locked stale cleanup retries later. Never raises."""
+    if not delete_pieces(pieces):
+        return False
+    try:
+        _release_locked(resv)
+    except OSError as exc:
+        log.warning("reservation could not be deleted; stale cleanup will retry",
+                    extra={"session": resv.parent.name, "piece": resv.name, "error": type(exc).__name__})
+        return False
+    return True
 
 
 def heartbeat(root: Path, resv: Path) -> None:
@@ -291,35 +335,30 @@ def heartbeat(root: Path, resv: Path) -> None:
 
 
 def _cleanup_locked(root: Path, now: float) -> list[str]:
+    """Reclaim abandoned uploads (caller holds the lock). A stale reservation is released only after every piece of its
+    upload is confirmed deleted; if a delete fails the reservation stays (still charged) and a later cleanup retries.
+    A delete that fails is logged and skipped rather than failing closed for every upload."""
     removed: list[str] = []
     cutoff = now - limits.STALE_SECONDS
+    piece_kinds = ("part", "json.tmp", "pdf", "json")
     for d in _session_dirs(root):
         for doc_id, doc in _scan(d).items():
-            files = {"resv": (doc.resv is not None or doc.resv_corrupt, doc.resv_mtime),
-                     "part": (doc.has_part, doc.part_mtime),
-                     "json.tmp": (doc.tmp, doc.tmp_mtime),
-                     "pdf": (doc.has_pdf, doc.pdf_mtime),
-                     "json": (doc.has_json, doc.json_mtime)}
-            victims: list[str] = []
-            if files["resv"][0]:
-                if doc.resv_mtime <= cutoff:                               # stale reservation
-                    victims.append("resv")
-                    if not doc.committed:                                  # its upload, in any half-finished form
-                        victims += [k for k in ("part", "json.tmp", "pdf", "json") if files[k][0]]
+            present = {"part": (doc.has_part, doc.part_mtime), "json.tmp": (doc.tmp, doc.tmp_mtime),
+                       "pdf": (doc.has_pdf, doc.pdf_mtime), "json": (doc.has_json, doc.json_mtime)}
+            has_resv = doc.resv is not None or doc.resv_corrupt
+            if has_resv:
+                if doc.resv_mtime > cutoff:
+                    continue                                               # active upload
+                kinds = [] if doc.committed else [k for k in piece_kinds if present[k][0]]
+                pieces = [d / f"{doc_id}.{k}" for k in kinds]
+                resv = d / f"{doc_id}.resv"
+                if release_after_pieces(resv, pieces):
+                    removed += [f"{d.name}/{p.name}" for p in pieces + [resv]]
             elif not doc.committed:                                        # no reservation, not a complete document
-                victims += [k for k in ("part", "json.tmp", "pdf", "json") if files[k][0] and files[k][1] <= cutoff]
-            for ext in victims:
-                name = f"{doc_id}.{ext}"
-                p = d / name
-                try:
-                    if p.is_symlink() or not p.is_file():
-                        continue
-                    p.unlink()
-                    removed.append(f"{d.name}/{name}")
-                except FileNotFoundError:
-                    continue
-                except OSError as exc:
-                    raise QuotaUnavailable(str(exc)) from exc
+                kinds = [k for k in piece_kinds if present[k][0] and present[k][1] <= cutoff]
+                for p in (d / f"{doc_id}.{k}" for k in kinds):
+                    if delete_pieces([p]):
+                        removed.append(f"{d.name}/{p.name}")
     return removed
 
 

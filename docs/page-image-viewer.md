@@ -194,23 +194,31 @@ only cover one process). Where `fcntl` does not exist, or the lock cannot be tak
 - **Commit order:** metadata first (`.json.tmp` → `.json`), then `.part` → `.pdf` as the commit point, then the
   reservation is released (a failure there is ignored: the document is complete). A document is not visible until its
   PDF exists, so every crash point leaves either a complete document or pieces cleanup reclaims, never an inaccessible
-  PDF holding quota. On a failed commit the endpoint discards the upload (reservation, `.part`, `.json.tmp`).
+  PDF holding quota. On a failed commit the endpoint discards the upload: its `.part`, `.json.tmp` and, if there is no `.pdf`, a `.json`
+  left by a failed rollback are deleted, and only then is the reservation released.
 - **Cleanup** runs inside every reservation. It removes the pieces of an upload that never became a complete document: a
-  stale reservation together with its `.part`/`.json.tmp`/`.pdf`/`.json`, and such pieces with no reservation once older than
-  1 h. It never removes a complete document (`.pdf` + `.json`) and has no retention policy for those. It never follows
+  stale reservation together with its `.part`/`.json.tmp`/`.pdf`/`.json` (the pieces first, the reservation
+  only once they are all gone), and such pieces with no reservation once older than 1 h. It never removes a complete document (`.pdf` + `.json`) and has no retention policy for those. It never follows
   a symlink and ignores any name that is not `<32 hex>.<ext>` inside a plain-named, non-link session directory.
 - **Links:** a session directory that is a symlink is rejected everywhere (also when it points elsewhere inside the
   documents root); it is neither read, written, counted nor cleaned.
-- **Deletions are locked too:** discarding a failed upload (its `.part`, `.json.tmp` and reservation) takes the storage
-  lock, and commit, which already holds it, releases its reservation through a lock-held helper, so a scan normally
-  never sees a file disappear half-way. A discard runs on the failure path, so it never raises and never waits long:
-  if the lock is not free within 0.5 s, or the request is being cancelled, it deletes the pieces without the lock
-  rather than leave a reservation holding a document slot and 50 MiB for an hour. That is safe because of the next
-  rule. If a file disappears mid-scan (that fallback, or anything outside the app), that listing is thrown away and the
-  directory is listed again; a directory that keeps changing after 3 listings fails closed (503 for every upload). A
-  vanished entry never makes a session look empty. An unreadable or non-UTF-8 reservation is counted at the worst
-  case (50 MiB) and is reclaimed by stale cleanup like any other. **Operators** who delete files under
-  `<data_dir>/documents` by hand should stop the server or hold `.quota.lock` (flock) while they do it.
+- **Deletions are locked, and a reservation goes last:** every deletion of upload pieces runs under the storage lock:
+  discarding a failed upload, stale cleanup, and commit (which releases its reservation through a lock-held helper).
+  There is no unlocked path. The reservation of an upload that did not complete is released only after every one of its
+  pieces (`.part`, `.json.tmp`, and for stale cleanup also a half-written `.pdf`/`.json`) is confirmed gone. If the
+  lock cannot be taken, or any piece cannot be deleted, the reservation stays (the other pieces are still deleted):
+  the upload stays charged at its worst case (a document slot and 50 MiB), and a later stale cleanup (also locked)
+  retries. No cleanup path can lower the charge below what was reserved; a failed delete is logged (session, piece,
+  error type) and skipped rather than failing every upload. Discard treats a `.json` as a piece only when there is no
+  `.pdf`, so it never touches a committed document. (The upload heartbeat gap below is separate: a slow upload whose
+  reservation was reclaimed can still write its first chunk to a `.part` before it is refused.) Failure-path cleanup never raises, runs in a worker thread, and is shielded from cancellation
+  so a cancelled request still cleans up; if it cannot run at all, the upload simply stays charged until stale cleanup.
+- **Scans re-list:** if a file disappears mid-scan (only possible from outside the app, since every app deletion holds
+  the lock the scan holds), that listing is thrown away and the directory is listed again; a directory that keeps
+  changing after 3 listings fails closed (503 for every upload). A vanished entry never makes a session look empty. An
+  unreadable or non-UTF-8 reservation is counted at the worst case (50 MiB) and is reclaimed by stale cleanup like any
+  other. **Operators** who delete files under `<data_dir>/documents` by hand should stop the server or hold
+  `.quota.lock` (flock) while they do it.
 - **Fail closed:** if usage cannot be read (I/O error, lock busy, a directory that will not hold still; an unreadable
   reservation counts as 50 MiB) the upload is refused with 503; nothing is deleted to make room. An upload idle for over an hour loses its reservation and its
   commit is refused (409 "upload expired").

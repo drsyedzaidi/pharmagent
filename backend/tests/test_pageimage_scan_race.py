@@ -6,7 +6,6 @@ never report the whole session as empty: it retries from a fresh listing and fai
 still."""
 from __future__ import annotations
 
-import fcntl
 import os
 import threading
 import time
@@ -101,7 +100,7 @@ def test_a_discard_waits_for_a_scan_that_holds_the_lock(store, monkeypatch):
         with quota.locked(store):
             seen["usage"] = quota.usage(store)
 
-    monkeypatch.setattr(limits, "DISCARD_LOCK_WAIT_SECONDS", 20.0)       # wait out the paused scan, no fallback
+    monkeypatch.setattr(limits, "LOCK_WAIT_SECONDS", 20.0)               # wait out the paused scan
 
     def delete():
         documents.discard(part)
@@ -120,24 +119,6 @@ def test_a_discard_waits_for_a_scan_that_holds_the_lock(store, monkeypatch):
     assert not scanner.is_alive() and not remover.is_alive()
     assert seen["usage"][0]["s1"] == (2, 2 * limits.MAX_PDF_BYTES)          # the scan saw both, consistently
     assert deleted.is_set() and not part.with_suffix(".resv").exists()
-
-
-def test_a_discard_that_cannot_get_the_lock_still_releases_without_raising(store, monkeypatch):
-    """discard() runs on the upload's failure path: it must not raise, and it must not leave a reservation holding a
-    document slot and 50 MiB for an hour just because the lock is busy. After a short wait it deletes the pieces
-    without the lock; the scan tolerates that (it re-lists when an entry vanishes)."""
-    ((doc_id, part),) = _reserve("s1", 1)
-    part.write_bytes(b"%PDF-partial")
-    fd = os.open(store / quota.LOCK_NAME, os.O_CREAT | os.O_RDWR)
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    try:
-        t0 = time.monotonic()
-        documents.discard(part)                                          # returns, does not raise
-        assert time.monotonic() - t0 < limits.DISCARD_LOCK_WAIT_SECONDS + 1.0
-    finally:
-        os.close(fd)
-    assert not part.exists() and not part.with_suffix(".resv").exists()
-    assert quota.usage(store)[1] == 0
 
 
 def test_a_discard_whose_deletes_fail_never_raises(store, monkeypatch):

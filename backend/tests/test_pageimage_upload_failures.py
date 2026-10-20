@@ -113,6 +113,9 @@ def test_a_failing_cleanup_never_replaces_the_original_error(client, monkeypatch
     sid = client.post("/api/sessions").json()["id"]
     r = _up(client, sid, b"not a pdf")
     assert r.status_code == 400 and r.json()["error"]["message"] == "file is not a PDF"
+    # and nothing was deleted behind the lock's back: the reservation and its full charge remain for stale cleanup
+    assert len(list((_root() / sid).glob("*.resv"))) == 1
+    assert quota.usage(_root())[0][sid] == (1, limits.MAX_PDF_BYTES)
 
 
 @pytest.mark.parametrize("where,error,status,message", [

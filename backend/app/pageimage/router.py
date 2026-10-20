@@ -111,19 +111,18 @@ def _close_all(files) -> None:
 
 
 async def _discard_quietly(part) -> None:
-    """Release a failed upload's reservation and pieces without blocking the event loop and without ever replacing the
-    error that caused the failure. ``documents.discard`` may wait briefly for the storage lock, so it runs in a worker
-    thread, shielded from cancellation. If even that cannot run (the request is being cancelled before a thread is
-    available, or anything else goes wrong), the pieces are deleted directly, without the lock (fast, never raises).
-    A cancellation is then re-raised; any other failure of the cleanup is only logged."""
+    """Release a failed upload's pieces and reservation without blocking the event loop and without ever replacing the
+    error that caused the failure. ``documents.discard`` waits for the storage lock, so it runs in a worker thread,
+    shielded from cancellation so a cancelled request still cleans up. If it cannot run at all, nothing is deleted:
+    the reservation keeps the upload charged and locked stale cleanup reclaims it later. A cancellation is re-raised;
+    any other failure of the cleanup is only logged."""
     try:
         with anyio.CancelScope(shield=True):
             await run_in_threadpool(documents.discard, part)
     except BaseException as exc:
-        documents.discard_unlocked(part)
         if not isinstance(exc, Exception):
             raise
-        log.warning("upload cleanup fell back to an unlocked delete")
+        log.warning("upload cleanup did not run; the reservation stays for stale cleanup")
 
 
 def _http(table: dict, kind: str) -> HTTPException:
@@ -252,7 +251,7 @@ def build_documents_router(owned_session: Callable) -> APIRouter:
             meta = await run_in_threadpool(documents.commit, sess.id, doc_id, part,
                                            filename=file.filename, size=size, pages=pages)
         except BaseException as exc:
-            await _discard_quietly(part)      # every failure releases the reservation and removes its pieces
+            await _discard_quietly(part)      # deletes the pieces, then releases the reservation (if all went)
             if isinstance(exc, documents.ReservationLostError):
                 raise HTTPException(409, "upload expired; please retry") from None
             if isinstance(exc, documents.QuotaUnavailable):

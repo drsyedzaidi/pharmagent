@@ -128,32 +128,23 @@ def _rollback(*paths: Path) -> None:
 
 
 def discard(part: Path) -> None:
-    """Abandon an upload: delete its ``.part``, ``.json.tmp`` and reservation.
+    """Abandon an upload, always under the storage lock: delete its ``.part`` and ``.json.tmp``, then release its
+    reservation only if both are confirmed gone.
 
-    Normally under the storage lock, so a concurrent scan never sees them half-removed. Runs on the upload's failure
-    path, so it never raises and never waits long: if the lock is not free within DISCARD_LOCK_WAIT_SECONDS it deletes
-    the pieces without the lock. That is safe because the scan re-lists when an entry vanishes, and it keeps a failed
-    upload from holding a document slot and 50 MiB of quota for an hour just because the store is busy."""
+    A ``.json`` is included when there is no ``.pdf`` (the upload never committed; a failed rollback can leave one),
+    and never when there is (a cancellation that arrives after a successful commit must not touch the document).
+    Runs on the upload's failure path, so it never raises. If the lock cannot be taken, or any piece cannot be
+    deleted, the reservation stays: the upload stays charged at its worst case (a document slot and 50 MiB), so a
+    failed cleanup can never be used to slip past a quota, and locked stale cleanup reclaims it later."""
     try:
-        with quota.locked(_root(), wait=limits.DISCARD_LOCK_WAIT_SECONDS):
-            discard_unlocked(part)
+        with quota.locked(_root()):
+            pieces = [part, part.with_suffix(".json.tmp")]
+            if not quota._regular_file_present(part.with_suffix(".pdf")):
+                pieces.append(part.with_suffix(".json"))     # never committed: a failed rollback's .json is a piece
+            quota.release_after_pieces(_resv_of(part), pieces)
     except quota.QuotaUnavailable:
-        log.warning("storage lock busy; failed upload removed without it")
-        discard_unlocked(part)
-
-
-def discard_unlocked(part: Path) -> None:
-    """Best-effort, lock-free deletion of an upload's pieces; never raises. Used under the lock by ``discard`` and,
-    without it, as the last-resort fallback (lock busy, or the request is being cancelled)."""
-    for piece in (part, part.with_suffix(".json.tmp")):
-        try:
-            piece.unlink(missing_ok=True)
-        except OSError:
-            log.warning("upload piece left for stale cleanup: could not delete")
-    try:
-        quota._release_locked(_resv_of(part))
-    except OSError:
-        log.warning("reservation left for stale cleanup: could not delete")
+        log.warning("failed upload left charged for stale cleanup: storage lock unavailable",
+                    extra={"session": part.parent.name, "document": part.stem})
 
 
 def _read_meta(p: Path) -> DocumentMeta | None:
