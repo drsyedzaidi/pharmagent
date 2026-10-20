@@ -142,12 +142,16 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
 
     cmax = float(np.max(conc))
     tmax = float(time[int(np.argmax(conc))])
-    auc_last, aumc_last = _auc_intervals(time, conc)
 
-    # last measurable (positive) concentration
+    # last measurable (positive) concentration. AUC_last is the area from the first sample to Tlast and NOT beyond it:
+    # trailing zeros (below-LOQ values coded as 0) must not add the triangle down to the next zero row, which would
+    # also make AUC_inf = AUC_last + Clast/lambda_z count the tail twice. A profile with nothing measurable keeps its
+    # old reporting (area over the rows given, which is 0).
     pos = np.where(conc > 0)[0]
     t_last = float(time[pos[-1]]) if pos.size else float(time[-1])
     c_last = float(conc[pos[-1]]) if pos.size else 0.0
+    end = int(pos[-1]) + 1 if pos.size else len(time)
+    auc_last, aumc_last = _auc_intervals(time[:end], conc[:end])
 
     out: dict[str, Any] = {
         "subject": p.subject,
