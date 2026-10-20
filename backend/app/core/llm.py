@@ -35,7 +35,9 @@ class LLM(Protocol):
 _PATH_RE = re.compile(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", re.IGNORECASE)
 
 
-_KE_RE = re.compile(r"\bke\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
+_KE_RE = re.compile(
+    r"(?:\bke|(?:elimination\s+)?rate\s+constant)\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)"
+)
 _HL_RE = re.compile(r"half[- ]life\s*(?:is|=|of)?\s*([0-9]*\.?[0-9]+)")
 
 
@@ -106,6 +108,9 @@ class MockLLM:
             return None if s.get("poppk_results") else {"name": "run_poppk", "input": {}}
         if agent == "modeler":
             return None if s.get("pk_model_results") else {"name": "fit_pk_model", "input": {"compare": True}}
+        if agent == "reviewer":
+            rev = s.get("review_diagnostics") or {}
+            return None if rev.get("status") else {"name": "adversarial_review", "input": {}}
         if agent == "qc":
             return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
         if agent == "report":
