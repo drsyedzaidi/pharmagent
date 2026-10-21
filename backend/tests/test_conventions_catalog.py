@@ -178,11 +178,11 @@ def test_cli_check_fails_on_a_broken_catalog(tmp_path):
     assert cli_main(["--check", "--catalog", str(p)]) == 1
 
 
-def test_the_package_changes_no_runtime_module():
-    """Slice 1 is read-only: nothing under app/ outside app/conventions imports it."""
-    offenders = [str(p) for p in (BACKEND / "app").rglob("*.py")
-                 if "conventions" not in p.parts and "app.conventions" in p.read_text()]
-    assert offenders == []
+def test_only_the_known_runtime_modules_import_the_package():
+    """Slice 2: the package is imported only by app startup (validation) and the NCA tool (results)."""
+    importers = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
+                       if "conventions" not in p.parts and "app.conventions" in p.read_text())
+    assert importers == ["app/main.py", "app/tools/nca_tools.py"]
 
 
 # ── owner review of PR #16: approval semantics and wording corrections ─────────────────────────

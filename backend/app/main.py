@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.conventions.runtime import validate_catalog_at_startup
 from app.core import cdisc, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
@@ -25,6 +26,7 @@ log = logging.getLogger("pharmagent")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 ALLOWED_UPLOAD_SUFFIXES = {".csv"}
 
+validate_catalog_at_startup()   # fail fast on a broken conventions catalog
 app = FastAPI(title=f"{settings.app_name} API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=settings.cors_origins,
