@@ -55,12 +55,11 @@ def run_bootstrap(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> 
 
     # Local import: pkmodel_tools imports this module's siblings, and the NLME
     # engine is heavy — keep both off the module-import path.
-    from app.compute.cohort import build_subjects
     from app.compute.nlme import population_fit
-    from app.tools.pkmodel_tools import _roles
+    from app.tools.pkmodel_tools import _build_subjects, _roles
 
     model_key = nl.get("model_key")
-    subjects, _multi, _has_pd = build_subjects(df, _roles(df, state), with_blq=True)
+    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
 
     # Stratify on a per-subject covariate when asked. Without it a resample can
     # under-represent a study arm or dose group; see the compute docstring.

@@ -49,12 +49,11 @@ def run_sir(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
         return ToolResult(summary="SIR skipped: no dataset.",
                           action="run_sir(no_dataset)", writes={}, result=status)
 
-    from app.compute.cohort import build_subjects
     from app.compute.nlme import sir_inputs  # lazy: heavy engine
-    from app.tools.pkmodel_tools import _roles
+    from app.tools.pkmodel_tools import _build_subjects, _roles
 
     model_key = nl.get("model_key")
-    subjects, _multi, _has_pd = build_subjects(df, _roles(df, state), with_blq=True)
+    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
     inp = sir_inputs(model_key, subjects, nl)
     if inp is None:
         status = {"status": "proposal_unavailable",
