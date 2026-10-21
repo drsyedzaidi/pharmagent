@@ -52,3 +52,21 @@ def test_the_chosen_window_always_ends_at_the_last_positive_point():
 
 def test_fewer_than_three_points_after_tmax_gives_no_lambda_z():
     assert _best_lambda_z(T[:3], _expo(0.3)[:3], tmax=0.0) == {}
+
+
+def test_every_window_without_a_positive_adjusted_r2_gives_no_lambda_z():
+    """Every window declines here, but none fits: adjusted R-squared is -0.05 (4 points) and -0.97 (3 points)."""
+    assert _best_lambda_z(np.array([0.0, 1, 2, 3, 4]), np.array([100.0, 10, 3, 9, 2.5]), tmax=0.0) == {}
+
+
+def test_a_barely_positive_adjusted_r2_is_accepted():
+    fit = _best_lambda_z(np.array([0.0, 1, 2, 3, 4]), np.array([100.0, 10, 2, 8, 1.5]), tmax=0.0)
+    assert fit and 0 < fit["lambda_z_r2_adj"] < 0.01
+
+
+def test_a_zero_after_tmax_is_left_out_of_the_window():
+    conc = _expo(0.3)
+    conc[3] = 0.0
+    fit = _best_lambda_z(T, conc, tmax=0.0)
+    assert fit["lambda_z_n_points"] == 5 and 3.0 not in fit["lambda_z_pts_t"]
+    assert fit["lambda_z"] == pytest.approx(0.3, rel=1e-9)

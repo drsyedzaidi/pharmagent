@@ -100,6 +100,8 @@ def test_the_catalog_numbers_match_the_code_they_describe():
     assert by_id["profile.ofv_cutoff"].parameters["cutoff"] == round(_chi2_1df(0.95), 2)
     sig = inspect.signature(extract_ss_intervals_checked)
     assert by_id["nca.ss_endpoint_closure"].parameters["snap_fraction"] == sig.parameters["tol_frac"].default
+    from app.compute.dosing import PRE_DOSE_TOL
+    assert by_id["nca.ss_endpoint_closure"].parameters["pre_dose_tol"] == PRE_DOSE_TOL
     from app.compute.bioequivalence import be_one_parameter
     be = inspect.signature(be_one_parameter).parameters
     bp = by_id["be.average_tost"].parameters
@@ -220,5 +222,95 @@ def test_the_corrected_entries_were_version_bumped():
     by_id = {c.id: c for c in load_catalog().conventions}
     for cid in ("nca.blq_leading_middle_trailing", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
                 "nca.lambda_z_window", "be.average_tost", "profile.ofv_cutoff"):
-        assert by_id[cid].version == "1.1.0", cid
-    assert load_catalog().catalog_version == "1.1.0"
+        assert tuple(map(int, by_id[cid].version.split("."))) >= (1, 1, 0), cid
+    assert tuple(map(int, load_catalog().catalog_version.split("."))) >= (1, 1, 0)
+
+
+# ── coverage checker hardening (independent review of baf9b8e) ─────────────────────────────────
+def _tmp_backend(tmp_path, files: dict[str, bytes | str]) -> Path:
+    root = tmp_path / "backend"
+    (root / "tests").mkdir(parents=True)
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        (p.write_bytes if isinstance(body, bytes) else p.write_text)(body)
+    return root
+
+
+def _problems(root, *refs):
+    cat = Catalog(catalog_version="1.0.0", conventions=[_conv(id=f"x.r{i}", tests=[r]) for i, r in enumerate(refs)])
+    return {p.ref: p.reason for p in check_test_coverage(cat, root)}
+
+
+GOOD = "def test_ok():\n    assert True\n"
+
+
+def test_a_top_level_test_function_is_accepted(tmp_path):
+    root = _tmp_backend(tmp_path, {"tests/test_a.py": GOOD})
+    assert _problems(root, "tests/test_a.py::test_ok") == {}
+
+
+@pytest.mark.parametrize("ref", [
+    "tests/../app/test_x.py::test_ok",              # traversal to a real file with a real test function
+    "tests/sub/../../app/test_x.py::test_ok",
+    "/abs/tests/test_x.py::test_ok",                # absolute
+    "tests\\test_a.py::test_ok",                    # backslash
+    "app/test_x.py::test_ok",                       # not under tests/
+])
+def test_references_outside_the_tests_root_are_rejected(tmp_path, ref):
+    root = _tmp_backend(tmp_path, {"tests/test_a.py": GOOD, "tests/sub/test_s.py": GOOD, "app/test_x.py": GOOD})
+    reason = _problems(root, ref).get(ref, "")
+    assert reason and "does not exist" not in reason and "not found" not in reason
+
+
+def test_a_symlink_escaping_the_tests_root_is_rejected(tmp_path):
+    root = _tmp_backend(tmp_path, {"outside/test_evil.py": GOOD})
+    (root / "tests" / "test_link.py").symlink_to(root / "outside" / "test_evil.py")
+    assert "outside the tests root" in _problems(root, "tests/test_link.py::test_ok")["tests/test_link.py::test_ok"]
+
+
+def test_malformed_python_is_reported_not_raised(tmp_path):
+    root = _tmp_backend(tmp_path, {"tests/test_bad.py": "def test_ok(:\n"})
+    assert "parse" in _problems(root, "tests/test_bad.py::test_ok")["tests/test_bad.py::test_ok"]
+
+
+def test_a_non_utf8_file_is_reported_not_raised(tmp_path):
+    root = _tmp_backend(tmp_path, {"tests/test_bin.py": b"def test_ok():\n    x = '\xff\xfe'\n"})
+    assert "read" in _problems(root, "tests/test_bin.py::test_ok")["tests/test_bin.py::test_ok"]
+
+
+@pytest.mark.parametrize("ref,body", [
+    ("tests/test_n.py::test_inner", "def test_outer():\n    def test_inner():\n        pass\n"),   # nested
+    ("tests/test_h.py::_helper", "def _helper():\n    pass\n"),                                # not a test name
+    ("tests/test_h.py::helper", "def helper():\n    pass\n"),
+    ("tests/test_c.py::test_m", "class TestX:\n    def test_m(self):\n        pass\n"),            # method: not a module-level node id
+    ("tests/helpers.py::test_ok", GOOD),                                                        # file pytest does not collect
+])
+def test_only_top_level_collectable_test_functions_count(tmp_path, ref, body):
+    root = _tmp_backend(tmp_path, {ref.split("::")[0]: body})
+    assert ref in _problems(root, ref)
+
+
+def test_the_cli_reports_an_unreadable_test_instead_of_crashing(tmp_path, capsys):
+    raw = json.loads((BACKEND / "app" / "conventions" / "catalog.json").read_text())
+    raw["conventions"][0]["tests"] = ["tests/../tests/test_conventions_catalog.py::test_the_shipped_catalog_loads_and_validates"]
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps(raw))
+    assert cli_main(["--check", "--catalog", str(p)]) == 1
+
+
+def test_the_report_says_coverage_is_citation_not_semantic_proof():
+    cat = load_catalog()
+    md = render_report_markdown(cat, [])
+    assert "does not show that a test exercises the rule" in md
+    assert "does not show that a test exercises the rule" in json.loads(render_report_json(cat, []))["coverage_meaning"]
+
+
+def test_the_endpoint_closure_states_the_separate_start_window():
+    c = {c.id: c for c in load_catalog().conventions}["nca.ss_endpoint_closure"]
+    assert "{pre_dose_tol}" in c.statement and "before the dose" in c.statement
+
+
+def test_every_entry_cites_at_least_two_behavioural_tests_except_where_a_gap_says_why():
+    for c in load_catalog().conventions:
+        assert len(c.tests) >= 2 or c.known_gaps, c.id

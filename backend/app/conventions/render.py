@@ -10,6 +10,10 @@ APPROVAL_MEANING = ("Approved means the owner reviewed an entry as an accurate d
                     "For an implementation_convention it is not regulatory validation.")
 
 
+COVERAGE_MEANING = ("The coverage check confirms that each cited test is a top-level, collectable pytest function. It "
+                    "does not show that a test exercises the rule; that is owner review.")
+
+
 def rule_text(conv: Convention) -> str:
     return conv.statement.format(**conv.parameters)
 
@@ -18,6 +22,7 @@ def render_report_json(catalog: Catalog, problems: list[CoverageProblem]) -> str
     return json.dumps({
         "catalog_version": catalog.catalog_version,
         "approval_meaning": APPROVAL_MEANING,
+        "coverage_meaning": COVERAGE_MEANING,
         "coverage_problems": [{"convention_id": p.convention_id, "ref": p.ref, "reason": p.reason} for p in problems],
         "conventions": [{**c.model_dump(), "rule_text": rule_text(c)} for c in catalog.conventions],
     }, indent=2, sort_keys=True) + "\n"
@@ -30,7 +35,7 @@ def render_report_markdown(catalog: Catalog, problems: list[CoverageProblem]) ->
         f"Conventions: {len(catalog.conventions)}. Pending owner review: {pending}. "
         f"Coverage problems: {len(problems)}.", "",
         "Rule text below is generated from the catalog data; it is not hand-written.", "",
-        APPROVAL_MEANING, "",
+        APPROVAL_MEANING, "", COVERAGE_MEANING, "",
         "| Id | Version | Approval | Source | Tests |", "|---|---|---|---|---|",
     ]
     for c in catalog.conventions:
