@@ -51,11 +51,12 @@ def run_profile(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
         return ToolResult(summary="Profiling skipped: no dataset.",
                           action="run_profile(no_dataset)", writes={}, result=status)
 
+    from app.compute.cohort import build_subjects
     from app.compute.nlme import profile_ofv_factory
-    from app.tools.pkmodel_tools import _build_subjects, _roles
+    from app.tools.pkmodel_tools import _roles
 
     model_key = nl.get("model_key")
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
+    subjects, _multi, _has_pd = build_subjects(df, _roles(df, state), with_blq=True)
     fac = profile_ofv_factory(model_key, subjects, nl)
     if fac is None or not fac.get("estimates"):
         status = {"status": "profile_unavailable",

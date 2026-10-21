@@ -49,7 +49,7 @@ def run_matrix(df, roles: dict[str, str], candidates: list[CandidateSpec],
                adapters: list[EngineAdapter], *, seed: int = 20250614) -> dict[str, Any]:
     """Dataframe entry point: build subjects with the app's canonical converter,
     then delegate to :func:`run_matrix_subjects`."""
-    from app.tools.pkmodel_tools import _build_subjects  # lazy: pandas/app layer
+    from app.compute.cohort import build_subjects
 
-    subjects, _multi, _has_pd = _build_subjects(df, roles, with_blq=True)
+    subjects, _multi, _has_pd = build_subjects(df, roles, with_blq=True)
     return run_matrix_subjects(subjects, candidates, adapters, seed=seed)

@@ -78,8 +78,9 @@ def _skip(summary: str, tag: str, status: dict[str, Any]) -> ToolResult:
 
 def run_engine_comparison(state, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Fit candidates across engines; pick the winner on engine-agnostic metrics."""
+    from app.compute.cohort import build_subjects
     from app.compute.pk_models import REGISTRY
-    from app.tools.pkmodel_tools import _build_subjects, _roles  # lazy: avoid import cycle
+    from app.tools.pkmodel_tools import _roles
 
     candidates = _resolve_candidates(args, state)
     if not candidates:
@@ -97,7 +98,7 @@ def run_engine_comparison(state, ctx: ToolContext, args: dict[str, Any]) -> Tool
                      {"status": "no_dataset", "message": "Load a dataset first."})
 
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
+    subjects, _multi, _has_pd = build_subjects(df, _roles(df, state), with_blq=True)
     if len(subjects) < 2:
         return _skip("Engine comparison skipped: too few subjects.", "insufficient",
                      {"status": "insufficient", "message": "Need >=2 subjects for a population fit."})
