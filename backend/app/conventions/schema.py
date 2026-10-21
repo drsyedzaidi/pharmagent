@@ -1,7 +1,9 @@
 """Typed schema for the conventions catalog (read-only data; see docs/design/context-engineering-ideas.md)."""
 from __future__ import annotations
 
+import re
 import string
+from datetime import date as _date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,14 +25,26 @@ class Source(_Strict):
 
 
 class Approval(_Strict):
+    """`approved` means the owner reviewed the entry as an accurate description of PharmAgent behaviour. For an
+    `implementation_convention` it is not regulatory validation."""
     status: Literal["pending_owner_review", "approved"]
     by: str | None = None
     date: str | None = None
 
     @model_validator(mode="after")
-    def _approved_needs_who_and_when(self) -> Approval:
-        if self.status == "approved" and not (self.by and self.date):
+    def _who_and_when_only_when_approved(self) -> Approval:
+        if self.status == "pending_owner_review":
+            if self.by is not None or self.date is not None:
+                raise ValueError("a pending_owner_review entry cannot name an approver or a date")
+            return self
+        if not (self.by and self.date):
             raise ValueError("an approved convention needs `by` and `date`")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date):
+            raise ValueError("`date` must be an ISO calendar date, YYYY-MM-DD")
+        try:
+            _date.fromisoformat(self.date)
+        except ValueError as exc:
+            raise ValueError(f"`date` is not a real calendar date: {self.date}") from exc
         return self
 
 

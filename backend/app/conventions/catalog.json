@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.0.0",
+  "catalog_version": "1.1.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -46,37 +46,6 @@
         "tests/test_nca_blq.py::test_trailing_zeros_do_not_extend_auc_last",
         "tests/test_nca_blq.py::test_without_a_flag_trailing_zeros_no_longer_inflate_the_area"
       ]
-    },
-    {
-      "id": "nca.blq_m1",
-      "title": "BLQ rule M1",
-      "domain": "nca",
-      "applies_to": [
-        "compute_nca"
-      ],
-      "statement": "With a BLQ flag, flagged records before a subject's first quantifiable value count as a 0 baseline (also when the value is blank); later flagged records, in the middle or trailing, are excluded from AUC and lambda_z. A record is quantifiable only when it is unflagged with a finite TIME and a finite positive DV.",
-      "parameters": {},
-      "version": "1.0.0",
-      "source": {
-        "kind": "implementation_convention",
-        "reference": "PR #3 (drsyedzaidi/pharmagent#3), rule M1 as documented in the tool's result text."
-      },
-      "approval": {
-        "status": "pending_owner_review"
-      },
-      "tests": [
-        "tests/test_nca_blq.py::test_trailing_blq_rows_are_excluded",
-        "tests/test_nca_blq.py::test_a_middle_blq_row_is_excluded_not_integrated_as_zero",
-        "tests/test_nca_blq.py::test_leading_blq_rows_count_as_a_zero_baseline_even_when_the_value_is_blank",
-        "tests/test_nca_blq.py::test_m1_is_classified_per_subject"
-      ],
-      "branch_point": {
-        "alternatives": [
-          "exclude middle and trailing BLQ (M1, PharmAgent)",
-          "keep middle BLQ as zero (PKNCA matched configuration)"
-        ],
-        "changes_conclusion_when": "a flagged middle or trailing BLQ record changes AUC_last, AUC_inf or CL/F beyond the reviewer's tolerance"
-      }
     },
     {
       "id": "nca.measured_zero",
@@ -152,9 +121,9 @@
       "applies_to": [
         "compute_nca"
       ],
-      "statement": "For steady-state data, BLQ rule M1 is applied inside the final dosing interval only; samples from earlier intervals play no part in the classification. Rows with AMT above 0 build the dose schedule and are never concentrations, and BLQ is counted on observation rows only.",
+      "statement": "For steady-state data, the BLQ leading/middle/trailing rule is applied inside the final dosing interval only; samples from earlier intervals play no part in the classification. Rows with AMT above 0 build the dose schedule and are never concentrations, and BLQ is counted on observation rows only.",
       "parameters": {},
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": {
         "kind": "implementation_convention",
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), steady-state corrections."
@@ -175,11 +144,11 @@
       "applies_to": [
         "compute_nca"
       ],
-      "statement": "Each end of the dosing interval (0 and tau) needs its own sample within {snap_fraction} of tau, and the sample closest to each end is placed exactly at it, so every profile spans exactly [0, tau]. At most one end is assumed by steady-state periodicity (C(tau) = C(0) or C(0) = C(tau)); the assumed closing segment must be integrable by linear-up/log-down. Each subject reports which end was measured or assumed.",
+      "statement": "A complete steady-state profile spans exactly [0, tau]. At least one end must be measured: a sample within {snap_fraction} of tau of that end (a BLQ record at the start, normalised to a 0 baseline, counts for the start), and the sample closest to each end is placed exactly at it. Every measured end uses a distinct closest sample; one sample never supplies both ends. At most one end may be supplied by the steady-state periodicity assumption (C(tau) = C(0) or C(0) = C(tau)), and that assumed closing segment must be integrable by linear-up/log-down. Each subject reports whether each end was measured or assumed, and the summary and rule text name the subjects with an assumed end.",
       "parameters": {
         "snap_fraction": 0.02
       },
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": {
         "kind": "implementation_convention",
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), commits d4b7be1 and d706954. No PKNCA steady-state reference exists."
@@ -199,7 +168,10 @@
           "bridge to an assumed zero concentration"
         ],
         "changes_conclusion_when": "bridging changes AUC_tau materially; one pinned case gave 18.13 against an analytic 11.20"
-      }
+      },
+      "known_gaps": [
+        "The integration rule used for the assumed closing segment (log-down) is not reported as a separate result field; only the assumed end is reported."
+      ]
     },
     {
       "id": "nca.ss_incomplete_interval_fail_closed",
@@ -233,11 +205,12 @@
         "compute_nca",
         "app.compute.nca"
       ],
-      "statement": "Lambda_z is fitted over contiguous windows of at least {min_points} positive concentrations after Tmax that always end at the last point, and the window with the largest adjusted R-squared is chosen. A window needs a materially declining slope and a positive adjusted R-squared; otherwise no lambda_z is reported.",
+      "statement": "Lambda_z is fitted over contiguous windows of at least {min_points} positive concentrations after Tmax that always end at the last point, and the window with the largest adjusted R-squared is chosen. A window needs a decline steeper than {min_lambda_z} per time unit (issue #12: this rejects floating-point noise on flat terminal phases) and a positive adjusted R-squared; otherwise no lambda_z is reported. Equal fits go to the longest window: a later, shorter window replaces the current best only when its adjusted R-squared is strictly greater than the stored best, rounded to 6 decimals.",
       "parameters": {
-        "min_points": 3
+        "min_points": 3,
+        "min_lambda_z": 1e-09
       },
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": {
         "kind": "implementation_convention",
         "reference": "app.compute.nca._best_lambda_z docstring and code."
@@ -246,10 +219,14 @@
         "status": "pending_owner_review"
       },
       "tests": [
-        "tests/test_nca_compute.py::test_lambda_z_and_thalf_exact"
+        "tests/test_nca_compute.py::test_lambda_z_and_thalf_exact",
+        "tests/test_nca_lambda_z.py::test_a_flat_terminal_phase_gives_no_lambda_z",
+        "tests/test_nca_lambda_z.py::test_a_decline_below_the_threshold_gives_no_lambda_z",
+        "tests/test_nca_lambda_z.py::test_a_decline_above_the_threshold_is_accepted",
+        "tests/test_nca_lambda_z.py::test_equal_fits_prefer_the_longest_window",
+        "tests/test_nca_lambda_z.py::test_a_clearly_better_shorter_window_wins"
       ],
       "known_gaps": [
-        "Tie handling is not pinned by a dedicated test: a later, shorter window replaces the current best only when its adjusted R-squared is strictly greater than the stored 6-decimal-rounded best value.",
         "PKNCA's default prefers more points on near-ties; lambda_z differed by under 0.6% on the committed cross-check tables. That difference is documented, not a tested convention."
       ],
       "branch_point": {
@@ -267,14 +244,14 @@
       "applies_to": [
         "bioequivalence"
       ],
-      "statement": "Average bioequivalence is assessed on the natural-log scale with a {ci_percent}% confidence interval of the geometric mean ratio (alpha {alpha}). A parameter passes when the whole interval lies within {lower} to {upper} percent. Paired (crossover) and parallel designs are supported; non-positive or missing values are dropped.",
+      "statement": "Average bioequivalence is assessed on the natural-log scale with a {ci_percent}% confidence interval of the geometric mean ratio (alpha {alpha}). A parameter passes when the whole interval lies within {lower} to {upper} percent. Paired (crossover) and parallel designs are supported. Implementation behaviour: non-positive or missing values are dropped before the analysis, and the result reports the number used, not the number excluded.",
       "parameters": {
         "ci_percent": 90,
         "alpha": 0.1,
         "lower": 80.0,
         "upper": 125.0
       },
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": {
         "kind": "implementation_convention",
         "reference": "app/compute/bioequivalence.py (module docstring and defaults); not independently re-verified against guidance in this slice."
@@ -286,6 +263,10 @@
         "tests/test_be_compute.py::test_paired_gmr_matches_hand_computed",
         "tests/test_be_compute.py::test_paired_clearly_outside_limits_not_be",
         "tests/test_be_compute.py::test_parallel_gmr_and_ci_hand_computed"
+      ],
+      "known_gaps": [
+        "Dropped (non-positive or missing) observations are not counted or reported as excluded. This is implementation behaviour and must not be read as an endorsed silent-deletion rule; a follow-up should count and report them.",
+        "Not yet checked against the applicable FDA/EMA bioequivalence guidance; the entry stays pending until that check is done."
       ]
     },
     {
@@ -296,12 +277,12 @@
         "profile_parameter",
         "app.compute.profile"
       ],
-      "statement": "Log-likelihood profiling limits are where the objective function worsens by the chi-square (1 df) quantile: {cutoff} at the {level_percent}% level.",
+      "statement": "Log-likelihood profiling limits are where the objective function worsens by the chi-square (1 df) quantile: {cutoff} at the {level_percent}% level. The objective function (OFV) is on the -2 log-likelihood scale, and the 3.84 value applies only on that scale with one degree of freedom.",
       "parameters": {
         "cutoff": 3.84,
         "level_percent": 95
       },
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": {
         "kind": "implementation_convention",
         "reference": "app/compute/profile.py module docstring."
@@ -311,7 +292,41 @@
       },
       "tests": [
         "tests/test_profile.py::test_cutoff_is_the_chi_square_one_df_quantile"
+      ],
+      "known_gaps": [
+        "The chi-square source is not yet cited. The scale is taken from app/compute/nlme.py (OFV = -2 log L); verify and cite a source before approval."
       ]
+    },
+    {
+      "id": "nca.blq_leading_middle_trailing",
+      "title": "BLQ leading/middle/trailing rule",
+      "domain": "nca",
+      "applies_to": [
+        "compute_nca"
+      ],
+      "statement": "With a BLQ flag, flagged records before a subject's first quantifiable value count as a 0 baseline (also when the value is blank); later flagged records, in the middle or trailing, are excluded from AUC and lambda_z. A record is quantifiable only when it is unflagged with a finite TIME and a finite positive DV.",
+      "parameters": {},
+      "version": "1.1.0",
+      "source": {
+        "kind": "implementation_convention",
+        "reference": "PR #3 (drsyedzaidi/pharmagent#3). The tool's result text calls this rule 'M1'; no authoritative source defining that name has been identified, so the catalog does not use it."
+      },
+      "approval": {
+        "status": "pending_owner_review"
+      },
+      "tests": [
+        "tests/test_nca_blq.py::test_trailing_blq_rows_are_excluded",
+        "tests/test_nca_blq.py::test_a_middle_blq_row_is_excluded_not_integrated_as_zero",
+        "tests/test_nca_blq.py::test_leading_blq_rows_count_as_a_zero_baseline_even_when_the_value_is_blank",
+        "tests/test_nca_blq.py::test_m1_is_classified_per_subject"
+      ],
+      "branch_point": {
+        "alternatives": [
+          "exclude middle and trailing BLQ (PharmAgent)",
+          "keep middle BLQ as zero (PKNCA matched configuration)"
+        ],
+        "changes_conclusion_when": "a flagged middle or trailing BLQ record changes AUC_last, AUC_inf or CL/F beyond the reviewer's tolerance"
+      }
     }
   ]
 }

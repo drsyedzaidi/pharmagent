@@ -6,6 +6,9 @@ import json
 from .coverage import CoverageProblem
 from .schema import Catalog, Convention
 
+APPROVAL_MEANING = ("Approved means the owner reviewed an entry as an accurate description of PharmAgent behaviour. "
+                    "For an implementation_convention it is not regulatory validation.")
+
 
 def rule_text(conv: Convention) -> str:
     return conv.statement.format(**conv.parameters)
@@ -14,6 +17,7 @@ def rule_text(conv: Convention) -> str:
 def render_report_json(catalog: Catalog, problems: list[CoverageProblem]) -> str:
     return json.dumps({
         "catalog_version": catalog.catalog_version,
+        "approval_meaning": APPROVAL_MEANING,
         "coverage_problems": [{"convention_id": p.convention_id, "ref": p.ref, "reason": p.reason} for p in problems],
         "conventions": [{**c.model_dump(), "rule_text": rule_text(c)} for c in catalog.conventions],
     }, indent=2, sort_keys=True) + "\n"
@@ -26,6 +30,7 @@ def render_report_markdown(catalog: Catalog, problems: list[CoverageProblem]) ->
         f"Conventions: {len(catalog.conventions)}. Pending owner review: {pending}. "
         f"Coverage problems: {len(problems)}.", "",
         "Rule text below is generated from the catalog data; it is not hand-written.", "",
+        APPROVAL_MEANING, "",
         "| Id | Version | Approval | Source | Tests |", "|---|---|---|---|---|",
     ]
     for c in catalog.conventions:

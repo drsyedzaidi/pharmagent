@@ -71,7 +71,7 @@ def test_the_shipped_catalog_loads_and_validates():
 
 def test_the_shipped_catalog_has_the_initial_nca_be_and_profile_conventions():
     ids = {c.id for c in load_catalog().conventions}
-    assert {"nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_m1", "nca.measured_zero",
+    assert {"nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_leading_middle_trailing", "nca.measured_zero",
             "nca.blq_flag_codes", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
             "nca.ss_incomplete_interval_fail_closed", "nca.lambda_z_window", "nca.pre_dose_records",
             "be.average_tost", "profile.ofv_cutoff"} <= ids
@@ -105,11 +105,17 @@ def test_the_catalog_numbers_match_the_code_they_describe():
     bp = by_id["be.average_tost"].parameters
     assert (bp["alpha"], bp["lower"], bp["upper"]) == (be["alpha"].default, be["lower"].default, be["upper"].default)
     assert bp["ci_percent"] == round(100 * (1 - be["alpha"].default))
+    from app.compute.nca import _MIN_LAMBDA_Z
+    assert by_id["nca.lambda_z_window"].parameters["min_lambda_z"] == _MIN_LAMBDA_Z
 
 
-def test_known_gaps_are_recorded_for_the_lambda_z_tie_rule():
+def test_the_lambda_z_entry_pins_the_threshold_and_the_tie_rule_with_dedicated_tests():
     c = {c.id: c for c in load_catalog().conventions}["nca.lambda_z_window"]
-    assert any("tie" in g.lower() for g in c.known_gaps)
+    names = " ".join(c.tests)
+    assert "test_nca_lambda_z.py::test_equal_fits_prefer_the_longest_window" in names
+    assert "test_nca_lambda_z.py::test_a_decline_below_the_threshold_gives_no_lambda_z" in names
+    assert "materially" not in c.statement and "{min_lambda_z}" in c.statement
+    assert not any("not pinned" in g.lower() for g in c.known_gaps)
 
 
 def test_every_shipped_convention_is_pending_owner_review_until_the_owner_approves():
@@ -145,7 +151,7 @@ def test_cli_check_passes_on_the_shipped_catalog(capsys):
 def test_cli_writes_a_markdown_report(tmp_path):
     out = tmp_path / "r.md"
     assert cli_main(["report", "--format", "md", "--output", str(out)]) == 0
-    assert "nca.blq_m1" in out.read_text()
+    assert "nca.blq_leading_middle_trailing" in out.read_text()
 
 
 def test_cli_check_fails_on_a_broken_catalog(tmp_path):
@@ -161,3 +167,58 @@ def test_the_package_changes_no_runtime_module():
     offenders = [str(p) for p in (BACKEND / "app").rglob("*.py")
                  if "conventions" not in p.parts and "app.conventions" in p.read_text()]
     assert offenders == []
+
+
+# ── owner review of PR #16: approval semantics and wording corrections ─────────────────────────
+@pytest.mark.parametrize("extra", [{"by": "owner"}, {"date": "2026-10-21"}, {"by": "owner", "date": "2026-10-21"}])
+def test_a_pending_entry_rejects_an_approver_or_a_date(extra):
+    with pytest.raises(ValidationError):
+        Convention(**_conv(approval={"status": "pending_owner_review", **extra}))
+
+
+@pytest.mark.parametrize("bad", ["not-a-date", "2026-13-40", "2026-02-30", "20261021", "2026-10-21T00:00", "21/10/2026", ""])
+def test_an_approval_date_must_be_an_iso_calendar_date(bad):
+    with pytest.raises(ValidationError):
+        Convention(**_conv(approval={"status": "approved", "by": "owner", "date": bad}))
+
+
+def test_the_reports_say_that_approval_is_not_regulatory_validation():
+    cat = load_catalog()
+    md = render_report_markdown(cat, [])
+    assert "not regulatory validation" in md
+    assert "not regulatory validation" in json.loads(render_report_json(cat, []))["approval_meaning"]
+
+
+def test_nothing_is_called_m1_without_an_authoritative_source():
+    for c in load_catalog().conventions:
+        assert "M1" not in c.title and "M1" not in c.statement, c.id
+    assert "nca.blq_m1" not in {c.id for c in load_catalog().conventions}
+
+
+def test_the_endpoint_closure_wording_is_consistent():
+    c = {c.id: c for c in load_catalog().conventions}["nca.ss_endpoint_closure"]
+    low = c.statement.lower()
+    assert "at least one" in low and "measured" in low and "at most one" in low
+    assert "distinct" in low and "periodicity" in low and "needs its own sample" not in low
+    assert any("integration rule" in g.lower() for g in c.known_gaps)
+
+
+def test_the_be_entry_discloses_dropped_rows_and_the_unchecked_guidance():
+    c = {c.id: c for c in load_catalog().conventions}["be.average_tost"]
+    gaps = " ".join(c.known_gaps).lower()
+    assert "not counted" in gaps and "guidance" in gaps
+    assert "implementation behaviour" in c.statement.lower() and "silent" not in c.statement.lower()
+
+
+def test_the_cutoff_entry_states_the_objective_scale_and_its_open_source():
+    c = {c.id: c for c in load_catalog().conventions}["profile.ofv_cutoff"]
+    assert "-2 log-likelihood" in c.statement
+    assert any("source" in g.lower() for g in c.known_gaps)
+
+
+def test_the_corrected_entries_were_version_bumped():
+    by_id = {c.id: c for c in load_catalog().conventions}
+    for cid in ("nca.blq_leading_middle_trailing", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
+                "nca.lambda_z_window", "be.average_tost", "profile.ofv_cutoff"):
+        assert by_id[cid].version == "1.1.0", cid
+    assert load_catalog().catalog_version == "1.1.0"
