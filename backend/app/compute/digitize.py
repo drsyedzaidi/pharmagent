@@ -1,30 +1,39 @@
 """Deterministic Plot Digitizer with 2-point axis calibration, editable points,
-uncertainty propagation, derived PK exposure metrics, and local contour proposals.
+directly digitized error-bar bounds, point-estimate PK metrics, and local contour proposals.
 
 Design invariants ("Models propose, tools compute, humans verify"):
 - Pixel-to-data mapping (`linear` or `log10`), reversed/cropped axis handling,
-  calibration-leverage + pixel-jitter uncertainty propagation, error-bar SE
-  conversion, and linear-trapezoidal AUClast integration are 100% deterministic
-  NumPy/math calculations.
-- Local image proposal (`propose_plot_from_image`) enforces strict file-size,
-  pixel-count, dimension, format, and directory-confinement limits, and marks
-  every proposed point `origin='contour_proposed'` and `verified=False`.
-- No raw image bytes (`image_data_url`) or extracted coordinate tables are ever
-  sent to an LLM or embedded as base64 blobs in session state.
+  direct error-bar bound conversion, and linear-trapezoidal AUClast point-estimate
+  integration are 100% deterministic NumPy/math calculations.
+- Uncertainty propagation (joint Monte Carlo over shared calibration anchors,
+  click jitter, time/concentration errors, and log-space error bars) is deferred
+  to a separately validated slice; this module preserves calibration metadata and
+  directly digitized bounds without emitting unvalidated symmetric CI or sigma_AUC claims.
+- Local image loading (`validate_and_load_image`) requires a mandatory `allowed_dir`,
+  accepts only direct regular-file children opened via `dir_fd` with `O_NOFOLLOW`,
+  validates via `fstat`, reads at most `max_bytes + 1` from the descriptor, and
+  uses a fixed application-wide `Image.MAX_IMAGE_PIXELS` ceiling.
+- No raw image bytes (`image_data_url`), source filenames, or extracted coordinate
+  tables are ever sent to an LLM or audit action strings.
 """
 from __future__ import annotations
 
 import csv
+import errno
 import hashlib
 import io
 import json
 import math
-from collections.abc import Sequence
+import os
+import stat
+import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 VALID_SCALES = ("linear", "log10")
 VALID_ERROR_TYPES = ("se", "sd", "ci95")
@@ -36,12 +45,42 @@ MIN_IMAGE_DIMENSION = 32            # minimum width/height in pixels
 MIN_AXIS_SPAN_PX = 1.0              # minimum 1 px separation between calibration anchors
 MIN_AXIS_ANGLE_SIN = math.sin(math.radians(5.0))  # minimum 5 deg angle between 2D axes
 
+# Fixed application-wide Pillow pixel ceiling (never mutated per request).
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
 
 def _is_finite_number(val: Any) -> bool:
     """Return True if val is a finite int/float (excluding bool)."""
     if isinstance(val, bool) or not isinstance(val, (int, float)):
         return False
     return math.isfinite(float(val))
+
+
+def _validate_metadata_text(value: str, field_name: str, *, max_len: int = 256) -> str:
+    """Reject CR/LF and ASCII/C1 control characters in metadata strings."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string.")
+    if len(value) > max_len:
+        raise ValueError(f"{field_name} exceeds maximum length ({max_len} chars).")
+    for ch in value:
+        code = ord(ch)
+        if code < 32 or 127 <= code <= 159:
+            raise ValueError(
+                f"{field_name} must not contain CR/LF or control characters (found U+{code:04X})."
+            )
+    return value.strip()
+
+
+def _neutralize_csv_cell(value: Any) -> Any:
+    """Prefix textual CSV cells starting with spreadsheet formula triggers with `'`."""
+    if not isinstance(value, str) or not value:
+        return value
+    stripped = value.lstrip(" ")
+    if value[0] in _FORMULA_PREFIXES or (stripped and stripped[0] in _FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 @dataclass(frozen=True)
@@ -78,6 +117,9 @@ class AxisCalibration:
             raise ValueError(f"{axis_name} reference values v1 and v2 must be distinct.")
         if self.scale == "log10" and (self.v1 <= 0.0 or self.v2 <= 0.0):
             raise ValueError(f"{axis_name} log10 scale requires strictly positive v1 and v2.")
+
+        _validate_metadata_text(self.label, f"{axis_name}.label")
+        _validate_metadata_text(self.unit, f"{axis_name}.unit")
 
         if (self.p1_uv is None) ^ (self.p2_uv is None):
             raise ValueError(f"{axis_name} must provide both p1_uv and p2_uv when 2D anchors are used.")
@@ -128,41 +170,6 @@ class AxisCalibration:
             frac = (fval - self.v1) / (self.v2 - self.v1)
         return float(self.p1_px + frac * (self.p2_px - self.p1_px))
 
-    def sigma_value(
-        self,
-        px: float,
-        pixel_sigma: float,
-        anchor_sigma_px: float | None = None,
-    ) -> float:
-        """Propagated 1-SD uncertainty in data units from:
-        1. Point-picking pixel jitter `pixel_sigma`, and
-        2. Two-point calibration anchor placement uncertainty `anchor_sigma_px`
-           (defaults to `0.75 * pixel_sigma`), which grows with leverage
-           `(1 - f)^2 + f^2` away from the calibration interval `[p1_px, p2_px]`.
-        """
-        if not _is_finite_number(pixel_sigma) or float(pixel_sigma) < 0.0:
-            raise ValueError(f"pixel_sigma must be a finite non-negative number, got {pixel_sigma!r}")
-        sig_pt = float(pixel_sigma)
-        if anchor_sigma_px is not None:
-            if not _is_finite_number(anchor_sigma_px) or float(anchor_sigma_px) < 0.0:
-                raise ValueError(f"anchor_sigma_px must be a finite non-negative number, got {anchor_sigma_px!r}")
-            sig_cal = float(anchor_sigma_px)
-        else:
-            sig_cal = 0.75 * sig_pt
-
-        span_px = abs(self.p2_px - self.p1_px)
-        frac = self.fractional_coord(px)
-        var_frac = (
-            (sig_pt ** 2) + ((1.0 - frac) ** 2 + (frac ** 2)) * (sig_cal ** 2)
-        ) / (span_px ** 2)
-        sd_frac = math.sqrt(max(0.0, var_frac))
-        if self.scale == "log10":
-            val = self.pixel_to_value(px)
-            log_span = abs(math.log10(self.v2) - math.log10(self.v1))
-            return float(val * math.log(10.0) * log_span * sd_frac)
-        val_span = abs(self.v2 - self.v1)
-        return float(val_span * sd_frac)
-
 
 def validate_non_collinear_2d(
     x_cal: AxisCalibration,
@@ -210,6 +217,10 @@ def parse_axis_calibration(raw: dict[str, Any], axis_name: str) -> AxisCalibrati
     for req_key in ("p1_px", "p2_px", "v1", "v2"):
         if req_key not in raw or not _is_finite_number(raw[req_key]):
             raise ValueError(f"Invalid {axis_name} calibration: '{req_key}' must be a finite number.")
+    raw_label = str(raw.get("label", axis_name.upper()))
+    raw_unit = str(raw.get("unit", ""))
+    _validate_metadata_text(raw_label, f"{axis_name}.label")
+    _validate_metadata_text(raw_unit, f"{axis_name}.unit")
     p1_uv = tuple(float(c) for c in raw["p1_uv"]) if raw.get("p1_uv") is not None else None
     p2_uv = tuple(float(c) for c in raw["p2_uv"]) if raw.get("p2_uv") is not None else None
     cal = AxisCalibration(
@@ -218,8 +229,8 @@ def parse_axis_calibration(raw: dict[str, Any], axis_name: str) -> AxisCalibrati
         v1=float(raw["v1"]),
         v2=float(raw["v2"]),
         scale=str(raw.get("scale", "linear")).lower().strip(),
-        label=str(raw.get("label", axis_name.upper())).strip(),
-        unit=str(raw.get("unit", "")).strip(),
+        label=raw_label.strip(),
+        unit=raw_unit.strip(),
         p1_uv=p1_uv,  # type: ignore[arg-type]
         p2_uv=p2_uv,  # type: ignore[arg-type]
     )
@@ -227,178 +238,210 @@ def parse_axis_calibration(raw: dict[str, Any], axis_name: str) -> AxisCalibrati
     return cal
 
 
-def _error_bar_to_se(
-    y_val: float,
-    y_low: float | None,
-    y_high: float | None,
-    *,
-    error_type: str = "se",
-    n: int | None = None,
-) -> float | None:
-    """Convert digitized upper/lower error bar bounds into a standard error (SE)."""
-    spans: list[float] = []
-    if y_low is not None and math.isfinite(y_low):
-        spans.append(abs(y_val - y_low))
-    if y_high is not None and math.isfinite(y_high):
-        spans.append(abs(y_high - y_val))
-    if not spans:
-        return None
-    half_width = float(sum(spans) / len(spans))
-    et = (error_type or "se").lower().strip()
-    if et == "ci95":
-        return half_width / 1.959963984540054
-    if et == "sd":
-        if n is not None and int(n) < 1:
-            raise ValueError("sample_n must be >= 1 when error_type='sd'.")
-        sample_n = max(1, int(n)) if n is not None else 1
-        return half_width / math.sqrt(sample_n)
-    return half_width
-
-
-def _trapezoidal_auc_with_uncertainty(
-    xs: list[float],
-    ys: list[float],
-    sig_ys: list[float],
-) -> dict[str, Any]:
-    """Compute linear-trapezoidal AUClast, Cmax, Tmax, and propagated 1-SD uncertainty
-    on a digitized concentration-time series sorted by X."""
+def _trapezoidal_auc(xs: list[float], ys: list[float]) -> dict[str, float | None]:
+    """Compute point-estimate Cmax, Tmax, and linear-trapezoidal AUClast on a
+    digitized concentration-time series sorted by X."""
     pts = [
-        (float(x), float(y), float(s))
-        for x, y, s in zip(xs, ys, sig_ys)
+        (float(x), float(y))
+        for x, y in zip(xs, ys)
         if math.isfinite(x) and math.isfinite(y) and x >= 0.0 and y >= 0.0
     ]
     if len(pts) < 2:
-        return {
-            "cmax": None,
-            "cmax_sigma": None,
-            "tmax": None,
-            "auclast": None,
-            "auclast_sigma": None,
-            "auclast_ci95": None,
-        }
+        return {"cmax": None, "tmax": None, "auclast": None}
     pts.sort(key=lambda t: t[0])
-    n = len(pts)
     t_arr = np.array([p[0] for p in pts], dtype=float)
     c_arr = np.array([p[1] for p in pts], dtype=float)
-    s_arr = np.array([max(0.0, p[2]) for p in pts], dtype=float)
 
     idx_max = int(np.argmax(c_arr))
     cmax = float(c_arr[idx_max])
-    cmax_sigma = float(s_arr[idx_max])
     tmax = float(t_arr[idx_max])
-
     dt = np.diff(t_arr)
     auclast = float(np.sum(0.5 * dt * (c_arr[:-1] + c_arr[1:])))
 
-    w = np.zeros(n, dtype=float)
-    w[0] = 0.5 * dt[0]
-    w[-1] = 0.5 * dt[-1]
-    if n > 2:
-        w[1:-1] = 0.5 * (dt[:-1] + dt[1:])
-    auclast_sigma = float(math.sqrt(float(np.sum((w * s_arr) ** 2))))
-
     return {
         "cmax": round(cmax, 6),
-        "cmax_sigma": round(cmax_sigma, 6),
         "tmax": round(tmax, 6),
         "auclast": round(auclast, 6),
-        "auclast_sigma": round(auclast_sigma, 6),
-        "auclast_ci95": [
-            round(max(0.0, auclast - 1.96 * auclast_sigma), 6),
-            round(auclast + 1.96 * auclast_sigma, 6),
-        ],
     }
 
 
 def validate_and_load_image(
     image_path: str | Path,
     *,
-    allowed_dir: str | Path | None = None,
+    allowed_dir: str | Path | None,
     max_bytes: int = MAX_IMAGE_BYTES,
     max_pixels: int = MAX_IMAGE_PIXELS,
     min_dim: int = MIN_IMAGE_DIMENSION,
-) -> tuple[Path, str, dict[str, Any], np.ndarray]:
-    """Validate an image file against security and resource limits and return
-    `(resolved_path, sha256_hex, image_dims_meta, grayscale_float_array)`.
-    """
-    from PIL import Image, UnidentifiedImageError
+    _after_fstat_hook: Callable[[], None] | None = None,
+) -> tuple[str, str, dict[str, Any], np.ndarray]:
+    """Safely open a direct child image inside `allowed_dir` using `dir_fd` + `O_NOFOLLOW`,
+    validate via `fstat`, read at most `max_bytes + 1` bytes from the descriptor, and decode
+    from bounded in-memory bytes without mutating `Image.MAX_IMAGE_PIXELS`.
 
+    Returns `(filename, sha256_hex, image_dims_meta, grayscale_float_array)`.
+    """
+    if allowed_dir is None or not str(allowed_dir).strip():
+        raise ValueError("allowed_dir is required for image loading.")
     if not image_path or not str(image_path).strip():
         raise ValueError("Image path must be a non-empty path.")
-    raw_p = Path(str(image_path)).expanduser()
+
+    raw_str = str(image_path).strip()
+    if "\x00" in raw_str:
+        raise ValueError("Image path contains null byte.")
+
+    dir_str = str(allowed_dir).strip()
+    if "\x00" in dir_str:
+        raise ValueError("allowed_dir contains null byte.")
+    dir_path = Path(dir_str).expanduser()
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        resolved = raw_p.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise ValueError(f"Image file not found: {image_path}") from exc
+        dir_fd = os.open(str(dir_path), dir_flags)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, getattr(errno, "EFTYPE", -1)):
+            raise ValueError("Symlinks are not permitted for allowed_dir.") from exc
+        raise ValueError(f"allowed_dir cannot be opened as a directory: {allowed_dir}") from exc
 
-    if not resolved.is_file():
-        raise ValueError(f"Image path is not a regular file: {image_path}")
+    try:
+        dir_st = os.fstat(dir_fd)
+        if not stat.S_ISDIR(dir_st.st_mode):
+            raise ValueError("allowed_dir is not a directory.")
 
-    if allowed_dir is not None:
-        base = Path(allowed_dir).expanduser().resolve()
-        if not resolved.is_relative_to(base):
-            raise ValueError(f"Image path {image_path!r} is outside the allowed data directory.")
+        cand = Path(raw_str)
+        filename = cand.name
+        if filename in ("", ".", "..") or "/" in filename or "\\" in filename:
+            raise ValueError("Image path must be a direct child of allowed_dir.")
 
-    file_size = resolved.stat().st_size
-    if file_size <= 0:
-        raise ValueError("Image file is empty (0 bytes).")
-    if file_size > max_bytes:
-        raise ValueError(
-            f"Image file size ({file_size} bytes) exceeds maximum limit ({max_bytes} bytes)."
-        )
+        if cand.is_absolute():
+            try:
+                parent_st = os.stat(str(cand.parent), follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError("Image path must be a direct child of allowed_dir.") from exc
+            if (parent_st.st_dev, parent_st.st_ino) != (dir_st.st_dev, dir_st.st_ino):
+                raise ValueError("Image path must be a direct child of allowed_dir (outside or nested path refused).")
+        else:
+            if len(cand.parts) != 1 or cand.parts[0] != filename:
+                raise ValueError(
+                    "Image path must be a direct child filename inside allowed_dir (nested paths refused)."
+                )
 
-    raw_bytes = resolved.read_bytes()
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(filename, file_flags, dir_fd=dir_fd)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, getattr(errno, "EFTYPE", -1)):
+                raise ValueError(f"Symlinks are not permitted for image files: {filename}") from exc
+            if exc.errno == errno.ENOENT:
+                raise ValueError(f"Image file not found: {filename}") from exc
+            if exc.errno == errno.EISDIR:
+                raise ValueError(f"Image path is not a regular file: {filename}") from exc
+            raise ValueError(f"Unable to open image file {filename}: {exc}") from exc
+
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"Image path is not a regular file: {filename}")
+            if st.st_size <= 0:
+                raise ValueError("Image file is empty (0 bytes).")
+            if st.st_size > max_bytes:
+                raise ValueError(
+                    f"Image file size ({st.st_size} bytes) exceeds maximum limit ({max_bytes} bytes)."
+                )
+
+            if _after_fstat_hook is not None:
+                _after_fstat_hook()
+
+            chunks: list[bytes] = []
+            total = 0
+            read_cap = max_bytes + 1
+            while total < read_cap:
+                chunk = os.read(fd, min(65536, read_cap - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+
+            if total <= 0:
+                raise ValueError("Image file is empty (0 bytes).")
+            if total > max_bytes:
+                raise ValueError(
+                    f"Image file grew beyond maximum limit ({max_bytes} bytes) during read."
+                )
+            raw_bytes = b"".join(chunks)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+
     sha256_hex = hashlib.sha256(raw_bytes).hexdigest()
 
-    prev_max = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = max_pixels
+    effective_max_pixels = min(int(max_pixels), MAX_IMAGE_PIXELS)
     try:
-        with Image.open(io.BytesIO(raw_bytes)) as im:
-            fmt = (im.format or "").upper()
-            if fmt not in ALLOWED_IMAGE_FORMATS:
-                raise ValueError(
-                    f"Unsupported image format {fmt!r}; allowed formats are {ALLOWED_IMAGE_FORMATS}."
-                )
-            w, h = int(im.width), int(im.height)
-            if w * h > max_pixels:
-                raise ValueError(
-                    f"Image pixel count ({w * h}) exceeds maximum limit ({max_pixels} pixels)."
-                )
-            if w < min_dim or h < min_dim:
-                raise ValueError(
-                    f"Image dimensions ({w}x{h}) are smaller than minimum ({min_dim}x{min_dim})."
-                )
-            im.load()
-            gray = np.asarray(im.convert("L"), dtype=float)
-    except Image.DecompressionBombError as exc:
-        raise ValueError(f"Image exceeds decompression pixel limit ({max_pixels} pixels).") from exc
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw_bytes)) as im:
+                fmt = (im.format or "").upper()
+                if fmt not in ALLOWED_IMAGE_FORMATS:
+                    raise ValueError(
+                        f"Unsupported image format {fmt!r}; allowed formats are {ALLOWED_IMAGE_FORMATS}."
+                    )
+                w, h = int(im.width), int(im.height)
+                if w * h > effective_max_pixels:
+                    raise ValueError(
+                        f"Image pixel count ({w * h}) exceeds maximum limit ({effective_max_pixels} pixels)."
+                    )
+                if w < min_dim or h < min_dim:
+                    raise ValueError(
+                        f"Image dimensions ({w}x{h}) are smaller than minimum ({min_dim}x{min_dim})."
+                    )
+                im.load()
+                gray = np.asarray(im.convert("L"), dtype=float)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError(
+            f"Image pixel count exceeds maximum limit ({effective_max_pixels} pixels)."
+        ) from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         if isinstance(exc, ValueError):
             raise
         raise ValueError(f"Invalid or corrupted image file: {exc}") from exc
-    finally:
-        Image.MAX_IMAGE_PIXELS = prev_max
 
-    dims = {"width": w, "height": h, "format": fmt, "bytes": file_size}
-    return resolved, sha256_hex, dims, gray
+    dims = {"width": w, "height": h, "format": fmt, "bytes": len(raw_bytes)}
+    return filename, sha256_hex, dims, gray
 
 
 def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
     """Deterministically serialize digitized points and calibration metadata to CSV.
 
+    - Rejects CR/LF and control characters in metadata fields.
+    - Neutralizes leading spreadsheet formula prefixes (`=`, `+`, `-`, `@`) in CSV cells.
     Returns `{"csv": csv_string, "export_sha256": sha256_hex}`.
     """
-    x_meta = json.dumps(result.get("x_axis") or {}, sort_keys=True, separators=(",", ":"))
-    y_meta = json.dumps(result.get("y_axis") or {}, sort_keys=True, separators=(",", ":"))
+    fig_label = _validate_metadata_text(str(result.get("figure_label") or ""), "figure_label")
+    src_sha = _validate_metadata_text(str(result.get("source_sha256") or ""), "source_sha256")
+    err_type = _validate_metadata_text(str(result.get("error_type") or "se"), "error_type")
+
+    x_axis_dict = dict(result.get("x_axis") or {})
+    y_axis_dict = dict(result.get("y_axis") or {})
+    if "label" in x_axis_dict:
+        _validate_metadata_text(str(x_axis_dict["label"]), "x_axis.label")
+    if "unit" in x_axis_dict:
+        _validate_metadata_text(str(x_axis_dict["unit"]), "x_axis.unit")
+    if "label" in y_axis_dict:
+        _validate_metadata_text(str(y_axis_dict["label"]), "y_axis.label")
+    if "unit" in y_axis_dict:
+        _validate_metadata_text(str(y_axis_dict["unit"]), "y_axis.unit")
+
+    x_meta = json.dumps(x_axis_dict, sort_keys=True, separators=(",", ":"))
+    y_meta = json.dumps(y_axis_dict, sort_keys=True, separators=(",", ":"))
     buf = io.StringIO()
     buf.write("# format=pharmagent-digitizer-v1\n")
-    buf.write(f"# figure_label={result.get('figure_label') or ''}\n")
-    buf.write(f"# source_sha256={result.get('source_sha256') or ''}\n")
+    buf.write(f"# figure_label={fig_label}\n")
+    buf.write(f"# source_sha256={src_sha}\n")
     buf.write(f"# x_axis={x_meta}\n")
     buf.write(f"# y_axis={y_meta}\n")
     buf.write(f"# pixel_sigma={result.get('pixel_sigma')}\n")
     buf.write(f"# anchor_sigma_px={result.get('anchor_sigma_px')}\n")
-    buf.write(f"# error_type={result.get('error_type') or 'se'}\n")
+    buf.write(f"# error_type={err_type}\n")
 
     fieldnames = [
         "id",
@@ -410,12 +453,8 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
         "v_high_px",
         "x",
         "y",
-        "sigma_x",
-        "sigma_y_cal",
-        "se_bar",
-        "total_se_y",
-        "ci95_low",
-        "ci95_high",
+        "y_low",
+        "y_high",
         "out_of_bounds",
         "origin",
         "verified",
@@ -424,12 +463,17 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
     writer.writerow(fieldnames)
 
     pts = list(result.get("points") or [])
-    pts_sorted = sorted(pts, key=lambda r: (str(r.get("series", "")), int(r.get("index", 0)), str(r.get("id", ""))))
+    pts_sorted = sorted(
+        pts,
+        key=lambda r: (str(r.get("series", "")), int(r.get("index", 0)), str(r.get("id", ""))),
+    )
     for pt in pts_sorted:
-        ci = pt.get("ci95_y") or [None, None]
+        pt_id = _validate_metadata_text(str(pt.get("id", "")), "point.id")
+        pt_series = _validate_metadata_text(str(pt.get("series", "")), "point.series")
+        pt_origin = _validate_metadata_text(str(pt.get("origin", "manual")), "point.origin")
         writer.writerow([
-            pt.get("id", ""),
-            pt.get("series", ""),
+            _neutralize_csv_cell(pt_id),
+            _neutralize_csv_cell(pt_series),
             pt.get("index", ""),
             pt.get("u_px", ""),
             pt.get("v_px", ""),
@@ -437,14 +481,10 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
             "" if pt.get("v_high_px") is None else pt.get("v_high_px"),
             pt.get("x", ""),
             pt.get("y", ""),
-            pt.get("sigma_x", ""),
-            pt.get("sigma_y_cal", ""),
-            "" if pt.get("se_bar") is None else pt.get("se_bar"),
-            pt.get("total_se_y", ""),
-            "" if ci[0] is None else ci[0],
-            "" if ci[1] is None else ci[1],
+            "" if pt.get("y_low") is None else pt.get("y_low"),
+            "" if pt.get("y_high") is None else pt.get("y_high"),
             bool(pt.get("out_of_bounds", False)),
-            pt.get("origin", "manual"),
+            _neutralize_csv_cell(pt_origin),
             bool(pt.get("verified", False)),
         ])
 
@@ -474,8 +514,8 @@ def digitize_plot(
     figure_label: str = "Figure 1",
     approve_all: bool = False,
 ) -> dict[str, Any]:
-    """Deterministically calibrate pixel points and error bars into data coordinates
-    with propagated uncertainty, bounds checking, and canonical CSV export metadata.
+    """Deterministically calibrate pixel points and directly digitized error-bar bounds
+    into data coordinates with bounds checking and canonical CSV export metadata.
     """
     if pixel_jitter is not None:
         pixel_sigma = float(pixel_jitter)
@@ -492,6 +532,8 @@ def digitize_plot(
     if not _is_finite_number(eff_anchor_sigma) or eff_anchor_sigma < 0.0:
         raise ValueError(f"anchor_sigma_px must be a finite non-negative number, got {anchor_sigma_px!r}")
 
+    clean_fig_label = _validate_metadata_text(str(figure_label or "Figure 1"), "figure_label")
+
     x_cal = parse_axis_calibration(x_axis if x_axis is not None else (x_calibration or {}), "x_axis")
     y_cal = parse_axis_calibration(y_axis if y_axis is not None else (y_calibration or {}), "y_axis")
     validate_non_collinear_2d(x_cal, y_cal, extra_anchors_uv=calibration_points_2d)
@@ -504,7 +546,7 @@ def digitize_plot(
     if sample_n is not None and int(sample_n) < 1:
         raise ValueError("sample_n must be >= 1.")
 
-    computed_sha = source_sha256
+    computed_sha = _validate_metadata_text(str(source_sha256), "source_sha256") if source_sha256 else None
     image_dims: dict[str, Any] | None = None
     if source_path:
         _, computed_sha, image_dims, _ = validate_and_load_image(
@@ -513,7 +555,7 @@ def digitize_plot(
 
     digitized: list[dict[str, Any]] = []
     by_series: dict[str, list[dict[str, Any]]] = {}
-    warnings: list[str] = []
+    warnings_list: list[str] = []
     n_out_of_bounds = 0
 
     for idx, pt in enumerate(points, 1):
@@ -523,9 +565,9 @@ def digitize_plot(
             raise ValueError(f"Point #{idx} pixel coordinates 'u_px' and 'v_px' must be finite numbers.")
         u_px = float(pt["u_px"])
         v_px = float(pt["v_px"])
-        series = str(pt.get("series") or "Series 1").strip()
-        pt_id = str(pt.get("id") or f"pt_{idx}")
-        origin = str(pt.get("origin") or "manual").strip()
+        series = _validate_metadata_text(str(pt.get("series") or "Series 1"), f"points[{idx}].series")
+        pt_id = _validate_metadata_text(str(pt.get("id") or f"pt_{idx}"), f"points[{idx}].id")
+        origin = _validate_metadata_text(str(pt.get("origin") or "manual"), f"points[{idx}].origin")
         verified = bool(pt.get("verified", origin == "manual")) or bool(approve_all)
 
         v_low_px: float | None = None
@@ -552,15 +594,12 @@ def digitize_plot(
                     f"Point {pt_id!r} at ({u_px}, {v_px}) lies outside the calibrated axis region."
                 )
             n_out_of_bounds += 1
-            warnings.append(
-                f"Point {pt_id!r} ({u_px}, {v_px}) is outside the calibrated pixel bounds; "
-                "extrapolated value has elevated calibration leverage uncertainty."
+            warnings_list.append(
+                f"Point {pt_id!r} ({u_px}, {v_px}) is outside the calibrated pixel bounds."
             )
 
         x_val = x_cal.pixel_to_value(u_px)
         y_val = y_cal.pixel_to_value(v_px)
-        sigma_x = x_cal.sigma_value(u_px, pixel_sigma, eff_anchor_sigma)
-        sigma_y = y_cal.sigma_value(v_px, pixel_sigma, eff_anchor_sigma)
 
         y_low_raw = y_cal.pixel_to_value(v_low_px) if v_low_px is not None else None
         y_high_raw = y_cal.pixel_to_value(v_high_px) if v_high_px is not None else None
@@ -569,16 +608,6 @@ def digitize_plot(
             y_low, y_high = min(y_low_raw, y_high_raw), max(y_low_raw, y_high_raw)
         else:
             y_low, y_high = y_low_raw, y_high_raw
-
-        se_bar = _error_bar_to_se(
-            y_val,
-            y_low,
-            y_high,
-            error_type=et,
-            n=int(pt["n"]) if pt.get("n") is not None else sample_n,
-        )
-        total_se_y = float(math.hypot(sigma_y, se_bar)) if se_bar is not None else sigma_y
-        cv_pct = (100.0 * total_se_y / abs(y_val)) if abs(y_val) > 1e-12 else None
 
         row = {
             "id": pt_id,
@@ -590,19 +619,8 @@ def digitize_plot(
             "v_high_px": round(v_high_px, 4) if v_high_px is not None else None,
             "x": round(x_val, 6),
             "y": round(y_val, 6),
-            "sigma_x": round(sigma_x, 6),
-            "sigma_y_cal": round(sigma_y, 6),
-            "cal_se_y": round(sigma_y, 6),
             "y_low": round(y_low, 6) if y_low is not None else None,
             "y_high": round(y_high, 6) if y_high is not None else None,
-            "se_bar": round(se_bar, 6) if se_bar is not None else None,
-            "bar_se_y": round(se_bar, 6) if se_bar is not None else None,
-            "total_se_y": round(total_se_y, 6),
-            "ci95_y": [
-                round(y_val - 1.96 * total_se_y, 6),
-                round(y_val + 1.96 * total_se_y, 6),
-            ],
-            "cv_pct": round(cv_pct, 2) if cv_pct is not None else None,
             "out_of_bounds_x": oob_x,
             "out_of_bounds_y": oob_y,
             "out_of_bounds": oob,
@@ -615,10 +633,9 @@ def digitize_plot(
     series_summaries: dict[str, dict[str, Any]] = {}
     for s_name, s_pts in by_series.items():
         s_pts.sort(key=lambda r: r["x"])
-        pk = _trapezoidal_auc_with_uncertainty(
+        pk = _trapezoidal_auc(
             [r["x"] for r in s_pts],
             [r["y"] for r in s_pts],
-            [r["total_se_y"] for r in s_pts],
         )
         n_ver = sum(1 for r in s_pts if r["verified"])
         series_summaries[s_name] = {
@@ -627,13 +644,6 @@ def digitize_plot(
             "all_verified": n_ver == len(s_pts),
             "x_range": [s_pts[0]["x"], s_pts[-1]["x"]],
             "y_range": [min(r["y"] for r in s_pts), max(r["y"] for r in s_pts)],
-            "mean_rel_cal_uncertainty_pct": round(
-                float(np.mean([
-                    100.0 * r["sigma_y_cal"] / max(abs(r["y"]), 1e-12)
-                    for r in s_pts
-                ])),
-                2,
-            ),
             "pk_metrics": pk,
         }
 
@@ -659,7 +669,7 @@ def digitize_plot(
 
     out: dict[str, Any] = {
         "status": "ok",
-        "figure_label": figure_label,
+        "figure_label": clean_fig_label,
         "source_sha256": computed_sha,
         "image_dims": image_dims,
         "pixel_sigma": float(pixel_sigma),
@@ -676,7 +686,7 @@ def digitize_plot(
         "n_verified": n_verified_total,
         "all_verified": n_verified_total == len(digitized),
         "n_out_of_bounds": n_out_of_bounds,
-        "warnings": warnings,
+        "warnings": warnings_list,
         "points": digitized,
         "series": series_summaries,
         "derived_pk": next(iter(series_summaries.values()), {}).get("pk_metrics", {}),
@@ -690,21 +700,24 @@ def digitize_plot(
 def propose_plot_from_image(
     image_path: str | Path,
     *,
+    allowed_dir: str | Path | None,
     n_candidates: int = 8,
     x_range: tuple[float, float] = (0.0, 24.0),
     y_range: tuple[float, float] = (1.0, 100.0),
     y_scale: str = "linear",
-    allowed_dir: str | Path | None = None,
+    figure_label: str | None = None,
     max_bytes: int = MAX_IMAGE_BYTES,
     max_pixels: int = MAX_IMAGE_PIXELS,
 ) -> dict[str, Any]:
     """Detect plot axes and candidate curve markers from an image using local
     deterministic luminance/contour analysis (zero cloud/LLM calls).
 
-    Every proposed point is marked ``origin='contour_proposed'`` and ``verified=False``
-    so the scientist must inspect and approve or adjust the overlay before use.
+    - Requires a mandatory `allowed_dir` and opens only direct regular-file children.
+    - Uses an opaque hash label (`source_<sha[:12]>`) by default rather than exposing
+      the filesystem filename.
+    - Marks every proposed point `origin='contour_proposed'` and `verified=False`.
     """
-    resolved, sha, dims, gray = validate_and_load_image(
+    _, sha, dims, gray = validate_and_load_image(
         image_path,
         allowed_dir=allowed_dir,
         max_bytes=max_bytes,
@@ -745,6 +758,7 @@ def propose_plot_from_image(
             "verified": False,
         })
 
+    opaque_label = figure_label if figure_label else f"source_{sha[:12]}"
     out = digitize_plot(
         x_axis={
             "p1_px": float(x_left),
@@ -766,7 +780,7 @@ def propose_plot_from_image(
         },
         points=proposed_pts,
         source_sha256=sha,
-        figure_label=resolved.name,
+        figure_label=opaque_label,
         approve_all=False,
     )
     out["image_dims"] = dims

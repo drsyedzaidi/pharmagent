@@ -5,15 +5,18 @@ import type {
   AxisScale,
   DigitizedPoint,
   DigitizeResult,
+  DigitizerViewState,
   ErrorBarType,
 } from './digitizeMath';
 import {
-  addDigitizerPoint,
+  applyAddDigitizerPoint,
+  applyPointPixelEdit,
+  applyRemoveDigitizerPoint,
+  buildResultSourceKey,
   computeSvgOverlayGeometry,
+  createDigitizerViewState,
   isPointOutOfBounds,
-  removeDigitizerPoint,
   togglePointVerified,
-  updatePointPixel,
   validateAxisSpec,
 } from './digitizeMath';
 
@@ -53,21 +56,26 @@ export function PlotDigitizerCard({
   busy?: boolean;
   onRecompute?: (payload: PlotDigitizerRecomputePayload) => Promise<void>;
 }) {
-  const [points, setPoints] = useState<DigitizedPoint[]>(r.points ?? []);
-  const [yScale, setYScale] = useState<AxisScale>(r.y_axis?.scale ?? 'linear');
-  const [pixelSigma, setPixelSigma] = useState<number>(r.pixel_sigma ?? 1.5);
-  const [strictBounds, setStrictBounds] = useState<boolean>(Boolean(r.strict_bounds));
+  const [viewState, setViewState] = useState<DigitizerViewState>(() =>
+    createDigitizerViewState(r),
+  );
   const [localBusy, setLocalBusy] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
+  const incomingKey = buildResultSourceKey(r);
+  if (viewState.sourceKey !== incomingKey) {
+    setViewState(createDigitizerViewState(r));
+  }
+
+  const { points, yScale, pixelSigma, strictBounds, isDirty, derivedPk } = viewState;
   const xAx: AxisCalibrationSpec = r.x_axis;
   const yAx: AxisCalibrationSpec = { ...r.y_axis, scale: yScale };
 
   async function triggerRecompute(
-    nextPts = points,
-    nextScale = yScale,
-    nextSigma = pixelSigma,
-    nextStrict = strictBounds,
+    nextPts: DigitizedPoint[] = points,
+    nextScale: AxisScale = yScale,
+    nextSigma: number = pixelSigma,
+    nextStrict: boolean = strictBounds,
   ) {
     if (!onRecompute) return;
     const candidateY: AxisCalibrationSpec = { ...r.y_axis, scale: nextScale };
@@ -118,13 +126,12 @@ export function PlotDigitizerCard({
     padB: PAD_B,
   });
 
-  const pk = r.derived_pk;
   const nVerified = points.filter(p => p.verified).length;
   const nOob = points.filter(p => isPointOutOfBounds(p, xAx, yAx)).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Summary KPI bar */}
+      {/* Summary KPI bar — hides derived PK values when local edits are uncommitted */}
       <div
         style={{
           display: 'grid',
@@ -137,21 +144,33 @@ export function PlotDigitizerCard({
         }}
       >
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Digitized Cmax ± σ</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Digitized Cmax</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {fmt(pk?.cmax, 2)} ± {fmt(pk?.cmax_sigma, 2)} {yAx?.unit}
+            {isDirty || !derivedPk ? (
+              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
+            ) : (
+              `${fmt(derivedPk.cmax, 2)} ${yAx?.unit}`
+            )}
           </div>
         </div>
         <div>
           <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Digitized Tmax</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {fmt(pk?.tmax, 2)} {xAx?.unit}
+            {isDirty || !derivedPk ? (
+              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
+            ) : (
+              `${fmt(derivedPk.tmax, 2)} ${xAx?.unit}`
+            )}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Trapezoidal AUClast ± σ</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Trapezoidal AUClast</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {fmt(pk?.auclast, 1)} ± {fmt(pk?.auclast_sigma, 1)} {yAx?.unit}·{xAx?.unit}
+            {isDirty || !derivedPk ? (
+              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
+            ) : (
+              `${fmt(derivedPk.auclast, 1)} ${yAx?.unit}·${xAx?.unit}`
+            )}
           </div>
         </div>
         <div>
@@ -170,6 +189,7 @@ export function PlotDigitizerCard({
               <AlertTriangle size={12} style={{ display: 'inline', marginRight: 4 }} />
             )}
             {nVerified}/{points.length} verified · {nOob} out-of-bounds
+            {isDirty ? ' · preview' : ''}
           </div>
         </div>
       </div>
@@ -189,7 +209,7 @@ export function PlotDigitizerCard({
         </div>
       )}
 
-      {/* Calibration & uncertainty controls */}
+      {/* Calibration & metadata controls */}
       {onRecompute && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', fontSize: 12 }}>
           <label className="sim-field">
@@ -200,7 +220,12 @@ export function PlotDigitizerCard({
               disabled={busy || localBusy}
               onChange={e => {
                 const next = e.target.value as AxisScale;
-                setYScale(next);
+                setViewState(prev => ({
+                  ...prev,
+                  yScale: next,
+                  isDirty: true,
+                  derivedPk: null,
+                }));
                 void triggerRecompute(points, next, pixelSigma, strictBounds);
               }}
             >
@@ -209,14 +234,16 @@ export function PlotDigitizerCard({
             </select>
           </label>
           <label className="sim-field">
-            Pixel jitter σ (px)
+            Click σ metadata (px)
             <input
               type="number"
               step="0.25"
               min="0.0"
               max="10"
               value={pixelSigma}
-              onChange={e => setPixelSigma(Number(e.target.value))}
+              onChange={e =>
+                setViewState(prev => ({ ...prev, pixelSigma: Number(e.target.value), isDirty: true, derivedPk: null }))
+              }
               style={{ width: 64 }}
             />
           </label>
@@ -224,7 +251,9 @@ export function PlotDigitizerCard({
             <input
               type="checkbox"
               checked={strictBounds}
-              onChange={e => setStrictBounds(e.target.checked)}
+              onChange={e =>
+                setViewState(prev => ({ ...prev, strictBounds: e.target.checked, isDirty: true, derivedPk: null }))
+              }
             />
             Strict bounds
           </label>
@@ -237,13 +266,13 @@ export function PlotDigitizerCard({
             }}
           >
             <RefreshCw size={11} style={{ marginRight: 4 }} />
-            Re-calibrate &amp; propagate σ
+            Re-calibrate (authoritative)
           </button>
           <button
             type="button"
             className="chip"
             disabled={busy || localBusy}
-            onClick={() => setPoints(prev => addDigitizerPoint(prev))}
+            onClick={() => setViewState(prev => applyAddDigitizerPoint(prev, xAx, yAx))}
           >
             <Plus size={11} style={{ marginRight: 4 }} />
             Add point
@@ -251,7 +280,7 @@ export function PlotDigitizerCard({
         </div>
       )}
 
-      {/* Calibrated SVG Curve & Uncertainty Overlay */}
+      {/* Calibrated SVG Curve & Directly Digitized Bounds Overlay */}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         width={W}
@@ -264,7 +293,7 @@ export function PlotDigitizerCard({
           background: 'var(--surface)',
         }}
         role="img"
-        aria-label="Calibrated concentration-time digitized curve with error bars"
+        aria-label="Calibrated concentration-time digitized curve with directly digitized error-bar bounds"
       >
         {geom.areaPath && <path d={geom.areaPath} fill="var(--accent)" fillOpacity={0.1} />}
         <line x1={PAD_L} x2={W - PAD_R} y1={H - PAD_B} y2={H - PAD_B} stroke="var(--border-strong)" />
@@ -274,9 +303,13 @@ export function PlotDigitizerCard({
           const color = m.outOfBounds ? '#B23A2E' : m.verified ? 'var(--accent)' : '#9A5B12';
           return (
             <g key={m.id}>
-              <line x1={m.cx} x2={m.cx} y1={m.yHi} y2={m.yLo} stroke={color} strokeWidth={1.6} />
-              <line x1={m.cx - 4} x2={m.cx + 4} y1={m.yHi} y2={m.yHi} stroke={color} strokeWidth={1.6} />
-              <line x1={m.cx - 4} x2={m.cx + 4} y1={m.yLo} y2={m.yLo} stroke={color} strokeWidth={1.6} />
+              {m.yLo != null && m.yHi != null && (
+                <>
+                  <line x1={m.cx} x2={m.cx} y1={m.yHi} y2={m.yLo} stroke={color} strokeWidth={1.6} />
+                  <line x1={m.cx - 4} x2={m.cx + 4} y1={m.yHi} y2={m.yHi} stroke={color} strokeWidth={1.6} />
+                  <line x1={m.cx - 4} x2={m.cx + 4} y1={m.yLo} y2={m.yLo} stroke={color} strokeWidth={1.6} />
+                </>
+              )}
               <circle cx={m.cx} cy={m.cy} r={4.2} fill={color} stroke="var(--bg)" strokeWidth={1.2} />
             </g>
           );
@@ -310,9 +343,8 @@ export function PlotDigitizerCard({
               <th>
                 {yAx?.label ?? 'Y'} ({yAx?.unit})
               </th>
-              <th>Cal σy</th>
-              <th>Bar σy</th>
-              <th>Total σy</th>
+              <th>Y low</th>
+              <th>Y high</th>
               <th>Origin / Gate</th>
               {onRecompute && <th />}
             </tr>
@@ -332,6 +364,14 @@ export function PlotDigitizerCard({
                         [OOB]
                       </span>
                     )}
+                    {p.previewOnly && (
+                      <span
+                        title="Preview coordinate only — click Re-calibrate for authoritative backend result"
+                        style={{ color: '#9A5B12', marginLeft: 4, fontSize: 10 }}
+                      >
+                        (preview)
+                      </span>
+                    )}
                   </td>
                   <td>
                     {onRecompute ? (
@@ -339,7 +379,9 @@ export function PlotDigitizerCard({
                         type="number"
                         value={p.u_px}
                         onChange={e =>
-                          setPoints(prev => updatePointPixel(prev, idx, 'u_px', Number(e.target.value)))
+                          setViewState(prev =>
+                            applyPointPixelEdit(prev, idx, 'u_px', Number(e.target.value), xAx, yAx),
+                          )
                         }
                         style={{ width: 64, fontSize: 11, ...MONO }}
                       />
@@ -353,7 +395,9 @@ export function PlotDigitizerCard({
                         type="number"
                         value={p.v_px}
                         onChange={e =>
-                          setPoints(prev => updatePointPixel(prev, idx, 'v_px', Number(e.target.value)))
+                          setViewState(prev =>
+                            applyPointPixelEdit(prev, idx, 'v_px', Number(e.target.value), xAx, yAx),
+                          )
                         }
                         style={{ width: 64, fontSize: 11, ...MONO }}
                       />
@@ -363,9 +407,8 @@ export function PlotDigitizerCard({
                   </td>
                   <td style={MONO}>{fmt(p.x, 2)}</td>
                   <td style={{ fontWeight: 600, ...MONO }}>{fmt(p.y, 2)}</td>
-                  <td style={MONO}>{fmt(p.sigma_y_cal ?? p.cal_se_y, 2)}</td>
-                  <td style={MONO}>{fmt(p.se_bar ?? p.bar_se_y, 2)}</td>
-                  <td style={{ fontWeight: 600, ...MONO }}>±{fmt(p.total_se_y, 2)}</td>
+                  <td style={MONO}>{fmt(p.y_low, 2)}</td>
+                  <td style={MONO}>{fmt(p.y_high, 2)}</td>
                   <td>
                     <button
                       type="button"
@@ -375,7 +418,14 @@ export function PlotDigitizerCard({
                         fontSize: 11,
                         color: p.verified ? '#1D7A5A' : '#9A5B12',
                       }}
-                      onClick={() => setPoints(prev => togglePointVerified(prev, idx))}
+                      onClick={() =>
+                        setViewState(prev => ({
+                          ...prev,
+                          points: togglePointVerified(prev.points, idx),
+                          isDirty: true,
+                          derivedPk: null,
+                        }))
+                      }
                       title="Click to toggle human verification status"
                     >
                       {p.verified ? 'verified' : `${p.origin} · verify`}
@@ -388,7 +438,7 @@ export function PlotDigitizerCard({
                         className="chip"
                         style={{ padding: '1px 5px' }}
                         disabled={points.length <= 2}
-                        onClick={() => setPoints(prev => removeDigitizerPoint(prev, idx))}
+                        onClick={() => setViewState(prev => applyRemoveDigitizerPoint(prev, idx))}
                         title="Delete point"
                       >
                         <Trash2 size={11} />

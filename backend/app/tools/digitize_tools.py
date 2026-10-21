@@ -1,8 +1,8 @@
 """Narrowly scoped Plot Digitizer tool wrapper (`digitize_plot`).
 
 - Zero imports from `app.evidence` or any LLM client.
-- Enforces `allowed_dir=ctx.data_dir` on any local image path.
-- Never embeds raw image bytes or coordinate arrays into the LLM-facing summary.
+- Enforces mandatory `allowed_dir=ctx.data_dir` on any local image path (refuses missing/empty `data_dir`).
+- Never embeds raw image bytes, coordinate arrays, or source filenames into `ToolResult.summary` or `ToolResult.action`.
 """
 from __future__ import annotations
 
@@ -16,16 +16,20 @@ from app.tools.base import Tool, ToolContext, ToolRegistry, ToolResult
 def _run_digitize_plot(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     image_path = args.get("image_path") or args.get("source_path")
     points = args.get("points")
-    allowed_dir = ctx.data_dir if ctx and ctx.data_dir else None
+    allowed_dir = (ctx.data_dir or "").strip() if ctx and ctx.data_dir else ""
+
+    if image_path and not allowed_dir:
+        raise ValueError("allowed_dir is required at the tool boundary when loading an image.")
 
     if image_path and not points:
         res = propose_plot_from_image(
             image_path,
+            allowed_dir=allowed_dir,
             n_candidates=int(args.get("n_candidates") or 8),
             x_range=tuple(args.get("x_range") or (0.0, 24.0)),
             y_range=tuple(args.get("y_range") or (1.0, 100.0)),
             y_scale=str(args.get("y_scale") or "linear"),
-            allowed_dir=allowed_dir,
+            figure_label=str(args["figure_label"]) if args.get("figure_label") else None,
         )
     else:
         if not points:
@@ -46,16 +50,17 @@ def _run_digitize_plot(state: PharmState, ctx: ToolContext, args: dict[str, Any]
             calibration_points_2d=args.get("calibration_points_2d"),
             source_path=str(image_path) if image_path else None,
             source_sha256=args.get("source_sha256"),
-            allowed_dir=allowed_dir,
+            allowed_dir=allowed_dir if image_path else None,
             figure_label=str(args.get("figure_label") or "Figure 1"),
             approve_all=bool(args.get("approve_all", False)),
         )
 
+    ref_hash = (res.get("source_sha256") or res["export_sha256"])[:12]
     summary = (
         f"Digitized {res['n_points']} point(s) across {len(res['series'])} series "
         f"({res['n_verified']}/{res['n_points']} verified, "
         f"{res['n_out_of_bounds']} out-of-bounds; X={res['x_axis']['scale']}, "
-        f"Y={res['y_axis']['scale']}, export_sha256={res['export_sha256'][:12]})."
+        f"Y={res['y_axis']['scale']}, ref={ref_hash})."
     )
     prior_widgets = [w for w in (state.widgets or []) if w.get("type") != "plot_digitizer"]
     next_widgets = [*prior_widgets, {"type": "plot_digitizer", "data": res}]
@@ -64,7 +69,7 @@ def _run_digitize_plot(state: PharmState, ctx: ToolContext, args: dict[str, Any]
         summary=summary,
         writes={"widgets": next_widgets},
         result=res,
-        action=f"digitize_plot({res['figure_label']!r}, n={res['n_points']}, verified={res['n_verified']})",
+        action=f"digitize_plot(ref={ref_hash}, n={res['n_points']}, verified={res['n_verified']})",
     )
 
 
@@ -73,8 +78,8 @@ TOOLS: list[Tool] = [
         name="digitize_plot",
         description=(
             "Calibrate a plot's X and Y axes (linear or log10) from two reference pixel anchors per axis, "
-            "convert marker and error-bar pixels into data coordinates with propagated calibration and "
-            "pixel uncertainty, or propose initial contour points from a local image."
+            "convert marker and error-bar pixels into data coordinates, or propose initial contour points "
+            "from a direct child image in data_dir."
         ),
         agent="data_manager",
         input_schema={
@@ -92,12 +97,12 @@ TOOLS: list[Tool] = [
                     "type": "array",
                     "description": "Points [{id, series, u_px, v_px, v_low_px, v_high_px, origin, verified}].",
                 },
-                "pixel_sigma": {"type": "number", "description": "Pixel picking 1-SD uncertainty (default 1.5 px)."},
-                "anchor_sigma_px": {"type": "number", "description": "Calibration anchor 1-SD uncertainty in px."},
+                "pixel_sigma": {"type": "number", "description": "Pixel picking metadata (default 1.5 px)."},
+                "anchor_sigma_px": {"type": "number", "description": "Calibration anchor metadata in px."},
                 "error_type": {"type": "string", "enum": ["se", "sd", "ci95"]},
                 "sample_n": {"type": "integer"},
                 "strict_bounds": {"type": "boolean"},
-                "image_path": {"type": "string", "description": "Optional local image path inside data_dir."},
+                "image_path": {"type": "string", "description": "Optional direct-child image filename in data_dir."},
                 "figure_label": {"type": "string"},
                 "approve_all": {"type": "boolean"},
             },

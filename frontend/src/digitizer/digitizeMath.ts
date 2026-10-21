@@ -1,5 +1,9 @@
 /**
- * Pure TypeScript geometry, validation, and state helpers for PlotDigitizerCard.
+ * Pure TypeScript geometry, validation, and preview-only state helpers for PlotDigitizerCard.
+ * Authoritative calibration, digitized bounds, and PK metrics come from the backend;
+ * frontend coordinate updates after local edits are explicitly marked `previewOnly: true`
+ * and invalidate (`isDirty: true`) derived PK metrics until backend recomputation completes.
+ *
  * Tested directly by `frontend/tests/plotDigitizer.test.ts`.
  */
 
@@ -24,29 +28,22 @@ export interface DigitizedPoint {
   v_px: number;
   v_low_px: number | null;
   v_high_px: number | null;
-  x: number;
-  y: number;
-  sigma_x: number;
-  sigma_y_cal: number;
-  cal_se_y?: number;
-  se_bar: number | null;
-  bar_se_y?: number | null;
-  total_se_y: number;
-  ci95_y: [number, number];
+  x: number | null;
+  y: number | null;
+  y_low: number | null;
+  y_high: number | null;
   out_of_bounds_x?: boolean;
   out_of_bounds_y?: boolean;
   out_of_bounds?: boolean;
   origin: 'manual' | 'contour_proposed';
   verified: boolean;
+  previewOnly?: boolean;
 }
 
 export interface DerivedPkMetrics {
   cmax: number | null;
-  cmax_sigma: number | null;
   tmax: number | null;
   auclast: number | null;
-  auclast_sigma: number | null;
-  auclast_ci95: [number, number] | null;
 }
 
 export interface DigitizeResult {
@@ -68,6 +65,16 @@ export interface DigitizeResult {
   warnings?: string[];
   points: DigitizedPoint[];
   derived_pk: DerivedPkMetrics;
+}
+
+export interface DigitizerViewState {
+  sourceKey: string;
+  points: DigitizedPoint[];
+  yScale: AxisScale;
+  pixelSigma: number;
+  strictBounds: boolean;
+  isDirty: boolean;
+  derivedPk: DerivedPkMetrics | null;
 }
 
 export function validateAxisSpec(ax: AxisCalibrationSpec, name = 'axis'): string | null {
@@ -136,48 +143,192 @@ export function isPointOutOfBounds(
   return false;
 }
 
+export function computePointPreview(
+  pt: DigitizedPoint,
+  xAx?: AxisCalibrationSpec,
+  yAx?: AxisCalibrationSpec,
+): DigitizedPoint {
+  if (!xAx || !yAx || validateAxisSpec(xAx) !== null || validateAxisSpec(yAx) !== null) {
+    return {
+      ...pt,
+      x: null,
+      y: null,
+      y_low: null,
+      y_high: null,
+      previewOnly: true,
+    };
+  }
+  const x = pixelToValue(xAx, pt.u_px);
+  const y = pixelToValue(yAx, pt.v_px);
+  let yLow: number | null = null;
+  let yHigh: number | null = null;
+  if (pt.v_low_px != null || pt.v_high_px != null) {
+    const vLo = pt.v_low_px != null ? pt.v_low_px : pt.v_px;
+    const vHi = pt.v_high_px != null ? pt.v_high_px : pt.v_px;
+    const valA = pixelToValue(yAx, vLo);
+    const valB = pixelToValue(yAx, vHi);
+    yLow = Math.min(valA, valB);
+    yHigh = Math.max(valA, valB);
+  }
+  const oob = isPointOutOfBounds(pt, xAx, yAx);
+  return {
+    ...pt,
+    x,
+    y,
+    y_low: yLow,
+    y_high: yHigh,
+    out_of_bounds: oob,
+    previewOnly: true,
+  };
+}
+
 export function updatePointPixel(
   points: DigitizedPoint[],
   idx: number,
   field: 'u_px' | 'v_px',
   val: number,
+  xAx?: AxisCalibrationSpec,
+  yAx?: AxisCalibrationSpec,
 ): DigitizedPoint[] {
   if (!Number.isFinite(val)) return points;
-  return points.map((p, i) =>
-    i === idx ? { ...p, [field]: val, origin: 'manual', verified: true } : p,
-  );
+  return points.map((p, i) => {
+    if (i !== idx) return p;
+    const edited: DigitizedPoint = {
+      ...p,
+      [field]: val,
+      origin: 'manual',
+      verified: true,
+    };
+    return computePointPreview(edited, xAx, yAx);
+  });
 }
 
 export function togglePointVerified(points: DigitizedPoint[], idx: number): DigitizedPoint[] {
   return points.map((p, i) => (i === idx ? { ...p, verified: !p.verified } : p));
 }
 
-export function addDigitizerPoint(points: DigitizedPoint[]): DigitizedPoint[] {
+export function addDigitizerPoint(
+  points: DigitizedPoint[],
+  xAx?: AxisCalibrationSpec,
+  yAx?: AxisCalibrationSpec,
+): DigitizedPoint[] {
   const last = points[points.length - 1];
   const nextId = `pt_${points.length + 1}`;
-  const nextPt: DigitizedPoint = {
+  let uPx = last ? last.u_px + 25 : xAx ? (xAx.p1_px + xAx.p2_px) / 2 : 150;
+  const vPx = last ? last.v_px : yAx ? (yAx.p1_px + yAx.p2_px) / 2 : 250;
+  if (xAx) {
+    const xLo = Math.min(xAx.p1_px, xAx.p2_px);
+    const xHi = Math.max(xAx.p1_px, xAx.p2_px);
+    uPx = Math.min(xHi, Math.max(xLo, uPx));
+  }
+  const basePt: DigitizedPoint = {
     id: nextId,
-    u_px: last ? last.u_px + 25 : 150,
-    v_px: last ? last.v_px : 250,
+    u_px: uPx,
+    v_px: vPx,
     v_low_px: null,
     v_high_px: null,
-    x: last ? last.x + 1 : 0,
-    y: last ? last.y : 0,
-    sigma_x: 0,
-    sigma_y_cal: 0,
-    se_bar: null,
-    total_se_y: 0,
-    ci95_y: [0, 0],
+    x: null,
+    y: null,
+    y_low: null,
+    y_high: null,
     out_of_bounds: false,
     origin: 'manual',
     verified: true,
+    previewOnly: true,
   };
-  return [...points, nextPt];
+  return [...points, computePointPreview(basePt, xAx, yAx)];
 }
 
 export function removeDigitizerPoint(points: DigitizedPoint[], idx: number): DigitizedPoint[] {
   if (points.length <= 2) return points;
   return points.filter((_, i) => i !== idx);
+}
+
+export function buildResultSourceKey(r: DigitizeResult): string {
+  const ptsKey = (r.points ?? [])
+    .map(p => `${p.id}:${p.u_px}:${p.v_px}:${p.x ?? 'null'}:${p.y ?? 'null'}:${p.verified}`)
+    .join('|');
+  return [
+    r.export_sha256 ?? '',
+    r.source_sha256 ?? '',
+    r.y_axis?.scale ?? 'linear',
+    r.pixel_sigma ?? 1.5,
+    Boolean(r.strict_bounds),
+    ptsKey,
+  ].join('::');
+}
+
+export function createDigitizerViewState(r: DigitizeResult): DigitizerViewState {
+  return {
+    sourceKey: buildResultSourceKey(r),
+    points: (r.points ?? []).map(p => ({
+      ...p,
+      y_low: p.y_low ?? null,
+      y_high: p.y_high ?? null,
+      previewOnly: false,
+    })),
+    yScale: r.y_axis?.scale ?? 'linear',
+    pixelSigma: r.pixel_sigma ?? 1.5,
+    strictBounds: Boolean(r.strict_bounds),
+    isDirty: false,
+    derivedPk: r.derived_pk ?? null,
+  };
+}
+
+export function syncDigitizerViewState(
+  current: DigitizerViewState,
+  nextResult: DigitizeResult,
+): DigitizerViewState {
+  const nextKey = buildResultSourceKey(nextResult);
+  if (current.sourceKey === nextKey) {
+    return current;
+  }
+  return createDigitizerViewState(nextResult);
+}
+
+export function applyPointPixelEdit(
+  state: DigitizerViewState,
+  idx: number,
+  field: 'u_px' | 'v_px',
+  val: number,
+  xAx: AxisCalibrationSpec,
+  yAx: AxisCalibrationSpec,
+): DigitizerViewState {
+  if (!Number.isFinite(val)) return state;
+  const effectiveY: AxisCalibrationSpec = { ...yAx, scale: state.yScale };
+  return {
+    ...state,
+    points: updatePointPixel(state.points, idx, field, val, xAx, effectiveY),
+    isDirty: true,
+    derivedPk: null,
+  };
+}
+
+export function applyAddDigitizerPoint(
+  state: DigitizerViewState,
+  xAx: AxisCalibrationSpec,
+  yAx: AxisCalibrationSpec,
+): DigitizerViewState {
+  const effectiveY: AxisCalibrationSpec = { ...yAx, scale: state.yScale };
+  return {
+    ...state,
+    points: addDigitizerPoint(state.points, xAx, effectiveY),
+    isDirty: true,
+    derivedPk: null,
+  };
+}
+
+export function applyRemoveDigitizerPoint(
+  state: DigitizerViewState,
+  idx: number,
+): DigitizerViewState {
+  if (state.points.length <= 2) return state;
+  return {
+    ...state,
+    points: removeDigitizerPoint(state.points, idx),
+    isDirty: true,
+    derivedPk: null,
+  };
 }
 
 export interface SvgOverlayGeometry {
@@ -187,10 +338,11 @@ export interface SvgOverlayGeometry {
     id: string;
     cx: number;
     cy: number;
-    yLo: number;
-    yHi: number;
+    yLo: number | null;
+    yHi: number | null;
     verified: boolean;
     outOfBounds: boolean;
+    previewOnly: boolean;
   }[];
 }
 
@@ -200,15 +352,27 @@ export function computeSvgOverlayGeometry(
   dims = { width: 680, height: 240, padL: 54, padR: 24, padT: 18, padB: 36 },
 ): SvgOverlayGeometry {
   const { width: W, height: H, padL, padR, padT, padB } = dims;
-  const sortedPts = [...points].sort((a, b) => a.x - b.x);
+  const validPts = points.filter(
+    (p): p is DigitizedPoint & { x: number; y: number } =>
+      p.x != null && Number.isFinite(p.x) && p.y != null && Number.isFinite(p.y),
+  );
+  const sortedPts = [...validPts].sort((a, b) => a.x - b.x);
   if (sortedPts.length === 0) {
     return { linePath: '', areaPath: '', markers: [] };
   }
 
   const xMin = Math.min(0, ...sortedPts.map(p => p.x));
   const xMax = Math.max(1, ...sortedPts.map(p => p.x)) * 1.04;
-  const yMax = Math.max(1, ...sortedPts.map(p => p.y + p.total_se_y)) * 1.12;
-  const positiveYs = sortedPts.map(p => p.y).filter(v => v > 0);
+  const yMax =
+    Math.max(
+      1,
+      ...sortedPts.map(p =>
+        p.y_high != null && Number.isFinite(p.y_high) ? Math.max(p.y, p.y_high) : p.y,
+      ),
+    ) * 1.12;
+  const positiveYs = sortedPts
+    .flatMap(p => [p.y, p.y_low != null && p.y_low > 0 ? p.y_low : p.y])
+    .filter(v => v > 0);
   const yPosMin = positiveYs.length > 0 ? Math.min(...positiveYs) * 0.5 : 0.1;
 
   const sx = (x: number) => padL + ((x - xMin) / (xMax - xMin || 1)) * (W - padL - padR);
@@ -231,15 +395,23 @@ export function computeSvgOverlayGeometry(
       ? `${linePath} L${sx(sortedPts[sortedPts.length - 1].x).toFixed(1)},${baselineY.toFixed(1)} L${sx(sortedPts[0].x).toFixed(1)},${baselineY.toFixed(1)} Z`
       : '';
 
-  const markers = sortedPts.map(p => ({
-    id: p.id,
-    cx: sx(p.x),
-    cy: sy(p.y),
-    yLo: sy(Math.max(yScale === 'log10' ? yPosMin : 0, p.y - p.total_se_y)),
-    yHi: sy(p.y + p.total_se_y),
-    verified: p.verified,
-    outOfBounds: Boolean(p.out_of_bounds),
-  }));
+  const markers = sortedPts.map(p => {
+    const hasBounds =
+      p.y_low != null &&
+      Number.isFinite(p.y_low) &&
+      p.y_high != null &&
+      Number.isFinite(p.y_high);
+    return {
+      id: p.id,
+      cx: sx(p.x),
+      cy: sy(p.y),
+      yLo: hasBounds ? sy(Math.max(yScale === 'log10' ? yPosMin : 0, p.y_low!)) : null,
+      yHi: hasBounds ? sy(p.y_high!) : null,
+      verified: p.verified,
+      outOfBounds: Boolean(p.out_of_bounds),
+      previewOnly: Boolean(p.previewOnly),
+    };
+  });
 
   return { linePath, areaPath, markers };
 }
