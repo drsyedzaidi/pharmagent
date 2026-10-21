@@ -120,8 +120,22 @@ def test_the_lambda_z_entry_pins_the_threshold_and_the_tie_rule_with_dedicated_t
     assert not any("not pinned" in g.lower() for g in c.known_gaps)
 
 
-def test_every_shipped_convention_is_pending_owner_review_until_the_owner_approves():
-    assert {c.approval.status for c in load_catalog().conventions} == {"pending_owner_review"}
+APPROVED_2026_10_21 = {
+    "nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_leading_middle_trailing", "nca.measured_zero",
+    "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
+    "nca.ss_incomplete_interval_fail_closed", "nca.lambda_z_window", "profile.ofv_cutoff",
+}
+
+
+def test_exactly_the_owner_confirmed_entries_are_approved():
+    """Owner confirmation 2026-10-21: these 11 as accurate implementation descriptions; be.average_tost stays pending."""
+    cat = load_catalog().conventions
+    approved = {c.id for c in cat if c.approval.status == "approved"}
+    assert approved == APPROVED_2026_10_21
+    assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost"}
+    for c in cat:
+        if c.id in approved:
+            assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-21"), c.id
 
 
 # ── generated text and the report ──────────────────────────────────────────────────────────────

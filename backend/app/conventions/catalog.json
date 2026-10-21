@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.2.0",
+  "catalog_version": "1.3.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -17,7 +17,9 @@
         "reference": "Stated in the app/compute/nca.py module docstring; not independently re-verified against guidance in this slice."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_auc_last_equals_the_hand_computed_value",
@@ -44,7 +46,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3); agrees with PKNCA 0.12.1 on the committed offline cross-check tables."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_trailing_zeros_do_not_extend_auc_last",
@@ -67,7 +71,9 @@
         "reference": "Owner's rule recorded in PR #3 correction cycle (drsyedzaidi/pharmagent#3, commit d706954)."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_an_unflagged_measured_zero_does_not_end_the_leading_blq_phase",
@@ -90,7 +96,9 @@
         "reference": "app.compute.dosing.parse_blq_flag docstring (PR #3)."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_supported_blq_flag_codings_mean_the_same_as_1_and_0",
@@ -114,7 +122,9 @@
         "reference": "PR #3 correction cycle (drsyedzaidi/pharmagent#3, commit d706954)."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_a_flagged_pre_dose_sample_adds_no_area_before_the_dose",
@@ -138,7 +148,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), steady-state corrections."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_steady_state_m1_is_scoped_to_the_final_interval_not_the_whole_history",
@@ -166,7 +178,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), commits d4b7be1 and d706954. No PKNCA steady-state reference exists."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_trailing_blq_profile_spans_exactly_zero_to_tau",
@@ -208,7 +222,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), commits 55a75a1 and d706954."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_one_unclosable_subject_is_not_silently_omitted",
@@ -237,7 +253,9 @@
         "reference": "app.compute.nca._best_lambda_z docstring and code."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_compute.py::test_lambda_z_and_thalf_exact",
@@ -317,7 +335,9 @@
         "reference": "app/compute/profile.py module docstring."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_profile.py::test_cutoff_is_the_chi_square_one_df_quantile"
@@ -342,7 +362,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3). The tool's result text calls this rule 'M1'; no authoritative source defining that name has been identified, so the catalog does not use it."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-21"
       },
       "tests": [
         "tests/test_nca_blq.py::test_trailing_blq_rows_are_excluded",
