@@ -1,20 +1,27 @@
-"""Deterministic Plot Digitizer with 2-point axis calibration, editable points,
-directly digitized error-bar bounds, point-estimate PK metrics, and local contour proposals.
+"""Deterministic Plot Digitizer with 2-point axis calibration, explicit plot-region (ROI)
+bounds, verified-only per-series PK metrics, directly digitized error-bar bounds, and
+bounded-memory `uint8` local contour proposals.
 
 Design invariants ("Models propose, tools compute, humans verify"):
 - Pixel-to-data mapping (`linear` or `log10`), reversed/cropped axis handling,
   direct error-bar bound conversion, and linear-trapezoidal AUClast point-estimate
   integration are 100% deterministic NumPy/math calculations.
-- Uncertainty propagation (joint Monte Carlo over shared calibration anchors,
-  click jitter, time/concentration errors, and log-space error bars) is deferred
-  to a separately validated slice; this module preserves calibration metadata and
-  directly digitized bounds without emitting unvalidated symmetric CI or sigma_AUC claims.
+- Calibration anchors (`x_axis`, `y_axis`) define the coordinate transformation; points
+  outside the calibration-anchor span are labeled `extrapolated=True`, not automatically
+  out-of-bounds.
+- Explicit plot-region bounds (`plot_roi`) define whether a point is inside the graph
+  (`bounds_status` is `"in_bounds"` or `"out_of_bounds"` when `plot_roi` is declared, and
+  `"unknown"` when `plot_roi` is omitted). `strict_bounds=True` requires and enforces `plot_roi`.
+- Derived PK metrics (`cmax`, `tmax`, `auclast`) are always keyed by series (`series` /
+  `series_pk`) with no ambiguous top-level scalar summary, and are withheld with a named
+  unresolved status (`unresolved_unverified_points`, `unresolved_out_of_bounds`, etc.)
+  unless every point in the series is human-verified and either inside `plot_roi` or covered
+  by a separately recorded override.
 - Local image loading (`validate_and_load_image`) requires a mandatory `allowed_dir`,
-  accepts only direct regular-file children opened via `dir_fd` with `O_NOFOLLOW`,
-  validates via `fstat`, reads at most `max_bytes + 1` from the descriptor, and
-  uses a fixed application-wide `Image.MAX_IMAGE_PIXELS` ceiling.
-- No raw image bytes (`image_data_url`), source filenames, or extracted coordinate
-  tables are ever sent to an LLM or audit action strings.
+  opens only direct regular-file children via `dir_fd` with `O_NOFOLLOW`, validates via
+  `fstat`, reads at most `max_bytes + 1` bytes, never mutates `Image.MAX_IMAGE_PIXELS`,
+  enforces a 4 MiP (`4,194,304` px) ceiling, and keeps grayscale image data in `uint8`
+  (1 byte/pixel) with strip-wise contour projections.
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ import json
 import math
 import os
 import stat
+import threading
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -39,14 +47,27 @@ VALID_SCALES = ("linear", "log10")
 VALID_ERROR_TYPES = ("se", "sd", "ci95")
 ALLOWED_IMAGE_FORMATS = ("PNG", "JPEG", "WEBP", "TIFF", "BMP")
 
+# Measured per-call image memory budget:
+# - Raw compressed file bytes: <= 10.0 MiB (MAX_IMAGE_BYTES)
+# - Decoded Pillow RGBA/RGB buffer during load: <= 4.0 MiP * 4 B = 16.0 MiB
+# - Retained grayscale uint8 array: <= 4.0 MiP * 1 B = 4.0 MiB
+# - Strip-wise boolean projection scratch (256 rows x 2048 cols): <= 0.5 MiB
+# Total peak per call <= 30.5 MiB (31,981,568 B); bounded to 2 concurrent proposals.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MiB hard cap
-MAX_IMAGE_PIXELS = 25_000_000       # 25 megapixels hard cap
+MAX_IMAGE_PIXELS = 4_194_304        # 4 MiP (e.g., 2048x2048) hard cap
 MIN_IMAGE_DIMENSION = 32            # minimum width/height in pixels
+PROJECTION_STRIP_ROWS = 256         # strip height for contour projection
+IMAGE_MEMORY_BUDGET_BYTES = (
+    MAX_IMAGE_BYTES
+    + (MAX_IMAGE_PIXELS * 4)
+    + (MAX_IMAGE_PIXELS * 1)
+    + (PROJECTION_STRIP_ROWS * 2048)
+)
+MAX_CONCURRENT_IMAGE_PROPOSALS = 2
+_IMAGE_PROPOSAL_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_IMAGE_PROPOSALS)
+
 MIN_AXIS_SPAN_PX = 1.0              # minimum 1 px separation between calibration anchors
 MIN_AXIS_ANGLE_SIN = math.sin(math.radians(5.0))  # minimum 5 deg angle between 2D axes
-
-# Fixed application-wide Pillow pixel ceiling (never mutated per request).
-Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -140,11 +161,15 @@ class AxisCalibration:
             raise ValueError(f"Pixel coordinate must be finite, got {px!r}")
         return float((float(px) - self.p1_px) / (self.p2_px - self.p1_px))
 
-    def in_pixel_bounds(self, px: float, *, tol_px: float = 1e-6) -> bool:
-        """Return True if px lies within [min(p1_px, p2_px), max(p1_px, p2_px)] up to tol_px."""
+    def in_anchor_span(self, px: float, *, tol_px: float = 1e-6) -> bool:
+        """Return True if px lies within the calibration-anchor span [min(p1_px, p2_px), max(p1_px, p2_px)]."""
         lo = min(self.p1_px, self.p2_px) - max(0.0, float(tol_px))
         hi = max(self.p1_px, self.p2_px) + max(0.0, float(tol_px))
         return lo <= float(px) <= hi
+
+    def in_pixel_bounds(self, px: float, *, tol_px: float = 1e-6) -> bool:
+        """Alias for `in_anchor_span`."""
+        return self.in_anchor_span(px, tol_px=tol_px)
 
     def pixel_to_value(self, px: float) -> float:
         """Deterministic mapping from pixel coordinate to calibrated axis value."""
@@ -169,6 +194,77 @@ class AxisCalibration:
         else:
             frac = (fval - self.v1) / (self.v2 - self.v1)
         return float(self.p1_px + frac * (self.p2_px - self.p1_px))
+
+
+@dataclass(frozen=True)
+class PlotROI:
+    """Explicit plot-region bounding box in image pixel coordinates.
+
+    Separated from calibration anchors (`AxisCalibration`) because calibration ticks
+    are frequently interior ticks rather than the edges of the plotting frame.
+    """
+
+    u_min_px: float
+    u_max_px: float
+    v_min_px: float
+    v_max_px: float
+
+    def validate(self) -> None:
+        for name, val in (
+            ("u_min_px", self.u_min_px),
+            ("u_max_px", self.u_max_px),
+            ("v_min_px", self.v_min_px),
+            ("v_max_px", self.v_max_px),
+        ):
+            if not _is_finite_number(val):
+                raise ValueError(f"plot_roi.{name} must be a finite number.")
+        if self.u_max_px - self.u_min_px < MIN_AXIS_SPAN_PX:
+            raise ValueError(
+                f"plot_roi horizontal span must be >= {MIN_AXIS_SPAN_PX} px "
+                f"(got u_min_px={self.u_min_px}, u_max_px={self.u_max_px})."
+            )
+        if self.v_max_px - self.v_min_px < MIN_AXIS_SPAN_PX:
+            raise ValueError(
+                f"plot_roi vertical span must be >= {MIN_AXIS_SPAN_PX} px "
+                f"(got v_min_px={self.v_min_px}, v_max_px={self.v_max_px})."
+            )
+
+    def in_u_bounds(self, u_px: float, *, tol_px: float = 1e-6) -> bool:
+        tol = max(0.0, float(tol_px))
+        return (self.u_min_px - tol) <= float(u_px) <= (self.u_max_px + tol)
+
+    def in_v_bounds(self, v_px: float, *, tol_px: float = 1e-6) -> bool:
+        tol = max(0.0, float(tol_px))
+        return (self.v_min_px - tol) <= float(v_px) <= (self.v_max_px + tol)
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "u_min_px": float(self.u_min_px),
+            "u_max_px": float(self.u_max_px),
+            "v_min_px": float(self.v_min_px),
+            "v_max_px": float(self.v_max_px),
+        }
+
+
+def parse_plot_roi(raw: dict[str, Any] | PlotROI | None) -> PlotROI | None:
+    if raw is None:
+        return None
+    if isinstance(raw, PlotROI):
+        raw.validate()
+        return raw
+    if not isinstance(raw, dict):
+        raise ValueError("plot_roi must be a dict with u_min_px, u_max_px, v_min_px, v_max_px.")
+    for req_key in ("u_min_px", "u_max_px", "v_min_px", "v_max_px"):
+        if req_key not in raw or not _is_finite_number(raw[req_key]):
+            raise ValueError(f"Invalid plot_roi: '{req_key}' must be a finite number.")
+    roi = PlotROI(
+        u_min_px=float(raw["u_min_px"]),
+        u_max_px=float(raw["u_max_px"]),
+        v_min_px=float(raw["v_min_px"]),
+        v_max_px=float(raw["v_max_px"]),
+    )
+    roi.validate()
+    return roi
 
 
 def validate_non_collinear_2d(
@@ -240,7 +336,7 @@ def parse_axis_calibration(raw: dict[str, Any], axis_name: str) -> AxisCalibrati
 
 def _trapezoidal_auc(xs: list[float], ys: list[float]) -> dict[str, float | None]:
     """Compute point-estimate Cmax, Tmax, and linear-trapezoidal AUClast on a
-    digitized concentration-time series sorted by X."""
+    verified, in-bounds digitized concentration-time series sorted by X."""
     pts = [
         (float(x), float(y))
         for x, y in zip(xs, ys)
@@ -265,6 +361,36 @@ def _trapezoidal_auc(xs: list[float], ys: list[float]) -> dict[str, float | None
     }
 
 
+def _compute_dark_projections_uint8(
+    gray: np.ndarray,
+    *,
+    threshold: int = 140,
+    strip_rows: int = PROJECTION_STRIP_ROWS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-row and per-column counts of dark pixels (`gray < threshold`)
+    on a 2D `uint8` grayscale image in row strips without allocating full-frame
+    boolean or float64 arrays.
+    """
+    if not isinstance(gray, np.ndarray) or gray.dtype != np.uint8 or gray.ndim != 2:
+        raise ValueError(
+            f"_compute_dark_projections_uint8 requires a 2D uint8 ndarray, got "
+            f"dtype={getattr(gray, 'dtype', None)}, ndim={getattr(gray, 'ndim', None)}."
+        )
+    h, w = gray.shape
+    step = max(1, int(strip_rows))
+    thresh_u8 = np.uint8(max(0, min(255, int(threshold))))
+    row_dark_counts = np.empty(h, dtype=np.int32)
+    col_dark_counts = np.zeros(w, dtype=np.int32)
+
+    for r0 in range(0, h, step):
+        r1 = min(h, r0 + step)
+        strip_mask = gray[r0:r1, :] < thresh_u8
+        row_dark_counts[r0:r1] = np.count_nonzero(strip_mask, axis=1)
+        col_dark_counts += np.count_nonzero(strip_mask, axis=0)
+
+    return row_dark_counts, col_dark_counts
+
+
 def validate_and_load_image(
     image_path: str | Path,
     *,
@@ -276,9 +402,9 @@ def validate_and_load_image(
 ) -> tuple[str, str, dict[str, Any], np.ndarray]:
     """Safely open a direct child image inside `allowed_dir` using `dir_fd` + `O_NOFOLLOW`,
     validate via `fstat`, read at most `max_bytes + 1` bytes from the descriptor, and decode
-    from bounded in-memory bytes without mutating `Image.MAX_IMAGE_PIXELS`.
+    into a `uint8` grayscale array (`1 byte/pixel`) without mutating `Image.MAX_IMAGE_PIXELS`.
 
-    Returns `(filename, sha256_hex, image_dims_meta, grayscale_float_array)`.
+    Returns `(filename, sha256_hex, image_dims_meta, grayscale_uint8_array)`.
     """
     if allowed_dir is None or not str(allowed_dir).strip():
         raise ValueError("allowed_dir is required for image loading.")
@@ -395,7 +521,8 @@ def validate_and_load_image(
                         f"Image dimensions ({w}x{h}) are smaller than minimum ({min_dim}x{min_dim})."
                     )
                 im.load()
-                gray = np.asarray(im.convert("L"), dtype=float)
+                with im.convert("L") as gray_im:
+                    gray = np.array(gray_im, dtype=np.uint8, copy=True)
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ValueError(
             f"Image pixel count exceeds maximum limit ({effective_max_pixels} pixels)."
@@ -405,7 +532,13 @@ def validate_and_load_image(
             raise
         raise ValueError(f"Invalid or corrupted image file: {exc}") from exc
 
-    dims = {"width": w, "height": h, "format": fmt, "bytes": len(raw_bytes)}
+    dims = {
+        "width": w,
+        "height": h,
+        "format": fmt,
+        "bytes": len(raw_bytes),
+        "dtype": str(gray.dtype),
+    }
     return filename, sha256_hex, dims, gray
 
 
@@ -433,12 +566,14 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
 
     x_meta = json.dumps(x_axis_dict, sort_keys=True, separators=(",", ":"))
     y_meta = json.dumps(y_axis_dict, sort_keys=True, separators=(",", ":"))
+    roi_meta = json.dumps(result.get("plot_roi"), sort_keys=True, separators=(",", ":"))
     buf = io.StringIO()
     buf.write("# format=pharmagent-digitizer-v1\n")
     buf.write(f"# figure_label={fig_label}\n")
     buf.write(f"# source_sha256={src_sha}\n")
     buf.write(f"# x_axis={x_meta}\n")
     buf.write(f"# y_axis={y_meta}\n")
+    buf.write(f"# plot_roi={roi_meta}\n")
     buf.write(f"# pixel_sigma={result.get('pixel_sigma')}\n")
     buf.write(f"# anchor_sigma_px={result.get('anchor_sigma_px')}\n")
     buf.write(f"# error_type={err_type}\n")
@@ -455,7 +590,10 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
         "y",
         "y_low",
         "y_high",
+        "extrapolated",
+        "bounds_status",
         "out_of_bounds",
+        "oob_override",
         "origin",
         "verified",
     ]
@@ -465,16 +603,24 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
     pts = list(result.get("points") or [])
     pts_sorted = sorted(
         pts,
-        key=lambda r: (str(r.get("series", "")), int(r.get("index", 0)), str(r.get("id", ""))),
+        key=lambda r: (
+            str(r.get("series", "")),
+            float(r.get("x", 0.0)),
+            str(r.get("id", "")),
+            float(r.get("u_px", 0.0)),
+            float(r.get("v_px", 0.0)),
+        ),
     )
-    for pt in pts_sorted:
+    for canonical_idx, pt in enumerate(pts_sorted, 1):
         pt_id = _validate_metadata_text(str(pt.get("id", "")), "point.id")
         pt_series = _validate_metadata_text(str(pt.get("series", "")), "point.series")
         pt_origin = _validate_metadata_text(str(pt.get("origin", "manual")), "point.origin")
+        pt_bstatus = _validate_metadata_text(str(pt.get("bounds_status", "unknown")), "point.bounds_status")
+        oob_val = pt.get("out_of_bounds")
         writer.writerow([
             _neutralize_csv_cell(pt_id),
             _neutralize_csv_cell(pt_series),
-            pt.get("index", ""),
+            canonical_idx,
             pt.get("u_px", ""),
             pt.get("v_px", ""),
             "" if pt.get("v_low_px") is None else pt.get("v_low_px"),
@@ -483,7 +629,10 @@ def export_digitized_csv(result: dict[str, Any]) -> dict[str, str]:
             pt.get("y", ""),
             "" if pt.get("y_low") is None else pt.get("y_low"),
             "" if pt.get("y_high") is None else pt.get("y_high"),
-            bool(pt.get("out_of_bounds", False)),
+            bool(pt.get("extrapolated", False)),
+            _neutralize_csv_cell(pt_bstatus),
+            "" if oob_val is None else bool(oob_val),
+            bool(pt.get("oob_override", False)),
             _neutralize_csv_cell(pt_origin),
             bool(pt.get("verified", False)),
         ])
@@ -499,6 +648,7 @@ def digitize_plot(
     y_axis: dict[str, Any] | None = None,
     x_calibration: dict[str, Any] | None = None,
     y_calibration: dict[str, Any] | None = None,
+    plot_roi: dict[str, Any] | PlotROI | None = None,
     points: list[dict[str, Any]],
     pixel_sigma: float = 1.5,
     pixel_jitter: float | None = None,
@@ -507,6 +657,7 @@ def digitize_plot(
     error_bar_type: str | None = None,
     sample_n: int | None = None,
     strict_bounds: bool = False,
+    oob_overrides: dict[str, str] | None = None,
     calibration_points_2d: Sequence[tuple[float, float]] | None = None,
     source_path: str | None = None,
     source_sha256: str | None = None,
@@ -515,7 +666,8 @@ def digitize_plot(
     approve_all: bool = False,
 ) -> dict[str, Any]:
     """Deterministically calibrate pixel points and directly digitized error-bar bounds
-    into data coordinates with bounds checking and canonical CSV export metadata.
+    into data coordinates with explicit `plot_roi` bounds checking, verified-only
+    series-keyed PK metrics, and canonical CSV export metadata.
     """
     if pixel_jitter is not None:
         pixel_sigma = float(pixel_jitter)
@@ -538,6 +690,21 @@ def digitize_plot(
     y_cal = parse_axis_calibration(y_axis if y_axis is not None else (y_calibration or {}), "y_axis")
     validate_non_collinear_2d(x_cal, y_cal, extra_anchors_uv=calibration_points_2d)
 
+    roi_obj = parse_plot_roi(plot_roi)
+    if strict_bounds and roi_obj is None:
+        raise ValueError("strict_bounds=True requires an explicit plot_roi.")
+
+    clean_overrides: dict[str, str] = {}
+    if oob_overrides is not None:
+        if not isinstance(oob_overrides, dict):
+            raise ValueError("oob_overrides must be a dict mapping point_id -> non-empty reason string.")
+        for k, v in oob_overrides.items():
+            clean_k = _validate_metadata_text(str(k), "oob_overrides.key")
+            clean_v = _validate_metadata_text(str(v), f"oob_overrides[{clean_k!r}]")
+            if not clean_v:
+                raise ValueError(f"oob_overrides[{clean_k!r}] must provide a non-empty reason.")
+            clean_overrides[clean_k] = clean_v
+
     if not isinstance(points, list) or not points:
         raise ValueError("digitize_plot requires a non-empty list of points.")
     et = (error_type or "se").lower().strip()
@@ -553,10 +720,8 @@ def digitize_plot(
             source_path, allowed_dir=allowed_dir
         )
 
-    digitized: list[dict[str, Any]] = []
     by_series: dict[str, list[dict[str, Any]]] = {}
     warnings_list: list[str] = []
-    n_out_of_bounds = 0
 
     for idx, pt in enumerate(points, 1):
         if not isinstance(pt, dict) or "u_px" not in pt or "v_px" not in pt:
@@ -568,7 +733,7 @@ def digitize_plot(
         series = _validate_metadata_text(str(pt.get("series") or "Series 1"), f"points[{idx}].series")
         pt_id = _validate_metadata_text(str(pt.get("id") or f"pt_{idx}"), f"points[{idx}].id")
         origin = _validate_metadata_text(str(pt.get("origin") or "manual"), f"points[{idx}].origin")
-        verified = bool(pt.get("verified", origin == "manual")) or bool(approve_all)
+        verified = bool(pt.get("verified", False)) or bool(approve_all)
 
         v_low_px: float | None = None
         v_high_px: float | None = None
@@ -581,22 +746,45 @@ def digitize_plot(
                 raise ValueError(f"Point {pt_id!r} v_high_px must be a finite number.")
             v_high_px = float(pt["v_high_px"])
 
-        oob_x = not x_cal.in_pixel_bounds(u_px)
-        oob_y = not y_cal.in_pixel_bounds(v_px)
-        oob_bar = (
-            (v_low_px is not None and not y_cal.in_pixel_bounds(v_low_px))
-            or (v_high_px is not None and not y_cal.in_pixel_bounds(v_high_px))
+        extrap_x = not x_cal.in_anchor_span(u_px)
+        extrap_y = (
+            (not y_cal.in_anchor_span(v_px))
+            or (v_low_px is not None and not y_cal.in_anchor_span(v_low_px))
+            or (v_high_px is not None and not y_cal.in_anchor_span(v_high_px))
         )
-        oob = oob_x or oob_y or oob_bar
-        if oob:
-            if strict_bounds:
-                raise ValueError(
-                    f"Point {pt_id!r} at ({u_px}, {v_px}) lies outside the calibrated axis region."
-                )
-            n_out_of_bounds += 1
-            warnings_list.append(
-                f"Point {pt_id!r} ({u_px}, {v_px}) is outside the calibrated pixel bounds."
+        extrapolated = extrap_x or extrap_y
+
+        if roi_obj is None:
+            oob_x: bool | None = None
+            oob_y: bool | None = None
+            oob: bool | None = None
+            pt_bounds_status = "unknown"
+        else:
+            oob_x = not roi_obj.in_u_bounds(u_px)
+            oob_y = (
+                (not roi_obj.in_v_bounds(v_px))
+                or (v_low_px is not None and not roi_obj.in_v_bounds(v_low_px))
+                or (v_high_px is not None and not roi_obj.in_v_bounds(v_high_px))
             )
+            oob = oob_x or oob_y
+            pt_bounds_status = "out_of_bounds" if oob else "in_bounds"
+            if oob and strict_bounds:
+                raise ValueError(
+                    f"Point {pt_id!r} at ({u_px}, {v_px}) lies outside the declared plot_roi."
+                )
+
+        pt_override_reason = clean_overrides.get(pt_id)
+        if pt_override_reason is None and pt.get("oob_override_reason") is not None:
+            cand_reason = _validate_metadata_text(
+                str(pt["oob_override_reason"]), f"points[{idx}].oob_override_reason"
+            )
+            if cand_reason:
+                pt_override_reason = cand_reason
+        if bool(pt.get("oob_override")) and not pt_override_reason:
+            raise ValueError(
+                f"Point {pt_id!r} specifies oob_override=True without a non-empty oob_override_reason."
+            )
+        has_oob_override = bool(pt_override_reason)
 
         x_val = x_cal.pixel_to_value(u_px)
         y_val = y_cal.pixel_to_value(v_px)
@@ -611,7 +799,7 @@ def digitize_plot(
 
         row = {
             "id": pt_id,
-            "index": idx,
+            "index": 0,  # Assigned canonically after sorting by (series, x, id)
             "series": series,
             "u_px": round(u_px, 4),
             "v_px": round(v_px, 4),
@@ -621,33 +809,173 @@ def digitize_plot(
             "y": round(y_val, 6),
             "y_low": round(y_low, 6) if y_low is not None else None,
             "y_high": round(y_high, 6) if y_high is not None else None,
+            "extrapolated_x": extrap_x,
+            "extrapolated_y": extrap_y,
+            "extrapolated": extrapolated,
+            "bounds_status": pt_bounds_status,
             "out_of_bounds_x": oob_x,
             "out_of_bounds_y": oob_y,
             "out_of_bounds": oob,
+            "oob_override": has_oob_override,
+            "oob_override_reason": pt_override_reason,
             "origin": origin,
             "verified": verified,
         }
-        digitized.append(row)
         by_series.setdefault(series, []).append(row)
 
-    series_summaries: dict[str, dict[str, Any]] = {}
-    for s_name, s_pts in by_series.items():
-        s_pts.sort(key=lambda r: r["x"])
-        pk = _trapezoidal_auc(
-            [r["x"] for r in s_pts],
-            [r["y"] for r in s_pts],
+    seen_point_ids = {
+        r["id"] for s_pts in by_series.values() for r in s_pts
+    }
+    unknown_override_ids = sorted(set(clean_overrides.keys()) - seen_point_ids)
+    if unknown_override_ids:
+        raise ValueError(
+            f"oob_overrides references unknown point IDs not present in points: {unknown_override_ids}"
         )
+
+    digitized: list[dict[str, Any]] = []
+    series_summaries: dict[str, dict[str, Any]] = {}
+    series_pk: dict[str, dict[str, float | None]] = {}
+    all_unverified_ids: list[str] = []
+    all_blocking_oob_ids: list[str] = []
+    all_blocking_ids: list[str] = []
+    unresolved_reasons: list[str] = []
+
+    for s_name in sorted(by_series.keys()):
+        s_pts = by_series[s_name]
+        s_pts.sort(key=lambda r: (r["x"], r["id"], r["u_px"], r["v_px"]))
+        for r in s_pts:
+            r["index"] = len(digitized) + 1
+            digitized.append(r)
+            if r["out_of_bounds"] is True:
+                warnings_list.append(
+                    f"Point {r['id']!r} ({r['u_px']}, {r['v_px']}) in series {s_name!r} "
+                    "is outside the declared plot_roi."
+                )
+
+        unverified_ids = sorted(r["id"] for r in s_pts if not r["verified"])
+        blocking_oob_ids = sorted(
+            r["id"] for r in s_pts if r["out_of_bounds"] is True and not r["oob_override"]
+        )
+        negative_ids = sorted(
+            r["id"] for r in s_pts if r["x"] < 0.0 or r["y"] < 0.0
+        )
+        blocking_ids = sorted(set(unverified_ids) | set(blocking_oob_ids) | set(negative_ids))
+        recorded_overrides = [
+            {"id": r["id"], "reason": str(r["oob_override_reason"])}
+            for r in sorted(s_pts, key=lambda item: item["id"])
+            if r["out_of_bounds"] is True and r["oob_override"]
+        ]
+
+        if unverified_ids and blocking_oob_ids:
+            s_metrics_status = "unresolved_unverified_and_out_of_bounds"
+            s_status = s_metrics_status
+            s_reason: str | None = (
+                f"Series {s_name!r} metrics withheld: unverified points {unverified_ids} "
+                f"and out-of-bounds points without override {blocking_oob_ids}."
+            )
+            pk: dict[str, float | None] = {"cmax": None, "tmax": None, "auclast": None}
+        elif unverified_ids:
+            s_metrics_status = "unresolved_unverified_points"
+            s_status = s_metrics_status
+            s_reason = (
+                f"Series {s_name!r} metrics withheld: unverified points {unverified_ids} "
+                "must be human-verified before computing Cmax, Tmax, and AUClast."
+            )
+            pk = {"cmax": None, "tmax": None, "auclast": None}
+        elif blocking_oob_ids:
+            s_metrics_status = "unresolved_out_of_bounds"
+            s_status = s_metrics_status
+            s_reason = (
+                f"Series {s_name!r} metrics withheld: out-of-bounds points {blocking_oob_ids} "
+                "lie outside plot_roi without a recorded override."
+            )
+            pk = {"cmax": None, "tmax": None, "auclast": None}
+        elif negative_ids:
+            s_metrics_status = "unresolved_negative_coordinates"
+            s_status = s_metrics_status
+            s_reason = (
+                f"Series {s_name!r} metrics withheld: points {negative_ids} have negative "
+                "calibrated time or concentration values."
+            )
+            pk = {"cmax": None, "tmax": None, "auclast": None}
+        else:
+            pk = _trapezoidal_auc(
+                [r["x"] for r in s_pts],
+                [r["y"] for r in s_pts],
+            )
+            if pk["cmax"] is None:
+                s_metrics_status = "unresolved_insufficient_points"
+                s_status = s_metrics_status
+                s_reason = (
+                    f"Series {s_name!r} metrics withheld: at least 2 finite non-negative "
+                    "verified points are required."
+                )
+            else:
+                s_metrics_status = "resolved"
+                s_status = "ok"
+                s_reason = None
+
+        all_unverified_ids.extend(unverified_ids)
+        all_blocking_oob_ids.extend(blocking_oob_ids)
+        all_blocking_ids.extend(blocking_ids)
+        if s_reason:
+            unresolved_reasons.append(s_reason)
+
         n_ver = sum(1 for r in s_pts if r["verified"])
+        n_s_oob = sum(1 for r in s_pts if r["out_of_bounds"] is True)
+        n_s_extrap = sum(1 for r in s_pts if r["extrapolated"] is True)
+        s_bounds_status = (
+            "unknown"
+            if roi_obj is None
+            else ("out_of_bounds" if n_s_oob > 0 else "in_bounds")
+        )
+
         series_summaries[s_name] = {
+            "series": s_name,
+            "status": s_status,
+            "metrics_status": s_metrics_status,
+            "unresolved_reason": s_reason,
+            "blocking_point_ids": blocking_ids,
+            "unverified_point_ids": unverified_ids,
+            "blocking_oob_point_ids": blocking_oob_ids,
+            "recorded_oob_overrides": recorded_overrides,
             "n_points": len(s_pts),
             "n_verified": n_ver,
             "all_verified": n_ver == len(s_pts),
+            "n_extrapolated": n_s_extrap,
+            "n_out_of_bounds": n_s_oob,
+            "bounds_status": s_bounds_status,
             "x_range": [s_pts[0]["x"], s_pts[-1]["x"]],
             "y_range": [min(r["y"] for r in s_pts), max(r["y"] for r in s_pts)],
             "pk_metrics": pk,
         }
+        series_pk[s_name] = pk
 
     n_verified_total = sum(1 for r in digitized if r["verified"])
+    n_extrapolated_total = sum(1 for r in digitized if r["extrapolated"] is True)
+    n_out_of_bounds_total = sum(1 for r in digitized if r["out_of_bounds"] is True)
+    overall_bounds_status = (
+        "unknown"
+        if roi_obj is None
+        else ("out_of_bounds" if n_out_of_bounds_total > 0 else "in_bounds")
+    )
+
+    if all_unverified_ids and all_blocking_oob_ids:
+        overall_metrics_status = "unresolved_unverified_and_out_of_bounds"
+        overall_status = overall_metrics_status
+    elif all_unverified_ids:
+        overall_metrics_status = "unresolved_unverified_points"
+        overall_status = overall_metrics_status
+    elif all_blocking_oob_ids:
+        overall_metrics_status = "unresolved_out_of_bounds"
+        overall_status = overall_metrics_status
+    elif any(s["metrics_status"] != "resolved" for s in series_summaries.values()):
+        overall_metrics_status = "unresolved_insufficient_points"
+        overall_status = overall_metrics_status
+    else:
+        overall_metrics_status = "resolved"
+        overall_status = "ok"
+
     x_axis_out = {
         "p1_px": x_cal.p1_px,
         "p2_px": x_cal.p2_px,
@@ -668,7 +996,10 @@ def digitize_plot(
     }
 
     out: dict[str, Any] = {
-        "status": "ok",
+        "status": overall_status,
+        "metrics_status": overall_metrics_status,
+        "unresolved_reason": " ".join(unresolved_reasons) if unresolved_reasons else None,
+        "blocking_point_ids": sorted(set(all_blocking_ids)),
         "figure_label": clean_fig_label,
         "source_sha256": computed_sha,
         "image_dims": image_dims,
@@ -678,6 +1009,8 @@ def digitize_plot(
         "error_type": et,
         "error_bar_type": et,
         "strict_bounds": bool(strict_bounds),
+        "plot_roi": roi_obj.to_dict() if roi_obj is not None else None,
+        "bounds_status": overall_bounds_status,
         "x_axis": x_axis_out,
         "y_axis": y_axis_out,
         "x_calibration": x_axis_out,
@@ -685,11 +1018,12 @@ def digitize_plot(
         "n_points": len(digitized),
         "n_verified": n_verified_total,
         "all_verified": n_verified_total == len(digitized),
-        "n_out_of_bounds": n_out_of_bounds,
+        "n_extrapolated": n_extrapolated_total,
+        "n_out_of_bounds": n_out_of_bounds_total,
         "warnings": warnings_list,
         "points": digitized,
         "series": series_summaries,
-        "derived_pk": next(iter(series_summaries.values()), {}).get("pk_metrics", {}),
+        "series_pk": series_pk,
     }
     export_bundle = export_digitized_csv(out)
     out["csv_export"] = export_bundle["csv"]
@@ -710,78 +1044,96 @@ def propose_plot_from_image(
     max_pixels: int = MAX_IMAGE_PIXELS,
 ) -> dict[str, Any]:
     """Detect plot axes and candidate curve markers from an image using local
-    deterministic luminance/contour analysis (zero cloud/LLM calls).
+    deterministic `uint8` luminance/contour analysis (zero cloud/LLM calls).
 
+    - Enforces bounded concurrency via `_IMAGE_PROPOSAL_SEMAPHORE`.
     - Requires a mandatory `allowed_dir` and opens only direct regular-file children.
-    - Uses an opaque hash label (`source_<sha[:12]>`) by default rather than exposing
-      the filesystem filename.
-    - Marks every proposed point `origin='contour_proposed'` and `verified=False`.
+    - Uses strip-wise `uint8` projections (`_compute_dark_projections_uint8`) without
+      full-frame boolean or float64 arrays.
+    - Marks every proposed point `origin='contour_proposed'` and `verified=False`,
+      so `digitize_plot` withholds derived PK metrics (`status='unresolved_unverified_points'`)
+      until a human verifies every point.
     """
-    _, sha, dims, gray = validate_and_load_image(
-        image_path,
-        allowed_dir=allowed_dir,
-        max_bytes=max_bytes,
-        max_pixels=max_pixels,
-    )
-    h, w = gray.shape
+    if not _IMAGE_PROPOSAL_SEMAPHORE.acquire(blocking=False):
+        raise RuntimeError(
+            f"Image proposal admission limit reached (max {MAX_CONCURRENT_IMAGE_PROPOSALS} concurrent proposals)."
+        )
+    try:
+        _, sha, dims, gray = validate_and_load_image(
+            image_path,
+            allowed_dir=allowed_dir,
+            max_bytes=max_bytes,
+            max_pixels=max_pixels,
+        )
+        h, w = gray.shape
+        row_dark_counts, col_dark_counts = _compute_dark_projections_uint8(
+            gray, threshold=140, strip_rows=PROJECTION_STRIP_ROWS
+        )
 
-    row_dark = np.mean(gray < 140, axis=1)
-    col_dark = np.mean(gray < 140, axis=0)
+        c0, c1 = int(0.05 * w), max(int(0.05 * w) + 1, int(0.35 * w))
+        r0, r1 = int(0.65 * h), max(int(0.65 * h) + 1, int(0.95 * h))
+        x_left = int(np.argmax(col_dark_counts[c0:c1]) + c0)
+        x_right = int(0.90 * w)
+        y_bottom = int(np.argmax(row_dark_counts[r0:r1]) + r0)
+        y_top = int(0.10 * h)
 
-    x_left = int(np.argmax(col_dark[int(0.05 * w):int(0.35 * w)]) + int(0.05 * w))
-    x_right = int(0.90 * w)
-    y_bottom = int(np.argmax(row_dark[int(0.65 * h):int(0.95 * h)]) + int(0.65 * h))
-    y_top = int(0.10 * h)
+        if x_right - x_left < 20:
+            x_left, x_right = int(0.12 * w), int(0.90 * w)
+        if y_bottom - y_top < 20:
+            y_top, y_bottom = int(0.10 * h), int(0.85 * h)
 
-    if x_right - x_left < 20:
-        x_left, x_right = int(0.12 * w), int(0.90 * w)
-    if y_bottom - y_top < 20:
-        y_top, y_bottom = int(0.10 * h), int(0.85 * h)
+        n_candidates = max(3, min(int(n_candidates), 25))
+        u_grid = np.linspace(x_left + 10, x_right - 10, n_candidates)
+        proposed_pts: list[dict[str, Any]] = []
+        for idx, u_center in enumerate(u_grid, 1):
+            u0 = max(x_left + 2, int(u_center - 4))
+            u1 = min(x_right - 2, int(u_center + 4))
+            strip = gray[y_top + 2:y_bottom - 2, u0:u1 + 1]
+            if strip.size == 0:
+                continue
+            min_row = int(np.argmin(np.min(strip, axis=1)))
+            v_px = float(y_top + 2 + min_row)
+            proposed_pts.append({
+                "id": f"prop_{idx}",
+                "series": "Proposed Series 1",
+                "u_px": round(float(u_center), 1),
+                "v_px": round(v_px, 1),
+                "origin": "contour_proposed",
+                "verified": False,
+            })
 
-    n_candidates = max(3, min(int(n_candidates), 25))
-    u_grid = np.linspace(x_left + 10, x_right - 10, n_candidates)
-    proposed_pts: list[dict[str, Any]] = []
-    for idx, u_center in enumerate(u_grid, 1):
-        u0 = max(x_left + 2, int(u_center - 4))
-        u1 = min(x_right - 2, int(u_center + 4))
-        strip = gray[y_top + 2:y_bottom - 2, u0:u1 + 1]
-        if strip.size == 0:
-            continue
-        min_row = int(np.argmin(np.min(strip, axis=1)))
-        v_px = float(y_top + 2 + min_row)
-        proposed_pts.append({
-            "id": f"prop_{idx}",
-            "series": "Proposed Series 1",
-            "u_px": round(float(u_center), 1),
-            "v_px": round(v_px, 1),
-            "origin": "contour_proposed",
-            "verified": False,
-        })
-
-    opaque_label = figure_label if figure_label else f"source_{sha[:12]}"
-    out = digitize_plot(
-        x_axis={
-            "p1_px": float(x_left),
-            "p2_px": float(x_right),
-            "v1": float(x_range[0]),
-            "v2": float(x_range[1]),
-            "scale": "linear",
-            "label": "Time",
-            "unit": "h",
-        },
-        y_axis={
-            "p1_px": float(y_bottom),
-            "p2_px": float(y_top),
-            "v1": float(y_range[0]),
-            "v2": float(y_range[1]),
-            "scale": y_scale,
-            "label": "Concentration",
-            "unit": "ng/mL",
-        },
-        points=proposed_pts,
-        source_sha256=sha,
-        figure_label=opaque_label,
-        approve_all=False,
-    )
-    out["image_dims"] = dims
-    return out
+        opaque_label = figure_label if figure_label else f"source_{sha[:12]}"
+        out = digitize_plot(
+            x_axis={
+                "p1_px": float(x_left),
+                "p2_px": float(x_right),
+                "v1": float(x_range[0]),
+                "v2": float(x_range[1]),
+                "scale": "linear",
+                "label": "Time",
+                "unit": "h",
+            },
+            y_axis={
+                "p1_px": float(y_bottom),
+                "p2_px": float(y_top),
+                "v1": float(y_range[0]),
+                "v2": float(y_range[1]),
+                "scale": y_scale,
+                "label": "Concentration",
+                "unit": "ng/mL",
+            },
+            plot_roi={
+                "u_min_px": float(x_left),
+                "u_max_px": float(x_right),
+                "v_min_px": float(y_top),
+                "v_max_px": float(y_bottom),
+            },
+            points=proposed_pts,
+            source_sha256=sha,
+            figure_label=opaque_label,
+            approve_all=False,
+        )
+        out["image_dims"] = dims
+        return out
+    finally:
+        _IMAGE_PROPOSAL_SEMAPHORE.release()

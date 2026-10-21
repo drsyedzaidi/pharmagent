@@ -7,6 +7,7 @@ import type {
   DigitizeResult,
   DigitizerViewState,
   ErrorBarType,
+  PlotROISpec,
 } from './digitizeMath';
 import {
   applyAddDigitizerPoint,
@@ -15,9 +16,13 @@ import {
   buildResultSourceKey,
   computeSvgOverlayGeometry,
   createDigitizerViewState,
-  isPointOutOfBounds,
+  evaluatePointBounds,
+  getSeriesDisplayMetrics,
+  isPointExtrapolated,
+  selectDigitizerSeries,
   togglePointVerified,
   validateAxisSpec,
+  validatePlotRoi,
 } from './digitizeMath';
 
 const MONO: React.CSSProperties = {
@@ -33,15 +38,19 @@ function fmt(v: number | null | undefined, digits = 2): string {
 export interface PlotDigitizerRecomputePayload {
   x_axis: AxisCalibrationSpec;
   y_axis: AxisCalibrationSpec;
+  plot_roi?: PlotROISpec | null;
   pixel_sigma: number;
   error_type: ErrorBarType;
   strict_bounds: boolean;
   points: {
     id: string;
+    series: string;
     u_px: number;
     v_px: number;
     v_low_px: number | null;
     v_high_px: number | null;
+    oob_override?: boolean;
+    oob_override_reason?: string | null;
     origin: 'manual' | 'contour_proposed';
     verified: boolean;
   }[];
@@ -64,12 +73,26 @@ export function PlotDigitizerCard({
 
   const incomingKey = buildResultSourceKey(r);
   if (viewState.sourceKey !== incomingKey) {
-    setViewState(createDigitizerViewState(r));
+    setViewState(createDigitizerViewState(r, viewState.selectedSeries));
   }
 
-  const { points, yScale, pixelSigma, strictBounds, isDirty, derivedPk } = viewState;
+  const {
+    points,
+    availableSeries,
+    selectedSeries,
+    yScale,
+    pixelSigma,
+    strictBounds,
+    isDirty,
+  } = viewState;
   const xAx: AxisCalibrationSpec = r.x_axis;
   const yAx: AxisCalibrationSpec = { ...r.y_axis, scale: yScale };
+  const plotRoi: PlotROISpec | null = r.plot_roi ?? null;
+
+  const seriesDisplay = getSeriesDisplayMetrics(viewState);
+  const activeSeriesPoints = points.filter(
+    p => (p.series ?? 'Series 1') === selectedSeries,
+  );
 
   async function triggerRecompute(
     nextPts: DigitizedPoint[] = points,
@@ -81,8 +104,13 @@ export function PlotDigitizerCard({
     const candidateY: AxisCalibrationSpec = { ...r.y_axis, scale: nextScale };
     const xErr = validateAxisSpec(xAx, 'X axis');
     const yErr = validateAxisSpec(candidateY, 'Y axis');
-    if (xErr || yErr) {
-      setErrMsg(xErr ?? yErr);
+    const roiErr = validatePlotRoi(plotRoi);
+    if (xErr || yErr || roiErr) {
+      setErrMsg(xErr ?? yErr ?? roiErr);
+      return;
+    }
+    if (nextStrict && !plotRoi) {
+      setErrMsg('strict_bounds=true requires an explicit plot_roi.');
       return;
     }
     setErrMsg(null);
@@ -91,15 +119,19 @@ export function PlotDigitizerCard({
       await onRecompute({
         x_axis: xAx,
         y_axis: candidateY,
+        plot_roi: plotRoi,
         pixel_sigma: nextSigma,
         error_type: r.error_type ?? 'se',
         strict_bounds: nextStrict,
         points: nextPts.map(p => ({
           id: p.id,
+          series: p.series ?? 'Series 1',
           u_px: p.u_px,
           v_px: p.v_px,
           v_low_px: p.v_low_px,
           v_high_px: p.v_high_px,
+          oob_override: p.oob_override,
+          oob_override_reason: p.oob_override_reason,
           origin: p.origin,
           verified: p.verified,
         })),
@@ -117,7 +149,7 @@ export function PlotDigitizerCard({
   const PAD_R = 24;
   const PAD_T = 18;
   const PAD_B = 36;
-  const geom = computeSvgOverlayGeometry(points, yScale, {
+  const geom = computeSvgOverlayGeometry(activeSeriesPoints, yScale, {
     width: W,
     height: H,
     padL: PAD_L,
@@ -126,12 +158,36 @@ export function PlotDigitizerCard({
     padB: PAD_B,
   });
 
-  const nVerified = points.filter(p => p.verified).length;
-  const nOob = points.filter(p => isPointOutOfBounds(p, xAx, yAx)).length;
+  const nVerified = activeSeriesPoints.filter(p => p.verified).length;
+  const nOob = activeSeriesPoints.filter(
+    p => evaluatePointBounds(p, plotRoi).out_of_bounds === true,
+  ).length;
+  const nExtrap = activeSeriesPoints.filter(p =>
+    isPointExtrapolated(p, xAx, yAx),
+  ).length;
+  const boundsLabel = plotRoi == null ? 'ROI unknown' : `${nOob} OOB`;
+
+  const renderMetricValue = (
+    val: number | null | undefined,
+    digits: number,
+    unitStr: string,
+  ) => {
+    if (seriesDisplay.displayStatus === 'stale') {
+      return <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>;
+    }
+    if (seriesDisplay.displayStatus !== 'resolved' || !seriesDisplay.pkMetrics) {
+      return (
+        <span style={{ fontSize: 11, color: '#B23A2E' }}>
+          Withheld ({seriesDisplay.displayStatus})
+        </span>
+      );
+    }
+    return `${fmt(val, digits)} ${unitStr}`;
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Summary KPI bar — hides derived PK values when local edits are uncommitted */}
+      {/* Series-keyed KPI summary bar */}
       <div
         style={{
           display: 'grid',
@@ -144,55 +200,105 @@ export function PlotDigitizerCard({
         }}
       >
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Digitized Cmax</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {isDirty || !derivedPk ? (
-              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Active Series</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
+            {availableSeries.length > 1 ? (
+              <select
+                aria-label="Select digitized series"
+                className="model-select"
+                value={selectedSeries}
+                onChange={e =>
+                  setViewState(prev => selectDigitizerSeries(prev, e.target.value))
+                }
+                style={{ fontSize: 12 }}
+              >
+                {availableSeries.map(sName => (
+                  <option key={sName} value={sName}>
+                    {sName}
+                  </option>
+                ))}
+              </select>
             ) : (
-              `${fmt(derivedPk.cmax, 2)} ${yAx?.unit}`
+              selectedSeries
             )}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Digitized Tmax</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            Digitized Cmax ({selectedSeries})
+          </div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {isDirty || !derivedPk ? (
-              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
-            ) : (
-              `${fmt(derivedPk.tmax, 2)} ${xAx?.unit}`
+            {renderMetricValue(seriesDisplay.pkMetrics?.cmax, 2, yAx?.unit ?? '')}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            Digitized Tmax ({selectedSeries})
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
+            {renderMetricValue(seriesDisplay.pkMetrics?.tmax, 2, xAx?.unit ?? '')}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            Trapezoidal AUClast ({selectedSeries})
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
+            {renderMetricValue(
+              seriesDisplay.pkMetrics?.auclast,
+              1,
+              `${yAx?.unit ?? ''}·${xAx?.unit ?? ''}`,
             )}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Trapezoidal AUClast</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-h)', ...MONO }}>
-            {isDirty || !derivedPk ? (
-              <span style={{ fontSize: 12, color: '#9A5B12' }}>Stale — re-calibrate</span>
-            ) : (
-              `${fmt(derivedPk.auclast, 1)} ${yAx?.unit}·${xAx?.unit}`
-            )}
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            Verification &amp; Plot ROI
           </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Verification &amp; Bounds</div>
           <div
             style={{
               fontSize: 12,
               fontWeight: 600,
-              color: nOob > 0 ? '#B23A2E' : nVerified === points.length ? '#1D7A5A' : '#9A5B12',
+              color:
+                nOob > 0
+                  ? '#B23A2E'
+                  : nVerified === activeSeriesPoints.length
+                    ? '#1D7A5A'
+                    : '#9A5B12',
               ...MONO,
             }}
           >
-            {nVerified === points.length ? (
+            {nVerified === activeSeriesPoints.length && nOob === 0 ? (
               <CheckCircle size={12} style={{ display: 'inline', marginRight: 4 }} />
             ) : (
               <AlertTriangle size={12} style={{ display: 'inline', marginRight: 4 }} />
             )}
-            {nVerified}/{points.length} verified · {nOob} out-of-bounds
+            {nVerified}/{activeSeriesPoints.length} verified · {boundsLabel} · {nExtrap} extrap
             {isDirty ? ' · preview' : ''}
           </div>
         </div>
       </div>
+
+      {/* Unresolved / withheld metrics reason banner */}
+      {seriesDisplay.displayStatus !== 'resolved' && seriesDisplay.unresolvedReason && (
+        <div
+          role="status"
+          style={{
+            padding: '6px 10px',
+            borderRadius: 4,
+            background: 'rgba(154, 91, 18, 0.12)',
+            color: '#9A5B12',
+            fontSize: 12,
+          }}
+        >
+          <strong>{seriesDisplay.displayStatus}:</strong> {seriesDisplay.unresolvedReason}
+          {seriesDisplay.blockingPointIds.length > 0 && (
+            <span style={{ marginLeft: 6, ...MONO }}>
+              (blocking: {seriesDisplay.blockingPointIds.join(', ')})
+            </span>
+          )}
+        </div>
+      )}
 
       {errMsg && (
         <div
@@ -224,7 +330,7 @@ export function PlotDigitizerCard({
                   ...prev,
                   yScale: next,
                   isDirty: true,
-                  derivedPk: null,
+                  seriesByKey: null,
                 }));
                 void triggerRecompute(points, next, pixelSigma, strictBounds);
               }}
@@ -242,7 +348,12 @@ export function PlotDigitizerCard({
               max="10"
               value={pixelSigma}
               onChange={e =>
-                setViewState(prev => ({ ...prev, pixelSigma: Number(e.target.value), isDirty: true, derivedPk: null }))
+                setViewState(prev => ({
+                  ...prev,
+                  pixelSigma: Number(e.target.value),
+                  isDirty: true,
+                  seriesByKey: null,
+                }))
               }
               style={{ width: 64 }}
             />
@@ -251,11 +362,22 @@ export function PlotDigitizerCard({
             <input
               type="checkbox"
               checked={strictBounds}
+              disabled={!plotRoi}
+              title={
+                plotRoi
+                  ? 'Reject points outside plot_roi on recalibration'
+                  : 'Requires an explicit plot_roi'
+              }
               onChange={e =>
-                setViewState(prev => ({ ...prev, strictBounds: e.target.checked, isDirty: true, derivedPk: null }))
+                setViewState(prev => ({
+                  ...prev,
+                  strictBounds: e.target.checked,
+                  isDirty: true,
+                  seriesByKey: null,
+                }))
               }
             />
-            Strict bounds
+            Strict ROI bounds
           </label>
           <button
             type="button"
@@ -272,10 +394,12 @@ export function PlotDigitizerCard({
             type="button"
             className="chip"
             disabled={busy || localBusy}
-            onClick={() => setViewState(prev => applyAddDigitizerPoint(prev, xAx, yAx))}
+            onClick={() =>
+              setViewState(prev => applyAddDigitizerPoint(prev, xAx, yAx, plotRoi))
+            }
           >
             <Plus size={11} style={{ marginRight: 4 }} />
-            Add point
+            Add point ({selectedSeries})
           </button>
         </div>
       )}
@@ -293,7 +417,7 @@ export function PlotDigitizerCard({
           background: 'var(--surface)',
         }}
         role="img"
-        aria-label="Calibrated concentration-time digitized curve with directly digitized error-bar bounds"
+        aria-label={`Calibrated concentration-time digitized curve for ${selectedSeries}`}
       >
         {geom.areaPath && <path d={geom.areaPath} fill="var(--accent)" fillOpacity={0.1} />}
         <line x1={PAD_L} x2={W - PAD_R} y1={H - PAD_B} y2={H - PAD_B} stroke="var(--border-strong)" />
@@ -315,7 +439,7 @@ export function PlotDigitizerCard({
           );
         })}
         <text x={(PAD_L + W - PAD_R) / 2} y={H - 8} textAnchor="middle" fontSize={11} fill="var(--text-dim)">
-          {xAx?.label} ({xAx?.unit}) · Calibrated [{xAx?.v1} → {xAx?.v2}]
+          {selectedSeries} · {xAx?.label} ({xAx?.unit}) · Anchors [{xAx?.v1} → {xAx?.v2}]
         </text>
         <text
           x={14}
@@ -335,6 +459,7 @@ export function PlotDigitizerCard({
           <thead>
             <tr>
               <th>Point</th>
+              <th>Series</th>
               <th>u (px)</th>
               <th>v (px)</th>
               <th>
@@ -345,25 +470,19 @@ export function PlotDigitizerCard({
               </th>
               <th>Y low</th>
               <th>Y high</th>
+              <th>ROI / Span</th>
               <th>Origin / Gate</th>
               {onRecompute && <th />}
             </tr>
           </thead>
           <tbody>
             {points.map((p, idx) => {
-              const oob = isPointOutOfBounds(p, xAx, yAx);
+              const bInfo = evaluatePointBounds(p, plotRoi);
+              const extrap = isPointExtrapolated(p, xAx, yAx);
               return (
-                <tr key={p.id}>
+                <tr key={`${p.series ?? 'Series 1'}_${p.id}`}>
                   <td style={MONO}>
                     {p.id}
-                    {oob && (
-                      <span
-                        title="Point lies outside calibrated axis bounds"
-                        style={{ color: '#B23A2E', marginLeft: 4, fontWeight: 700 }}
-                      >
-                        [OOB]
-                      </span>
-                    )}
                     {p.previewOnly && (
                       <span
                         title="Preview coordinate only — click Re-calibrate for authoritative backend result"
@@ -373,6 +492,7 @@ export function PlotDigitizerCard({
                       </span>
                     )}
                   </td>
+                  <td style={MONO}>{p.series ?? 'Series 1'}</td>
                   <td>
                     {onRecompute ? (
                       <input
@@ -380,7 +500,15 @@ export function PlotDigitizerCard({
                         value={p.u_px}
                         onChange={e =>
                           setViewState(prev =>
-                            applyPointPixelEdit(prev, idx, 'u_px', Number(e.target.value), xAx, yAx),
+                            applyPointPixelEdit(
+                              prev,
+                              idx,
+                              'u_px',
+                              Number(e.target.value),
+                              xAx,
+                              yAx,
+                              plotRoi,
+                            ),
                           )
                         }
                         style={{ width: 64, fontSize: 11, ...MONO }}
@@ -396,7 +524,15 @@ export function PlotDigitizerCard({
                         value={p.v_px}
                         onChange={e =>
                           setViewState(prev =>
-                            applyPointPixelEdit(prev, idx, 'v_px', Number(e.target.value), xAx, yAx),
+                            applyPointPixelEdit(
+                              prev,
+                              idx,
+                              'v_px',
+                              Number(e.target.value),
+                              xAx,
+                              yAx,
+                              plotRoi,
+                            ),
                           )
                         }
                         style={{ width: 64, fontSize: 11, ...MONO }}
@@ -409,6 +545,28 @@ export function PlotDigitizerCard({
                   <td style={{ fontWeight: 600, ...MONO }}>{fmt(p.y, 2)}</td>
                   <td style={MONO}>{fmt(p.y_low, 2)}</td>
                   <td style={MONO}>{fmt(p.y_high, 2)}</td>
+                  <td style={MONO}>
+                    {bInfo.bounds_status === 'out_of_bounds' ? (
+                      <span
+                        title="Point lies outside declared plot_roi"
+                        style={{ color: '#B23A2E', fontWeight: 700 }}
+                      >
+                        {p.oob_override ? 'OOB (overridden)' : 'OOB'}
+                      </span>
+                    ) : bInfo.bounds_status === 'unknown' ? (
+                      <span style={{ color: 'var(--text-dim)' }}>unknown</span>
+                    ) : (
+                      <span style={{ color: '#1D7A5A' }}>in_bounds</span>
+                    )}
+                    {extrap && (
+                      <span
+                        title="Outside calibration-anchor span (extrapolated)"
+                        style={{ color: '#9A5B12', marginLeft: 4 }}
+                      >
+                        · extrap
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <button
                       type="button"
@@ -423,7 +581,7 @@ export function PlotDigitizerCard({
                           ...prev,
                           points: togglePointVerified(prev.points, idx),
                           isDirty: true,
-                          derivedPk: null,
+                          seriesByKey: null,
                         }))
                       }
                       title="Click to toggle human verification status"
@@ -438,7 +596,9 @@ export function PlotDigitizerCard({
                         className="chip"
                         style={{ padding: '1px 5px' }}
                         disabled={points.length <= 2}
-                        onClick={() => setViewState(prev => applyRemoveDigitizerPoint(prev, idx))}
+                        onClick={() =>
+                          setViewState(prev => applyRemoveDigitizerPoint(prev, idx))
+                        }
                         title="Delete point"
                       >
                         <Trash2 size={11} />

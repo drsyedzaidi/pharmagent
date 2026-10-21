@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "description": "Hand-derived closed-form reference fixture for plot digitizer verification (affine/logarithmic projections, directly digitized error-bar bounds, and linear-trapezoidal AUClast point estimate). Note: hand-derived mathematical fixture, not external-tool validation.",
+    "description": "Hand-derived closed-form reference fixture for plot digitizer verification (affine/logarithmic projections, explicit plot_roi vs calibration-anchor extrapolation, directly digitized error-bar bounds, and linear-trapezoidal AUClast point estimate). Note: hand-derived mathematical fixture, not external-tool validation.",
     "derivation": "Closed-form hand arithmetic (no calls to app.compute.digitize)."
   },
   "linear_cropped_reversed_y": {
@@ -23,6 +23,12 @@
         "label": "Concentration",
         "unit": "ng/mL"
       },
+      "plot_roi": {
+        "u_min_px": 140.0,
+        "u_max_px": 650.0,
+        "v_min_px": 100.0,
+        "v_max_px": 430.0
+      },
       "pixel_sigma": 1.5,
       "anchor_sigma_px": 1.0,
       "error_type": "se",
@@ -37,6 +43,7 @@
       ]
     },
     "expected": {
+      "series_name": "Oral_100mg",
       "x": [0.0, 1.0, 2.0, 4.0, 8.0, 12.0, 24.0],
       "y": [0.0, 45.0, 80.0, 60.0, 30.0, 15.0, 3.0],
       "y_low": [0.0, 41.0, 75.0, 56.0, 27.0, 13.0, 2.0],
@@ -66,6 +73,12 @@
         "label": "Concentration",
         "unit": "ng/mL"
       },
+      "plot_roi": {
+        "u_min_px": 180.0,
+        "u_max_px": 720.0,
+        "v_min_px": 180.0,
+        "v_max_px": 550.0
+      },
       "pixel_sigma": 1.5,
       "anchor_sigma_px": 0.0,
       "error_type": "se",
@@ -78,6 +91,7 @@
       ]
     },
     "expected": {
+      "series_name": "IV_Bolus",
       "x": [2.0, 5.0, 8.0, 10.0, 12.0],
       "y": [1.0, 10.0, 31.622777, 100.0, 1000.0],
       "y_low_first_two": [0.5, 5.0],
