@@ -1,6 +1,6 @@
 # Context-engineering ideas for PharmAgent: design note
 
-**Status:** proposal for discussion. Nothing here is built or decided. No application code is changed by this note.
+**Status:** owner decisions recorded 2026-10-21 (below). The build plan is in `context-engineering-build-plan.md`. This note changes no application code.
 **Date:** 2026-10-20. **Base:** `main` at `0bf3c56`.
 
 ## Source and licence
@@ -96,12 +96,32 @@ Entries surface in the review gate, the report and the memo.
 | 3 | 3: divergence report | small | Isolated to the eval harness; live use only |
 | 4 | 4: branch points | medium | Touches results, review gate and memo, so it carries the most risk |
 
-## Decisions needed from the owner
-1. Typed fields on `StudyInfo`, or a new `StudyContext`? Where is it entered (form, chat, upload)?
-2. May the app ever auto-extract context from a protocol, and with what confirmation step?
-3. Strict mode: opt-in per session, or a global default after a deprecation period?
-4. Does the conventions catalog live in code or as a data file, and who may change an entry?
-5. Which branch points matter most to the agency's reports?
+## Owner decisions (2026-10-21)
+1. **`StudyContext` is a new type, separate from `StudyInfo`.** `StudyInfo` stays descriptive/reporting metadata.
+   `StudyContext` is typed, versioned, bound to the dataset content hash, and holds only analysis-governing facts.
+   Entry order: upload and schema detection create *proposals*; a dedicated form shows and confirms them; chat may
+   propose changes but cannot activate them; a confirmed context is an immutable version and an edit creates a new one.
+2. **Protocol extraction is allowed only as an untrusted proposal.** Every extracted value carries the source document
+   hash, a page or source locator, the extracted text or evidence, and a confidence/status. A human must explicitly
+   confirm each consequential field before it affects calculations. Missing or conflicting evidence stays unresolved.
+   An LLM-extracted LLOQ, unit, route or dosing fact is never accepted silently.
+3. **Strict mode rolls out per session, then becomes the default:** record only, warn, session-level strict opt-in,
+   strict by default for new sessions after a documented deprecation period. Legacy compatibility then requires an
+   explicit recorded opt-out. Every result states whether it ran in strict or legacy mode. Production and regulatory
+   exports should eventually require strict mode.
+4. **Conventions live in a version-controlled data file**, validated against a typed schema, and are **not
+   runtime-editable**. A change needs a maintainer PR, pharmacometrics-owner approval, an authoritative source or a
+   recorded owner decision, at least one behavioural test, regenerated rule text, and the convention version included
+   in run provenance.
+5. **Branch points are prioritised by whether they can change a regulatory conclusion.** Initial catalog: (1) BLQ/LLOQ
+   treatment and measured-zero handling; (2) steady-state endpoint closure and incomplete-interval handling;
+   (3) lambda_z terminal-window selection; (4) bioequivalence statistical method and CI/pass-fail result; (5) covariate
+   inclusion, functional form and clinical relevance; (6) parametric vs non-parametric uncertainty method;
+   (7) model-structure selection where alternatives are not meaningfully separated. A branch point is surfaced only when
+   a plausible alternative changes the conclusion or materially changes an estimate, not merely because alternatives exist.
+
+First slice: read-only conventions catalog, no runtime behaviour change, guarded review/audit code untouched.
+Not needed for this decision: a live R/PKNCA re-run.
 
 ## Out of scope
 Anything in guarded code (auth/owner, audit trail, e-signature, review gate, provenance) without explicit human review.
