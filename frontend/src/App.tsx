@@ -5,6 +5,7 @@ import {
   AlertTriangle, ChevronRight, Maximize2,
 } from 'lucide-react';
 import { api, setToken, getToken } from './api';
+import { provenanceBanner } from './provenance';
 import { FlexplotPanel } from './flexplot';
 import type { Decision, GateSigner, Marker, Outcome, VerifyNote, WorkflowName } from './shell/types';
 import { MARKERS, REVIEW_DRAWER_MQ } from './shell/types';
@@ -5045,6 +5046,16 @@ export default function App() {
             subtitle={docSubtitle}
             right={<ExportMenu disabled={loading || exportKinds.length === 0} items={exportItems} />}
           />
+          {(() => {
+            const banner = provenanceBanner(state?.run_provenance_status, state?.run_provenance_assurance);
+            return banner && (
+              <div className={`provenance-banner provenance-banner--${banner.level}`}
+                   role={banner.level === 'error' ? 'alert' : 'status'}>
+                <strong>{banner.title}</strong>
+                <span>{banner.detail}</span>
+              </div>
+            );
+          })()}
           {state?.dataset_metadata && (
             <ResultSection title="Dataset profile" agent="data_manager" tool="profile_pk_dataset"
               seal={profileSeal} sealing={!profileSeal}>

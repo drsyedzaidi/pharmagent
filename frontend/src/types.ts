@@ -108,6 +108,10 @@ export interface PendingTool {
 
 export interface PharmState {
   session_id: string;
+  /** verified | legacy_unverified | mismatch (mismatch = quarantined, read-only). Recomputed by the server. */
+  run_provenance_status?: 'verified' | 'legacy_unverified' | 'mismatch' | null;
+  /** hash_only | keyed_seal | keyed_seal_attested_legacy | keyed_seal_unconfirmed */
+  run_provenance_assurance?: string | null;
   pending_tool?: PendingTool | null;
   dataset_id: string | null;
   dataset_path: string | null;
