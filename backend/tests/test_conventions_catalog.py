@@ -122,20 +122,24 @@ def test_the_lambda_z_entry_pins_the_threshold_and_the_tie_rule_with_dedicated_t
 
 APPROVED_2026_10_21 = {
     "nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_leading_middle_trailing", "nca.measured_zero",
-    "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
+    "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_endpoint_closure",
     "nca.ss_incomplete_interval_fail_closed", "nca.lambda_z_window", "profile.ofv_cutoff",
 }
+# nca.ss_final_interval_scope was reworded (v1.2.0) and its new text re-approved on 2026-10-22.
+APPROVED_2026_10_22 = {"nca.ss_final_interval_scope"}
 
 
 def test_exactly_the_owner_confirmed_entries_are_approved():
     """Owner confirmation 2026-10-21: these 11 as accurate implementation descriptions; be.average_tost stays pending."""
     cat = load_catalog().conventions
     approved = {c.id for c in cat if c.approval.status == "approved"}
-    assert approved == APPROVED_2026_10_21
+    assert approved == APPROVED_2026_10_21 | APPROVED_2026_10_22
     assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost"}
     for c in cat:
-        if c.id in approved:
+        if c.id in APPROVED_2026_10_21:
             assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-21"), c.id
+        elif c.id in APPROVED_2026_10_22:
+            assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-22"), c.id
 
 
 # ── generated text and the report ──────────────────────────────────────────────────────────────
@@ -178,11 +182,11 @@ def test_cli_check_fails_on_a_broken_catalog(tmp_path):
     assert cli_main(["--check", "--catalog", str(p)]) == 1
 
 
-def test_the_package_changes_no_runtime_module():
-    """Slice 1 is read-only: nothing under app/ outside app/conventions imports it."""
-    offenders = [str(p) for p in (BACKEND / "app").rglob("*.py")
-                 if "conventions" not in p.parts and "app.conventions" in p.read_text()]
-    assert offenders == []
+def test_only_the_known_runtime_modules_import_the_package():
+    """Slice 2: the package is imported only by app startup (validation) and the NCA tool (results)."""
+    importers = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
+                       if "conventions" not in p.parts and "app.conventions" in p.read_text())
+    assert importers == ["app/main.py", "app/tools/nca_tools.py"]
 
 
 # ── owner review of PR #16: approval semantics and wording corrections ─────────────────────────
@@ -328,3 +332,14 @@ def test_the_endpoint_closure_states_the_separate_start_window():
 def test_every_entry_cites_at_least_two_behavioural_tests_except_where_a_gap_says_why():
     for c in load_catalog().conventions:
         assert len(c.tests) >= 2 or c.known_gaps, c.id
+
+
+def test_the_final_interval_scope_separates_unconditional_from_flag_conditional_rules():
+    c = {c.id: c for c in load_catalog().conventions}["nca.ss_final_interval_scope"]
+    text = c.statement
+    uncond, _, cond = text.partition("When a BLQ flag column is present")
+    assert cond, "the flag-conditional part must be introduced explicitly"
+    assert "final dosing interval" in uncond and "never concentrations" in uncond and "BLQ" not in uncond
+    assert "leading/middle/trailing" in cond and "within that interval" in cond
+    assert "all observation rows in the dataset" in cond          # the count is NOT limited to the interval (code)
+    assert c.version == "1.2.0"

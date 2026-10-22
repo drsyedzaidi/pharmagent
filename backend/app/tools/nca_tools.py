@@ -10,9 +10,16 @@ import pandas as pd
 from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose, parse_blq_flag
 from app.compute.nca import _round_sig, run_nca
 from app.compute.nca_ss import run_nca_ss
+from app.conventions.runtime import applied_conventions
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
+
+# Catalog conventions each NCA path applies (app/conventions/catalog.json); named in results, no number depends on them.
+_CONV_SD = ["nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.pre_dose_records", "nca.lambda_z_window"]
+_CONV_SS = ["nca.linear_up_log_down", "nca.lambda_z_window", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
+            "nca.ss_incomplete_interval_fail_closed"]
+_CONV_BLQ = ["nca.blq_leading_middle_trailing", "nca.measured_zero", "nca.blq_flag_codes"]
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -172,6 +179,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
             else:
                 n_blq = int((pd.to_numeric(obs_ss[dv_col], errors="coerce") <= 0).sum())
             out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
+            out["nca_summary"]["conventions"] = applied_conventions(_CONV_SS + (_CONV_BLQ if cens_col else []))
             out["nca_summary"]["blq"] = {
                 "n_below_loq": n_blq, "ctau_assumed_c0": assumed, "c0_assumed_ctau": opened, "rule": (
                     ("M1 applied within the final steady-state dosing interval: quantifiable = unflagged with a "
@@ -231,6 +239,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
                   dose_by_subject=dose_by_subject, is_iv=is_iv)
     out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
+    out["nca_summary"]["conventions"] = applied_conventions(_CONV_SD + (_CONV_BLQ if cens_col else []))
     vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."
     out["nca_summary"]["blq"] = {
         "n_below_loq": n_blq,
