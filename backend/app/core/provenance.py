@@ -88,7 +88,8 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, ses
     from app.core.audit import hash_payload  # local: keep core import graph light
 
     entries = getattr(chain, "entries", None)
-    if not entries or not chain.verify_status().get("ok"):
+    status = chain.verify_status() if entries else {}
+    if not entries or not status.get("ok"):
         return "mismatch"
     genesis = entries[0]
     if genesis.index != 0 or genesis.action != "session_created":
@@ -96,7 +97,9 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, ses
     if record is not None and len({k for k, _ in record}) != len(record):
         return "mismatch"                                        # a repeated key could hide a forged value
     if genesis.outputs_hash == hash_payload(genesis_outputs(session_id)):
-        if record is None:
+        if record is None or status.get("degraded"):
+            # New sessions always write v2 entries; a marker genesis in a degraded (v1: index/action not bound)
+            # chain can only be a forgery.
             return "mismatch"
         return "verified" if hash_payload(dict(record)) == genesis.inputs_hash else "mismatch"
     if genesis.outputs_hash == hash_payload({"session_id": session_id}):
