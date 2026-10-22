@@ -170,6 +170,34 @@ def _current_only(state: PharmState, trace: AuditTrace) -> tuple[PharmState, tup
     return state, (*((k, SOURCE_FIELDS[k][1]) for k in stale), *er_withheld)
 
 
+def provenance_blocks(state: PharmState, trace: AuditTrace) -> tuple[tuple[Block, ...], tuple[TracedValue, ...]]:
+    """The run-provenance label, from the record kept in state (never the current server). Its catalog version and
+    digest are registered as literals traced to the genesis audit entry [#0], so the untraced-number check still
+    covers the whole memo. A mismatched (quarantined) state is refused."""
+    from app.core.provenance import run_provenance_report_lines  # local: keep compute import graph light
+
+    run_provenance_report_lines(state)                  # raises ProvenanceQuarantined on mismatch
+    status = state.run_provenance_status
+    rec = dict(state.run_provenance) if state.run_provenance else {}
+    if status == "verified" and rec:
+        version = "v" + rec.get("conventions_catalog_version", "n/a")
+        digest = rec.get("conventions_catalog_canonical_json_sha256", "n/a")
+        keyed = state.run_provenance_assurance == "keyed_seal"
+        assurance = ("keyed_seal; audit chain authenticated by a keyed seal" if keyed else
+                     "hash_only; audit chain internally consistent, not cryptographically authenticated")
+        text = (f"Run provenance: verified (assurance: {assurance}). Conventions catalog {version}, "
+                f"canonical-JSON sha256 digest {digest}" + trace_tag(0))
+        values = (TracedValue(key="run_provenance.conventions_catalog_version", text=version, audit_index=0,
+                              kind="literal"),
+                  TracedValue(key="run_provenance.conventions_catalog_canonical_json_sha256", text=digest,
+                              audit_index=0, kind="literal"))
+        return (Para(text),), values
+    if status == "legacy_unverified":
+        return (Para("Run provenance: legacy_unverified. The software and the conventions catalog that produced "
+                     "these results were not recorded, and are not substituted from the current server."),), ()
+    return (Para("Run provenance: not recorded. This state carries no verified run-provenance record."),), ()
+
+
 def build_memo(state: PharmState, trace: AuditTrace, *, title: object = DEFAULT_TITLE,
                own_index: int | None = None) -> Memo:
     """The memo for ``state``. ``trace`` supplies audit indices (empty -> unknown tags);
@@ -180,11 +208,12 @@ def build_memo(state: PharmState, trace: AuditTrace, *, title: object = DEFAULT_
     state, withheld = _current_only(state, trace)
     gone = {k.split(".")[0] for k, _ in withheld}           # 'er_results.fits.x' -> 'er_results'
     built = [(key, _render(key, fn, state, trace, rec)) for key, fn in BUILDERS]
-    footer: tuple[Block, ...] = (
-        (Para("Built by audit entry" + trace_tag(own_index)),) if own_index is not None else ())
+    prov_blocks, prov_values = provenance_blocks(state, trace)
+    footer: tuple[Block, ...] = (*prov_blocks, *(
+        (Para("Built by audit entry" + trace_tag(own_index)),) if own_index is not None else ()))
     return Memo(
         title=clean, study=study,
         sections=tuple(sec for _, sec in built if sec is not None),
         omitted=tuple((key, SECTION_TITLES[key]) for key, sec in built
                       if sec is None and not gone.intersection(SECTION_SOURCES[key])),
-        values=rec.values, footer=footer, withheld=withheld)
+        values=(*rec.values, *prov_values), footer=footer, withheld=withheld)
