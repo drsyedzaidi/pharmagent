@@ -7,7 +7,12 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-from app.compute.poppk_plausibility.schema import NormalizedParameter, ParameterSpec, RouteKind
+from app.compute.poppk_plausibility.schema import (
+    NormalizedParameter,
+    ParameterSpec,
+    RouteKind,
+    sanitize_json_float,
+)
 
 
 class UnitCompatibilityError(ValueError):
@@ -27,10 +32,13 @@ _PARAM_CLASS_MAP: dict[str, tuple[str, str, bool]] = {
     "clr": ("CL_R", "clearance", False),
     "cl_r": ("CL_R", "clearance", False),
     "q": ("Q", "clearance", False),
-    "q2": ("Q", "clearance", False),
-    "q3": ("Q2", "clearance", False),
+    "q1": ("Q", "clearance", False),
+    "q2": ("Q2", "clearance", False),
+    "q3": ("Q3", "clearance", False),
     "q/f": ("Q/F", "clearance", True),
     "q_f": ("Q/F", "clearance", True),
+    "q2/f": ("Q2/F", "clearance", True),
+    "q2_f": ("Q2/F", "clearance", True),
     "vc": ("Vc", "volume", False),
     "v1": ("Vc", "volume", False),
     "v": ("Vc", "volume", False),
@@ -45,6 +53,8 @@ _PARAM_CLASS_MAP: dict[str, tuple[str, str, bool]] = {
     "v3": ("Vp2", "volume", False),
     "vp/f": ("Vp/F", "volume", True),
     "v2/f": ("Vp/F", "volume", True),
+    "vp2/f": ("Vp2/F", "volume", True),
+    "v3/f": ("Vp2/F", "volume", True),
     "vss": ("Vss", "volume", False),
     "vss/f": ("Vss/F", "volume", True),
     "ka": ("ka", "rate_constant", False),
@@ -54,6 +64,8 @@ _PARAM_CLASS_MAP: dict[str, tuple[str, str, bool]] = {
     "k10": ("k10", "rate_constant", False),
     "k12": ("k12", "rate_constant", False),
     "k21": ("k21", "rate_constant", False),
+    "k13": ("k13", "rate_constant", False),
+    "k31": ("k31", "rate_constant", False),
     "t_half": ("t_half", "half_life", False),
     "thalf": ("t_half", "half_life", False),
     "t1/2": ("t_half", "half_life", False),
@@ -76,7 +88,14 @@ _UNIT_TABLE: dict[str, tuple[str, float, str, bool]] = {
     "ml/d": ("clearance", 0.001 / 24.0, "L/h", False),
     "l/min": ("clearance", 60.0, "L/h", False),
     "l/h/kg": ("clearance", 1.0, "L/h/kg", True),
+    "l/hr/kg": ("clearance", 1.0, "L/h/kg", True),
     "ml/min/kg": ("clearance", 0.06, "L/h/kg", True),
+    "ml/h/kg": ("clearance", 0.001, "L/h/kg", True),
+    "ml/hr/kg": ("clearance", 0.001, "L/h/kg", True),
+    "l/d/kg": ("clearance", 1.0 / 24.0, "L/h/kg", True),
+    "l/day/kg": ("clearance", 1.0 / 24.0, "L/h/kg", True),
+    "ml/d/kg": ("clearance", 0.001 / 24.0, "L/h/kg", True),
+    "ml/day/kg": ("clearance", 0.001 / 24.0, "L/h/kg", True),
     # Volume -> L or L/kg
     "l": ("volume", 1.0, "L", False),
     "ml": ("volume", 0.001, "L", False),
@@ -118,9 +137,12 @@ _UNIT_TABLE: dict[str, tuple[str, float, str, bool]] = {
     "g": ("mass", 1000.0, "mg", False),
     "ug": ("mass", 0.001, "mg", False),
     "kg": ("mass", 1e6, "mg", False),
+    "g/l": ("concentration", 1000.0, "mg/L", False),
     "mg/l": ("concentration", 1.0, "mg/L", False),
-    "ng/ml": ("concentration", 0.001, "mg/L", False),
     "ug/ml": ("concentration", 1.0, "mg/L", False),
+    "mcg/ml": ("concentration", 1.0, "mg/L", False),
+    "ng/ml": ("concentration", 0.001, "mg/L", False),
+    "pg/ml": ("concentration", 1e-6, "mg/L", False),
 }
 
 
@@ -130,6 +152,16 @@ def classify_parameter(param_name: str) -> tuple[str, str, bool]:
     if key in _PARAM_CLASS_MAP:
         return _PARAM_CLASS_MAP[key]
     return (param_name.strip(), "other", False)
+
+
+def normalize_concentration_to_mg_l(value: float, unit: str | None) -> float:
+    """Convert a concentration value to canonical `mg/L` when unit is recognized."""
+    if not math.isfinite(value) or unit is None:
+        return value
+    u_key = unit.strip().lower()
+    if u_key in _UNIT_TABLE and _UNIT_TABLE[u_key][0] == "concentration":
+        return float(value) * _UNIT_TABLE[u_key][1]
+    return float(value)
 
 
 def normalize_parameter_unit(param_name: str, value: float, unit: str | None) -> tuple[float, str]:
@@ -156,6 +188,7 @@ def normalize_parameter_unit(param_name: str, value: float, unit: str | None) ->
 
 def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> NormalizedParameter:
     """Convert a `ParameterSpec` into an immutable `NormalizedParameter` without raising."""
+    del route
     canonical_name, param_class, apparent_by_name = classify_parameter(spec.name)
     if param_class in {"clearance", "volume"}:
         if spec.scale == "apparent" or apparent_by_name:
@@ -167,12 +200,14 @@ def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> No
     else:
         resolved_scale = "not_applicable"
 
+    obs_val: float | str = sanitize_json_float(spec.value)  # type: ignore[assignment]
+
     if spec.unit is None or not spec.unit.strip():
         return NormalizedParameter(
             name=spec.name,
             canonical_name=canonical_name,
             param_class=param_class,
-            observed_value=spec.value,
+            observed_value=obs_val,
             observed_unit=spec.unit,
             normalized_value=None,
             normalized_unit=None,
@@ -188,7 +223,7 @@ def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> No
             name=spec.name,
             canonical_name=canonical_name,
             param_class=param_class,
-            observed_value=spec.value,
+            observed_value=obs_val,
             observed_unit=spec.unit,
             normalized_value=None,
             normalized_unit=None,
@@ -204,7 +239,7 @@ def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> No
             name=spec.name,
             canonical_name=canonical_name,
             param_class=param_class,
-            observed_value=spec.value,
+            observed_value=obs_val,
             observed_unit=spec.unit,
             normalized_value=None,
             normalized_unit=None,
@@ -217,17 +252,17 @@ def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> No
             ),
         )
 
-    norm_val = float(spec.value) * factor if math.isfinite(spec.value) else float(spec.value)
+    norm_val = float(spec.value) * factor if math.isfinite(spec.value) else None
     return NormalizedParameter(
         name=spec.name,
         canonical_name=canonical_name,
         param_class=param_class,
-        observed_value=spec.value,
+        observed_value=obs_val,
         observed_unit=spec.unit,
         normalized_value=norm_val,
         normalized_unit=canonical_unit,
         weight_normalized=weight_norm,
         resolved_scale=resolved_scale,
-        unit_status="valid",
+        unit_status="compatible",
         unit_message="Normalized to canonical unit.",
     )

@@ -212,7 +212,9 @@
         "warn_min_ka_per_h": 0.05,
         "warn_max_ka_per_h": 10.0,
         "high_min_ka_per_h": 0.01,
-        "high_max_ka_per_h": 20.0
+        "high_max_ka_per_h": 20.0,
+        "mab_warn_min_ka_per_h": 0.003,
+        "mab_high_min_ka_per_h": 0.001
       },
       "scientific_rationale": "First-order absorption rate constant ka outside typical physiological absorption rates ([0.05, 10] h^-1) or ka <= elimination rate ke (CL/Vc) indicates potential flip-flop kinetics or unidentifiable rapid absorption.",
       "recommendation": "If ka <= ke, verify whether flip-flop kinetics are expected (e.g., extended-release or subcutaneous depot) or constrain ka > ke for immediate-release formulations.",

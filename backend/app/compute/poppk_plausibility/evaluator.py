@@ -1,6 +1,7 @@
 """Pure evaluation pipeline and non-destructive human justification engine."""
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from app.compute.poppk_plausibility.context import resolve_physiology_context
@@ -15,16 +16,32 @@ from app.compute.poppk_plausibility.schema import (
 from app.compute.poppk_plausibility.units import classify_parameter, normalize_parameter_spec
 
 
+def _base_param_key(name: str) -> str:
+    return name.removesuffix(" (derived)").strip().lower()
+
+
 def apply_justifications(
     findings: tuple[PlausibilityFinding, ...],
     justifications: tuple[JustificationRecord, ...],
 ) -> tuple[PlausibilityFinding, ...]:
     """Attach documented human justifications to findings without deleting or hiding any finding."""
-    just_map: dict[tuple[str, str], JustificationRecord] = {}
-    for j in justifications:
-        canon_p, _, _ = classify_parameter(j.parameter)
-        just_map[(j.rule_id, j.parameter.strip().lower())] = j
-        just_map[(j.rule_id, canon_p.lower())] = j
+    sorted_justs = sorted(
+        justifications,
+        key=lambda x: (x.rule_id, x.parameter.strip().lower(), x.reviewer, x.timestamp, x.rationale),
+    )
+    exact_map: dict[tuple[str, str], JustificationRecord] = {}
+    canon_map: dict[tuple[str, str], JustificationRecord] = {}
+    for j in sorted_justs:
+        raw_k = _base_param_key(j.parameter)
+        canon_p, _, _ = classify_parameter(raw_k)
+        exact_map[(j.rule_id, raw_k)] = j
+        canon_map[(j.rule_id, canon_p.lower())] = j
+
+    flagged_canon_counts: Counter[tuple[str, str]] = Counter()
+    for f in findings:
+        if f.status == "FLAGGED":
+            cf, _, _ = classify_parameter(_base_param_key(f.parameter))
+            flagged_canon_counts[(f.rule_id, cf.lower())] += 1
 
     updated: list[PlausibilityFinding] = []
     for f in findings:
@@ -32,11 +49,13 @@ def apply_justifications(
             updated.append(f.model_copy(update={"override_status": "none"}))
             continue
 
-        canon_f, _, _ = classify_parameter(f.parameter)
-        j = (
-            just_map.get((f.rule_id, f.parameter.strip().lower()))
-            or just_map.get((f.rule_id, canon_f.lower()))
-        )
+        raw_f = f.parameter.strip().lower()
+        base_f = _base_param_key(f.parameter)
+        canon_f, _, _ = classify_parameter(base_f)
+        j = exact_map.get((f.rule_id, raw_f)) or exact_map.get((f.rule_id, base_f))
+        if j is None and flagged_canon_counts[(f.rule_id, canon_f.lower())] == 1:
+            j = canon_map.get((f.rule_id, canon_f.lower()))
+
         if j is not None:
             if not f.override_allowed or f.severity == "CRITICAL":
                 updated.append(
@@ -87,7 +106,12 @@ def evaluate_poppk_plausibility(
     normalized_params = tuple(
         sorted(
             (normalize_parameter_spec(p, route=model.context.route) for p in model.parameters),
-            key=lambda np_item: (np_item.canonical_name, np_item.name),
+            key=lambda np_item: (
+                np_item.canonical_name,
+                np_item.name,
+                str(np_item.observed_value),
+                str(np_item.observed_unit),
+            ),
         )
     )
     phys = resolve_physiology_context(model.context, catalog.reference_physiology)

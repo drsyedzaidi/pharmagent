@@ -1,5 +1,7 @@
-"""Offline benchmark verification, mutation guards, and branch coverage tests."""
+"""Offline benchmark verification, mutation guards, and reviewer regression tests."""
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -21,7 +23,7 @@ from app.compute.poppk_plausibility import (
 )
 from app.compute.poppk_plausibility import evaluator as evaluator_mod
 from app.compute.poppk_plausibility import rules as rules_mod
-from app.compute.poppk_plausibility.rules_structural import make_finding
+from app.compute.poppk_plausibility.rules_structural import by_canonical, make_finding, to_l_kg
 
 # ---------------------------------------------------------------------------
 # 1. Offline Benchmark Suite Verification
@@ -41,9 +43,18 @@ def test_offline_benchmark_suite_achieves_full_recall_and_zero_false_flags() -> 
     assert summary.severity_distribution["HIGH"] > 0
     assert summary.severity_distribution["WARN"] > 0
 
+    by_case = {r["case_id"]: r for r in summary.case_results}
+    assert by_case["ref_dirks_meibohm_2010_typical_igg_mab"]["screening_status"] == "SCREENING_PASS"
+    assert by_case["ref_dirks_meibohm_2010_typical_igg_mab"]["flagged_rules"] == []
+    assert (
+        by_case["placeholder_justified_extrahepatic_cl"]["screening_status"]
+        == "REVIEW_ACCEPTED_WITH_JUSTIFICATION"
+    )
+    assert by_case["placeholder_justified_extrahepatic_cl"]["flagged_rules"] == ["PL-004"]
+
 
 # ---------------------------------------------------------------------------
-# 2. Explicit Mutation / False-Green Guards (3 deliberate mutations)
+# 2. Explicit Mutation / False-Green Guards (independent mutations)
 # ---------------------------------------------------------------------------
 
 def test_mutation_guard_1_removed_rule_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,35 +69,37 @@ def test_mutation_guard_1_removed_rule_is_caught(monkeypatch: pytest.MonkeyPatch
 
 
 def test_mutation_guard_2_reversed_inequality_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mutating a threshold inequality (flipping < to > on Vc plasma floor) must trigger false flags on clean models."""
+    """Flipping < 0.03 L/kg to > 0.03 L/kg on Vc plasma floor triggers false flags on clean models."""
     def _mutated_pl006(catalog, params, phys):
         rule = catalog.by_id("PL-006")
-        # Reversed inequality: flags when vc_l_kg > min_vc_l_kg instead of < min_vc_l_kg
-        return [make_finding(rule, parameter="Vc", status="FLAGGED", severity="HIGH")]
+        vc = by_canonical(params, "Vc")
+        vc_l_kg = to_l_kg(vc, phys) if vc else None
+        if vc_l_kg is not None and vc_l_kg > 0.03:  # Reversed inequality: > instead of <
+            return [make_finding(rule, parameter="Vc", status="FLAGGED", severity="HIGH")]
+        return [make_finding(rule, parameter="Vc", status="PASS")]
 
     monkeypatch.setattr(rules_mod, "eval_pl006_central_volume", _mutated_pl006)
     summary = run_plausibility_benchmark()
     assert summary.false_flag_rate_on_clean_models > 0.0
 
 
-def test_mutation_guard_3_stripped_override_provenance_or_critical_override_is_caught(
+def test_mutation_guard_3a_critical_override_acceptance_is_caught(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mutating apply_justifications to strip justification provenance or allow CRITICAL override is caught."""
-    def _mutated_apply_justifications(
+    """Mutating apply_justifications to allow CRITICAL overrides is caught independently."""
+    def _mutated_apply_allow_critical(
         findings: tuple[PlausibilityFinding, ...],
         justifications: tuple[JustificationRecord, ...],
     ) -> tuple[PlausibilityFinding, ...]:
-        # Defect: drops justification object and allows CRITICAL findings to be accepted
+        j = justifications[0] if justifications else None
         return tuple(
-            f.model_copy(update={"override_status": "accepted_with_justification", "justification": None})
+            f.model_copy(update={"override_status": "accepted_with_justification", "justification": j})
             if f.status == "FLAGGED"
             else f
             for f in findings
         )
 
-    monkeypatch.setattr(evaluator_mod, "apply_justifications", _mutated_apply_justifications)
-
+    monkeypatch.setattr(evaluator_mod, "apply_justifications", _mutated_apply_allow_critical)
     crit_model = PopPKModelInput(
         model_id="mut_crit",
         context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule"),
@@ -107,7 +120,44 @@ def test_mutation_guard_3_stripped_override_provenance_or_critical_override_is_c
     f13 = [f for f in rep.findings if f.rule_id == "PL-013"][0]
     with pytest.raises(AssertionError):
         assert f13.override_status == "rejected"
-        assert f13.justification is not None
+
+
+def test_mutation_guard_3b_stripped_override_provenance_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutating apply_justifications to drop justification provenance on an allowed override is caught."""
+    def _mutated_apply_strip_provenance(
+        findings: tuple[PlausibilityFinding, ...],
+        justifications: tuple[JustificationRecord, ...],
+    ) -> tuple[PlausibilityFinding, ...]:
+        return tuple(
+            f.model_copy(update={"override_status": "accepted_with_justification", "justification": None})
+            if f.status == "FLAGGED"
+            else f
+            for f in findings
+        )
+
+    monkeypatch.setattr(evaluator_mod, "apply_justifications", _mutated_apply_strip_provenance)
+    warn_model = PopPKModelInput(
+        model_id="mut_prov",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule"),
+        parameters=(ParameterSpec(name="CL", value=140.0, unit="L/h"), ParameterSpec(name="Vc", value=25.0, unit="L")),
+        justifications=(
+            JustificationRecord(
+                rule_id="PL-004",
+                parameter="CL",
+                rationale="Extrahepatic esterase metabolism",
+                scientific_basis_or_citation="Assay ref",
+                reviewer="Reviewer",
+                timestamp="2026-10-22T00:00:00Z",
+            ),
+        ),
+    )
+    rep = evaluate_poppk_plausibility(warn_model)
+    f04 = [f for f in rep.findings if f.rule_id == "PL-004"][0]
+    assert f04.override_status == "accepted_with_justification"
+    with pytest.raises(AssertionError):
+        assert f04.justification is not None
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +170,9 @@ def test_non_human_species_and_unknown_population_and_renal_impairment_unresolve
         PopPKContext(species="human", population="unknown", reference_weight_kg=70.0),
         PopPKContext(species="human", population="hepatic_impairment", child_pugh=None, reference_weight_kg=70.0),
         PopPKContext(species="human", population="adult", reference_weight_kg=-5.0),
+        PopPKContext(species="human", population="pregnancy", reference_weight_kg=70.0, gestational_age_weeks=50.0),
+        PopPKContext(species="human", population="elderly", reference_weight_kg=70.0, age_years=150.0),
+        PopPKContext(species="human", population="adult", reference_weight_kg=70.0, blood_to_plasma_ratio=-1.0),
     ):
         m = PopPKModelInput(
             model_id="ctx_edge",
@@ -128,6 +181,18 @@ def test_non_human_species_and_unknown_population_and_renal_impairment_unresolve
         )
         rep = evaluate_poppk_plausibility(m)
         assert rep.screening_status == "INCOMPLETE_CONTEXT"
+
+    # Negative or non-finite eGFR leaves CL_R unresolved even in adult population
+    m_neg_egfr = PopPKModelInput(
+        model_id="neg_egfr",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, egfr_ml_min_1_73m2=-10.0),
+        parameters=(
+            ParameterSpec(name="CL", value=5.0, unit="L/h"),
+            ParameterSpec(name="CL_R", value=2.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_neg_egfr).findings if f.rule_id == "PL-005"][0].status == "UNRESOLVED"
 
     # Renal impairment without eGFR leaves CL_R unresolved
     m_renal = PopPKModelInput(
@@ -165,7 +230,7 @@ def test_unit_compatibility_errors_and_weight_normalized_flows() -> None:
         normalize_parameter_unit("CL", 10.0, "mg/L")
     assert exc_incompat.value.kind == "incompatible"
 
-    # Weight-normalized clearance L/h/kg and mL/min/kg
+    # Weight-normalized clearance L/h/kg, mL/h/kg, L/day/kg
     m_wt_cl = PopPKModelInput(
         model_id="wt_cl",
         context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule"),
@@ -173,6 +238,8 @@ def test_unit_compatibility_errors_and_weight_normalized_flows() -> None:
             ParameterSpec(name="CL", value=0.1, unit="L/h/kg"),
             ParameterSpec(name="Vc", value=0.5, unit="L/kg"),
             ParameterSpec(name="Vp", value=0.4, unit="L/kg"),
+            ParameterSpec(name="Q2", value=10.0, unit="mL/h/kg"),
+            ParameterSpec(name="Vp2", value=0.2, unit="L/kg"),
         ),
     )
     rep = evaluate_poppk_plausibility(m_wt_cl)
@@ -180,32 +247,31 @@ def test_unit_compatibility_errors_and_weight_normalized_flows() -> None:
 
 
 def test_stochastic_and_structural_edge_branches() -> None:
-    # 1. Inconsistent omega_var vs cv_pct in IIV, non-square omega_matrix, near-collinear r=0.97, zero RUV, huge prediction
     m_edges = PopPKModelInput(
         model_id="edges",
         context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule"),
         parameters=(
             ParameterSpec(name="CL", value=10.0, unit="L/h"),
-            ParameterSpec(name="Vc", value=2500.0, unit="L"),  # > 20 L/kg warn, <= 50 L/kg high
-            ParameterSpec(name="Vp", value=6000.0, unit="L"),  # derived Vss > 100 L/kg warn
-            ParameterSpec(name="Q", value=350.0, unit="L/h"),  # > cardiac output 300 L/h
-            ParameterSpec(name="ka", value=15.0, unit="1/h"),  # > 10 1/h warn
+            ParameterSpec(name="Vc", value=2500.0, unit="L"),
+            ParameterSpec(name="Vp", value=6000.0, unit="L"),
+            ParameterSpec(name="Q", value=350.0, unit="L/h"),
+            ParameterSpec(name="ka", value=15.0, unit="1/h"),
         ),
         iiv=(
-            IIVSpec(parameter="CL", omega_var=0.09, cv_pct=90.0),  # inconsistent cv_pct vs omega_var
-            IIVSpec(parameter="Vc", omega_var=2.0),  # > 200% CV -> HIGH
+            IIVSpec(parameter="CL", omega_var=0.09, cv_pct=90.0),
+            IIVSpec(parameter="Vc", omega_var=2.0),
         ),
-        omega_matrix=((0.09, 0.01),),  # non-square matrix
-        correlations={"CL:Vc": 0.97},  # near-collinear WARN
-        residual_error=(ResidualErrorSpec(kind="additive", sigma_var=0.0, unit="mg/L"),),  # zero RUV
-        predictions=(PredictionPoint(time=1.0, pred=2_000_000.0, ipred=10.0, unit="mg/L"),),  # > 1e6 mg/L
+        omega_matrix=((0.09, 0.01),),
+        correlations={"CL:Vc": 0.97},
+        residual_error=(ResidualErrorSpec(kind="additive", sigma_var=0.0, unit="mg/L"),),
+        predictions=(PredictionPoint(time=1.0, pred=2_000_000.0, ipred=10.0, unit="mg/L"),),
     )
     rep = evaluate_poppk_plausibility(m_edges)
     flagged_ids = {f.rule_id for f in rep.findings if f.status == "FLAGGED"}
     for expected in ("PL-006", "PL-007", "PL-009", "PL-012", "PL-014", "PL-015", "PL-016", "PL-019", "PL-020"):
         assert expected in flagged_ids
 
-    # 2. Asymmetric omega_matrix and implied correlation from symmetric omega_matrix
+    # Asymmetric omega_matrix
     m_asym = PopPKModelInput(
         model_id="asym",
         context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule"),
@@ -215,7 +281,6 @@ def test_stochastic_and_structural_edge_branches() -> None:
     rep_asym = evaluate_poppk_plausibility(m_asym)
     assert [f for f in rep_asym.findings if f.rule_id == "PL-014"][0].status == "FLAGGED"
 
-    # 3. Blank justification field rejected by Pydantic validator
     with pytest.raises(ValueError):
         JustificationRecord(
             rule_id="PL-004",
@@ -226,10 +291,155 @@ def test_stochastic_and_structural_edge_branches() -> None:
             timestamp="2026-10-22",
         )
 
-    # 4. Unknown rule_id in catalog.by_id raises KeyError
     with pytest.raises(KeyError):
         load_rule_catalog().by_id("PL-999")
     assert len(build_benchmark_cases()) == 23
+
+
+def test_reviewer_scientific_and_security_regressions() -> None:
+    base_ctx = PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", modality="small_molecule")
+
+    # 1. Duplicate canonical parameters ("Vc" and "V1") flagged under PL-002 with override_allowed=False
+    m_dup = PopPKModelInput(
+        model_id="dup_vc",
+        context=base_ctx,
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=30.0, unit="L"),
+            ParameterSpec(name="V1", value=0.5, unit="L"),
+        ),
+    )
+    rep_dup = evaluate_poppk_plausibility(m_dup)
+    f02_dup = [f for f in rep_dup.findings if f.rule_id == "PL-002" and f.status == "FLAGGED"]
+    assert len(f02_dup) == 1
+    assert f02_dup[0].override_allowed is False
+
+    # 2. Apparent CL/F and Vc/F combined with valid F = 0.5 -> systemic CL = 120 L/h > Q_H (90 L/h) flagged!
+    m_oral_f = PopPKModelInput(
+        model_id="oral_f",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="oral", modality="small_molecule"),
+        parameters=(
+            ParameterSpec(name="F", value=0.5, unit="fraction"),
+            ParameterSpec(name="CL/F", value=240.0, unit="L/h"),
+            ParameterSpec(name="Vc/F", value=2.0, unit="L"),
+        ),
+    )
+    rep_oral_f = evaluate_poppk_plausibility(m_oral_f)
+    assert [f for f in rep_oral_f.findings if f.rule_id == "PL-004"][0].status == "FLAGGED"
+    assert [f for f in rep_oral_f.findings if f.rule_id == "PL-006"][0].status == "FLAGGED"
+
+    # 3. PL-005: CL_R (15 L/h) > systemic CL (10 L/h) flagged HIGH with override_allowed=False
+    m_clr_gt_cl = PopPKModelInput(
+        model_id="clr_gt_cl",
+        context=base_ctx,
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="CL_R", value=15.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=25.0, unit="L"),
+        ),
+    )
+    f05_gt = [f for f in evaluate_poppk_plausibility(m_clr_gt_cl).findings if f.rule_id == "PL-005"][0]
+    assert f05_gt.status == "FLAGGED"
+    assert f05_gt.override_allowed is False
+
+    # 4. PL-008 & PL-009: 2-compartment terminal beta half-life and SC mAb slow ka pass cleanly
+    m_2cmt_thalf = PopPKModelInput(
+        model_id="2cmt_thalf",
+        context=base_ctx,
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=80.0, unit="L"),
+            ParameterSpec(name="Q", value=20.0, unit="L/h"),
+            ParameterSpec(name="t_half", value=9.30, unit="h"),  # matches ln(2)/beta (~9.30 h), not ln(2)*Vc/CL (1.39 h)
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_2cmt_thalf).findings if f.rule_id == "PL-008"][0].status == "PASS"
+
+    m_sc_mab = PopPKModelInput(
+        model_id="sc_mab",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="sc", modality="monoclonal_antibody"),
+        parameters=(
+            ParameterSpec(name="F", value=0.65, unit="fraction"),
+            ParameterSpec(name="CL/F", value=0.015, unit="L/h"),
+            ParameterSpec(name="Vc/F", value=5.0, unit="L"),
+            ParameterSpec(name="ka", value=0.012, unit="1/h"),
+        ),
+    )
+    rep_sc_mab = evaluate_poppk_plausibility(m_sc_mab)
+    assert rep_sc_mab.screening_status == "SCREENING_PASS"
+
+    # 5. PL-020: overridable HIGH concentration at idx 0 cannot mask CRITICAL negative concentration at idx 1
+    m_pred_mask = PopPKModelInput(
+        model_id="pred_mask",
+        context=base_ctx,
+        parameters=(ParameterSpec(name="CL", value=10.0, unit="L/h"), ParameterSpec(name="Vc", value=25.0, unit="L")),
+        predictions=(
+            PredictionPoint(time=1.0, pred=2_000_000.0, unit="mg/L"),
+            PredictionPoint(time=2.0, pred=-1.0, unit="mg/L"),
+        ),
+    )
+    rep_pred = evaluate_poppk_plausibility(m_pred_mask)
+    assert rep_pred.screening_status == "CRITICAL_IMPLAUSIBILITY"
+    f20 = [f for f in rep_pred.findings if f.rule_id == "PL-020"]
+    assert len(f20) == 2
+
+    # 6. RFC-8259 strict JSON safety when observed_value is NaN, and catalog immutability
+    m_nan = PopPKModelInput(
+        model_id="nan_json",
+        context=base_ctx,
+        parameters=(ParameterSpec(name="CL", value=float("nan"), unit="L/h"), ParameterSpec(name="Vc", value=25.0, unit="L")),
+    )
+    rep_nan = evaluate_poppk_plausibility(m_nan)
+    dumped = json.dumps(rep_nan.to_dict(), allow_nan=False)
+    assert "NaN" in dumped
+
+    cat1 = load_rule_catalog()
+    cat1.by_id("PL-004").thresholds["mutated_key"] = 999999.0
+    cat2 = load_rule_catalog()
+    assert "mutated_key" not in cat2.by_id("PL-004").thresholds
+
+    # 7. Stochastic & micro-rate reviewer edge cases (omega-only PL-012/015, normal IIV without cv_pct, inconsistent RUV)
+    m_stoch_rev = PopPKModelInput(
+        model_id="stoch_rev",
+        context=base_ctx,
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=25.0, unit="L"),
+            ParameterSpec(name="k12", value=0.4, unit="mg"),  # invalid micro-rate unit -> PL-019 UNRESOLVED
+        ),
+        allometric_exponents={"ka": 0.5},  # unrecognized allometric key -> PL-010 UNRESOLVED
+        omega_matrix=((0.0, 0.05), (0.05, 0.04)),  # zero variance with non-zero covariance -> PL-015 CRITICAL
+        residual_error=(
+            ResidualErrorSpec(kind="proportional", sigma_var=0.04, sd_or_cv=50.0, unit="%"),  # inconsistent -> PL-016 HIGH
+            ResidualErrorSpec(kind="additive", sigma_var=-0.01, unit="mg/L"),  # negative -> PL-013 & PL-016 CRITICAL
+        ),
+        predictions=(
+            PredictionPoint(time=float("nan"), pred=1.0, unit="mg/L"),
+            PredictionPoint(time=1.0, pred=5.0, unit="unknown_conc_unit"),
+        ),
+    )
+    rep_stoch = evaluate_poppk_plausibility(m_stoch_rev)
+    by_rule = {f.rule_id: f for f in rep_stoch.findings}
+    assert by_rule["PL-010"].status == "UNRESOLVED"
+    assert by_rule["PL-012"].status == "PASS"
+    assert by_rule["PL-013"].status == "FLAGGED"
+    assert by_rule["PL-015"].status == "FLAGGED"
+    assert by_rule["PL-019"].status == "UNRESOLVED"
+
+    m_norm_iiv = PopPKModelInput(
+        model_id="norm_iiv",
+        context=base_ctx,
+        parameters=(ParameterSpec(name="CL", value=10.0, unit="L/h"), ParameterSpec(name="Vc", value=25.0, unit="L")),
+        iiv=(
+            IIVSpec(parameter="CL", omega_var=0.09, distribution="normal"),
+            IIVSpec(parameter="Vc", omega_var=0.04, distribution="proportional"),
+        ),
+    )
+    rep_norm = evaluate_poppk_plausibility(m_norm_iiv)
+    f12_map = {f.parameter: f.status for f in rep_norm.findings if f.rule_id == "PL-012"}
+    assert f12_map["CL"] == "UNRESOLVED"
+    assert f12_map["Vc"] == "PASS"
 
 
 def test_isolated_read_only_tool_adapter_executes_without_mutating_state() -> None:
@@ -268,4 +478,3 @@ def test_isolated_read_only_tool_adapter_executes_without_mutating_state() -> No
     assert "does not constitute regulatory validation" in res.summary
     assert len(audit.entries) == 1
     assert audit.verify() is True
-

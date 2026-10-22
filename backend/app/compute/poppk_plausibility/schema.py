@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +37,13 @@ PopulationKind = Literal[
 RouteKind = Literal["iv", "oral", "sc", "im", "extravascular", "unknown"]
 ModalityKind = Literal["small_molecule", "monoclonal_antibody", "peptide_biologic", "other", "unknown"]
 ScaleKind = Literal["systemic", "apparent", "auto"]
+
+
+def sanitize_json_float(val: float | str | None) -> float | str | None:
+    """Convert non-finite floats (NaN, Inf, -Inf) to strings for strict RFC-8259 JSON compliance."""
+    if isinstance(val, float) and not math.isfinite(val):
+        return str(val)
+    return val
 
 
 class _FrozenModel(BaseModel):
@@ -69,6 +77,10 @@ class RuleDefinition(_FrozenModel):
     ]
     approval: RuleApproval
 
+    def threshold_float(self, key: str, default: float) -> float:
+        raw = self.thresholds.get(key, default)
+        return float(raw) if isinstance(raw, (int, float)) else default
+
 
 class ReferencePhysiology(_FrozenModel):
     adult_reference_weight_kg: float
@@ -98,11 +110,14 @@ class RuleCatalog(_FrozenModel):
 
 
 @functools.lru_cache(maxsize=1)
-def load_rule_catalog() -> RuleCatalog:
-    """Load and validate the static rule catalog JSON."""
+def _cached_catalog_json() -> str:
     catalog_path = Path(__file__).with_name("catalog.json")
-    raw = json.loads(catalog_path.read_text(encoding="utf-8"))
-    return RuleCatalog.model_validate(raw)
+    return catalog_path.read_text(encoding="utf-8")
+
+
+def load_rule_catalog() -> RuleCatalog:
+    """Load and validate a fresh RuleCatalog instance from static JSON."""
+    return RuleCatalog.model_validate(json.loads(_cached_catalog_json()))
 
 
 class PopPKContext(_FrozenModel):
@@ -122,9 +137,9 @@ class PopPKContext(_FrozenModel):
 
 
 class ParameterSpec(_FrozenModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=128)
     value: float
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=64)
     scale: ScaleKind = "auto"
     fixed: bool = False
     lower_bound: float | None = None
@@ -135,21 +150,21 @@ class NormalizedParameter(_FrozenModel):
     name: str
     canonical_name: str
     param_class: str
-    observed_value: float
+    observed_value: float | str
     observed_unit: str | None
     normalized_value: float | None
     normalized_unit: str | None
     weight_normalized: bool = False
     resolved_scale: Literal["systemic", "apparent", "not_applicable"] = "not_applicable"
-    unit_status: Literal["valid", "missing", "incompatible", "unknown"] = "valid"
+    unit_status: Literal["compatible", "missing", "incompatible", "unknown"] = "compatible"
     unit_message: str = ""
 
 
 class IIVSpec(_FrozenModel):
-    parameter: str = Field(min_length=1)
+    parameter: str = Field(min_length=1, max_length=128)
     omega_var: float | None = None
     cv_pct: float | None = None
-    distribution: Literal["lognormal", "normal", "logit"] = "lognormal"
+    distribution: Literal["lognormal", "proportional", "normal", "logit"] = "lognormal"
     fixed: bool = False
 
 
@@ -157,24 +172,24 @@ class ResidualErrorSpec(_FrozenModel):
     kind: Literal["proportional", "additive", "combined", "exponential"] = "proportional"
     sigma_var: float | None = None
     sd_or_cv: float | None = None
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=64)
 
 
 class PredictionPoint(_FrozenModel):
     time: float
     pred: float | None = None
     ipred: float | None = None
-    unit: str = "mg/L"
-    subject_id: str | None = None
+    unit: str = Field(default="mg/L", max_length=64)
+    subject_id: str | None = Field(default=None, max_length=128)
 
 
 class JustificationRecord(_FrozenModel):
     rule_id: str = Field(pattern=r"^PL-\d{3}$")
-    parameter: str = Field(min_length=1)
-    rationale: str = Field(min_length=1)
-    scientific_basis_or_citation: str = Field(min_length=1)
-    reviewer: str = Field(min_length=1)
-    timestamp: str = Field(min_length=1)
+    parameter: str = Field(min_length=1, max_length=128)
+    rationale: str = Field(min_length=1, max_length=2000)
+    scientific_basis_or_citation: str = Field(min_length=1, max_length=1000)
+    reviewer: str = Field(min_length=1, max_length=256)
+    timestamp: str = Field(min_length=1, max_length=128)
 
     @field_validator("rationale", "scientific_basis_or_citation", "reviewer", "timestamp")
     @classmethod
@@ -186,17 +201,17 @@ class JustificationRecord(_FrozenModel):
 
 
 class PopPKModelInput(_FrozenModel):
-    model_id: str = Field(default="unnamed_model", min_length=1)
+    model_id: str = Field(default="unnamed_model", min_length=1, max_length=256)
     context: PopPKContext = Field(default_factory=PopPKContext)
-    parameters: tuple[ParameterSpec, ...] = ()
+    parameters: tuple[ParameterSpec, ...] = Field(default=(), max_length=128)
     allometric_exponents: dict[str, float] = Field(default_factory=dict)
-    iiv: tuple[IIVSpec, ...] = ()
-    omega_matrix: tuple[tuple[float, ...], ...] | None = None
-    sigma_matrix: tuple[tuple[float, ...], ...] | None = None
+    iiv: tuple[IIVSpec, ...] = Field(default=(), max_length=128)
+    omega_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
+    sigma_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
     correlations: dict[str, float] = Field(default_factory=dict)
-    residual_error: tuple[ResidualErrorSpec, ...] = ()
-    predictions: tuple[PredictionPoint, ...] = ()
-    justifications: tuple[JustificationRecord, ...] = ()
+    residual_error: tuple[ResidualErrorSpec, ...] = Field(default=(), max_length=64)
+    predictions: tuple[PredictionPoint, ...] = Field(default=(), max_length=2000)
+    justifications: tuple[JustificationRecord, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="before")
     @classmethod
@@ -206,7 +221,15 @@ class PopPKModelInput(_FrozenModel):
         copied = dict(data)
         for key in ("allometric_exponents", "correlations"):
             if key in copied and isinstance(copied[key], dict):
+                if len(copied[key]) > 128:
+                    raise ValueError(f"'{key}' exceeds maximum size of 128 entries.")
                 copied[key] = dict(copied[key])
+        for mat_key in ("omega_matrix", "sigma_matrix"):
+            mat = copied.get(mat_key)
+            if isinstance(mat, (list, tuple)) and any(
+                isinstance(r, (list, tuple)) and len(r) > 64 for r in mat
+            ):
+                raise ValueError(f"'{mat_key}' row length exceeds maximum of 64.")
         return copied
 
 
@@ -229,3 +252,15 @@ class PlausibilityFinding(_FrozenModel):
     override_status: OverrideStatus = "none"
     justification: JustificationRecord | None = None
     override_note: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_floats(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        copied = dict(data)
+        copied["observed_value"] = sanitize_json_float(copied.get("observed_value"))
+        nv = copied.get("normalized_value")
+        if isinstance(nv, float) and not math.isfinite(nv):
+            copied["normalized_value"] = None
+        return copied

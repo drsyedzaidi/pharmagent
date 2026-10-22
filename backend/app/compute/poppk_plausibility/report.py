@@ -24,6 +24,10 @@ MANDATORY_DISCLAIMER = (
 )
 
 
+def _md_safe(val: object) -> str:
+    return str(val).replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+
+
 class PlausibilityReport(_FrozenModel):
     report_version: str = "1.0.0"
     catalog_version: str
@@ -41,7 +45,7 @@ class PlausibilityReport(_FrozenModel):
 
     def to_markdown(self) -> str:
         lines: list[str] = [
-            f"# PopPK Physiological Plausibility Screening Report: `{self.model_id}`",
+            f"# PopPK Physiological Plausibility Screening Report: `{_md_safe(self.model_id)}`",
             "",
             f"> **Disclaimer:** {self.disclaimer}",
             "",
@@ -63,15 +67,19 @@ class PlausibilityReport(_FrozenModel):
             "|---|---|---|---|---|---|---|---|",
         ]
         for f in self.findings:
-            obs = f"{f.observed_value} {f.observed_unit or ''}".strip() if f.observed_value is not None else "-"
+            obs = (
+                _md_safe(f"{f.observed_value} {f.observed_unit or ''}".strip())
+                if f.observed_value is not None
+                else "-"
+            )
             norm = (
-                f"{f.normalized_value:.4g} {f.normalized_unit or ''}".strip()
+                _md_safe(f"{f.normalized_value:.4g} {f.normalized_unit or ''}".strip())
                 if f.normalized_value is not None
                 else "-"
             )
             lines.append(
-                f"| `{f.rule_id}` | `{f.parameter}` | `{f.status}` | `{f.severity}` "
-                f"| {obs} | {norm} | {f.expected_range or '-'} | `{f.override_status}` |"
+                f"| `{f.rule_id}` | `{_md_safe(f.parameter)}` | `{f.status}` | `{f.severity}` "
+                f"| {obs} | {norm} | {_md_safe(f.expected_range or '-')} | `{f.override_status}` |"
             )
         justified = [f for f in self.findings if f.justification is not None]
         if justified:
@@ -80,9 +88,9 @@ class PlausibilityReport(_FrozenModel):
                 j = f.justification
                 if j is not None:
                     lines.append(
-                        f"- **`{f.rule_id}` (`{f.parameter}`)** — *{f.override_status}* "
-                        f"by {j.reviewer} ({j.timestamp}): {j.rationale} "
-                        f"[Basis: {j.scientific_basis_or_citation}]"
+                        f"- **`{f.rule_id}` (`{_md_safe(f.parameter)}`)** — *{f.override_status}* "
+                        f"by {_md_safe(j.reviewer)} ({_md_safe(j.timestamp)}): {_md_safe(j.rationale)} "
+                        f"[Basis: {_md_safe(j.scientific_basis_or_citation)}]"
                     )
         return "\n".join(lines)
 
@@ -110,8 +118,28 @@ def build_plausibility_report(
     normalized_parameters: tuple[NormalizedParameter, ...],
     findings: tuple[PlausibilityFinding, ...],
 ) -> PlausibilityReport:
-    sorted_params = tuple(sorted(normalized_parameters, key=lambda p: (p.canonical_name, p.name)))
-    sorted_findings = tuple(sorted(findings, key=lambda f: (f.rule_id, f.parameter)))
+    sorted_params = tuple(
+        sorted(
+            normalized_parameters,
+            key=lambda p: (
+                p.canonical_name,
+                p.name,
+                str(p.observed_value),
+                str(p.observed_unit),
+            ),
+        )
+    )
+    sorted_findings = tuple(
+        sorted(
+            findings,
+            key=lambda f: (
+                f.rule_id,
+                f.parameter,
+                str(f.observed_value),
+                str(f.observed_unit),
+            ),
+        )
+    )
 
     counts: dict[str, int] = {
         "PASS": 0,
@@ -159,7 +187,9 @@ def build_plausibility_report(
         "summary_counts": counts,
     }
     digest = hashlib.sha256(
-        json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonical_payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
     ).hexdigest()
 
     return PlausibilityReport(

@@ -68,6 +68,13 @@ def resolve_physiology_context(
             **base_kwargs,
         )
 
+    if ctx.age_years is not None and (not math.isfinite(ctx.age_years) or not (0.0 <= ctx.age_years <= 130.0)):
+        return ResolvedPhysiologyContext(
+            is_resolvable=False,
+            unresolved_reason="Provided 'age_years' must be a finite value in [0, 130] years.",
+            **base_kwargs,
+        )
+
     if ctx.population in {"pediatric", "neonatal"} and ctx.reference_weight_kg is None:
         return ResolvedPhysiologyContext(
             is_resolvable=False,
@@ -78,15 +85,25 @@ def resolve_physiology_context(
             **base_kwargs,
         )
 
-    if ctx.population == "pregnancy" and ctx.gestational_age_weeks is None:
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason=(
-                "Population 'pregnancy' requires 'gestational_age_weeks' to resolve "
-                "pregnancy-induced hemodynamic and volume changes."
-            ),
-            **base_kwargs,
-        )
+    if ctx.population == "pregnancy":
+        ga = ctx.gestational_age_weeks
+        if ga is None or not math.isfinite(ga) or not (0.0 < ga <= 45.0):
+            return ResolvedPhysiologyContext(
+                is_resolvable=False,
+                unresolved_reason=(
+                    "Population 'pregnancy' requires a finite 'gestational_age_weeks' in (0, 45] "
+                    "to resolve pregnancy-induced hemodynamic and volume changes."
+                ),
+                **base_kwargs,
+            )
+    elif ctx.gestational_age_weeks is not None:
+        ga = ctx.gestational_age_weeks
+        if not math.isfinite(ga) or not (0.0 < ga <= 45.0):
+            return ResolvedPhysiologyContext(
+                is_resolvable=False,
+                unresolved_reason="Provided 'gestational_age_weeks' must be a finite value in (0, 45].",
+                **base_kwargs,
+            )
 
     if ctx.population == "hepatic_impairment" and ctx.child_pugh is None:
         return ResolvedPhysiologyContext(
@@ -94,6 +111,16 @@ def resolve_physiology_context(
             unresolved_reason="Population 'hepatic_impairment' requires 'child_pugh' ('A', 'B', or 'C').",
             **base_kwargs,
         )
+
+    rb = 1.0
+    if ctx.blood_to_plasma_ratio is not None:
+        if not math.isfinite(ctx.blood_to_plasma_ratio) or ctx.blood_to_plasma_ratio <= 0.0:
+            return ResolvedPhysiologyContext(
+                is_resolvable=False,
+                unresolved_reason="Provided 'blood_to_plasma_ratio' must be finite and > 0.",
+                **base_kwargs,
+            )
+        rb = float(ctx.blood_to_plasma_ratio)
 
     wt = ctx.reference_weight_kg
     if wt is None or not math.isfinite(wt) or wt <= 0:
@@ -115,13 +142,17 @@ def resolve_physiology_context(
         preg_flow_factor = 1.0 + 0.35 * ga_frac
         preg_vol_factor = 1.0 + 0.40 * ga_frac
 
-    qh = ref.adult_hepatic_blood_flow_l_h * flow_scale * hepatic_factor * elderly_factor * preg_flow_factor
-    co = ref.adult_cardiac_output_l_h * flow_scale * preg_flow_factor
+    qh = ref.adult_hepatic_blood_flow_l_h * flow_scale * hepatic_factor * elderly_factor * preg_flow_factor * rb
+    co = ref.adult_cardiac_output_l_h * flow_scale * elderly_factor * preg_flow_factor * rb
 
-    if ctx.egfr_ml_min_1_73m2 is not None and math.isfinite(ctx.egfr_ml_min_1_73m2) and ctx.egfr_ml_min_1_73m2 > 0:
-        gfr_l_h: float | None = float(ctx.egfr_ml_min_1_73m2) * 0.06 * flow_scale
-        renal_factor = min(float(ctx.egfr_ml_min_1_73m2) / 120.0, 1.2)
-        qr_plasma: float | None = ref.adult_renal_plasma_flow_l_h * flow_scale * max(renal_factor, 0.25)
+    if ctx.egfr_ml_min_1_73m2 is not None:
+        if not math.isfinite(ctx.egfr_ml_min_1_73m2) or ctx.egfr_ml_min_1_73m2 <= 0.0:
+            gfr_l_h: float | None = None
+            qr_plasma: float | None = None
+        else:
+            gfr_l_h = float(ctx.egfr_ml_min_1_73m2) * 0.06 * flow_scale
+            renal_factor = min(float(ctx.egfr_ml_min_1_73m2) / 125.0, 1.2)
+            qr_plasma = ref.adult_renal_plasma_flow_l_h * flow_scale * max(renal_factor, 0.25)
     elif ctx.population == "renal_impairment":
         gfr_l_h = None
         qr_plasma = None
