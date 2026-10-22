@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from python_multipart.exceptions import FormParserError
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.formparsers import MultiPartException
 
 from app.config import settings
@@ -393,6 +394,8 @@ async def upload_for_session(sid: str, request: Request, sess=Depends(writable_s
         form = await request.form(max_files=1, max_fields=5)
     except (MultiPartException, FormParserError) as e:   # malformed or over-limit multipart: a client error
         raise HTTPException(400, f"malformed multipart upload: {getattr(e, 'message', None) or e}")
+    except StarletteHTTPException as e:                    # Starlette's own form errors -> the app's envelope
+        raise HTTPException(e.status_code, f"malformed multipart upload: {e.detail}")
     try:                                     # always release the parser's spooled temporary files
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):
@@ -404,27 +407,35 @@ async def upload_for_session(sid: str, request: Request, sess=Depends(writable_s
         data_dir.mkdir(parents=True, exist_ok=True)
         stem = Path(file.filename or "upload").stem
         dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
-        size = 0
-        with dest.open("wb") as f:
-            while chunk := await file.read(1 << 20):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    f.close()
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
-                f.write(chunk)
-        import pandas as pd
+        try:                                 # any failure once dest may exist removes it: no stored file survives
+            try:
+                out = dest.open("wb")
+            except OSError:
+                raise HTTPException(400, "could not store the upload: invalid or too long file name")
+            size = 0
+            with out as f:
+                while chunk := await file.read(1 << 20):
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+                    f.write(chunk)
+            import pandas as pd
 
-        from app.core.schema_extractor import extract_schema
-        from app.tools.data_tools import NONMEM_NA_VALUES
-        try:
-            df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
-        except Exception as e:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(400, f"could not parse CSV: {e}")
-        meta = extract_schema(df, dataset_id=dest.stem)
-        meta["dataset_path"] = str(dest)
-        return {"dataset_id": dest.stem, "metadata": meta}
+            from app.core.schema_extractor import extract_schema
+            from app.tools.data_tools import NONMEM_NA_VALUES
+            try:
+                df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
+            except Exception as e:
+                raise HTTPException(400, f"could not parse CSV: {e}")
+            meta = extract_schema(df, dataset_id=dest.stem)
+            meta["dataset_path"] = str(dest)
+            return {"dataset_id": dest.stem, "metadata": meta}
+        except BaseException:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:          # e.g. a name too long to exist: nothing was stored; keep the original error
+                pass
+            raise
     finally:
         await form.close()
 
