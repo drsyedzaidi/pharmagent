@@ -11,6 +11,8 @@ from typing import Any
 
 from app.compute.poppk_plausibility.context import ResolvedPhysiologyContext
 from app.compute.poppk_plausibility.schema import (
+    FrozenIntMap,
+    FrozenMap,
     NormalizedParameter,
     PlausibilityFinding,
     PopPKContext,
@@ -34,10 +36,10 @@ class PlausibilityReport(_FrozenModel):
     model_id: str
     screening_status: ScreeningStatus
     disclaimer: str = MANDATORY_DISCLAIMER
-    context_summary: dict[str, Any]
+    context_summary: FrozenMap
     normalized_parameters: tuple[NormalizedParameter, ...]
     findings: tuple[PlausibilityFinding, ...]
-    summary_counts: dict[str, int]
+    summary_counts: FrozenIntMap
     report_sha256: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,6 +169,10 @@ def build_plausibility_report(
         "reference_weight_kg": context.reference_weight_kg,
         "route": context.route,
         "modality": context.modality,
+        "elimination_pathway": context.elimination_pathway,
+        "clearance_matrix": context.clearance_matrix,
+        "compartmental_structure": context.compartmental_structure,
+        "formulation_release": context.formulation_release,
         "physiology_resolvable": phys.is_resolvable,
         "unresolved_reason": phys.unresolved_reason,
         "scaled_hepatic_blood_flow_l_h": phys.hepatic_blood_flow_l_h,

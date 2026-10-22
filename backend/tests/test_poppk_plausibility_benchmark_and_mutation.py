@@ -59,7 +59,7 @@ def test_offline_benchmark_suite_achieves_full_recall_and_zero_false_flags() -> 
 
 def test_mutation_guard_1_removed_rule_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutating the rule engine by silencing PL-004 must cause benchmark recall to drop below 1.0."""
-    def _mutated_pl004(catalog, params, phys):
+    def _mutated_pl004(catalog, model, params, phys):
         rule = catalog.by_id("PL-004")
         return [make_finding(rule, parameter="CL", status="PASS")]
 
@@ -208,13 +208,13 @@ def test_non_human_species_and_unknown_population_and_renal_impairment_unresolve
     f05 = [f for f in rep_renal.findings if f.rule_id == "PL-005"][0]
     assert f05.status == "UNRESOLVED"
 
-    # Pregnancy WITH gestational_age_weeks resolves and passes plausible parameters
-    m_preg_ok = PopPKModelInput(
-        model_id="preg_ok",
+    # Special populations with pending_owner_review rules remain UNRESOLVED even with valid covariates
+    m_preg_pending = PopPKModelInput(
+        model_id="preg_pending",
         context=PopPKContext(population="pregnancy", reference_weight_kg=75.0, gestational_age_weeks=32.0),
         parameters=(ParameterSpec(name="CL", value=15.0, unit="L/h"), ParameterSpec(name="Vc", value=35.0, unit="L")),
     )
-    assert evaluate_poppk_plausibility(m_preg_ok).screening_status == "SCREENING_PASS"
+    assert evaluate_poppk_plausibility(m_preg_pending).screening_status == "INCOMPLETE_CONTEXT"
 
 
 def test_unit_compatibility_errors_and_weight_normalized_flows() -> None:
@@ -238,8 +238,7 @@ def test_unit_compatibility_errors_and_weight_normalized_flows() -> None:
             ParameterSpec(name="CL", value=0.1, unit="L/h/kg"),
             ParameterSpec(name="Vc", value=0.5, unit="L/kg"),
             ParameterSpec(name="Vp", value=0.4, unit="L/kg"),
-            ParameterSpec(name="Q2", value=10.0, unit="mL/h/kg"),
-            ParameterSpec(name="Vp2", value=0.2, unit="L/kg"),
+            ParameterSpec(name="Q", value=10.0, unit="mL/h/kg"),
         ),
     )
     rep = evaluate_poppk_plausibility(m_wt_cl)
@@ -395,9 +394,8 @@ def test_reviewer_scientific_and_security_regressions() -> None:
     assert "NaN" in dumped
 
     cat1 = load_rule_catalog()
-    cat1.by_id("PL-004").thresholds["mutated_key"] = 999999.0
-    cat2 = load_rule_catalog()
-    assert "mutated_key" not in cat2.by_id("PL-004").thresholds
+    with pytest.raises(TypeError):
+        cat1.by_id("PL-004").thresholds["mutated_key"] = 999999.0  # type: ignore[index]
 
     # 7. Stochastic & micro-rate reviewer edge cases (omega-only PL-012/015, normal IIV without cv_pct, inconsistent RUV)
     m_stoch_rev = PopPKModelInput(
@@ -478,3 +476,268 @@ def test_isolated_read_only_tool_adapter_executes_without_mutating_state() -> No
     assert "does not constitute regulatory validation" in res.summary
     assert len(audit.entries) == 1
     assert audit.verify() is True
+
+
+def test_correction_cycle_scientific_applicability_provenance_and_deep_immutability() -> None:
+    from pathlib import Path
+
+    from pydantic import ValidationError
+
+    from app.compute.poppk_plausibility.context import resolve_physiology_context
+
+    # 0. Canonical skill path check
+    repo_root = Path(__file__).resolve().parents[2]
+    assert (repo_root / "skills" / "poppk-plausibility-checker" / "SKILL.md").is_file()
+    assert not (repo_root / ".claude" / "skills" / "poppk-plausibility-checker").exists()
+
+    cat = load_rule_catalog()
+    approved_all = cat.reference_physiology.model_copy(
+        update={
+            "special_population_rules_status": {
+                "pediatric": "approved",
+                "neonate": "approved",
+                "elderly": "approved",
+                "pregnancy": "approved",
+                "renal_impairment": "approved",
+                "hepatic_impairment": "approved",
+            }
+        }
+    )
+    for sp_ctx in (
+        PopPKContext(population="neonate", reference_weight_kg=3.5, age_years=0.05),
+        PopPKContext(population="elderly", reference_weight_kg=68.0, age_years=80.0),
+        PopPKContext(population="pregnancy", reference_weight_kg=75.0, gestational_age_weeks=32.0),
+        PopPKContext(population="renal_impairment", reference_weight_kg=70.0, egfr_ml_min_1_73m2=35.0),
+    ):
+        assert resolve_physiology_context(sp_ctx, approved_all).is_resolvable is True
+
+    # 1. PL-004: elimination_pathway, clearance_matrix, blood_to_plasma_ratio (CL_blood = CL_plasma / Rb),
+    # and ambiguous extravascular scale
+    phys_rb = resolve_physiology_context(
+        PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="iv",
+             clearance_matrix="plasma",
+            blood_to_plasma_ratio=0.5,
+        ),
+        cat.reference_physiology,
+    )
+    # Whole-blood reference flows Q_H and CO are never multiplied or divided by Rb in context.py
+    assert phys_rb.hepatic_blood_flow_l_h == 90.0
+    assert phys_rb.cardiac_output_l_h == 300.0
+    assert phys_rb.blood_to_plasma_ratio == 0.5
+
+    # Plasma CL = 60 L/h with Rb = 0.5 -> CL_blood = 60 / 0.5 = 120 L/h > Q_H (90 L/h) -> FLAGGED WARN
+    m_plasma_high = PopPKModelInput(
+        model_id="plasma_rb_05",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="iv",
+            clearance_matrix="plasma",
+            blood_to_plasma_ratio=0.5,
+        ),
+        parameters=(ParameterSpec(name="CL", value=60.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    f04_rb05 = [f for f in evaluate_poppk_plausibility(m_plasma_high).findings if f.rule_id == "PL-004"][0]
+    assert f04_rb05.status == "FLAGGED"
+    assert f04_rb05.normalized_value == 120.0
+
+    # Plasma CL = 120 L/h with Rb = 2.0 -> CL_blood = 120 / 2.0 = 60 L/h <= Q_H (90 L/h) -> PASS
+    m_plasma_pass = PopPKModelInput(
+        model_id="plasma_rb_20",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="iv",
+            clearance_matrix="plasma",
+            blood_to_plasma_ratio=2.0,
+        ),
+        parameters=(ParameterSpec(name="CL", value=120.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    f04_rb20 = [f for f in evaluate_poppk_plausibility(m_plasma_pass).findings if f.rule_id == "PL-004"][0]
+    assert f04_rb20.status == "PASS"
+    assert f04_rb20.normalized_value == 60.0
+
+    # Plasma matrix without blood_to_plasma_ratio -> UNRESOLVED
+    m_plasma_no_rb = PopPKModelInput(
+        model_id="plasma_no_rb",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", clearance_matrix="plasma"),
+        parameters=(ParameterSpec(name="CL", value=20.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_plasma_no_rb).findings if f.rule_id == "PL-004"][0].status == "UNRESOLVED"
+
+    # Renal or extrahepatic elimination pathway -> PL-004 NOT_APPLICABLE; unknown pathway -> UNRESOLVED
+    m_renal_elim = PopPKModelInput(
+        model_id="renal_elim",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", elimination_pathway="renal"),
+        parameters=(ParameterSpec(name="CL", value=120.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_renal_elim).findings if f.rule_id == "PL-004"][0].status == "NOT_APPLICABLE"
+
+    m_unk_elim = PopPKModelInput(
+        model_id="unk_elim",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv", elimination_pathway="unknown"),
+        parameters=(ParameterSpec(name="CL", value=20.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_unk_elim).findings if f.rule_id == "PL-004"][0].status == "UNRESOLVED"
+
+    # Oral route with generic "CL" and "Vc" (scale="auto") and no F -> resolved_scale="ambiguous" -> UNRESOLVED
+    m_oral_ambig = PopPKModelInput(
+        model_id="oral_ambig",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="oral"),
+        parameters=(ParameterSpec(name="CL", value=20.0, unit="L/h"), ParameterSpec(name="Vc", value=30.0, unit="L")),
+    )
+    rep_ambig = evaluate_poppk_plausibility(m_oral_ambig)
+    assert [f for f in rep_ambig.findings if f.rule_id == "PL-004"][0].status == "UNRESOLVED"
+    assert [f for f in rep_ambig.findings if f.rule_id == "PL-006"][0].status == "UNRESOLVED"
+
+    # 2. PL-006: framed as modeling_heuristic, never "physically impossible"
+    r06 = cat.by_id("PL-006")
+    assert r06.rule_type == "modeling_heuristic"
+    assert "physically impossible" not in r06.scientific_rationale.lower()
+
+    # 3. PL-007: equality with Vc + sum(Vp) requires compartmental_structure == "mammillary_central_elimination"
+    m_non_mam = PopPKModelInput(
+        model_id="non_mam",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="iv",
+            compartmental_structure="peripheral_elimination",
+        ),
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=30.0, unit="L"),
+            ParameterSpec(name="Vss", value=80.0, unit="L"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_non_mam).findings if f.rule_id == "PL-007"][0].status == "PASS"
+
+    m_unk_struct = PopPKModelInput(
+        model_id="unk_struct",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="iv",
+            compartmental_structure="unknown",
+        ),
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=30.0, unit="L"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_unk_struct).findings if f.rule_id == "PL-007"][0].status == "UNRESOLVED"
+
+    # 4. PL-008: terminal half-life (t_half = ln(2)/beta) vs effective half-life (t_half_eff = ln(2)*Vss/CL)
+    # For CL=10, Vc=20, Vp=80, Q=20: t_half_term = 9.301 h, whereas t_half_eff = ln(2)*100/10 = 6.931 h.
+    # Supplying t_half = 6.931 h (confusing effective half-life for terminal half-life) MUST BE FLAGGED!
+    m_thalf_confused = PopPKModelInput(
+        model_id="thalf_confused",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv"),
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=80.0, unit="L"),
+            ParameterSpec(name="Q", value=20.0, unit="L/h"),
+            ParameterSpec(name="t_half", value=6.931, unit="h"),
+        ),
+    )
+    f08_conf = [f for f in evaluate_poppk_plausibility(m_thalf_confused).findings if f.rule_id == "PL-008"][0]
+    assert f08_conf.status == "FLAGGED"
+    assert f08_conf.override_allowed is False
+    assert "not interchangeable" in f08_conf.scientific_rationale
+
+    # Supplying t_half_eff = 6.931 h AND t_half = 9.301 h both PASS!
+    m_both_thalf = PopPKModelInput(
+        model_id="both_thalf",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv"),
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=80.0, unit="L"),
+            ParameterSpec(name="Q", value=20.0, unit="L/h"),
+            ParameterSpec(name="t_half", value=9.301, unit="h"),
+            ParameterSpec(name="t_half_eff", value=6.931, unit="h"),
+        ),
+    )
+    f08_both = [f for f in evaluate_poppk_plausibility(m_both_thalf).findings if f.rule_id == "PL-008"]
+    assert len(f08_both) == 2
+    assert all(f.status == "PASS" for f in f08_both)
+
+    # 2-compartment model with Vp but missing Q -> terminal half-life is UNRESOLVED
+    m_vp_no_q = PopPKModelInput(
+        model_id="vp_no_q",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv"),
+        parameters=(
+            ParameterSpec(name="CL", value=10.0, unit="L/h"),
+            ParameterSpec(name="Vc", value=20.0, unit="L"),
+            ParameterSpec(name="Vp", value=80.0, unit="L"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_vp_no_q).findings if f.rule_id == "PL-008"][0].status == "UNRESOLVED"
+
+    # 5. PL-009: route/formulation dependence for ka and flip-flop kinetics
+    m_depot_ff = PopPKModelInput(
+        model_id="depot_ff",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="im",
+            formulation_release="depot_or_long_acting",
+        ),
+        parameters=(
+            ParameterSpec(name="CL", value=15.0, unit="L/h", scale="systemic"),
+            ParameterSpec(name="Vc", value=30.0, unit="L", scale="systemic"),
+            ParameterSpec(name="ka", value=0.02, unit="1/h"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_depot_ff).findings if f.rule_id == "PL-009"][0].status == "PASS"
+
+    m_unk_form = PopPKModelInput(
+        model_id="unk_form",
+        context=PopPKContext(
+            population="adult",
+            reference_weight_kg=70.0,
+            route="oral",
+            formulation_release="unknown",
+        ),
+        parameters=(
+            ParameterSpec(name="CL", value=15.0, unit="L/h", scale="systemic"),
+            ParameterSpec(name="Vc", value=30.0, unit="L", scale="systemic"),
+            ParameterSpec(name="ka", value=1.0, unit="1/h"),
+        ),
+    )
+    assert [f for f in evaluate_poppk_plausibility(m_unk_form).findings if f.rule_id == "PL-009"][0].status == "UNRESOLVED"
+
+    # 6. Deep immutability across input models, catalog, report, and benchmark summary
+    m_immut = PopPKModelInput(
+        model_id="immut",
+        context=PopPKContext(population="adult", reference_weight_kg=70.0, route="iv"),
+        parameters=(ParameterSpec(name="CL", value=10.0, unit="L/h"), ParameterSpec(name="Vc", value=25.0, unit="L")),
+        allometric_exponents={"CL": 0.75},
+        correlations={"CL:Vc": 0.2},
+    )
+    with pytest.raises(TypeError):
+        m_immut.allometric_exponents["CL"] = 99.0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        m_immut.correlations["CL:Vc"] = 0.99  # type: ignore[index]
+    with pytest.raises(TypeError):
+        cat.reference_physiology.special_population_rules_status["pediatric"] = "approved"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        cat.reference_physiology.population_scaling.child_pugh_flow_factors["A"] = 1.0  # type: ignore[index]
+
+    rep_immut = evaluate_poppk_plausibility(m_immut)
+    with pytest.raises(TypeError):
+        rep_immut.context_summary["species"] = "rat"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        rep_immut.summary_counts["PASS"] = 999  # type: ignore[index]
+
+    bench_sum = run_plausibility_benchmark()
+    with pytest.raises(TypeError):
+        bench_sum.severity_distribution["INFO"] = 0  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        bench_sum.case_results[0].case_id = "mutated"  # type: ignore[misc]

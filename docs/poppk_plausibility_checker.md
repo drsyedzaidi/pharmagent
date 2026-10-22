@@ -6,107 +6,72 @@
 
 ### Intended Use
 - **Pre-review & QA screening** of population pharmacokinetic (`PopPK`) parameter tables before simulation, reporting, or downstream regulatory authoring.
-- **Deterministic detection** of mathematical impossibilities (non-positive structural parameters, negative variances, non-positive-semidefinite $\Omega/\Sigma$ matrices, correlations $|r_{ij}| > 1$, negative predicted concentrations, incompatible physical units) and physiologically implausible parameter estimates relative to context-scaled human reference bounds.
-- **Traceable human justification governance** that records why an extreme or atypical physiological parameter (e.g., extrahepatic blood-esterase clearance exceeding hepatic blood flow, or flip-flop kinetics in an extended-release formulation) was accepted by a qualified reviewer without erasing the underlying finding.
+- **Deterministic detection** of mathematical identities/impossibilities (non-positive structural parameters, negative variances, non-positive-semidefinite $\Omega/\Sigma$ matrices, correlations $|r_{ij}| > 1$, negative predicted concentrations, incompatible physical units), physiological reference violations, and modeling heuristics.
+- **Traceable human justification governance** that records why an extreme or atypical physiological parameter (e.g., extrahepatic blood-esterase clearance exceeding hepatic blood flow, or flip-flop kinetics in an immediate-release formulation) was accepted by a qualified reviewer without erasing the underlying finding.
 
 ### Non-Intended Use
-- **Not regulatory validation:** Passing all 20 plausibility rules (`SCREENING_PASS`) never proves that a model is statistically well-specified, identifiable, or fit for regulatory submission.
+- **Not regulatory or scientific validation:** Passing all 20 plausibility rules (`SCREENING_PASS`) never proves that a model is statistically well-specified, identifiable, or fit for regulatory submission.
 - **Not an automatic parameter modifier:** The engine never rewrites, clips, drops, or imputes submitted model parameters.
 
 ---
 
-## 2. Rule Taxonomy (`PL-001` through `PL-020`)
+## 2. Rule Taxonomy & Provenance (`PL-001` through `PL-020`)
 
-All rules are defined in `backend/app/compute/poppk_plausibility/catalog.json` (version `1.0.0`) with explicit source classifications (`mathematical_identity`, `physiological_reference`, `allometric_theory`, `modeling_heuristic`) and owner approval tracking (`pending_owner_review` by default).
+All rules are defined in `backend/app/compute/poppk_plausibility/catalog.json` (`catalog_version = "1.1.0"`). Every rule explicitly separates:
+- `rule_type`:
+  - `"mathematical_identity"`: Hard mathematical or dimensional identities (`PL-001`, `PL-002`, `PL-003`, `PL-007`, `PL-008`, `PL-013`, `PL-014`, `PL-015`, `PL-019`, `PL-020`).
+  - `"physiological_reference"`: Comparisons against published anatomical/physiological reference flows or spaces (`PL-004`, `PL-005`, `PL-010`, `PL-011`, `PL-017`, `PL-018`).
+  - `"modeling_heuristic"`: Empirical PopPK modeling review heuristics (`PL-006`, `PL-009`, `PL-012`, `PL-016`).
+- `approval_status`: Every rule and every special-population scaling rule is set to `"pending_owner_review"` until formally reviewed and approved by the repository owner.
+- `reference_basis`: Complete, source-verified bibliographic citations (author(s), full title, journal/book, year, volume/edition, and page numbers).
 
-| Rule ID | Slug | Category | Default Severity | Override Allowed | Summary |
+| Rule ID | Rule Type | Category | Default Severity | Override Allowed | Summary |
 |---|---|---|---|---|---|
-| `PL-001` | `positive_finite_parameters` | `parameter_domain` | `CRITICAL` | `False` | Structural PK parameters ($CL, V, Q, k_a, t_{1/2}$) must be finite and $> 0$. |
-| `PL-002` | `unit_compatibility_and_normalization` | `units` | `CRITICAL` | `False` | Units must be explicit, recognized, and dimensionally compatible with the parameter class. |
-| `PL-003` | `bioavailability_bounds` | `absorption_bioavailability` | `HIGH` | `True` ($F>1$) / `False` ($F\le 0$) | Absolute bioavailability $F \in (0, 1]$ (or $(0, 100]\%$ when explicitly typed as `%`). |
-| `PL-004` | `systemic_clearance_vs_hepatic_flow` | `physiological_clearance` | `WARN` | `True` | Systemic $CL$ (distinguished from $CL/F$) vs. scaled hepatic blood flow ($Q_H \approx 90\text{ L/h}$) and cardiac output ($\approx 300\text{ L/h}$). |
-| `PL-005` | `renal_clearance_vs_gfr_and_renal_flow` | `physiological_clearance` | `WARN` | `True` | Renal clearance $CL_R$ vs. filtration ($f_u \cdot \text{GFR}$) and effective renal plasma flow ($Q_{R,\text{plasma}} \approx 36\text{ L/h}$). |
-| `PL-006` | `central_volume_vs_physiological_space` | `physiological_volume` | `HIGH` | `True` | Central volume $V_c$ compared with plasma floor ($0.03\text{ L/kg}$) and tissue ceiling ($20\text{–}50\text{ L/kg}$). |
-| `PL-007` | `steady_state_volume_consistency` | `physiological_volume` | `HIGH` | `True` | $V_{ss}$ physiological bounds ($[0.03, 100]\text{ L/kg}$) and equality with $V_c + \sum V_p$ ($\pm 5\%$). |
-| `PL-008` | `half_life_clearance_volume_consistency` | `derived_kinetics` | `HIGH` | `True` | Reported $t_{1/2}$ consistency with $\ln(2)\cdot V_c/CL$ ($\pm 10\%$) and $[0.01, 5000]\text{ h}$ window. |
-| `PL-009` | `absorption_ka_and_flip_flop` | `absorption_bioavailability` | `WARN` | `True` | Absorption $k_a \in [0.05, 10]\text{ h}^{-1}$ and flip-flop kinetics detection ($k_a \le k_e = CL/V_c$). |
-| `PL-010` | `allometric_clearance_exponent` | `allometry` | `WARN` | `True` | Allometric weight exponent on clearance/flow near $0.75$ (pass $[0.60, 0.90]$, warn $[0.30, 1.20]$). |
-| `PL-011` | `allometric_volume_exponent` | `allometry` | `WARN` | `True` | Allometric weight exponent on volume near $1.0$ (pass $[0.80, 1.20]$, warn $[0.50, 1.50]$). |
-| `PL-012` | `iiv_magnitude_review` | `random_effects` | `WARN` | `True` | Log-normal IIV $\%CV \le 100\%$ (warn) / $\le 200\%$ (high) and $\omega^2 \leftrightarrow \%CV$ consistency. |
-| `PL-013` | `variance_nonnegative_finite` | `random_effects` | `CRITICAL` | `False` | All variance terms ($\omega^2, \sigma^2$, matrix diagonals) must be finite and $\ge 0$. |
-| `PL-014` | `covariance_matrix_psd` | `random_effects` | `CRITICAL` | `False` | $\Omega$ and $\Sigma$ matrices must be square, symmetric ($\le 10^{-8}$), and positive semidefinite ($\lambda_{\min} \ge -10^{-9}$). |
-| `PL-015` | `correlation_bounds` | `random_effects` | `CRITICAL` | `False` ($|r|>1$) / `True` ($|r|\ge 0.95$) | Correlations $r_{ij} \in [-1, 1]$ (`CRITICAL` outside) and collinearity screen $|r_{ij}| < 0.95$ (`WARN`). |
-| `PL-016` | `residual_error_plausibility` | `residual_error` | `WARN` | `True` | Residual error terms finite, $\ge 0$, not all zero, and proportional RUV $\le 50\%\text{ CV}$ (warn) / $\le 100\%\text{ CV}$ (high). |
-| `PL-017` | `mab_central_volume` | `biologics_mab` | `HIGH` | `True` | Monoclonal antibody $V_c \in [0.03, 0.10]\text{ L/kg}$ (approximating vascular plasma + interstitial space). |
-| `PL-018` | `mab_linear_clearance` | `biologics_mab` | `HIGH` | `True` | Monoclonal antibody linear $CL \in [0.003, 0.05]\text{ L/h}$ ($70\text{ kg}$ eq; $\approx 0.07\text{–}1.2\text{ L/day}$). |
-| `PL-019` | `intercompartmental_micro_rate_consistency` | `structural_consistency` | `HIGH` | `False` (micro-rates) | Micro-rate consistency ($k_{12}=Q/V_c$, $k_{21}=Q/V_p$, $k_{10}=CL/V_c$ within $\pm 2\%$) and $Q \le$ cardiac output. |
-| `PL-020` | `model_prediction_plausibility` | `predictions` | `CRITICAL` | `False` | Supplied `PRED`/`IPRED` points must be finite, nonnegative ($\ge 0$), and $\le 10^6\text{ mg/L}$. |
+| `PL-001` | `mathematical_identity` | `structural_domain` | `CRITICAL` | `False` | Structural PK parameters ($CL, V, Q, k_a, t_{1/2}$) must be finite and $> 0$. |
+| `PL-002` | `mathematical_identity` | `unit_compatibility` | `CRITICAL` | `False` | Units must be explicit, recognized, dimensionally compatible, and free of duplicate canonical aliases. |
+| `PL-003` | `mathematical_identity` | `bioavailability` | `HIGH` | `True` ($F>1$) / `False` ($F\le 0$) | Bioavailability $F \in (0, 1]$ (or $(0, 100]\%$ when typed as `%`). |
+| `PL-004` | `physiological_reference` | `clearance_physiology` | `WARN` | `True` | Systemic whole-blood $CL$ ($CL_{\text{blood}} = CL_{\text{plasma}} / R_b$) vs. scaled hepatic blood flow ($Q_H = 90\text{ L/h}$) and cardiac output ($300\text{ L/h}$) when `elimination_pathway in {"hepatic", "mixed"}` and `modality in {"small_molecule", "peptide"}`. |
+| `PL-005` | `physiological_reference` | `clearance_physiology` | `WARN` | `True` | Renal clearance $CL_R \le CL$ (`override_allowed=False`), $CL_R \le Q_{R,\text{plasma}}$ ($36\text{ L/h}$), and $CL_R \le f_u \cdot \text{GFR}$ ($7.5\text{ L/h}$) without known active tubular secretion. |
+| `PL-006` | `modeling_heuristic` | `volume_physiology` | `HIGH` | `True` | Unusual estimated central compartment volume $V_c$ compared with typical plasma volume ($0.03\text{ L/kg}$) and tissue distribution bounds ($20\text{–}50\text{ L/kg}$). |
+| `PL-007` | `mathematical_identity` | `volume_physiology` | `HIGH` | `True` (bounds) / `False` (sum mismatch) | Mammillary central-elimination identity $V_{ss} = V_c + \sum V_p$ ($\pm 5\%$, requiring `compartmental_structure == "mammillary_central_elimination"`) and $[0.04, 50]\text{ L/kg}$ screening bounds. |
+| `PL-008` | `mathematical_identity` | `derived_kinetics` | `HIGH` | `True` (range) / `False` (identity) | Strictly distinguishes terminal elimination half-life (`t_half`, $t_{1/2,\beta} = \ln(2)/\beta$) from effective half-life (`t_half_eff`, $t_{1/2,\text{eff}} = \ln(2)V_{ss}/CL$); never treats them as interchangeable. |
+| `PL-009` | `modeling_heuristic` | `absorption_kinetics` | `WARN` | `True` | Route- and formulation-dependent (`formulation_release`) screening of $k_a$ and flip-flop kinetics ($k_a \le \beta$); flip-flop is expected for ER/depot/SC mAbs and is an identifiability advisory for immediate-release models. |
+| `PL-010` | `physiological_reference` | `allometric_scaling` | `WARN` | `True` | Allometric weight exponent on clearance/flow near $0.75$ (pass $[0.60, 0.90]$, warn $[0.30, 1.20]$). |
+| `PL-011` | `physiological_reference` | `allometric_scaling` | `WARN` | `True` | Allometric weight exponent on volume near $1.0$ (pass $[0.80, 1.20]$, warn $[0.50, 1.50]$). |
+| `PL-012` | `modeling_heuristic` | `random_effects` | `WARN` | `True` | Log-normal IIV $\%CV \le 100\%$ (warn) / $\le 200\%$ (high) and $\omega^2 \leftrightarrow \%CV$ consistency. |
+| `PL-013` | `mathematical_identity` | `random_effects` | `CRITICAL` | `False` | All variance terms ($\omega^2, \sigma^2$, matrix diagonals) must be finite and $\ge 0$. |
+| `PL-014` | `mathematical_identity` | `random_effects` | `CRITICAL` | `False` | $\Omega$ and $\Sigma$ matrices must be square, symmetric ($\le 10^{-8}$), and positive semidefinite ($\lambda_{\min} \ge -10^{-9}$). |
+| `PL-015` | `mathematical_identity` | `random_effects` | `CRITICAL` | `False` ($|r|>1$) / `True` ($|r|\ge 0.95$) | Correlations $r_{ij} \in [-1, 1]$ (`CRITICAL` outside) and collinearity screen $|r_{ij}| < 0.95$ (`WARN`). |
+| `PL-016` | `modeling_heuristic` | `residual_error` | `WARN` | `True` | Residual error terms finite, $\ge 0$, not all zero, and proportional RUV $\le 50\%\text{ CV}$ (warn) / $\le 100\%\text{ CV}$ (high). |
+| `PL-017` | `physiological_reference` | `biologics_mab` | `HIGH` | `True` | Monoclonal antibody $V_c \in [0.03, 0.10]\text{ L/kg}$ (vascular plasma + interstitial space). |
+| `PL-018` | `physiological_reference` | `biologics_mab` | `HIGH` | `True` | Monoclonal antibody linear $CL \in [0.003, 0.05]\text{ L/h}$ ($70\text{ kg}$ eq; $\approx 0.07\text{–}1.2\text{ L/day}$). |
+| `PL-019` | `mathematical_identity` | `micro_rate_consistency` | `HIGH` | `False` (micro-rates) | Micro-rate consistency ($k_{12}=Q/V_c$, $k_{21}=Q/V_p$, $k_{10}=CL/V_c$ within $\pm 2\%$) and $Q \le$ cardiac output. |
+| `PL-020` | `mathematical_identity` | `prediction_plausibility` | `CRITICAL` | `False` | Supplied `PRED`/`IPRED` points must be finite, nonnegative ($\ge 0$), and $\le 10^6\text{ mg/L}$. |
 
 ---
 
-## 3. Unit Normalization & Context Requirements
+## 3. Scientific Applicability & Context Requirements
 
-### Deterministic Unit Normalization (`units.py`)
-- **Clearance / Flow (`CL`, `CL_R`, `Q`):** `L/h`, `mL/min`, `mL/h`, `L/day`, `L/d`, `mL/day`, `L/min` $\to$ canonical `L/h`; `L/h/kg`, `mL/min/kg` $\to$ `L/h/kg`.
-- **Volume (`Vc`, `Vp`, `Vss`):** `L`, `mL`, `dL` $\to$ canonical `L`; `L/kg`, `mL/kg` $\to$ `L/kg`.
-- **Rate Constants (`ka`, `ke`, `k10`, `k12`, `k21`):** `1/h`, `h^-1`, `/h`, `1/min`, `1/d`, `1/day` $\to$ canonical `1/h`.
-- **Half-Life (`t_half`):** `h`, `hr`, `min`, `d`, `day` $\to$ canonical `h`.
-- **Bioavailability (`F`):** `fraction`, `unitless`, `1`, `-`, `%`, `percent` $\to$ canonical `fraction`.
-- Missing units on dimensional parameters yield `UNRESOLVED` rather than guessing; unrecognized or dimensionally incompatible units (e.g., `mg` for `CL`) yield `CRITICAL` `FLAGGED`.
+### Clearance Semantics, Elimination Context & Blood-to-Plasma Ratio (`PL-004`)
+- **Scale Disambiguation:** On extravascular or unknown routes (`oral`, `sc`, `im`, `inhalation`, `unknown`), `scale="auto"` on clearance/volume parameters without an explicit valid bioavailability `F` resolves to `resolved_scale="ambiguous"`, causing `PL-004`, `PL-005`, `PL-006`, `PL-007`, `PL-017`, `PL-018`, and `PL-019` to return `UNRESOLVED` rather than conflating apparent `CL/F` or `Vc/F` with systemic `CL` or `Vc`.
+- **Blood-to-Plasma Ratio ($R_b = C_{\text{blood}} / C_{\text{plasma}}$):** Whole-blood physiological flows ($Q_H = 90\text{ L/h}$, $CO = 300\text{ L/h}$ per Rowland & Tozer 2011 / Davies & Morris 1993) are never multiplied or divided by $R_b$ in `context.py`. Instead, when `clearance_matrix == "plasma"`, `blood_to_plasma_ratio` ($R_b > 0$) is required and plasma clearance is converted to whole-blood clearance via $CL_{\text{blood}} = CL_{\text{plasma}} / R_b$ before comparison with $Q_H$ and $CO$.
+- **Elimination Pathway & Modality:** `PL-004` returns `NOT_APPLICABLE` when `elimination_pathway in {"renal", "catabolic", "extrahepatic"}` or `modality in {"monoclonal_antibody", "biologic_other"}`, and returns `UNRESOLVED` when `elimination_pathway == "unknown"` or `modality == "unknown"`.
 
-### Explicit Context Resolution (`context.py`)
-- **Apparent vs. Systemic Disambiguation:** `CL/F` and `Vc/F` (or `scale="apparent"`) are never conflated with systemic `CL` and `Vc`. Rule `PL-004` marks apparent-only `CL/F` as `NOT_APPLICABLE` unless bioavailability $F$ is resolved.
-- **Missing Context $\to$ `UNRESOLVED`:**
-  - `population="pediatric"` or `"neonatal"` without `reference_weight_kg` returns `UNRESOLVED` on weight-scaled rules (`PL-004`, `PL-006`, `PL-007`) so adult $70\text{ kg}$ bounds are never silently applied to children.
-  - `population="pregnancy"` without `gestational_age_weeks` returns `UNRESOLVED`.
-  - `population="hepatic_impairment"` without `child_pugh` (`"A"`, `"B"`, or `"C"`) returns `UNRESOLVED`.
-  - `population="renal_impairment"` without `egfr_ml_min_1_73m2` returns `UNRESOLVED` for `PL-005`.
-  - `modality="unknown"` returns `UNRESOLVED` for mAb rules (`PL-017`, `PL-018`).
+### Special Populations (`context.py`)
+- Adjustments for `pediatric`, `neonate`, `pregnancy`, `elderly`, `renal_impairment`, and `hepatic_impairment` require **both**:
+  1. The mandatory clinical covariate (`age_years` for `pediatric`/`neonate`/`elderly`, `gestational_age_weeks` for `pregnancy`, `egfr_ml_min_1_73m2` for `renal_impairment`, `child_pugh` for `hepatic_impairment`), **and**
+  2. `reference_physiology.special_population_rules_status[population] == "approved"` in `catalog.json`.
+- Because all special-population rules are currently `"pending_owner_review"`, special-population models deterministically return `UNRESOLVED` (`INCOMPLETE_CONTEXT`) rather than applying unapproved heuristic scaling factors.
 
 ---
 
-## 4. Human Justification & Override Governance
+## 4. Deep Immutability & Human Justification Governance
 
-A `JustificationRecord` requires four non-blank provenance fields in addition to `rule_id` and `parameter`:
-1. `rationale`
-2. `scientific_basis_or_citation`
-3. `reviewer`
-4. `timestamp`
-
-### Non-Destructive Rules
-- **Original finding is never deleted:** Even when a valid justification is supplied, `finding.status` remains `"FLAGGED"` so the audit trail and report table always show what was flagged.
-- **Overridable findings (`override_allowed=True`, `severity in {"WARN", "HIGH"}`):** Transition `override_status` from `"justification_required"` to `"accepted_with_justification"`. If all flagged findings have accepted justifications and no `CRITICAL` or `UNRESOLVED` findings exist, `report.screening_status` becomes `"REVIEW_ACCEPTED_WITH_JUSTIFICATION"`.
-- **Non-overridable mathematical/physical impossibilities (`override_allowed=False` or `severity == "CRITICAL"`):** Transition `override_status` to `"rejected"`, retain `report.screening_status == "CRITICAL_IMPLAUSIBILITY"`, and attach an explicit rejection note.
+- **Deep Immutability (`schema.py`, `report.py`, `benchmark.py`):** Every model inherits from `_FrozenModel` (`ConfigDict(extra="forbid", frozen=True)`) and wraps all mapping fields in `types.MappingProxyType` (`FrozenMap`, `FrozenFloatMap`, `FrozenIntMap`, `FrozenStrMap`) and all sequence fields in `tuple`. Any attempt to mutate a nested mapping or sequence in `PopPKModelInput`, `RuleCatalog`, `PlausibilityFinding`, `PlausibilityReport`, or `BenchmarkSummary` raises `TypeError`.
+- **Non-Destructive Overrides:** A `JustificationRecord` requires `rationale`, `scientific_basis_or_citation`, `reviewer`, and `timestamp`. Overridable findings transition `override_status` to `"accepted_with_justification"` while retaining `status="FLAGGED"`. Non-overridable (`override_allowed=False` or `CRITICAL`) findings transition `override_status` to `"rejected"`.
 
 ---
 
-## 5. Limitations
+## 5. Offline Software Regression Harness (`benchmark.py`)
 
-1. **Human linear compartmental focus:** Reference physiological flows and spaces in `catalog.json` apply to human systemic pharmacokinetics (`species="human"`). Preclinical species return `UNRESOLVED`.
-2. **Saturable / TMDD kinetics:** Rules `PL-008` and `PL-019` evaluate linear clearance/volume identities. Models with Michaelis-Menten ($V_{\max}, K_m$) or quasi-steady-state TMDD parameters should set `has_tmdd_or_nonlinear_cl=True` and supply a human justification where applicable.
-3. **Screening thresholds are heuristics, not clinical cutoffs:** Passing screening does not imply adequacy of goodness-of-fit, covariate selection, or predictive performance (VPC/NPDE).
-
----
-
-## 6. Offline Benchmark Methodology
-
-`backend/app/compute/poppk_plausibility/benchmark.py` executes 23 deterministic offline cases across three groups:
-1. **`known_plausible_synthetic` (3 cases):** Adult IV 2-compartment small molecule, adult oral 1-compartment small molecule, and 20 kg pediatric IV small molecule. Target `false_flag_rate_on_clean_models == 0.0`.
-2. **`corrupted_planted_violation` (18 cases):** Targeted single- and dual-rule corruptions spanning all 20 rules (`PL-001` through `PL-020`) plus incomplete pediatric context. Target `planted_violation_recall == 1.0` and `unresolved_rate_on_incomplete_context == 1.0`.
-3. **`published_model_reference` (2 cases):** Each entry carries an explicit `source_status` (`"literature_reference"` for Dirks & Meibohm 2010 typical IgG1 mAb parameters; `"synthetic_placeholder"` for the justified esterase-cleared compound).
-
----
-
-## 7. How to Add or Review a Rule
-
-1. Add the rule metadata and thresholds to `backend/app/compute/poppk_plausibility/catalog.json` with `approval.status = "pending_owner_review"`.
-2. Implement the pure evaluation function in `rules_structural.py`, `rules_stochastic.py`, or `rules.py` and register it in `evaluate_all_rules`.
-3. Add RED/GREEN unit, boundary, and mutation-guard tests in `backend/tests/test_poppk_plausibility.py` and `backend/tests/test_poppk_plausibility_benchmark_and_mutation.py`.
-4. Only set `approval.status = "approved"` (with `by` and ISO `date`) after explicit owner review.
-
----
-
-## 8. MCP & Tool Adapter Integration Plan
-
-- **Isolated Read-Only Tool Adapter (`backend/app/tools/poppk_plausibility_tools.py`):** Wraps `evaluate_poppk_plausibility` as a read-only `Tool` (`screen_poppk_plausibility`, owned by `"poppk"`, `writes={}`) that never mutates `PharmState` and requires no changes to guarded files (`builtins.py`, `main.py`, `orchestrator.py`, `pharmstate.py`).
-- **Runtime Registration Gate:** Wiring `TOOLS` from `poppk_plausibility_tools.py` into `backend/app/tools/builtins.py` or exposing an MCP server endpoint is intentionally deferred to a separate owner-approved integration PR so guarded runtime files remain untouched in this feature slice.
+`backend/app/compute/poppk_plausibility/benchmark.py` executes 23 deterministic cases (`known_plausible_synthetic`, `corrupted_planted_violation`, `published_model_reference`) to verify software execution, planted-violation recall (`1.0`), and false-flag rate (`0.0`) on synthetic fixtures. **This harness is a software regression check only and is not scientific or clinical validation.**

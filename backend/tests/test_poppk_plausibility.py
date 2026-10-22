@@ -79,7 +79,7 @@ def _find(report: PlausibilityReport, rule_id: str, parameter: str | None = None
 
 def test_catalog_contains_all_twenty_rules_with_metadata() -> None:
     catalog = load_rule_catalog()
-    assert catalog.catalog_version == "1.0.0"
+    assert catalog.catalog_version == "1.1.0"
     rule_ids = [r.rule_id for r in catalog.rules]
     expected_ids = [f"PL-{i:03d}" for i in range(1, 21)]
     assert rule_ids == expected_ids
@@ -87,9 +87,16 @@ def test_catalog_contains_all_twenty_rules_with_metadata() -> None:
         assert rule.version
         assert rule.title
         assert rule.category
+        assert rule.rule_type in {
+            "mathematical_identity",
+            "physiological_reference",
+            "modeling_heuristic",
+        }
         assert rule.scientific_rationale
-        assert rule.reference_basis
-        assert rule.approval.status in {"pending_owner_review", "approved"}
+        assert len(rule.reference_basis) >= 1
+        assert rule.approval_status == "pending_owner_review"
+    for pop_status in catalog.reference_physiology.special_population_rules_status.values():
+        assert pop_status == "pending_owner_review"
 
 
 def test_baseline_small_molecule_iv_model_passes_all_applicable_rules() -> None:
@@ -666,7 +673,9 @@ def test_pl020_implausible_or_nonfinite_predictions() -> None:
 # ---------------------------------------------------------------------------
 
 def test_pediatric_and_missing_context_return_unresolved_not_false_pass() -> None:
-    # Pediatric population WITHOUT reference_weight_kg must return UNRESOLVED for weight-scaled rules
+    from app.compute.poppk_plausibility.context import resolve_physiology_context
+
+    # Pediatric population WITHOUT reference_weight_kg or age_years must return UNRESOLVED
     m_ped_no_wt = PopPKModelInput(
         model_id="ped_no_wt",
         context=PopPKContext(
@@ -685,13 +694,14 @@ def test_pediatric_and_missing_context_return_unresolved_not_false_pass() -> Non
     assert _find(r_no_wt, "PL-006")[0].status == "UNRESOLVED"
     assert r_no_wt.screening_status == "INCOMPLETE_CONTEXT"
 
-    # Pediatric population WITH weight=10 kg: scaled Q_H = 90 * (10/70)^0.75 = 20.91 L/h
-    # CL = 30.0 L/h exceeds pediatric Q_H (even though < 90 L/h adult Q_H!) -> FLAGGED
-    m_ped_10kg = PopPKModelInput(
-        model_id="ped_10kg",
+    # Even when weight=10 kg and age_years=1.5 are supplied, default catalog marks pediatric
+    # rule as pending_owner_review -> remains UNRESOLVED
+    m_ped_pending = PopPKModelInput(
+        model_id="ped_pending",
         context=PopPKContext(
             population="pediatric",
             reference_weight_kg=10.0,
+            age_years=1.5,
             route="iv",
             modality="small_molecule",
         ),
@@ -700,12 +710,24 @@ def test_pediatric_and_missing_context_return_unresolved_not_false_pass() -> Non
             ParameterSpec(name="Vc", value=4.0, unit="L", scale="systemic"),
         ),
     )
-    r_10kg = evaluate_poppk_plausibility(m_ped_10kg)
-    assert _find(r_10kg, "PL-004")[0].status == "FLAGGED"
+    r_ped_pending = evaluate_poppk_plausibility(m_ped_pending)
+    assert _find(r_ped_pending, "PL-004")[0].status == "UNRESOLVED"
+    assert "pending_owner_review" in (_find(r_ped_pending, "PL-004")[0].scientific_rationale or "")
+
+    # When both required covariates (weight=10 kg, age_years=1.5) AND an approved pediatric rule are present:
+    cat = load_rule_catalog()
+    approved_ref = cat.reference_physiology.model_copy(
+        update={"special_population_rules_status": {"pediatric": "approved"}}
+    )
+    phys_ped = resolve_physiology_context(m_ped_pending.context, approved_ref)
+    assert phys_ped.is_resolvable is True
+    assert phys_ped.hepatic_blood_flow_l_h is not None and phys_ped.hepatic_blood_flow_l_h < 25.0
 
 
 def test_hepatic_impairment_and_pregnancy_context_handling() -> None:
-    # Child-Pugh C reduces effective hepatic flow threshold (0.5 * 90 = 45 L/h), so CL = 60 L/h is flagged
+    from app.compute.poppk_plausibility.context import resolve_physiology_context
+
+    # With default catalog (pending_owner_review), hepatic_impairment and pregnancy return UNRESOLVED
     m_hepatic = PopPKModelInput(
         model_id="hepatic_c",
         context=PopPKContext(
@@ -720,9 +742,18 @@ def test_hepatic_impairment_and_pregnancy_context_handling() -> None:
             ParameterSpec(name="Vc", value=30.0, unit="L", scale="systemic"),
         ),
     )
-    assert _find(evaluate_poppk_plausibility(m_hepatic), "PL-004")[0].status == "FLAGGED"
+    assert _find(evaluate_poppk_plausibility(m_hepatic), "PL-004")[0].status == "UNRESOLVED"
 
-    # Pregnancy without gestational_age_weeks returns UNRESOLVED on physiological flow/volume bounds
+    # Pregnancy without gestational_age_weeks returns UNRESOLVED even if rule were approved
+    cat = load_rule_catalog()
+    approved_ref = cat.reference_physiology.model_copy(
+        update={
+            "special_population_rules_status": {
+                "pregnancy": "approved",
+                "hepatic_impairment": "approved",
+            }
+        }
+    )
     m_preg_unknown = PopPKModelInput(
         model_id="preg_unknown",
         context=PopPKContext(
@@ -737,7 +768,8 @@ def test_hepatic_impairment_and_pregnancy_context_handling() -> None:
             ParameterSpec(name="Vc", value=30.0, unit="L", scale="systemic"),
         ),
     )
-    assert _find(evaluate_poppk_plausibility(m_preg_unknown), "PL-004")[0].status == "UNRESOLVED"
+    assert resolve_physiology_context(m_preg_unknown.context, approved_ref).is_resolvable is False
+    assert resolve_physiology_context(m_hepatic.context, approved_ref).is_resolvable is True
 
 
 def test_unknown_modality_returns_unresolved_for_mab_rules() -> None:

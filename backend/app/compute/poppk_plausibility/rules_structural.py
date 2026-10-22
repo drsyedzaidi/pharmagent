@@ -36,6 +36,7 @@ def make_finding(
     eff_override = rule.override_allowed if override_allowed is None else override_allowed
     return PlausibilityFinding(
         rule_id=rule.rule_id, rule_version=rule.version, category=rule.category,
+        rule_type=rule.rule_type, approval_status=rule.approval_status,
         parameter=parameter, observed_value=observed_value, observed_unit=observed_unit,
         normalized_value=normalized_value, normalized_unit=normalized_unit,
         expected_range=expected_range, severity=eff_sev, status=status,
@@ -120,32 +121,26 @@ def eval_pl002_units(
         if p.param_class != "other":
             if p.canonical_name in seen_canonical:
                 prev = seen_canonical[p.canonical_name]
-                out.append(
-                    make_finding(
-                        rule, parameter=p.name, status="FLAGGED", severity="CRITICAL",
-                        observed_value=p.observed_value, observed_unit=p.observed_unit,
-                        rationale=f"Duplicate canonical '{p.canonical_name}' ('{p.name}' vs '{prev}').",
-                        override_allowed=False,
-                    )
-                )
+                out.append(make_finding(
+                    rule, parameter=p.name, status="FLAGGED", severity="CRITICAL",
+                    observed_value=p.observed_value, observed_unit=p.observed_unit,
+                    rationale=f"Duplicate canonical '{p.canonical_name}' ('{p.name}' vs '{prev}').",
+                    override_allowed=False,
+                ))
             else:
                 seen_canonical[p.canonical_name] = p.name
         if p.unit_status == "missing":
-            out.append(
-                make_finding(
-                    rule, parameter=p.name, status="UNRESOLVED", severity="WARN",
-                    observed_value=p.observed_value, observed_unit=p.observed_unit,
-                    rationale=p.unit_message, override_allowed=False,
-                )
-            )
+            out.append(make_finding(
+                rule, parameter=p.name, status="UNRESOLVED", severity="WARN",
+                observed_value=p.observed_value, observed_unit=p.observed_unit,
+                rationale=p.unit_message, override_allowed=False,
+            ))
         elif p.unit_status in {"unknown", "incompatible"}:
-            out.append(
-                make_finding(
-                    rule, parameter=p.name, status="FLAGGED", severity="CRITICAL",
-                    observed_value=p.observed_value, observed_unit=p.observed_unit,
-                    rationale=p.unit_message, override_allowed=False,
-                )
-            )
+            out.append(make_finding(
+                rule, parameter=p.name, status="FLAGGED", severity="CRITICAL",
+                observed_value=p.observed_value, observed_unit=p.observed_unit,
+                rationale=p.unit_message, override_allowed=False,
+            ))
     return out or [make_finding(rule, parameter="all_parameters", status="PASS", expected_range="compatible units")]
 
 
@@ -157,36 +152,30 @@ def eval_pl003_bioavailability(
     if f_param is None:
         return [make_finding(rule, parameter="F", status="NOT_APPLICABLE")]
     if isinstance(f_param.observed_value, str) or f_param.observed_value <= 0:
-        return [
-            make_finding(
-                rule, parameter=f_param.name, status="FLAGGED", severity="CRITICAL",
-                observed_value=f_param.observed_value, observed_unit=f_param.observed_unit,
-                expected_range="(0, 1]", override_allowed=False,
-            )
-        ]
+        return [make_finding(
+            rule, parameter=f_param.name, status="FLAGGED", severity="CRITICAL",
+            observed_value=f_param.observed_value, observed_unit=f_param.observed_unit,
+            expected_range="(0, 1]", override_allowed=False,
+        )]
     if f_param.unit_status != "compatible" or f_param.normalized_value is None:
         return [make_finding(rule, parameter=f_param.name, status="UNRESOLVED", severity="WARN")]
-    val = f_param.normalized_value
-    max_f = rule.threshold_float("max_inclusive", 1.0)
+    val, max_f = f_param.normalized_value, rule.threshold_float("max_inclusive", 1.0)
     st: FindingStatus = "FLAGGED" if val > max_f else "PASS"
     sev: SeverityLevel = "HIGH" if val > max_f else "INFO"
-    return [
-        make_finding(
-            rule, parameter=f_param.name, status=st, severity=sev,
-            observed_value=f_param.observed_value, observed_unit=f_param.observed_unit,
-            normalized_value=val, normalized_unit=f_param.normalized_unit,
-            expected_range=f"(0, {max_f:g}]", override_allowed=True,
-        )
-    ]
+    return [make_finding(
+        rule, parameter=f_param.name, status=st, severity=sev,
+        observed_value=f_param.observed_value, observed_unit=f_param.observed_unit,
+        normalized_value=val, normalized_unit=f_param.normalized_unit,
+        expected_range=f"(0, {max_f:g}]", override_allowed=True,
+    )]
 
 
 def eval_pl004_systemic_cl(
-    catalog: RuleCatalog, params: tuple[NormalizedParameter, ...], phys: ResolvedPhysiologyContext
+    catalog: RuleCatalog, model: PopPKModelInput,
+    params: tuple[NormalizedParameter, ...], phys: ResolvedPhysiologyContext,
 ) -> list[PlausibilityFinding]:
     rule = catalog.by_id("PL-004")
-    cl = by_canonical(params, "CL")
-    clf = by_canonical(params, "CL/F")
-    f_val = resolved_f_fraction(params)
+    cl, clf, f_val = by_canonical(params, "CL"), by_canonical(params, "CL/F"), resolved_f_fraction(params)
     target, scale_factor = cl, 1.0
     if target is None:
         if clf is not None and f_val is not None:
@@ -201,8 +190,15 @@ def eval_pl004_systemic_cl(
             ]
         else:
             return [make_finding(rule, parameter="CL", status="NOT_APPLICABLE")]
+    if model.context.modality in {"monoclonal_antibody", "biologic_other"} or (
+        model.context.elimination_pathway in {"renal", "catabolic", "extrahepatic"}
+    ):
+        return [make_finding(rule, parameter=target.name, status="NOT_APPLICABLE")]
     if (
-        target.unit_status != "compatible" or not phys.is_resolvable
+        model.context.modality == "unknown" or model.context.elimination_pathway == "unknown"
+        or target.resolved_scale == "ambiguous"
+        or (model.context.clearance_matrix == "plasma" and phys.blood_to_plasma_ratio is None)
+        or target.unit_status != "compatible" or not phys.is_resolvable
         or phys.hepatic_blood_flow_l_h is None or phys.cardiac_output_l_h is None
     ):
         return [
@@ -215,16 +211,17 @@ def eval_pl004_systemic_cl(
     raw_flow = to_abs_flow(target, phys)
     if raw_flow is None:
         return [make_finding(rule, parameter=target.name, status="UNRESOLVED", severity="WARN")]
-    cl_l_h = raw_flow * scale_factor
+    rb = phys.blood_to_plasma_ratio if phys.blood_to_plasma_ratio is not None else 1.0
+    cl_blood_l_h = (raw_flow * scale_factor) / rb
     qh, co = phys.hepatic_blood_flow_l_h, phys.cardiac_output_l_h
     rng = f"<= {qh:.2f} L/h (Q_H); cardiac output <= {co:.2f} L/h"
-    st: FindingStatus = "FLAGGED" if cl_l_h > qh else "PASS"
-    sev: SeverityLevel = "HIGH" if cl_l_h > co else ("WARN" if cl_l_h > qh else "INFO")
+    st: FindingStatus = "FLAGGED" if cl_blood_l_h > qh else "PASS"
+    sev: SeverityLevel = "HIGH" if cl_blood_l_h > co else ("WARN" if cl_blood_l_h > qh else "INFO")
     return [
         make_finding(
             rule, parameter=target.name, status=st, severity=sev,
             observed_value=target.observed_value, observed_unit=target.observed_unit,
-            normalized_value=cl_l_h, normalized_unit="L/h", expected_range=rng,
+            normalized_value=cl_blood_l_h, normalized_unit="L/h", expected_range=rng,
         )
     ]
 
@@ -238,8 +235,8 @@ def eval_pl005_renal_cl(
     if clr is None:
         return [make_finding(rule, parameter="CL_R", status="NOT_APPLICABLE")]
     if (
-        clr.unit_status != "compatible" or not phys.is_resolvable
-        or phys.renal_plasma_flow_l_h is None or phys.gfr_l_h is None
+        clr.unit_status != "compatible" or clr.resolved_scale == "ambiguous"
+        or not phys.is_resolvable or phys.renal_plasma_flow_l_h is None or phys.gfr_l_h is None
     ):
         return [
             make_finding(
@@ -251,7 +248,7 @@ def eval_pl005_renal_cl(
     if clr_l_h is None:
         return [make_finding(rule, parameter=clr.name, status="UNRESOLVED", severity="WARN")]
     cl = by_canonical(params, "CL")
-    cl_l_h = to_abs_flow(cl, phys) if cl else None
+    cl_l_h = to_abs_flow(cl, phys) if (cl and cl.resolved_scale == "systemic") else None
     if cl_l_h is not None and clr_l_h > cl_l_h:
         return [
             make_finding(
@@ -269,8 +266,7 @@ def eval_pl005_renal_cl(
             make_finding(
                 rule, parameter=clr.name, status="FLAGGED", severity="HIGH",
                 observed_value=clr.observed_value, observed_unit=clr.observed_unit,
-                normalized_value=clr_l_h, normalized_unit="L/h",
-                expected_range=f"<= {qr:.2f} L/h (Q_R,plasma)",
+                normalized_value=clr_l_h, normalized_unit="L/h", expected_range=f"<= {qr:.2f} L/h (Q_R,plasma)",
             )
         ]
     fu = model.context.fraction_unbound_plasma
@@ -283,8 +279,7 @@ def eval_pl005_renal_cl(
             make_finding(
                 rule, parameter=clr.name, status="FLAGGED", severity="WARN",
                 observed_value=clr.observed_value, observed_unit=clr.observed_unit,
-                normalized_value=clr_l_h, normalized_unit="L/h",
-                expected_range=f"<= {filt:.2f} L/h ({label})",
+                normalized_value=clr_l_h, normalized_unit="L/h", expected_range=f"<= {filt:.2f} L/h ({label})",
             )
         ]
     return [
@@ -303,7 +298,11 @@ def eval_pl006_central_volume(
     vc = by_canonical(params, "Vc") or by_canonical(params, "Vc/F")
     if vc is None:
         return [make_finding(rule, parameter="Vc", status="NOT_APPLICABLE")]
-    raw_l_kg = to_l_kg(vc, phys) if (vc.unit_status == "compatible" and phys.is_resolvable) else None
+    raw_l_kg = (
+        to_l_kg(vc, phys)
+        if (vc.resolved_scale != "ambiguous" and vc.unit_status == "compatible" and phys.is_resolvable)
+        else None
+    )
     if raw_l_kg is None:
         return [
             make_finding(
@@ -334,7 +333,8 @@ def eval_pl006_central_volume(
 
 
 def eval_pl007_vss_consistency(
-    catalog: RuleCatalog, params: tuple[NormalizedParameter, ...], phys: ResolvedPhysiologyContext
+    catalog: RuleCatalog, model: PopPKModelInput,
+    params: tuple[NormalizedParameter, ...], phys: ResolvedPhysiologyContext,
 ) -> list[PlausibilityFinding]:
     rule = catalog.by_id("PL-007")
     vss, vc, vp, vp2 = (
@@ -343,43 +343,43 @@ def eval_pl007_vss_consistency(
     )
     if vss is None and vp is None:
         return [make_finding(rule, parameter="Vss", status="NOT_APPLICABLE")]
-    if not phys.is_resolvable:
+    c_struct = model.context.compartmental_structure
+    if c_struct == "unknown" or not phys.is_resolvable or any(
+        p is not None and p.resolved_scale == "ambiguous" for p in (vss, vc, vp, vp2)
+    ):
         return [make_finding(rule, parameter=vss.name if vss else "Vss", status="UNRESOLVED", severity="WARN")]
-    vc_l_kg = to_l_kg(vc, phys) if vc else None
-    vp_l_kg = to_l_kg(vp, phys) if vp else None
+    is_mammillary = c_struct == "mammillary_central_elimination"
+    if not is_mammillary and vss is None:
+        return [make_finding(rule, parameter="Vss", status="NOT_APPLICABLE")]
+    vc_l_kg, vp_l_kg = (to_l_kg(vc, phys) if vc else None), (to_l_kg(vp, phys) if vp else None)
     vp2_l_kg = to_l_kg(vp2, phys) if vp2 is not None else 0.0
-    if vp2 is not None and vp2_l_kg is None:
-        return [make_finding(rule, parameter=vp2.name, status="UNRESOLVED", severity="WARN")]
-    if (vc is not None and vc_l_kg is None) or (vp is not None and vp_l_kg is None):
+    if (vp2 is not None and vp2_l_kg is None) or (vc and vc_l_kg is None) or (vp and vp_l_kg is None):
         return [make_finding(rule, parameter=vss.name if vss else "Vss", status="UNRESOLVED", severity="WARN")]
-    comp_sum = (vc_l_kg + vp_l_kg + (vp2_l_kg or 0.0)) if (vc_l_kg is not None and vp_l_kg is not None) else None
+    comp_sum = (
+        (vc_l_kg + vp_l_kg + (vp2_l_kg or 0.0))
+        if (is_mammillary and vc_l_kg is not None and vp_l_kg is not None)
+        else None
+    )
     tol = rule.threshold_float("sum_rel_tol", 0.05)
     if vss is not None:
         vss_l_kg = to_l_kg(vss, phys)
         if vss_l_kg is None:
             return [make_finding(rule, parameter=vss.name, status="UNRESOLVED", severity="WARN")]
         if comp_sum is not None and abs(vss_l_kg - comp_sum) / max(comp_sum, 1e-12) > tol:
-            return [
-                make_finding(
-                    rule, parameter=vss.name, status="FLAGGED", severity="HIGH",
-                    observed_value=vss.observed_value, observed_unit=vss.observed_unit,
-                    normalized_value=vss_l_kg, normalized_unit="L/kg",
-                    expected_range=f"Vc + Vp = {comp_sum:.3f} L/kg (+/-{tol*100:.0f}%)",
-                    rationale="Reported Vss does not match the sum of compartmental volumes Vc + sum(Vp).",
-                    override_allowed=False,
-                )
-            ]
-        if comp_sum is None and vc_l_kg is not None and vss_l_kg < vc_l_kg * (1.0 - tol):
-            return [
-                make_finding(
-                    rule, parameter=vss.name, status="FLAGGED", severity="HIGH",
-                    observed_value=vss.observed_value, observed_unit=vss.observed_unit,
-                    normalized_value=vss_l_kg, normalized_unit="L/kg",
-                    expected_range=f">= Vc ({vc_l_kg:.3f} L/kg)",
-                    rationale="Steady-state volume Vss cannot be smaller than central volume Vc.",
-                    override_allowed=False,
-                )
-            ]
+            return [make_finding(
+                rule, parameter=vss.name, status="FLAGGED", severity="HIGH",
+                observed_value=vss.observed_value, observed_unit=vss.observed_unit,
+                normalized_value=vss_l_kg, normalized_unit="L/kg",
+                expected_range=f"Vc + Vp = {comp_sum:.3f} L/kg (+/-{tol*100:.0f}%)",
+                rationale="Reported Vss does not match mammillary sum Vc + sum(Vp).", override_allowed=False,
+            )]
+        if is_mammillary and comp_sum is None and vc_l_kg is not None and vss_l_kg < vc_l_kg * (1.0 - tol):
+            return [make_finding(
+                rule, parameter=vss.name, status="FLAGGED", severity="HIGH",
+                observed_value=vss.observed_value, observed_unit=vss.observed_unit,
+                normalized_value=vss_l_kg, normalized_unit="L/kg",
+                expected_range=f">= Vc ({vc_l_kg:.3f} L/kg)", override_allowed=False,
+            )]
         target_val, target_name = vss_l_kg, vss.name
     elif comp_sum is not None:
         target_val, target_name = comp_sum, "Vss (derived)"
@@ -389,10 +389,7 @@ def eval_pl007_vss_consistency(
     max_vss = rule.threshold_float("max_vss_l_kg", phys.max_vss_l_kg)
     st: FindingStatus = "FLAGGED" if (target_val < min_vss or target_val > max_vss) else "PASS"
     sev: SeverityLevel = "HIGH" if target_val < min_vss else ("WARN" if target_val > max_vss else "INFO")
-    return [
-        make_finding(
-            rule, parameter=target_name, status=st, severity=sev,
-            normalized_value=target_val, normalized_unit="L/kg",
-            expected_range=f"[{min_vss:.2f}, {max_vss:.1f}] L/kg",
-        )
-    ]
+    return [make_finding(
+        rule, parameter=target_name, status=st, severity=sev,
+        normalized_value=target_val, normalized_unit="L/kg", expected_range=f"[{min_vss:.2f}, {max_vss:.1f}] L/kg",
+    )]

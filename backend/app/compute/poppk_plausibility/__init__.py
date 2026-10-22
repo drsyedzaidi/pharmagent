@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.compute.poppk_plausibility.benchmark import (
     BenchmarkCase,
+    BenchmarkCaseResult,
     BenchmarkSummary,
     build_benchmark_cases,
     run_plausibility_benchmark,
@@ -27,7 +28,11 @@ from app.compute.poppk_plausibility.report import (
 )
 from app.compute.poppk_plausibility.rules import evaluate_all_rules
 from app.compute.poppk_plausibility.schema import (
+    ClearanceMatrixKind,
+    CompartmentalStructureKind,
+    EliminationPathwayKind,
     FindingStatus,
+    FormulationReleaseKind,
     IIVSpec,
     JustificationRecord,
     ModalityKind,
@@ -42,9 +47,10 @@ from app.compute.poppk_plausibility.schema import (
     ReferencePhysiology,
     ResidualErrorSpec,
     RouteKind,
-    RuleApproval,
+    RuleApprovalStatus,
     RuleCatalog,
     RuleDefinition,
+    RuleType,
     ScaleKind,
     ScreeningStatus,
     SeverityLevel,
@@ -59,8 +65,13 @@ from app.compute.poppk_plausibility.units import (
 
 __all__ = [
     "BenchmarkCase",
+    "BenchmarkCaseResult",
     "BenchmarkSummary",
+    "ClearanceMatrixKind",
+    "CompartmentalStructureKind",
+    "EliminationPathwayKind",
     "FindingStatus",
+    "FormulationReleaseKind",
     "IIVSpec",
     "JustificationRecord",
     "MANDATORY_DISCLAIMER",
@@ -78,9 +89,10 @@ __all__ = [
     "ResidualErrorSpec",
     "ResolvedPhysiologyContext",
     "RouteKind",
-    "RuleApproval",
+    "RuleApprovalStatus",
     "RuleCatalog",
     "RuleDefinition",
+    "RuleType",
     "ScaleKind",
     "ScreeningStatus",
     "SeverityLevel",

@@ -1,175 +1,174 @@
-"""Population, body-size, organ-function, and modality physiological context resolver.
+"""Physiological reference context resolution and body-weight scaling.
 
-Computes context-scaled physiological reference bounds and explicitly tracks
-when context is incomplete (`UNRESOLVED`) so the engine never falls back to a
-silent false `PASS`.
+Treats pediatric, neonate, pregnancy, elderly, and organ-impairment adjustments as
+UNRESOLVED unless both the required clinical covariate and an owner-reviewed
+population adjustment rule are available.
 """
 from __future__ import annotations
 
 import math
-
-from pydantic import BaseModel, ConfigDict
+from dataclasses import dataclass
 
 from app.compute.poppk_plausibility.schema import PopPKContext, ReferencePhysiology
 
 
-class ResolvedPhysiologyContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+@dataclass(frozen=True)
+class ResolvedPhysiologyContext:
     is_resolvable: bool
-    unresolved_reason: str = ""
-    weight_kg: float | None = None
-    flow_scale_factor: float | None = None
-    hepatic_blood_flow_l_h: float | None = None
-    cardiac_output_l_h: float | None = None
-    gfr_l_h: float | None = None
-    renal_plasma_flow_l_h: float | None = None
-    min_vc_l_kg: float
-    warn_vc_l_kg: float
-    high_vc_l_kg: float
-    min_vss_l_kg: float
-    max_vss_l_kg: float
-    plasma_volume_l: float | None = None
-    ecf_volume_l: float | None = None
-    tbw_volume_l: float | None = None
+    unresolved_reason: str | None
+    weight_kg: float | None
+    flow_scale_factor: float | None
+    volume_scale_factor: float | None
+    hepatic_blood_flow_l_h: float | None
+    cardiac_output_l_h: float | None
+    gfr_l_h: float | None
+    renal_plasma_flow_l_h: float | None
+    plasma_volume_l: float | None
+    ecf_volume_l: float | None
+    tbw_volume_l: float | None
+    blood_to_plasma_ratio: float | None = None
+    min_vc_l_kg: float = 0.03
+    warn_vc_l_kg: float = 20.0
+    high_vc_l_kg: float = 50.0
+    min_vss_l_kg: float = 0.04
+    max_vss_l_kg: float = 100.0
 
 
-_CHILD_PUGH_QH_FACTOR: dict[str, float] = {
-    "A": 0.85,
-    "B": 0.70,
-    "C": 0.50,
-}
+def _unresolved(reason: str) -> ResolvedPhysiologyContext:
+    return ResolvedPhysiologyContext(
+        is_resolvable=False,
+        unresolved_reason=reason,
+        weight_kg=None,
+        flow_scale_factor=None,
+        volume_scale_factor=None,
+        hepatic_blood_flow_l_h=None,
+        cardiac_output_l_h=None,
+        gfr_l_h=None,
+        renal_plasma_flow_l_h=None,
+        plasma_volume_l=None,
+        ecf_volume_l=None,
+        tbw_volume_l=None,
+    )
+
+
+def _check_covariate_requirements(ctx: PopPKContext) -> str | None:
+    if ctx.age_years is not None and (not math.isfinite(ctx.age_years) or ctx.age_years < 0.0 or ctx.age_years > 130.0):
+        return "Provided 'age_years' must be finite and within [0, 130] years."
+    if ctx.gestational_age_weeks is not None and (
+        not math.isfinite(ctx.gestational_age_weeks)
+        or ctx.gestational_age_weeks <= 0.0
+        or ctx.gestational_age_weeks > 45.0
+    ):
+        return "Provided 'gestational_age_weeks' must be finite and in (0, 45]."
+    if ctx.egfr_ml_min_1_73m2 is not None and (
+        not math.isfinite(ctx.egfr_ml_min_1_73m2) or ctx.egfr_ml_min_1_73m2 <= 0.0
+    ):
+        return "Provided 'egfr_ml_min_1_73m2' must be finite and strictly positive (> 0)."
+    if ctx.blood_to_plasma_ratio is not None and (
+        not math.isfinite(ctx.blood_to_plasma_ratio) or ctx.blood_to_plasma_ratio <= 0.0
+    ):
+        return "Provided 'blood_to_plasma_ratio' must be finite and strictly positive (> 0)."
+
+    if ctx.population in {"pediatric", "neonate", "elderly"} and ctx.age_years is None:
+        return f"Population '{ctx.population}' requires explicit 'age_years' to resolve physiology."
+    if ctx.population == "pregnancy" and ctx.gestational_age_weeks is None:
+        return "Pregnancy population requires explicit 'gestational_age_weeks' to resolve physiology."
+    if ctx.population == "hepatic_impairment" and ctx.child_pugh is None:
+        return "Hepatic impairment population requires explicit 'child_pugh' class ('A', 'B', or 'C')."
+    if ctx.population == "renal_impairment" and ctx.egfr_ml_min_1_73m2 is None:
+        return "Renal impairment population requires explicit 'egfr_ml_min_1_73m2' to resolve physiology."
+    return None
 
 
 def resolve_physiology_context(
     ctx: PopPKContext,
-    ref: ReferencePhysiology,
+    ref_phys: ReferencePhysiology,
 ) -> ResolvedPhysiologyContext:
-    """Resolve `PopPKContext` into scaled physiological bounds or an explicit unresolved state."""
-    base_kwargs = {
-        "min_vc_l_kg": ref.min_central_volume_l_kg,
-        "warn_vc_l_kg": 20.0,
-        "high_vc_l_kg": ref.max_central_volume_l_kg,
-        "min_vss_l_kg": ref.min_central_volume_l_kg,
-        "max_vss_l_kg": ref.max_vss_volume_l_kg,
-    }
-
+    """Resolve reference physiology for `ctx`, returning `is_resolvable=False` when context is incomplete."""
     if ctx.species.strip().lower() != "human":
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason=f"Species '{ctx.species}' does not have human physiological reference bounds.",
-            **base_kwargs,
-        )
+        return _unresolved(f"Non-human species '{ctx.species}' requires species-specific reference physiology.")
 
     if ctx.population == "unknown":
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason="Population is 'unknown'; physiological flow and volume scaling cannot be resolved.",
-            **base_kwargs,
-        )
+        return _unresolved("Population is 'unknown'; cannot resolve physiological flow or volume bounds.")
 
-    if ctx.age_years is not None and (not math.isfinite(ctx.age_years) or not (0.0 <= ctx.age_years <= 130.0)):
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason="Provided 'age_years' must be a finite value in [0, 130] years.",
-            **base_kwargs,
-        )
+    if ctx.reference_weight_kg is None or not math.isfinite(ctx.reference_weight_kg) or ctx.reference_weight_kg <= 0:
+        return _unresolved(f"Population '{ctx.population}' is missing a valid positive 'reference_weight_kg'.")
 
-    if ctx.population in {"pediatric", "neonatal"} and ctx.reference_weight_kg is None:
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason=(
-                f"Population '{ctx.population}' requires an explicit 'reference_weight_kg' "
-                "to scale physiological flows and volumes."
-            ),
-            **base_kwargs,
-        )
+    cov_err = _check_covariate_requirements(ctx)
+    if cov_err is not None:
+        return _unresolved(cov_err)
 
-    if ctx.population == "pregnancy":
-        ga = ctx.gestational_age_weeks
-        if ga is None or not math.isfinite(ga) or not (0.0 < ga <= 45.0):
-            return ResolvedPhysiologyContext(
-                is_resolvable=False,
-                unresolved_reason=(
-                    "Population 'pregnancy' requires a finite 'gestational_age_weeks' in (0, 45] "
-                    "to resolve pregnancy-induced hemodynamic and volume changes."
-                ),
-                **base_kwargs,
-            )
-    elif ctx.gestational_age_weeks is not None:
-        ga = ctx.gestational_age_weeks
-        if not math.isfinite(ga) or not (0.0 < ga <= 45.0):
-            return ResolvedPhysiologyContext(
-                is_resolvable=False,
-                unresolved_reason="Provided 'gestational_age_weeks' must be a finite value in (0, 45].",
-                **base_kwargs,
+    if ctx.population != "adult":
+        rule_status = ref_phys.special_population_rules_status.get(ctx.population, "pending_owner_review")
+        if rule_status != "approved":
+            return _unresolved(
+                f"Special-population physiological adjustment rule for '{ctx.population}' is "
+                f"{rule_status}; physiology-dependent bounds are left UNRESOLVED."
             )
 
-    if ctx.population == "hepatic_impairment" and ctx.child_pugh is None:
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason="Population 'hepatic_impairment' requires 'child_pugh' ('A', 'B', or 'C').",
-            **base_kwargs,
-        )
+    base_adult = ref_phys.adult_70kg
+    pop_scale = ref_phys.population_scaling
+    wt = float(ctx.reference_weight_kg)
+    weight_ratio = wt / base_adult.weight_kg
+    flow_scale = math.pow(weight_ratio, base_adult.allometric_flow_exponent)
+    vol_scale = math.pow(weight_ratio, base_adult.allometric_volume_exponent)
 
-    rb = 1.0
-    if ctx.blood_to_plasma_ratio is not None:
-        if not math.isfinite(ctx.blood_to_plasma_ratio) or ctx.blood_to_plasma_ratio <= 0.0:
-            return ResolvedPhysiologyContext(
-                is_resolvable=False,
-                unresolved_reason="Provided 'blood_to_plasma_ratio' must be finite and > 0.",
-                **base_kwargs,
-            )
-        rb = float(ctx.blood_to_plasma_ratio)
+    maturation_factor = 1.0
+    if ctx.population == "neonate":
+        maturation_factor = pop_scale.neonate_maturation_cl_factor
+    elif ctx.population == "pediatric" and ctx.age_years is not None and ctx.age_years < 2.0:
+        maturation_factor = 0.5 + 0.25 * max(0.0, ctx.age_years)
 
-    wt = ctx.reference_weight_kg
-    if wt is None or not math.isfinite(wt) or wt <= 0:
-        return ResolvedPhysiologyContext(
-            is_resolvable=False,
-            unresolved_reason="A positive finite 'reference_weight_kg' is required for physiological scaling.",
-            **base_kwargs,
-        )
+    elderly_factor = 1.0
+    if ctx.population == "elderly" and ctx.age_years is not None:
+        decades = max(1.0, (ctx.age_years - 65.0) / 10.0)
+        elderly_factor = math.pow(pop_scale.elderly_flow_factor_per_decade_over_65, decades)
 
-    w_ratio = wt / ref.adult_reference_weight_kg
-    flow_scale = w_ratio ** 0.75
+    hep_factor = 1.0
+    if ctx.population == "hepatic_impairment" and ctx.child_pugh is not None:
+        hep_factor = float(pop_scale.child_pugh_flow_factors[ctx.child_pugh])
 
-    hepatic_factor = _CHILD_PUGH_QH_FACTOR.get(ctx.child_pugh, 1.0) if ctx.child_pugh else 1.0
-    elderly_factor = 0.85 if ctx.population == "elderly" else 1.0
     preg_flow_factor = 1.0
+    preg_gfr_factor = 1.0
     preg_vol_factor = 1.0
     if ctx.population == "pregnancy" and ctx.gestational_age_weeks is not None:
-        ga_frac = min(max(float(ctx.gestational_age_weeks) / 40.0, 0.0), 1.0)
-        preg_flow_factor = 1.0 + 0.35 * ga_frac
-        preg_vol_factor = 1.0 + 0.40 * ga_frac
+        trimester_prog = min(max(ctx.gestational_age_weeks / 40.0, 0.0), 1.0)
+        preg_flow_factor = 1.0 + (pop_scale.pregnancy_hepatic_flow_factor - 1.0) * trimester_prog
+        preg_gfr_factor = 1.0 + (pop_scale.pregnancy_gfr_factor - 1.0) * trimester_prog
+        preg_vol_factor = 1.0 + (pop_scale.pregnancy_plasma_volume_factor - 1.0) * trimester_prog
 
-    qh = ref.adult_hepatic_blood_flow_l_h * flow_scale * hepatic_factor * elderly_factor * preg_flow_factor * rb
-    co = ref.adult_cardiac_output_l_h * flow_scale * elderly_factor * preg_flow_factor * rb
+    combined_flow_factor = flow_scale * maturation_factor * elderly_factor
+    qh = base_adult.hepatic_blood_flow_l_h * combined_flow_factor * hep_factor * preg_flow_factor
+    co = base_adult.cardiac_output_l_h * flow_scale * elderly_factor * preg_flow_factor
 
-    if ctx.egfr_ml_min_1_73m2 is not None:
-        if not math.isfinite(ctx.egfr_ml_min_1_73m2) or ctx.egfr_ml_min_1_73m2 <= 0.0:
-            gfr_l_h: float | None = None
-            qr_plasma: float | None = None
+    gfr_l_h: float | None
+    qr_plasma: float | None
+    if ctx.egfr_ml_min_1_73m2 is not None and ctx.egfr_ml_min_1_73m2 < 90.0:
+        renal_status = ref_phys.special_population_rules_status.get("renal_impairment", "pending_owner_review")
+        if renal_status != "approved":
+            gfr_l_h = None
+            qr_plasma = None
         else:
-            gfr_l_h = float(ctx.egfr_ml_min_1_73m2) * 0.06 * flow_scale
             renal_factor = min(float(ctx.egfr_ml_min_1_73m2) / 125.0, 1.2)
-            qr_plasma = ref.adult_renal_plasma_flow_l_h * flow_scale * max(renal_factor, 0.25)
-    elif ctx.population == "renal_impairment":
-        gfr_l_h = None
-        qr_plasma = None
+            gfr_l_h = base_adult.gfr_l_h * combined_flow_factor * renal_factor * preg_gfr_factor
+            qr_plasma = base_adult.renal_plasma_flow_l_h * combined_flow_factor * renal_factor * preg_flow_factor
     else:
-        gfr_l_h = ref.adult_gfr_l_h * flow_scale * elderly_factor * preg_flow_factor
-        qr_plasma = ref.adult_renal_plasma_flow_l_h * flow_scale * elderly_factor * preg_flow_factor
+        gfr_l_h = base_adult.gfr_l_h * combined_flow_factor * preg_gfr_factor
+        qr_plasma = base_adult.renal_plasma_flow_l_h * combined_flow_factor * preg_flow_factor
 
+    rb = float(ctx.blood_to_plasma_ratio) if ctx.blood_to_plasma_ratio is not None else None
     return ResolvedPhysiologyContext(
         is_resolvable=True,
+        unresolved_reason=None,
         weight_kg=wt,
         flow_scale_factor=flow_scale,
+        volume_scale_factor=vol_scale,
         hepatic_blood_flow_l_h=qh,
         cardiac_output_l_h=co,
         gfr_l_h=gfr_l_h,
         renal_plasma_flow_l_h=qr_plasma,
-        plasma_volume_l=ref.plasma_volume_l_kg * wt * preg_vol_factor,
-        ecf_volume_l=ref.ecf_volume_l_kg * wt * preg_vol_factor,
-        tbw_volume_l=ref.tbw_volume_l_kg * wt * preg_vol_factor,
-        **base_kwargs,
+        plasma_volume_l=base_adult.plasma_volume_l_kg * wt * preg_vol_factor,
+        ecf_volume_l=base_adult.ecf_volume_l_kg * wt,
+        tbw_volume_l=base_adult.tbw_volume_l_kg * wt,
+        blood_to_plasma_ratio=rb,
     )

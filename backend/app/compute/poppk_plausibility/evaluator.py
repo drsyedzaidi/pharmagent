@@ -102,10 +102,20 @@ def evaluate_poppk_plausibility(
         else PopPKModelInput.model_validate(model_input)
     )
     catalog = load_rule_catalog()
+    has_explicit_f = any(
+        classify_parameter(p.name)[0] == "F"
+        and isinstance(p.value, (int, float))
+        and not isinstance(p.value, bool)
+        and p.value > 0
+        for p in model.parameters
+    )
 
     normalized_params = tuple(
         sorted(
-            (normalize_parameter_spec(p, route=model.context.route) for p in model.parameters),
+            (
+                normalize_parameter_spec(p, route=model.context.route, has_explicit_f=has_explicit_f)
+                for p in model.parameters
+            ),
             key=lambda np_item: (
                 np_item.canonical_name,
                 np_item.name,

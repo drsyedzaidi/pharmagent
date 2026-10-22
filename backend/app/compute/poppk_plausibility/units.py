@@ -69,6 +69,13 @@ _PARAM_CLASS_MAP: dict[str, tuple[str, str, bool]] = {
     "t_half": ("t_half", "half_life", False),
     "thalf": ("t_half", "half_life", False),
     "t1/2": ("t_half", "half_life", False),
+    "t_half_beta": ("t_half", "half_life", False),
+    "thalf_beta": ("t_half", "half_life", False),
+    "t_half_terminal": ("t_half", "half_life", False),
+    "t_half_eff": ("t_half_eff", "half_life", False),
+    "thalf_eff": ("t_half_eff", "half_life", False),
+    "effective_t_half": ("t_half_eff", "half_life", False),
+    "t_half_effective": ("t_half_eff", "half_life", False),
     "f": ("F", "bioavailability", False),
     "f1": ("F", "bioavailability", False),
     "bioavailability": ("F", "bioavailability", False),
@@ -154,14 +161,14 @@ def classify_parameter(param_name: str) -> tuple[str, str, bool]:
     return (param_name.strip(), "other", False)
 
 
-def normalize_concentration_to_mg_l(value: float, unit: str | None) -> float:
-    """Convert a concentration value to canonical `mg/L` when unit is recognized."""
+def normalize_concentration_to_mg_l(value: float, unit: str | None) -> float | None:
+    """Convert a concentration value to canonical `mg/L` when unit is recognized; else `None`."""
     if not math.isfinite(value) or unit is None:
-        return value
+        return None
     u_key = unit.strip().lower()
     if u_key in _UNIT_TABLE and _UNIT_TABLE[u_key][0] == "concentration":
         return float(value) * _UNIT_TABLE[u_key][1]
-    return float(value)
+    return None
 
 
 def normalize_parameter_unit(param_name: str, value: float, unit: str | None) -> tuple[float, str]:
@@ -186,17 +193,23 @@ def normalize_parameter_unit(param_name: str, value: float, unit: str | None) ->
     return norm_val, canonical_unit
 
 
-def normalize_parameter_spec(spec: ParameterSpec, route: RouteKind = "iv") -> NormalizedParameter:
+def normalize_parameter_spec(
+    spec: ParameterSpec, route: RouteKind = "iv", has_explicit_f: bool = False
+) -> NormalizedParameter:
     """Convert a `ParameterSpec` into an immutable `NormalizedParameter` without raising."""
-    del route
     canonical_name, param_class, apparent_by_name = classify_parameter(spec.name)
+    resolved_scale: Literal["systemic", "apparent", "ambiguous", "not_applicable"]
     if param_class in {"clearance", "volume"}:
         if spec.scale == "apparent" or apparent_by_name:
-            resolved_scale: Literal["systemic", "apparent", "not_applicable"] = "apparent"
+            resolved_scale = "apparent"
             if not canonical_name.endswith("/F"):
                 canonical_name = f"{canonical_name}/F"
-        else:
+        elif spec.scale == "systemic":
             resolved_scale = "systemic"
+        elif route == "iv" or (route != "unknown" and has_explicit_f):
+            resolved_scale = "systemic"
+        else:
+            resolved_scale = "ambiguous"
     else:
         resolved_scale = "not_applicable"
 

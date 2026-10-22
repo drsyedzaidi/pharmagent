@@ -1,46 +1,120 @@
-"""Immutable typed schemas for PopPK physiological plausibility screening.
-
-All input, catalog, finding, and report models are frozen (`frozen=True`,
-`extra="forbid"`) so evaluation is side-effect-free and never mutates caller
-inputs.
-"""
+"""Pydantic schemas and deeply immutable contracts for PopPK physiological plausibility screening."""
 from __future__ import annotations
 
 import functools
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    field_validator,
+    model_validator,
+)
 
 SeverityLevel = Literal["INFO", "WARN", "HIGH", "CRITICAL"]
 FindingStatus = Literal["PASS", "FLAGGED", "UNRESOLVED", "NOT_APPLICABLE"]
 OverrideStatus = Literal["none", "justification_required", "accepted_with_justification", "rejected"]
 ScreeningStatus = Literal[
     "SCREENING_PASS",
-    "REQUIRES_JUSTIFICATION",
     "REVIEW_ACCEPTED_WITH_JUSTIFICATION",
-    "CRITICAL_IMPLAUSIBILITY",
+    "REQUIRES_JUSTIFICATION",
     "INCOMPLETE_CONTEXT",
+    "CRITICAL_IMPLAUSIBILITY",
 ]
+
 PopulationKind = Literal[
     "adult",
     "pediatric",
-    "neonatal",
+    "neonate",
+    "elderly",
     "pregnancy",
     "renal_impairment",
     "hepatic_impairment",
-    "elderly",
     "unknown",
 ]
-RouteKind = Literal["iv", "oral", "sc", "im", "extravascular", "unknown"]
-ModalityKind = Literal["small_molecule", "monoclonal_antibody", "peptide_biologic", "other", "unknown"]
+RouteKind = Literal["iv", "oral", "sc", "im", "inhalation", "unknown"]
+ModalityKind = Literal["small_molecule", "monoclonal_antibody", "peptide", "biologic_other", "unknown"]
 ScaleKind = Literal["systemic", "apparent", "auto"]
+EliminationPathwayKind = Literal["hepatic", "renal", "mixed", "extrahepatic", "catabolic", "unknown"]
+ClearanceMatrixKind = Literal["blood", "plasma"]
+CompartmentalStructureKind = Literal[
+    "mammillary_central_elimination", "non_mammillary", "peripheral_elimination", "unknown"
+]
+FormulationReleaseKind = Literal[
+    "immediate_release", "extended_release", "depot_or_long_acting", "unknown"
+]
+RuleType = Literal["mathematical_identity", "physiological_reference", "modeling_heuristic"]
+RuleApprovalStatus = Literal["pending_owner_review"]
+RuleCategory = Literal[
+    "structural_domain",
+    "unit_compatibility",
+    "bioavailability",
+    "clearance_physiology",
+    "volume_physiology",
+    "derived_kinetics",
+    "absorption_kinetics",
+    "allometric_scaling",
+    "random_effects",
+    "residual_error",
+    "biologics_mab",
+    "micro_rate_consistency",
+    "prediction_plausibility",
+]
+
+
+def _deep_freeze(v: Any) -> Any:
+    if isinstance(v, Mapping):
+        return MappingProxyType({k: _deep_freeze(val) for k, val in v.items()})
+    if isinstance(v, (list, tuple)):
+        return tuple(_deep_freeze(x) for x in v)
+    return v
+
+
+def _deep_thaw(v: Any) -> Any:
+    if isinstance(v, Mapping):
+        return {k: _deep_thaw(val) for k, val in v.items()}
+    if isinstance(v, tuple):
+        return [_deep_thaw(x) for x in v]
+    return v
+
+
+FrozenMap = Annotated[
+    Mapping[str, Any],
+    BeforeValidator(dict),
+    AfterValidator(_deep_freeze),
+    PlainSerializer(_deep_thaw, return_type=dict),
+]
+FrozenFloatMap = Annotated[
+    Mapping[str, float],
+    BeforeValidator(dict),
+    AfterValidator(_deep_freeze),
+    PlainSerializer(_deep_thaw, return_type=dict),
+]
+FrozenIntMap = Annotated[
+    Mapping[str, int],
+    BeforeValidator(dict),
+    AfterValidator(_deep_freeze),
+    PlainSerializer(_deep_thaw, return_type=dict),
+]
+FrozenStrMap = Annotated[
+    Mapping[str, str],
+    BeforeValidator(dict),
+    AfterValidator(_deep_freeze),
+    PlainSerializer(_deep_thaw, return_type=dict),
+]
 
 
 def sanitize_json_float(val: float | str | None) -> float | str | None:
-    """Convert non-finite floats (NaN, Inf, -Inf) to strings for strict RFC-8259 JSON compliance."""
+    """Convert non-finite IEEE-754 floats (NaN, +/-Inf) to strings for RFC-8259 JSON safety."""
     if isinstance(val, float) and not math.isfinite(val):
         return str(val)
     return val
@@ -50,63 +124,80 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RuleApproval(_FrozenModel):
-    status: Literal["pending_owner_review", "approved"]
-    by: str | None = None
-    date: str | None = None
-
-
-class RuleDefinition(_FrozenModel):
-    rule_id: str = Field(pattern=r"^PL-\d{3}$")
-    slug: str = Field(min_length=1)
-    version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
-    title: str = Field(min_length=1)
-    category: str = Field(min_length=1)
-    applies_to_modalities: tuple[str, ...]
-    default_severity: SeverityLevel
-    override_allowed: bool
-    thresholds: dict[str, float | int | bool | str] = Field(default_factory=dict)
-    scientific_rationale: str = Field(min_length=1)
-    recommendation: str = Field(min_length=1)
-    reference_basis: str = Field(min_length=1)
-    source_kind: Literal[
-        "physiological_reference",
-        "mathematical_identity",
-        "allometric_theory",
-        "modeling_heuristic",
-    ]
-    approval: RuleApproval
-
-    def threshold_float(self, key: str, default: float) -> float:
-        raw = self.thresholds.get(key, default)
-        return float(raw) if isinstance(raw, (int, float)) else default
-
-
-class ReferencePhysiology(_FrozenModel):
-    adult_reference_weight_kg: float
-    adult_hepatic_blood_flow_l_h: float
-    adult_cardiac_output_l_h: float
-    adult_gfr_l_h: float
-    adult_renal_plasma_flow_l_h: float
+class AdultReferencePhysiology(_FrozenModel):
+    weight_kg: float
+    hepatic_blood_flow_l_h: float
+    cardiac_output_l_h: float
+    gfr_l_h: float
+    renal_plasma_flow_l_h: float
     plasma_volume_l_kg: float
     blood_volume_l_kg: float
     ecf_volume_l_kg: float
     tbw_volume_l_kg: float
-    min_central_volume_l_kg: float
-    max_central_volume_l_kg: float
-    max_vss_volume_l_kg: float
+    allometric_flow_exponent: float
+    allometric_volume_exponent: float
+
+
+class PopulationScalingConfig(_FrozenModel):
+    neonate_maturation_cl_factor: float
+    elderly_flow_factor_per_decade_over_65: float
+    child_pugh_flow_factors: FrozenFloatMap
+    pregnancy_gfr_factor: float
+    pregnancy_hepatic_flow_factor: float
+    pregnancy_plasma_volume_factor: float
+
+
+class ReferencePhysiology(_FrozenModel):
+    adult_70kg: AdultReferencePhysiology
+    special_population_rules_status: FrozenStrMap = Field(
+        default_factory=lambda: MappingProxyType(
+            {
+                "pediatric": "pending_owner_review",
+                "neonate": "pending_owner_review",
+                "elderly": "pending_owner_review",
+                "pregnancy": "pending_owner_review",
+                "renal_impairment": "pending_owner_review",
+                "hepatic_impairment": "pending_owner_review",
+            }
+        )
+    )
+    population_scaling: PopulationScalingConfig
+
+
+class RuleDefinition(_FrozenModel):
+    rule_id: str
+    version: str
+    category: RuleCategory
+    rule_type: RuleType = "modeling_heuristic"
+    approval_status: RuleApprovalStatus = "pending_owner_review"
+    description: str
+    scientific_rationale: str
+    recommendation: str
+    reference_basis: str
+    default_severity: SeverityLevel
+    override_allowed: bool
+    applicable_modalities: tuple[str, ...]
+    thresholds: FrozenMap = Field(default_factory=lambda: MappingProxyType({}))
+
+    @property
+    def title(self) -> str:
+        return self.description
+
+    def threshold_float(self, key: str, default: float) -> float:
+        raw = self.thresholds.get(key, default)
+        return float(raw)
 
 
 class RuleCatalog(_FrozenModel):
-    catalog_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    catalog_version: str
     reference_physiology: ReferencePhysiology
     rules: tuple[RuleDefinition, ...]
 
     def by_id(self, rule_id: str) -> RuleDefinition:
-        for rule in self.rules:
-            if rule.rule_id == rule_id:
-                return rule
-        raise KeyError(f"Unknown plausibility rule_id: {rule_id}")
+        for r in self.rules:
+            if r.rule_id == rule_id:
+                return r
+        raise KeyError(f"Unknown plausibility rule_id: {rule_id!r}")
 
 
 @functools.lru_cache(maxsize=1)
@@ -116,7 +207,7 @@ def _cached_catalog_json() -> str:
 
 
 def load_rule_catalog() -> RuleCatalog:
-    """Load and validate a fresh RuleCatalog instance from static JSON."""
+    """Load and validate a deeply immutable RuleCatalog instance from static JSON."""
     return RuleCatalog.model_validate(json.loads(_cached_catalog_json()))
 
 
@@ -130,6 +221,10 @@ class PopPKContext(_FrozenModel):
     child_pugh: Literal["A", "B", "C"] | None = None
     route: RouteKind = "iv"
     modality: ModalityKind = "small_molecule"
+    elimination_pathway: EliminationPathwayKind = "hepatic"
+    clearance_matrix: ClearanceMatrixKind = "blood"
+    compartmental_structure: CompartmentalStructureKind = "mammillary_central_elimination"
+    formulation_release: FormulationReleaseKind = "immediate_release"
     fraction_unbound_plasma: float | None = None
     blood_to_plasma_ratio: float | None = None
     renal_secretion_known: bool = False
@@ -155,9 +250,21 @@ class NormalizedParameter(_FrozenModel):
     normalized_value: float | None
     normalized_unit: str | None
     weight_normalized: bool = False
-    resolved_scale: Literal["systemic", "apparent", "not_applicable"] = "not_applicable"
+    resolved_scale: Literal["systemic", "apparent", "ambiguous", "not_applicable"] = "not_applicable"
     unit_status: Literal["compatible", "missing", "incompatible", "unknown"] = "compatible"
     unit_message: str = ""
+
+    @field_validator("observed_value", mode="before")
+    @classmethod
+    def _clean_obs(cls, v: Any) -> Any:
+        return sanitize_json_float(v)
+
+    @field_validator("normalized_value", mode="before")
+    @classmethod
+    def _clean_norm(cls, v: Any) -> Any:
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        return v
 
 
 class IIVSpec(_FrozenModel):
@@ -180,63 +287,38 @@ class PredictionPoint(_FrozenModel):
     pred: float | None = None
     ipred: float | None = None
     unit: str = Field(default="mg/L", max_length=64)
-    subject_id: str | None = Field(default=None, max_length=128)
 
 
 class JustificationRecord(_FrozenModel):
-    rule_id: str = Field(pattern=r"^PL-\d{3}$")
+    rule_id: str = Field(min_length=1, max_length=32)
     parameter: str = Field(min_length=1, max_length=128)
     rationale: str = Field(min_length=1, max_length=2000)
-    scientific_basis_or_citation: str = Field(min_length=1, max_length=1000)
+    scientific_basis_or_citation: str = Field(min_length=1, max_length=2000)
     reviewer: str = Field(min_length=1, max_length=256)
     timestamp: str = Field(min_length=1, max_length=128)
 
-    @field_validator("rationale", "scientific_basis_or_citation", "reviewer", "timestamp")
+    @field_validator(
+        "rule_id",
+        "parameter",
+        "rationale",
+        "scientific_basis_or_citation",
+        "reviewer",
+        "timestamp",
+    )
     @classmethod
-    def _non_blank(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("Justification fields must not be blank.")
-        return stripped
-
-
-class PopPKModelInput(_FrozenModel):
-    model_id: str = Field(default="unnamed_model", min_length=1, max_length=256)
-    context: PopPKContext = Field(default_factory=PopPKContext)
-    parameters: tuple[ParameterSpec, ...] = Field(default=(), max_length=128)
-    allometric_exponents: dict[str, float] = Field(default_factory=dict)
-    iiv: tuple[IIVSpec, ...] = Field(default=(), max_length=128)
-    omega_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
-    sigma_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
-    correlations: dict[str, float] = Field(default_factory=dict)
-    residual_error: tuple[ResidualErrorSpec, ...] = Field(default=(), max_length=64)
-    predictions: tuple[PredictionPoint, ...] = Field(default=(), max_length=2000)
-    justifications: tuple[JustificationRecord, ...] = Field(default=(), max_length=128)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_collections_without_mutating_caller(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        copied = dict(data)
-        for key in ("allometric_exponents", "correlations"):
-            if key in copied and isinstance(copied[key], dict):
-                if len(copied[key]) > 128:
-                    raise ValueError(f"'{key}' exceeds maximum size of 128 entries.")
-                copied[key] = dict(copied[key])
-        for mat_key in ("omega_matrix", "sigma_matrix"):
-            mat = copied.get(mat_key)
-            if isinstance(mat, (list, tuple)) and any(
-                isinstance(r, (list, tuple)) and len(r) > 64 for r in mat
-            ):
-                raise ValueError(f"'{mat_key}' row length exceeds maximum of 64.")
-        return copied
+    def _must_not_be_whitespace_only(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Justification fields must not be blank or whitespace-only.")
+        return cleaned
 
 
 class PlausibilityFinding(_FrozenModel):
     rule_id: str
     rule_version: str
-    category: str
+    category: RuleCategory
+    rule_type: RuleType = "modeling_heuristic"
+    approval_status: RuleApprovalStatus = "pending_owner_review"
     parameter: str
     observed_value: float | str | None = None
     observed_unit: str | None = None
@@ -253,14 +335,41 @@ class PlausibilityFinding(_FrozenModel):
     justification: JustificationRecord | None = None
     override_note: str = ""
 
+    @field_validator("observed_value", mode="before")
+    @classmethod
+    def _clean_obs_val(cls, v: Any) -> Any:
+        return sanitize_json_float(v)
+
+    @field_validator("normalized_value", mode="before")
+    @classmethod
+    def _clean_norm_val(cls, v: Any) -> Any:
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        return v
+
+
+class PopPKModelInput(_FrozenModel):
+    model_id: str = Field(default="unnamed_poppk_model", min_length=1, max_length=256)
+    context: PopPKContext = Field(default_factory=PopPKContext)
+    parameters: tuple[ParameterSpec, ...] = Field(default=(), max_length=128)
+    allometric_exponents: FrozenFloatMap = Field(default_factory=lambda: MappingProxyType({}))
+    iiv: tuple[IIVSpec, ...] = Field(default=(), max_length=128)
+    omega_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
+    sigma_matrix: tuple[tuple[float, ...], ...] | None = Field(default=None, max_length=64)
+    correlations: FrozenFloatMap = Field(default_factory=lambda: MappingProxyType({}))
+    residual_error: tuple[ResidualErrorSpec, ...] = Field(default=(), max_length=32)
+    predictions: tuple[PredictionPoint, ...] = Field(default=(), max_length=2000)
+    justifications: tuple[JustificationRecord, ...] = Field(default=(), max_length=128)
+
     @model_validator(mode="before")
     @classmethod
-    def _sanitize_floats(cls, data: Any) -> Any:
+    def _coerce_collections_without_mutating_caller(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         copied = dict(data)
-        copied["observed_value"] = sanitize_json_float(copied.get("observed_value"))
-        nv = copied.get("normalized_value")
-        if isinstance(nv, float) and not math.isfinite(nv):
-            copied["normalized_value"] = None
+        for k in ("allometric_exponents", "correlations"):
+            if k in copied and isinstance(copied[k], Mapping):
+                if len(copied[k]) > 128:
+                    raise ValueError(f"{k} exceeds maximum length of 128.")
+                copied[k] = dict(copied[k])
         return copied

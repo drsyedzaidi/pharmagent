@@ -1,19 +1,17 @@
-"""Offline benchmark harness for the PopPK Physiological Plausibility Checker.
+"""Offline software regression harness for the PopPK Physiological Plausibility Checker.
 
-Evaluates three deterministic case groups:
-1. `known_plausible_synthetic_models`: clean models expected to have zero false flags.
-2. `corrupted_models_with_planted_violations`: models with planted violations across PL-001..PL-020.
-3. `published_model_reference_cases`: literature-anchored and placeholder reference structures.
+NOTE: This synthetic/reference benchmark verifies deterministic rule-engine execution,
+planted-violation recall, and false-flag rate on synthetic fixtures. It does NOT
+constitute scientific, clinical, or regulatory validation of any pharmacometric model.
 """
 from __future__ import annotations
 
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
-
 from app.compute.poppk_plausibility.evaluator import evaluate_poppk_plausibility
 from app.compute.poppk_plausibility.schema import (
+    FrozenIntMap,
     IIVSpec,
     JustificationRecord,
     ParameterSpec,
@@ -21,12 +19,12 @@ from app.compute.poppk_plausibility.schema import (
     PopPKModelInput,
     PredictionPoint,
     ResidualErrorSpec,
+    ScreeningStatus,
+    _FrozenModel,
 )
 
 
-class BenchmarkCase(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+class BenchmarkCase(_FrozenModel):
     case_id: str
     group: Literal[
         "known_plausible_synthetic",
@@ -40,9 +38,21 @@ class BenchmarkCase(BaseModel):
     expected_unresolved_rules: tuple[str, ...] = ()
 
 
-class BenchmarkSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class BenchmarkCaseResult(_FrozenModel):
+    case_id: str
+    group: str
+    source_status: str
+    screening_status: ScreeningStatus
+    flagged_rules: tuple[str, ...]
+    unresolved_rules: tuple[str, ...]
 
+    def __getitem__(self, key: str) -> Any:
+        val = getattr(self, key)
+        return list(val) if isinstance(val, tuple) else val
+
+
+class BenchmarkSummary(_FrozenModel):
+    harness_note: str = "Synthetic/reference software regression harness only; not scientific validation."
     total_cases: int
     clean_model_count: int
     corrupted_model_count: int
@@ -52,8 +62,8 @@ class BenchmarkSummary(BaseModel):
     unresolved_rate_on_incomplete_context: float
     rules_exercised_count: int
     rules_exercised: tuple[str, ...]
-    severity_distribution: dict[str, int]
-    case_results: tuple[dict[str, Any], ...]
+    severity_distribution: FrozenIntMap
+    case_results: tuple[BenchmarkCaseResult, ...]
 
 
 def _p(name: str, value: float, unit: str, scale: str = "auto") -> ParameterSpec:
@@ -61,7 +71,7 @@ def _p(name: str, value: float, unit: str, scale: str = "auto") -> ParameterSpec
 
 
 def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
-    """Construct the offline benchmark suite covering clean, corrupted, and reference cases."""
+    """Construct the offline software regression suite covering clean, corrupted, and reference cases."""
     base_ctx = PopPKContext(
         species="human", population="adult",
         reference_weight_kg=70.0, route="iv",
@@ -103,13 +113,16 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
             ),
         ),
         BenchmarkCase(
-            case_id="clean_pediatric_20kg_iv", group="known_plausible_synthetic", source_status="synthetic",
-            citation_note="Synthetic reference 20 kg pediatric IV small-molecule model.",
+            case_id="clean_adult_er_oral_1cmt", group="known_plausible_synthetic", source_status="synthetic",
+            citation_note="Synthetic reference 70 kg adult extended-release oral 1-compartment model.",
             model=PopPKModelInput(
-                model_id="clean_pediatric_20kg_iv",
-                context=PopPKContext(population="pediatric", reference_weight_kg=20.0),
+                model_id="clean_adult_er_oral_1cmt",
+                context=PopPKContext(
+                    population="adult", route="oral", formulation_release="extended_release"
+                ),
                 parameters=(
-                    _p("CL", 4.5, "L/h", scale="systemic"), _p("Vc", 8.0, "L", scale="systemic"),
+                    _p("F", 0.75, "fraction"), _p("CL", 15.0, "L/h", scale="systemic"),
+                    _p("Vc", 30.0, "L", scale="systemic"), _p("ka", 0.12, "1/h"),
                 ),
             ),
         ),
@@ -161,7 +174,7 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
         BenchmarkCase(
             case_id="corrupt_pl006_vc_below_plasma", group="corrupted_planted_violation",
             source_status="synthetic",
-            citation_note="Planted violation: central volume Vc = 0.8 L < adult plasma volume floor (2.1 L).",
+            citation_note="Planted violation: central volume Vc = 0.8 L < adult typical lower bound (2.1 L).",
             model=PopPKModelInput(
                 model_id="corrupt_pl006", context=base_ctx, parameters=(_p("CL", 10.0, "L/h"), _p("Vc", 0.8, "L")),
             ),
@@ -172,10 +185,7 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
             source_status="synthetic", citation_note="Planted violation: Vss (95 L) != Vc (25 L) + Vp (35 L).",
             model=PopPKModelInput(
                 model_id="corrupt_pl007", context=base_ctx,
-                parameters=(
-                    *base_params, _p("Vp", 35.0, "L"),
-                    _p("Vss", 95.0, "L"),
-                ),
+                parameters=(*base_params, _p("Vp", 35.0, "L"), _p("Vss", 95.0, "L")),
             ),
             expected_flagged_rules=("PL-007",),
         ),
@@ -190,9 +200,14 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
         ),
         BenchmarkCase(
             case_id="corrupt_pl009_flip_flop", group="corrupted_planted_violation",
-            source_status="synthetic", citation_note="Planted violation: ka (0.2 1/h) <= ke (10/25 = 0.4 1/h).",
+            source_status="synthetic",
+            citation_note="Planted violation: immediate-release oral ka (0.2 1/h) <= ke (10/25 = 0.4 1/h).",
             model=PopPKModelInput(
-                model_id="corrupt_pl009", context=base_ctx, parameters=(*base_params, _p("ka", 0.2, "1/h")),
+                model_id="corrupt_pl009",
+                context=PopPKContext(
+                    population="adult", route="oral", formulation_release="immediate_release"
+                ),
+                parameters=(*base_params, _p("ka", 0.2, "1/h")),
             ),
             expected_flagged_rules=("PL-009",),
         ),
@@ -246,8 +261,8 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
             source_status="synthetic", citation_note="Planted violation: mAb with Vc=35 L and CL=5 L/h.",
             model=PopPKModelInput(
                 model_id="corrupt_pl017_018",
-                context=PopPKContext(population="adult", modality="monoclonal_antibody"),
-                parameters=(_p("CL", 5.0, "L/h"), _p("Vc", 35.0, "L")),
+                context=PopPKContext(population="adult", route="iv", modality="monoclonal_antibody"),
+                parameters=(_p("CL", 5.0, "L/h", scale="systemic"), _p("Vc", 35.0, "L", scale="systemic")),
             ),
             expected_flagged_rules=("PL-017", "PL-018"),
         ),
@@ -273,7 +288,7 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
         BenchmarkCase(
             case_id="incomplete_pediatric_missing_weight", group="corrupted_planted_violation",
             source_status="synthetic",
-            citation_note="Incomplete context: pediatric model missing reference_weight_kg.",
+            citation_note="Incomplete context: pediatric model missing reference_weight_kg and approved rule.",
             model=PopPKModelInput(
                 model_id="incomplete_ped", context=PopPKContext(population="pediatric", reference_weight_kg=None),
                 parameters=base_params,
@@ -287,12 +302,12 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
             case_id="ref_dirks_meibohm_2010_typical_igg_mab", group="published_model_reference",
             source_status="literature_reference",
             citation_note=(
-                "Dirks & Meibohm 2010 (Clin Pharmacokinet 49:633-659): typical human IgG1 mAb "
+                "Dirks & Meibohm 2010 (Clin Pharmacokinet 49(10):633-659): typical human IgG1 mAb "
                 "parameters (Vc ~ 3.1 L, Vp ~ 2.6 L, CL ~ 0.25 L/day = 0.0104 L/h, Q ~ 0.6 L/day)."
             ),
             model=PopPKModelInput(
                 model_id="dirks_meibohm_2010_igg",
-                context=PopPKContext(population="adult", modality="monoclonal_antibody"),
+                context=PopPKContext(population="adult", route="iv", modality="monoclonal_antibody"),
                 parameters=(
                     _p("CL", 0.25, "L/day", scale="systemic"), _p("Vc", 3.1, "L", scale="systemic"),
                     _p("Vp", 2.6, "L", scale="systemic"), _p("Q", 0.60, "L/day", scale="systemic"),
@@ -329,20 +344,17 @@ def build_benchmark_cases() -> tuple[BenchmarkCase, ...]:
 def run_plausibility_benchmark() -> BenchmarkSummary:
     """Run all offline benchmark cases and compute recall, false-flag, and coverage metrics."""
     cases = build_benchmark_cases()
-    clean_total = 0
-    clean_false_flags = 0
-    planted_expected = 0
-    planted_recalled = 0
-    unresolved_expected = 0
-    unresolved_hit = 0
+    clean_total, clean_false_flags = 0, 0
+    planted_expected, planted_recalled = 0, 0
+    unresolved_expected, unresolved_hit = 0, 0
     exercised_rules: set[str] = set()
     severity_dist: dict[str, int] = {"INFO": 0, "WARN": 0, "HIGH": 0, "CRITICAL": 0}
-    case_results: list[dict[str, Any]] = []
+    case_results: list[BenchmarkCaseResult] = []
 
     for c in cases:
         rep = evaluate_poppk_plausibility(c.model)
-        flagged_rules = sorted({f.rule_id for f in rep.findings if f.status == "FLAGGED"})
-        unresolved_rules = sorted({f.rule_id for f in rep.findings if f.status == "UNRESOLVED"})
+        flagged_rules = tuple(sorted({f.rule_id for f in rep.findings if f.status == "FLAGGED"}))
+        unresolved_rules = tuple(sorted({f.rule_id for f in rep.findings if f.status == "UNRESOLVED"}))
         for f in rep.findings:
             if f.status in {"PASS", "FLAGGED", "UNRESOLVED"}:
                 exercised_rules.add(f.rule_id)
@@ -364,14 +376,14 @@ def run_plausibility_benchmark() -> BenchmarkSummary:
                 unresolved_hit += 1
 
         case_results.append(
-            {
-                "case_id": c.case_id,
-                "group": c.group,
-                "source_status": c.source_status,
-                "screening_status": rep.screening_status,
-                "flagged_rules": flagged_rules,
-                "unresolved_rules": unresolved_rules,
-            }
+            BenchmarkCaseResult(
+                case_id=c.case_id,
+                group=c.group,
+                source_status=c.source_status,
+                screening_status=rep.screening_status,
+                flagged_rules=flagged_rules,
+                unresolved_rules=unresolved_rules,
+            )
         )
 
     return BenchmarkSummary(
