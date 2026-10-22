@@ -84,7 +84,7 @@ def test_the_genesis_audit_entry_binds_the_recorded_provenance(orch):
     genesis = sess.audit.entries[0]
     assert genesis.action == "session_created"
     assert hash_payload(dict(sess.state.run_provenance)) == genesis.inputs_hash
-    assert verify_run_provenance(sess.state.run_provenance, genesis) == "verified"
+    assert verify_run_provenance(sess.state.run_provenance, genesis, sess.id) == "verified"
 
 
 def test_the_record_is_a_snapshot_taken_at_creation(orch, monkeypatch):
@@ -108,7 +108,7 @@ def test_the_recorded_provenance_survives_serialisation_and_reload(tmp_path):
     reloaded = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert reloaded.state.run_provenance == expected
     assert reloaded.audit.verify() and verify_run_provenance(reloaded.state.run_provenance,
-                                                              reloaded.audit.entries[0]) == "verified"
+                                                              reloaded.audit.entries[0], sid) == "verified"
 
 
 def _rewrite_state(db: str, sid: str, mutate) -> None:
@@ -121,17 +121,68 @@ def _rewrite_state(db: str, sid: str, mutate) -> None:
     con.close()
 
 
-def test_a_legacy_session_without_the_field_loads_and_is_reported_as_legacy(tmp_path):
+def _make_legacy(db: str, sid: str) -> None:
+    """Rewrite a session into the pre-provenance-record format: no state field, and a genesis entry whose outputs are
+    only {"session_id": sid}, re-hashed so the chain is internally consistent (as an older build would have written)."""
+    from app.core.audit import AuditChain
+
+    _rewrite_state(db, sid, lambda st: st.pop("run_provenance", None))
+    con = sqlite3.connect(db)
+    (audit_json,) = con.execute("SELECT audit_json FROM sessions WHERE id = ?", (sid,)).fetchone()
+    chain = AuditChain.from_list(json.loads(audit_json))
+    g = chain.entries[0]
+    g.outputs_hash = hash_payload({"session_id": sid})
+    g.entry_hash = g.compute_hash()
+    con.execute("UPDATE sessions SET audit_json = ? WHERE id = ?", (json.dumps(chain.to_list()), sid))
+    con.commit()
+    con.close()
+
+
+def test_a_legacy_session_loads_and_is_reported_as_legacy_unverified(tmp_path):
     from app.core.provenance import verify_run_provenance
 
     db = str(tmp_path / "s.db")
     sid = Orchestrator(llm=MockLLM(), store=SessionStore(db)).create_session().id
-    _rewrite_state(db, sid, lambda s: s.pop("run_provenance", None))
+    _make_legacy(db, sid)
     legacy = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
-    assert legacy.state.run_provenance is None
-    assert legacy.audit.verify()
-    assert verify_run_provenance(legacy.state.run_provenance, legacy.audit.entries[0]) == "legacy"
+    assert legacy.state.run_provenance is None and legacy.audit.verify()
+    assert verify_run_provenance(legacy.state.run_provenance, legacy.audit.entries[0], sid) == "legacy_unverified"
     assert PharmState.model_validate({"session_id": "old"}).run_provenance is None
+
+
+# ── genesis marker (review item 3) ─────────────────────────────────────────────────────────────
+def test_a_new_genesis_entry_binds_the_provenance_schema_marker(orch):
+    sess = orch.create_session()
+    assert sess.audit.entries[0].outputs_hash == hash_payload({"session_id": sess.id, "run_provenance_schema": 1})
+
+
+def test_deleting_the_record_of_a_new_session_is_a_mismatch_not_legacy(tmp_path):
+    from app.core.provenance import verify_run_provenance
+
+    db = str(tmp_path / "s.db")
+    sid = Orchestrator(llm=MockLLM(), store=SessionStore(db)).create_session().id
+    _rewrite_state(db, sid, lambda st: st.pop("run_provenance", None))
+    sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
+    assert sess.state.run_provenance is None
+    assert verify_run_provenance(None, sess.audit.entries[0], sid) == "mismatch"
+
+
+def test_a_record_injected_into_a_legacy_session_is_a_mismatch(tmp_path):
+    from app.core.provenance import collect_provenance, verify_run_provenance
+
+    db = str(tmp_path / "s.db")
+    sid = Orchestrator(llm=MockLLM(), store=SessionStore(db)).create_session().id
+    _make_legacy(db, sid)
+    sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
+    forged = tuple(collect_provenance().items())
+    assert verify_run_provenance(forged, sess.audit.entries[0], sid) == "mismatch"
+
+
+def test_a_genesis_entry_of_another_session_is_a_mismatch(orch):
+    from app.core.provenance import verify_run_provenance
+
+    a, b = orch.create_session(), orch.create_session()
+    assert verify_run_provenance(a.state.run_provenance, b.audit.entries[0], a.id) == "mismatch"
 
 
 def test_a_tampered_stored_record_is_detected(tmp_path):
@@ -145,7 +196,7 @@ def test_a_tampered_stored_record_is_detected(tmp_path):
     _rewrite_state(db, sid, forge)
     sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert sess.audit.verify()                                 # the chain itself was not touched ...
-    assert verify_run_provenance(sess.state.run_provenance, sess.audit.entries[0]) == "mismatch"   # ... but this was
+    assert verify_run_provenance(sess.state.run_provenance, sess.audit.entries[0], sid) == "mismatch"   # ... this was
 
 
 def test_tampering_with_the_genesis_entry_breaks_the_audit_chain(orch):
@@ -159,7 +210,7 @@ def test_verification_rejects_a_record_checked_against_a_non_genesis_entry(orch)
 
     sess = orch.create_session()
     fake = type(sess.audit.entries[0])(**{**sess.audit.entries[0].to_dict(), "action": "tool_called"})
-    assert verify_run_provenance(sess.state.run_provenance, fake) == "mismatch"
+    assert verify_run_provenance(sess.state.run_provenance, fake, sess.id) == "mismatch"
 
 
 @pytest.mark.parametrize("agent", sorted(AGENT_WRITE_FIELDS))

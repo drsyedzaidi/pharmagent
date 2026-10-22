@@ -27,7 +27,7 @@ from app.core.audit_seal import (
 )
 from app.core.llm import LLM, get_llm
 from app.core.pharmstate import PharmState, apply_writes
-from app.core.provenance import collect_provenance
+from app.core.provenance import collect_provenance, genesis_outputs
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.core.store import SecureWriteConflict, SessionStore
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
@@ -325,7 +325,7 @@ class Orchestrator:
         # Genesis provenance entry: stamp the software/platform fingerprint into
         # the audit chain so every result traces to the run that produced it.
         sess.audit.append(agent="system", tool="session", action="session_created",
-                          inputs=prov, outputs={"session_id": sid},
+                          inputs=prov, outputs=genesis_outputs(sid),
                           timestamp=self.clock(), actor=owner or "anonymous")
         self.sessions[sid] = sess
         self._persist(sess)

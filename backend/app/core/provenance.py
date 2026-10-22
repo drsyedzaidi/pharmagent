@@ -59,19 +59,34 @@ def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
     return dict(_collect(app_version))
 
 
-def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, genesis) -> str:
+RUN_PROVENANCE_SCHEMA = 1
+
+
+def genesis_outputs(session_id: str) -> dict:
+    """Outputs of a new session's genesis audit entry: the session id plus a marker that a run-provenance record
+    was written. The marker is what makes a deleted record detectable (it can no longer pass as legacy)."""
+    return {"session_id": session_id, "run_provenance_schema": RUN_PROVENANCE_SCHEMA}
+
+
+def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, genesis, session_id: str) -> str:
     """Check a session's stored run provenance against its genesis audit entry.
 
-    ``legacy``: no stored record (session created before run provenance was kept in state).
-    ``verified``: the record hashes to the genesis entry's inputs_hash. ``mismatch``: anything else, including a
-    record checked against an entry that is not the session's genesis entry."""
+    ``verified``: the genesis entry carries the provenance marker and the record hashes to its inputs_hash.
+    ``legacy_unverified``: a genesis entry written before records were kept (outputs are only the session id) and no
+    record. ``mismatch``: anything else, including a missing record where the marker says one was written, a record in
+    a legacy session, or an entry that is not this session's genesis entry."""
     from app.core.audit import hash_payload  # local: keep core import graph light
 
-    if record is None:
-        return "legacy"
     if getattr(genesis, "index", None) != 0 or getattr(genesis, "action", None) != "session_created":
         return "mismatch"
-    return "verified" if hash_payload(dict(record)) == genesis.inputs_hash else "mismatch"
+    outputs = getattr(genesis, "outputs_hash", None)
+    if outputs == hash_payload(genesis_outputs(session_id)):
+        if record is None:
+            return "mismatch"
+        return "verified" if hash_payload(dict(record)) == genesis.inputs_hash else "mismatch"
+    if outputs == hash_payload({"session_id": session_id}):
+        return "legacy_unverified" if record is None else "mismatch"
+    return "mismatch"
 
 
 def file_sha256(path: str | Path) -> str:
