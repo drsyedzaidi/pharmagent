@@ -145,6 +145,11 @@ class ToolRegistry:
         ``allow_expensive`` must be set explicitly by callers that are themselves
         admission-controlled — see ExpensiveToolError.
         """
+        if getattr(state, "run_provenance_status", None) == "mismatch":
+            from app.core.provenance import ProvenanceQuarantined  # local: keep import graph light
+            raise ProvenanceQuarantined(
+                "this session's run provenance does not match its audit record (run_provenance_status=mismatch); "
+                "it is quarantined: no tool may run")
         tool = self.get(name)
         if tool.expensive and not allow_expensive:
             raise ExpensiveToolError(

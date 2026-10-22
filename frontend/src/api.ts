@@ -3,6 +3,7 @@ import type {
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
   AuditIntegrityStatus,
 } from './types';
+import { describeApiError } from './provenance';
 
 const BASE = '/api';
 
@@ -37,14 +38,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, { ...init, headers: authHeaders(init?.headers as Record<string, string>) });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    throw new Error(describeApiError(res.status, text));
   }
   return res.json() as Promise<T>;
 }
 
 async function download(path: string, filename: string): Promise<void> {
   const res = await fetch(BASE + path, { headers: authHeaders() });
-  if (!res.ok) throw new Error((await res.text().catch(() => res.statusText)) || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(describeApiError(res.status, await res.text().catch(() => res.statusText)));
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

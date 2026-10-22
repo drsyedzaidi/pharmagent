@@ -183,10 +183,11 @@ def test_cli_check_fails_on_a_broken_catalog(tmp_path):
 
 
 def test_only_the_known_runtime_modules_import_the_package():
-    """Slice 2: the package is imported only by app startup (validation) and the NCA tool (results)."""
+    """Slice 2: the package is imported only by app startup (validation), the NCA tool (results) and run provenance
+    (catalog identity recorded at session creation)."""
     importers = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
                        if "conventions" not in p.parts and "app.conventions" in p.read_text())
-    assert importers == ["app/main.py", "app/tools/nca_tools.py"]
+    assert importers == ["app/core/provenance.py", "app/main.py", "app/tools/nca_tools.py"]
 
 
 # ── owner review of PR #16: approval semantics and wording corrections ─────────────────────────

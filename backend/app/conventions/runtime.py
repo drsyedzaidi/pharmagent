@@ -2,23 +2,24 @@
 changes a computed number. Run provenance is guarded code and is deliberately not touched."""
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .catalog_io import load_catalog
+from .catalog_io import cached_catalog, load_catalog
 from .render import APPROVAL_MEANING, rule_text
 from .schema import Catalog
 
 
-@lru_cache(maxsize=1)
 def _catalog() -> Catalog:
-    return load_catalog()
+    """The same cached catalog that run provenance fingerprints (one load per process)."""
+    return cached_catalog().catalog
 
 
 def validate_catalog_at_startup(path: Path | str | None = None) -> str:
     """Load and validate the catalog; raise ValueError so the application fails fast on a broken file."""
     try:
+        if path is None:      # fill the shared cache: the catalog validated here is the one fingerprinted and applied
+            return cached_catalog().catalog.catalog_version
         return load_catalog(path).catalog_version
     except (ValueError, OSError) as exc:           # pydantic ValidationError and JSON errors are ValueErrors
         raise ValueError(f"conventions catalog is invalid: {exc}") from exc

@@ -41,7 +41,8 @@ def _with_data(orch, fits: bool = False) -> str:
 # ── report ─────────────────────────────────────────────────────────────────────
 def test_a_memo_request_builds_the_briefing_memo_once(orch):
     sid = orch.create_session().id
-    orch.get_session(sid).state = full_state().model_copy(update={"session_id": sid})
+    sess = orch.get_session(sid)       # keep the session's own run-provenance record, or it reads as quarantined
+    sess.state = full_state().model_copy(update={"session_id": sid, "run_provenance": sess.state.run_provenance})
     out = orch.chat(sid, "write a briefing memo", actor="alice")
     assert out["agent"] == "report" and _tools(out) == ["build_briefing_memo"]
     assert out["state"]["memo_path"] and "Built briefing memo" in out["messages"][0]
@@ -51,7 +52,8 @@ def test_a_memo_request_builds_the_briefing_memo_once(orch):
 
 def test_a_plain_report_request_still_generates_the_docx_report(orch):
     sid = orch.create_session().id
-    orch.get_session(sid).state = full_state().model_copy(update={"session_id": sid})
+    sess = orch.get_session(sid)       # keep the session's own run-provenance record, or it reads as quarantined
+    sess.state = full_state().model_copy(update={"session_id": sid, "run_provenance": sess.state.run_provenance})
     out = orch.chat(sid, "generate the report docx", actor="alice")
     assert out["agent"] == "report" and _tools(out) == ["generate_report"]
 

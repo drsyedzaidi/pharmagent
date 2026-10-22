@@ -6,18 +6,23 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
+from python_multipart.exceptions import FormParserError
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 
 from app.config import settings
 from app.conventions.runtime import validate_catalog_at_startup
-from app.core import cdisc, exporters
+from app.core import cdisc, export_provenance, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
+from app.core.provenance import ProvenanceQuarantined
 from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
@@ -79,6 +84,14 @@ async def job_rejected_handler(request: Request, exc: JobRejected) -> JSONRespon
                         content=_error_body("job_rejected", str(exc), rid))
 
 
+@app.exception_handler(ProvenanceQuarantined)
+async def provenance_quarantined_handler(request: Request, exc: ProvenanceQuarantined) -> JSONResponse:
+    # 423 Locked: the session is quarantined (run_provenance_status=mismatch). Read-only audit/state access remains.
+    rid = getattr(request.state, "request_id", "")
+    return JSONResponse(status_code=423, headers={"X-Request-ID": rid},
+                        content=_error_body("provenance_mismatch", str(exc), rid))
+
+
 @app.exception_handler(AuditSecurityError)
 async def audit_security_handler(
     request: Request, exc: AuditSecurityError
@@ -131,6 +144,15 @@ def owned_session(sid: str, owner: str | None = Depends(current_owner)):
         raise HTTPException(404, str(e))
     except AccessError as e:
         raise HTTPException(403, str(e))
+
+
+def trusted_session(sess=Depends(owned_session)):
+    """A session whose outputs may be exported as trusted: refused (423) while its run provenance is mismatched."""
+    if sess.state.run_provenance_status == "mismatch":
+        raise ProvenanceQuarantined(
+            f"session {sess.id} is quarantined (run_provenance_status=mismatch): trusted exports and reports are "
+            "refused; audit inspection and raw state remain available")
+    return sess
 
 
 def actor_id(owner: str | None = Depends(current_owner)) -> str:
@@ -355,37 +377,67 @@ def create_session(owner: str | None = Depends(current_owner)) -> dict:
     return {"id": sess.id, "created_at": sess.created_at}
 
 
-@app.post("/api/sessions/{sid}/upload")
-async def upload_for_session(sid: str, file: UploadFile = File(...),
-                             sess=Depends(owned_session)) -> dict:
-    suffix = Path(file.filename or "upload").suffix.lower()
-    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
-    data_dir = Path(settings.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(file.filename or "upload").stem
-    dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
-    size = 0
-    with dest.open("wb") as f:
-        while chunk := await file.read(1 << 20):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                f.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
-            f.write(chunk)
-    import pandas as pd
+def writable_session(sess=Depends(owned_session)):
+    """A session that may be written to, including its file storage: refused (423) while quarantined. Resolved as a
+    dependency with no body parameters, so it runs BEFORE any request body is parsed."""
+    if sess.state.run_provenance_status == "mismatch":
+        raise ProvenanceQuarantined(
+            f"session {sess.id} is quarantined (run_provenance_status=mismatch): it is read-only, including file "
+            "storage; nothing was parsed or stored")
+    return sess
 
-    from app.core.schema_extractor import extract_schema
-    from app.tools.data_tools import NONMEM_NA_VALUES
+
+@app.post("/api/sessions/{sid}/upload")
+async def upload_for_session(sid: str, request: Request, sess=Depends(writable_session)) -> dict:
+    # The body is parsed here, only after writable_session has run: a quarantined session never reaches the parser.
     try:
-        df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
-    except Exception as e:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(400, f"could not parse CSV: {e}")
-    meta = extract_schema(df, dataset_id=dest.stem)
-    meta["dataset_path"] = str(dest)
-    return {"dataset_id": dest.stem, "metadata": meta}
+        form = await request.form(max_files=1, max_fields=5)
+    except (MultiPartException, FormParserError) as e:   # malformed or over-limit multipart: a client error
+        raise HTTPException(400, f"malformed multipart upload: {getattr(e, 'message', None) or e}")
+    except StarletteHTTPException as e:                    # Starlette's own form errors -> the app's envelope
+        raise HTTPException(e.status_code, f"malformed multipart upload: {e.detail}")
+    try:                                     # always release the parser's spooled temporary files
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(422, "expected a multipart form with a 'file' field")
+        suffix = Path(file.filename or "upload").suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
+        data_dir = Path(settings.data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(file.filename or "upload").stem
+        dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
+        try:                                 # any failure once dest may exist removes it: no stored file survives
+            try:
+                out = dest.open("wb")
+            except OSError:
+                raise HTTPException(400, "could not store the upload: invalid or too long file name")
+            size = 0
+            with out as f:
+                while chunk := await file.read(1 << 20):
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+                    f.write(chunk)
+            import pandas as pd
+
+            from app.core.schema_extractor import extract_schema
+            from app.tools.data_tools import NONMEM_NA_VALUES
+            try:
+                df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
+            except Exception as e:
+                raise HTTPException(400, f"could not parse CSV: {e}")
+            meta = extract_schema(df, dataset_id=dest.stem)
+            meta["dataset_path"] = str(dest)
+            return {"dataset_id": dest.stem, "metadata": meta}
+        except BaseException:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:          # e.g. a name too long to exist: nothing was stored; keep the original error
+                pass
+            raise
+    finally:
+        await form.close()
 
 
 @app.post("/api/sessions/{sid}/chat")
@@ -803,7 +855,8 @@ def get_audit(sid: str, sess=Depends(owned_session)) -> dict:
         # current external anchor. Hash-only development mode is never presented
         # as authenticated, even when its public chain is internally consistent.
         return {"entries": entries, "verified": status["verified"],
-                "count": len(entries), "integrity": status}
+                "count": len(entries), "integrity": status,
+                "run_provenance_status": status.get("run_provenance_status")}
 
 
 @app.get("/api/sessions/{sid}/state")
@@ -818,32 +871,43 @@ def list_exports(sid: str, sess=Depends(owned_session)) -> dict:
             "control": exporters.control_available(sess.state)}
 
 
-@app.get("/api/sessions/{sid}/export/{kind}")
-def export_csv(sid: str, kind: str, sess=Depends(owned_session)) -> Response:
+def _csv_body(sess, kind: str) -> bytes:
     try:
         body = exporters.export_csv(sess.state, kind)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not body:
         raise HTTPException(404, f"no {kind} results to export")
+    return body.encode("utf-8")
+
+
+@app.get("/api/sessions/{sid}/export/{kind}")
+def export_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
+    body = _csv_body(sess, kind)              # CSV bytes unchanged: provenance travels in headers + manifest
     return Response(content=body, media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.csv"'})
+                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.csv"',
+                             **export_provenance.headers(sess.state)})
 
 
-@app.get("/api/sessions/{sid}/export/control/{kind}")
-def export_control(sid: str, kind: str, sess=Depends(owned_session)) -> Response:
-    """NONMEM (.ctl) or mrgsolve (.cpp) control stream seeded from the NLME fit."""
+def _control_body(sess, kind: str) -> tuple[bytes, str]:
     try:
         text, ext = exporters.export_control(sess.state, kind)
     except ValueError as e:
         raise HTTPException(404, str(e))
-    return Response(content=text, media_type="text/plain",
-                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.{ext}"'})
+    return (export_provenance.control_comment(sess.state, ext) + text).encode("utf-8"), ext
 
 
-@app.get("/api/sessions/{sid}/cdisc")
-def export_cdisc(sid: str, sess=Depends(owned_session)) -> Response:
-    """Download a CDISC ADaM-aligned package (ADPC + ADPP + define.xml) as a zip."""
+@app.get("/api/sessions/{sid}/export/control/{kind}")
+def export_control(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
+    """NONMEM (.ctl) or mrgsolve (.cpp) control stream seeded from the NLME fit."""
+    body, ext = _control_body(sess, kind)
+    return Response(content=body, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.{ext}"',
+                             **export_provenance.headers(sess.state)})
+
+
+def _cdisc_body(sid: str, sess) -> bytes:
+    """The CDISC package with an embedded provenance.json; ADPC/ADPP/define.xml members are unchanged."""
     if not sess.state.nca_parameters:
         raise HTTPException(404, "run NCA first — no parameters to export as ADaM")
     roles = (sess.state.dataset_metadata or {}).get("detected_roles", {})
@@ -868,8 +932,17 @@ def export_cdisc(sid: str, sess=Depends(owned_session)) -> Response:
         raise HTTPException(409, "ADPC would be empty: no usable concentration "
                                  "records in the source dataset")
     body = cdisc.build_package(sess.state, df, roles)
+    return export_provenance.zip_with_manifest(sess.state, body, session_id=sid, kind="cdisc",
+                                               filename=f"cdisc_adam_{sid}.zip")
+
+
+@app.get("/api/sessions/{sid}/cdisc")
+def export_cdisc(sid: str, sess=Depends(trusted_session)) -> Response:
+    """Download a CDISC ADaM-aligned package (ADPC + ADPP + define.xml) as a zip."""
+    body = _cdisc_body(sid, sess)
     return Response(content=body, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"',
+                             **export_provenance.headers(sess.state)})
 
 
 class CaptureSkillRequest(BaseModel):
@@ -962,14 +1035,14 @@ def generate_report(sid: str, sess=Depends(owned_session),
 
 
 @app.get("/api/sessions/{sid}/report/{filename}")
-def download_report(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+def download_report(sid: str, filename: str, sess=Depends(trusted_session)) -> FileResponse:
     report_path = sess.state.report_path
     if not report_path or Path(report_path).name != filename:
         raise HTTPException(404, "report not found")
     p = Path(report_path)
     if not p.exists():
         raise HTTPException(404, "report file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
@@ -999,14 +1072,14 @@ def generate_report_272(sid: str, req: Report272Request,
 
 @app.get("/api/sessions/{sid}/report/272/{filename}")
 def download_report_272(sid: str, filename: str,
-                        sess=Depends(owned_session)) -> FileResponse:
+                        sess=Depends(trusted_session)) -> FileResponse:
     report_path = sess.state.regulatory_report_path
     if not report_path or Path(report_path).name != filename:
         raise HTTPException(404, "Module 2.7.2 report not found or filename mismatch")
     p = Path(report_path)
     if not p.exists():
         raise HTTPException(404, "report file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
@@ -1028,15 +1101,63 @@ def generate_memo(sid: str, req: MemoRequest | None = None, sess=Depends(owned_s
 
 
 @app.get("/api/sessions/{sid}/memo/{filename}")
-def download_memo(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+def download_memo(sid: str, filename: str, sess=Depends(trusted_session)) -> FileResponse:
     memo_path = sess.state.memo_path
     if not memo_path or Path(memo_path).name != filename:
         raise HTTPException(404, "memo not found")
     p = Path(memo_path)
     if not p.exists():
         raise HTTPException(404, "memo file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+# ── companion provenance manifests (pharmagent.export_provenance/1) ─────────────
+# One per download, refused (423) for a quarantined session like the download itself.
+@app.get("/api/sessions/{sid}/provenance/export/control/{kind}")
+def provenance_control(sid: str, kind: str, sess=Depends(trusted_session)) -> dict:
+    body, ext = _control_body(sess, kind)
+    return export_provenance.manifest(sess.state, session_id=sid, kind=f"control/{kind}",
+                                      filename=f"{kind}_{sid}.{ext}", payload=body)
+
+
+@app.get("/api/sessions/{sid}/provenance/export/{kind}")
+def provenance_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> dict:
+    return export_provenance.manifest(sess.state, session_id=sid, kind=kind, filename=f"{kind}_{sid}.csv",
+                                      payload=_csv_body(sess, kind))
+
+
+@app.get("/api/sessions/{sid}/provenance/cdisc")
+def provenance_cdisc(sid: str, sess=Depends(trusted_session)) -> dict:
+    import io
+    import zipfile
+    body = _cdisc_body(sid, sess)
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    members = {n: export_provenance._sha256(zf.read(n)) for n in zf.namelist()}
+    return export_provenance.manifest(sess.state, session_id=sid, kind="cdisc", filename=f"cdisc_adam_{sid}.zip",
+                                      payload=body, members=members)
+
+
+def _file_manifest(sid: str, sess, path: str | None, kind: str) -> dict:
+    if not path or not Path(path).exists():
+        raise HTTPException(404, f"no {kind} file")
+    p = Path(path)
+    return export_provenance.manifest(sess.state, session_id=sid, kind=kind, filename=p.name, payload=p.read_bytes())
+
+
+@app.get("/api/sessions/{sid}/provenance/report")
+def provenance_report(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.report_path, "report")
+
+
+@app.get("/api/sessions/{sid}/provenance/report/272")
+def provenance_report_272(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.regulatory_report_path, "report_272")
+
+
+@app.get("/api/sessions/{sid}/provenance/memo")
+def provenance_memo(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.memo_path, "memo")
 
 
 # ── static frontend (single-process desktop app) ───────────────────────────────

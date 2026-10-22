@@ -60,12 +60,22 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: Process-wide count of modifications to audit entries already constructed. Every attribute re-assignment on an
+#: AuditEntry bumps it, so a cache that remembers a verified prefix can tell that SOME entry changed since (it then
+#: re-verifies fully). Deliberately bypassing the attribute protocol (object.__setattr__) is outside this guard.
+_entry_modifications = 0
+
+
+def entry_modifications() -> int:
+    return _entry_modifications
+
+
 def hash_payload(obj) -> str:
     """Stable SHA-256 of an arbitrary JSON-serializable payload."""
     return _sha256(json.dumps(obj, sort_keys=True, default=str))
 
 
-@dataclass
+@dataclass(slots=True)
 class AuditEntry:
     index: int
     timestamp: str
@@ -79,6 +89,15 @@ class AuditEntry:
     actor: str = ""          # authenticated identity that triggered the entry
     reason: str = ""         # reason-for-change / approval note (Part 11)
     hash_version: int = 1    # 1 = legacy format; 2 additionally binds index + action
+
+    def __setattr__(self, name: str, value) -> None:
+        global _entry_modifications
+        try:
+            object.__getattribute__(self, name)
+            _entry_modifications += 1                 # re-assignment of a constructed field (not first init)
+        except AttributeError:
+            pass
+        object.__setattr__(self, name, value)
 
     def compute_hash(self) -> str:
         if self.hash_version == 2:
@@ -127,9 +146,43 @@ class AuditEntry:
         return asdict(self)
 
 
+class _EntryList(list):
+    """The chain's entry list. Appending at the tail is the only modification that keeps a verified prefix valid;
+    every other in-place change (item/slice assignment, deletion, insertion, reordering) bumps ``rewrites``."""
+
+    __slots__ = ("rewrites",)
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.rewrites = 0
+
+    def _rewrite(name):  # noqa: N805 - builds wrapped list methods at class-creation time
+        method = getattr(list, name)
+
+        def wrapped(self, *args, **kwargs):
+            self.rewrites += 1
+            return method(self, *args, **kwargs)
+        wrapped.__name__ = name
+        return wrapped
+
+    for _name in ("__setitem__", "__delitem__", "__imul__", "insert", "pop", "remove", "clear", "sort", "reverse"):
+        locals()[_name] = _rewrite(_name)
+    del _name, _rewrite
+
+
 @dataclass
 class AuditChain:
-    entries: list[AuditEntry] = field(default_factory=list)
+    entries: list[AuditEntry] = field(default_factory=_EntryList)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name == "entries" and not isinstance(value, _EntryList):
+            value = _EntryList(value)                 # every entry list is tracked, however it was assigned
+        object.__setattr__(self, name, value)
+
+    def version(self) -> tuple[int, int]:
+        """Changes on every modification of the chain other than a tail append: (entry modifications process-wide,
+        in-place rewrites of this chain's entry list). Used to decide whether a verified prefix can be trusted."""
+        return (_entry_modifications, getattr(self.entries, "rewrites", -1))
 
     @property
     def head(self) -> str:
@@ -160,7 +213,8 @@ class AuditChain:
             reason=reason or "",
             hash_version=2,      # new entries bind index + action (tamper-evident)
         )
-        entry.entry_hash = entry.compute_hash()
+        # set before the entry is published to any chain, so no verified prefix can hold it yet
+        object.__setattr__(entry, "entry_hash", entry.compute_hash())
         self.entries.append(entry)
         return entry
 
