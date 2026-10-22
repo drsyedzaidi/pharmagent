@@ -374,9 +374,9 @@ def _table_2723_covariates(doc: Document, state: PharmState) -> None:
 # ── main tool function ────────────────────────────────────────────────────────
 
 def generate_272(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Generate an ICH M4E Module 2.7.2 CTD-compliant DOCX."""
     from app.core.provenance import run_provenance_report_lines
     prov_lines = run_provenance_report_lines(state)    # refuses a quarantined (mismatched) session before any work
-    """Generate an ICH M4E Module 2.7.2 CTD-compliant DOCX."""
     # Merge args into study info; existing study_info in state takes lower priority
     si_data = (state.study_info.model_dump() if state.study_info else {})
     for k in ("drug_name", "sponsor", "study_id", "route", "indication",

@@ -18,6 +18,8 @@ def _catalog() -> Catalog:
 def validate_catalog_at_startup(path: Path | str | None = None) -> str:
     """Load and validate the catalog; raise ValueError so the application fails fast on a broken file."""
     try:
+        if path is None:      # fill the shared cache: the catalog validated here is the one fingerprinted and applied
+            return cached_catalog().catalog.catalog_version
         return load_catalog(path).catalog_version
     except (ValueError, OSError) as exc:           # pydantic ValidationError and JSON errors are ValueErrors
         raise ValueError(f"conventions catalog is invalid: {exc}") from exc
