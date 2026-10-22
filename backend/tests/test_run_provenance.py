@@ -84,7 +84,7 @@ def test_the_genesis_audit_entry_binds_the_recorded_provenance(orch):
     genesis = sess.audit.entries[0]
     assert genesis.action == "session_created"
     assert hash_payload(dict(sess.state.run_provenance)) == genesis.inputs_hash
-    assert verify_run_provenance(sess.state.run_provenance, genesis, sess.id) == "verified"
+    assert verify_run_provenance(sess.state.run_provenance, sess.audit, sess.id) == "verified"
 
 
 def test_the_record_is_a_snapshot_taken_at_creation(orch, monkeypatch):
@@ -108,7 +108,7 @@ def test_the_recorded_provenance_survives_serialisation_and_reload(tmp_path):
     reloaded = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert reloaded.state.run_provenance == expected
     assert reloaded.audit.verify() and verify_run_provenance(reloaded.state.run_provenance,
-                                                              reloaded.audit.entries[0], sid) == "verified"
+                                                              reloaded.audit, sid) == "verified"
 
 
 def _rewrite_state(db: str, sid: str, mutate) -> None:
@@ -146,7 +146,7 @@ def test_a_legacy_session_loads_and_is_reported_as_legacy_unverified(tmp_path):
     _make_legacy(db, sid)
     legacy = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert legacy.state.run_provenance is None and legacy.audit.verify()
-    assert verify_run_provenance(legacy.state.run_provenance, legacy.audit.entries[0], sid) == "legacy_unverified"
+    assert verify_run_provenance(legacy.state.run_provenance, legacy.audit, sid) == "legacy_unverified"
     assert PharmState.model_validate({"session_id": "old"}).run_provenance is None
 
 
@@ -164,7 +164,7 @@ def test_deleting_the_record_of_a_new_session_is_a_mismatch_not_legacy(tmp_path)
     _rewrite_state(db, sid, lambda st: st.pop("run_provenance", None))
     sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert sess.state.run_provenance is None
-    assert verify_run_provenance(None, sess.audit.entries[0], sid) == "mismatch"
+    assert verify_run_provenance(None, sess.audit, sid) == "mismatch"
 
 
 def test_a_record_injected_into_a_legacy_session_is_a_mismatch(tmp_path):
@@ -175,14 +175,14 @@ def test_a_record_injected_into_a_legacy_session_is_a_mismatch(tmp_path):
     _make_legacy(db, sid)
     sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     forged = tuple(collect_provenance().items())
-    assert verify_run_provenance(forged, sess.audit.entries[0], sid) == "mismatch"
+    assert verify_run_provenance(forged, sess.audit, sid) == "mismatch"
 
 
 def test_a_genesis_entry_of_another_session_is_a_mismatch(orch):
     from app.core.provenance import verify_run_provenance
 
     a, b = orch.create_session(), orch.create_session()
-    assert verify_run_provenance(a.state.run_provenance, b.audit.entries[0], a.id) == "mismatch"
+    assert verify_run_provenance(a.state.run_provenance, b.audit, a.id) == "mismatch"
 
 
 def test_a_tampered_stored_record_is_detected(tmp_path):
@@ -196,7 +196,7 @@ def test_a_tampered_stored_record_is_detected(tmp_path):
     _rewrite_state(db, sid, forge)
     sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert sess.audit.verify()                                 # the chain itself was not touched ...
-    assert verify_run_provenance(sess.state.run_provenance, sess.audit.entries[0], sid) == "mismatch"   # ... this was
+    assert verify_run_provenance(sess.state.run_provenance, sess.audit, sid) == "mismatch"   # ... this was
 
 
 def test_tampering_with_the_genesis_entry_breaks_the_audit_chain(orch):
@@ -205,12 +205,15 @@ def test_tampering_with_the_genesis_entry_breaks_the_audit_chain(orch):
     assert not sess.audit.verify()
 
 
-def test_verification_rejects_a_record_checked_against_a_non_genesis_entry(orch):
+def test_verification_rejects_a_chain_whose_first_entry_is_not_a_genesis_entry(orch):
+    from app.core.audit import AuditChain
     from app.core.provenance import verify_run_provenance
 
     sess = orch.create_session()
-    fake = type(sess.audit.entries[0])(**{**sess.audit.entries[0].to_dict(), "action": "tool_called"})
-    assert verify_run_provenance(sess.state.run_provenance, fake, sess.id) == "mismatch"
+    chain = AuditChain()
+    chain.append(agent="system", tool="session", action="tool_called", inputs=dict(sess.state.run_provenance),
+                 outputs={"session_id": sess.id, "run_provenance_schema": 1}, timestamp="t")
+    assert verify_run_provenance(sess.state.run_provenance, chain, sess.id) == "mismatch"
 
 
 @pytest.mark.parametrize("agent", sorted(AGENT_WRITE_FIELDS))

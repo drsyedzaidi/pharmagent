@@ -282,10 +282,11 @@ class Orchestrator:
         """Return an honest structural/MAC/anchor status for the persisted row."""
         sess = self.get_session(sid)
         prov_status = sess.state.run_provenance_status
+        prov_assurance = sess.state.run_provenance_assurance
         if self.audit_security is None:
             chain = sess.audit.verify_status()
             return {
-                "run_provenance_status": prov_status,
+                "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance,
                 **chain,
                 "chain_ok": chain["ok"],
                 "mode": "hash_only",
@@ -300,7 +301,7 @@ class Orchestrator:
         row = self.store.get(sid)
         if row is None:
             return {
-                "run_provenance_status": prov_status,
+                "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance,
                 "ok": False,
                 "chain_ok": False,
                 "mode": "enforced",
@@ -319,7 +320,7 @@ class Orchestrator:
         return {**self.audit_security.inspect(
             sid, row["audit"], row["audit_seal"],
             owner=row["owner"], created_at=row["created_at"]
-        ), "run_provenance_status": prov_status}
+        ), "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance}
 
     @staticmethod
     def _log_command(sess: Session, agent: str, tool: str, args: dict[str, Any]) -> None:
@@ -352,13 +353,13 @@ class Orchestrator:
         self._refresh_provenance_status(sess)
         return sess
 
-    @staticmethod
-    def _refresh_provenance_status(sess: Session) -> None:
-        """Recompute run_provenance_status from the genesis entry. Never trusts a stored value."""
-        genesis = sess.audit.entries[0] if sess.audit.entries else None
-        status = verify_run_provenance(sess.state.run_provenance, genesis, sess.id)
-        if sess.state.run_provenance_status != status:
-            sess.state = sess.state.model_copy(update={"run_provenance_status": status})
+    def _refresh_provenance_status(self, sess: Session) -> None:
+        """Recompute run_provenance_status from the whole audit chain. Never trusts a stored value."""
+        status = verify_run_provenance(sess.state.run_provenance, sess.audit, sess.id)
+        assurance = "keyed_seal" if self.audit_security is not None else "hash_only"
+        if (sess.state.run_provenance_status, sess.state.run_provenance_assurance) != (status, assurance):
+            sess.state = sess.state.model_copy(update={"run_provenance_status": status,
+                                                       "run_provenance_assurance": assurance})
 
     @staticmethod
     def _ensure_writable(sess: Session) -> None:

@@ -44,6 +44,8 @@ class PharmState(BaseModel):
     # verified | legacy_unverified | mismatch. Recomputed from the genesis entry on every load and access; a stored
     # value is never trusted. "mismatch" quarantines the session (read-only). Not writable by any agent.
     run_provenance_status: str | None = None
+    # hash_only (chain internally consistent) | keyed_seal (chain authenticated by a keyed seal). Set with the status.
+    run_provenance_assurance: str | None = None
     last_agent: str | None = None
     workflow_name: str | None = None
     current_step: int = 0

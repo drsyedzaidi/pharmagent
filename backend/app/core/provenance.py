@@ -74,25 +74,40 @@ def genesis_outputs(session_id: str) -> dict:
     return {"session_id": session_id, "run_provenance_schema": RUN_PROVENANCE_SCHEMA}
 
 
-def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, genesis, session_id: str) -> str:
-    """Check a session's stored run provenance against its genesis audit entry.
+def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, session_id: str) -> str:
+    """Check a session's stored run provenance against its audit chain.
 
-    ``verified``: the genesis entry carries the provenance marker and the record hashes to its inputs_hash.
-    ``legacy_unverified``: a genesis entry written before records were kept (outputs are only the session id) and no
-    record. ``mismatch``: anything else, including a missing record where the marker says one was written, a record in
-    a legacy session, or an entry that is not this session's genesis entry."""
+    The whole chain must verify first (every entry recomputes and every link holds); field values alone prove nothing,
+    because they can be edited without recomputing hashes. Then the genesis entry decides:
+    ``verified``: it carries the provenance marker and the record (no repeated keys) hashes to its inputs_hash.
+    ``legacy_unverified``: a chain-valid genesis written before records were kept (outputs = {"session_id"}) and no
+    record. ``mismatch``: anything else.
+
+    In hash-only mode a complete, consistent rebuild of the chain cannot be told from the original: that is why the
+    assurance level is reported separately (hash_only vs keyed_seal)."""
     from app.core.audit import hash_payload  # local: keep core import graph light
 
-    if getattr(genesis, "index", None) != 0 or getattr(genesis, "action", None) != "session_created":
+    entries = getattr(chain, "entries", None)
+    if not entries or not chain.verify_status().get("ok"):
         return "mismatch"
-    outputs = getattr(genesis, "outputs_hash", None)
-    if outputs == hash_payload(genesis_outputs(session_id)):
+    genesis = entries[0]
+    if genesis.index != 0 or genesis.action != "session_created":
+        return "mismatch"
+    if record is not None and len({k for k, _ in record}) != len(record):
+        return "mismatch"                                        # a repeated key could hide a forged value
+    if genesis.outputs_hash == hash_payload(genesis_outputs(session_id)):
         if record is None:
             return "mismatch"
         return "verified" if hash_payload(dict(record)) == genesis.inputs_hash else "mismatch"
-    if outputs == hash_payload({"session_id": session_id}):
+    if genesis.outputs_hash == hash_payload({"session_id": session_id}):
         return "legacy_unverified" if record is None else "mismatch"
     return "mismatch"
+
+
+def _assurance_text(state) -> str:
+    if getattr(state, "run_provenance_assurance", None) == "keyed_seal":
+        return "keyed_seal: audit chain authenticated by a keyed seal on restore"
+    return "hash_only: audit chain internally consistent, not cryptographically authenticated"
 
 
 def run_provenance_report_lines(state) -> list[str]:
@@ -113,7 +128,7 @@ def run_provenance_report_lines(state) -> list[str]:
             f"pandas {g('pandas', 'n/a')}.",
             f"Conventions catalog: version {g('conventions_catalog_version', 'n/a')}, canonical-JSON SHA-256 "
             f"{g('conventions_catalog_canonical_json_sha256', 'n/a')}.",
-            "Run provenance status: verified.",
+            "Run provenance status: verified (assurance: " + _assurance_text(state) + ").",
         ]
     if status == "legacy_unverified":
         return ["Run provenance status: legacy_unverified. This session was created before run provenance was "
