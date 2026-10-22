@@ -66,6 +66,9 @@ class Session:
     # Replayable analysis command log (agent, tool, args) — the capture source for
     # skills. Independent of the audit chain, whose inputs are hashed.
     commands: list[dict[str, Any]] = field(default_factory=list)
+    # Keyed-seal baseline of this session ("fresh" = sealed since creation, "operator_attested_legacy" = enrolled
+    # later); None in hash-only mode. Read from the seal at creation/restore; drives run_provenance_assurance.
+    seal_baseline: str | None = None
 
 
 class Orchestrator:
@@ -132,6 +135,11 @@ class Orchestrator:
                     row["id"], row["audit"], row["audit_seal"],
                     owner=row["owner"], created_at=row["created_at"], recover=True
                 )
+            seal_baseline = None
+            if self.audit_security is not None:
+                seal_baseline = self.audit_security.inspect(
+                    row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"]
+                ).get("baseline")
             ctx = ToolContext(data_dir=str(settings.data_dir))
             state = PharmState.model_validate(row["state"])
             path, dsid = row.get("dataset_path"), row.get("dataset_id")
@@ -191,7 +199,7 @@ class Orchestrator:
                 ctx=ctx, audit=audit,
                 history=row["history"], pending_review=row["pending"],
                 params=row["params"], owner=row["owner"], created_at=row["created_at"],
-                commands=row.get("commands") or [])
+                commands=row.get("commands") or [], seal_baseline=seal_baseline)
             self._refresh_provenance_status(sess)
             self.sessions[row["id"]] = sess
             if integrity_changed:
@@ -333,7 +341,8 @@ class Orchestrator:
         prov = collect_provenance()     # recorded once, at creation: kept in state and bound into the genesis entry
         sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=tuple(prov.items())),
                        ctx=ToolContext(data_dir=str(settings.data_dir)),
-                       owner=owner, created_at=self.clock())
+                       owner=owner, created_at=self.clock(),
+                       seal_baseline="fresh" if self.audit_security is not None else None)
         # Genesis provenance entry: stamp the software/platform fingerprint into
         # the audit chain so every result traces to the run that produced it.
         sess.audit.append(agent="system", tool="session", action="session_created",
@@ -357,7 +366,12 @@ class Orchestrator:
     def _refresh_provenance_status(self, sess: Session) -> None:
         """Recompute run_provenance_status from the whole audit chain. Never trusts a stored value."""
         status = verify_run_provenance(sess.state.run_provenance, sess.audit, sess.id)
-        assurance = "keyed_seal" if self.audit_security is not None else "hash_only"
+        if self.audit_security is None:
+            assurance = "hash_only"
+        else:           # what THIS session's seal covers, not merely that keyed mode is on
+            assurance = {"fresh": "keyed_seal",
+                         "operator_attested_legacy": "keyed_seal_attested_legacy"}.get(sess.seal_baseline or "",
+                                                                                        "keyed_seal_unconfirmed")
         if (sess.state.run_provenance_status, sess.state.run_provenance_assurance) != (status, assurance):
             sess.state = sess.state.model_copy(update={"run_provenance_status": status,
                                                        "run_provenance_assurance": assurance})

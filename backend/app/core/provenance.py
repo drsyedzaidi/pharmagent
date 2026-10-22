@@ -108,9 +108,16 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, ses
 
 
 def _assurance_text(state) -> str:
-    if getattr(state, "run_provenance_assurance", None) == "keyed_seal":
-        return "keyed_seal: audit chain authenticated by a keyed seal on restore"
-    return "hash_only: audit chain internally consistent, not cryptographically authenticated"
+    level = getattr(state, "run_provenance_assurance", None)
+    if level == "keyed_seal":
+        return "keyed_seal: audit chain authenticated by a keyed seal on every restore, sealed since creation"
+    if level == "keyed_seal_attested_legacy":
+        return ("keyed_seal_attested_legacy: sealed from an operator-attested migration baseline, not since creation; "
+                "entries before the baseline are attested, not authenticated")
+    if level == "keyed_seal_unconfirmed":
+        return "keyed_seal_unconfirmed: keyed mode is on but this session's seal baseline is unknown"
+    return ("hash_only: audit chain internally consistent, not cryptographically authenticated; a consistent "
+            "rebuild or removal of trailing entries is not detectable in this mode")
 
 
 def run_provenance_report_lines(state) -> list[str]:

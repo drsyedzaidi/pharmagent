@@ -182,9 +182,9 @@ def provenance_blocks(state: PharmState, trace: AuditTrace) -> tuple[tuple[Block
     if status == "verified" and rec:
         version = "v" + rec.get("conventions_catalog_version", "n/a")
         digest = rec.get("conventions_catalog_canonical_json_sha256", "n/a")
-        keyed = state.run_provenance_assurance == "keyed_seal"
-        assurance = ("keyed_seal; audit chain authenticated by a keyed seal" if keyed else
-                     "hash_only; audit chain internally consistent, not cryptographically authenticated")
+        from app.core.provenance import _assurance_text  # local: keep compute import graph light
+
+        assurance = _assurance_text(state)
         text = (f"Run provenance: verified (assurance: {assurance}). Conventions catalog {version}, "
                 f"canonical-JSON sha256 digest {digest}" + trace_tag(0))
         values = (TracedValue(key="run_provenance.conventions_catalog_version", text=version, audit_index=0,
