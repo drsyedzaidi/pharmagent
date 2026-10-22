@@ -350,7 +350,8 @@ class Orchestrator:
         sess = self.sessions[sid]
         if owner is not None and sess.owner is not None and sess.owner != owner:
             raise AccessError(f"session {sid} belongs to another user")
-        self._refresh_provenance_status(sess)
+        with self.session_lock(sid):      # the refresh writes sess.state: serialise with mutating paths (RLock)
+            self._refresh_provenance_status(sess)
         return sess
 
     def _refresh_provenance_status(self, sess: Session) -> None:
