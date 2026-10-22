@@ -77,17 +77,20 @@ def genesis_outputs(session_id: str) -> dict:
 def chain_status(chain, cache: dict | None = None) -> dict:
     """``AuditChain.verify_status()`` ok/degraded, computed incrementally when ``cache`` (a dict owned by the
     in-memory session) remembers a verified prefix: only entries appended since then are recomputed and linked to the
-    remembered head. A shorter chain or a changed head entry hash means a full re-verify. Callers verify fully on
-    creation and restore (empty cache); in-memory changes inside an already verified prefix are not re-detected until
-    the next restore (that requires code running in-process, outside the stored-data tamper model)."""
+    remembered head. The cache is bound to the exact chain object and entries list it verified, and the head entry is
+    recomputed before resuming; a replaced chain, a shorter chain or a changed head means a full re-verify. Callers
+    verify fully on creation and restore (empty cache); in-memory changes to entries strictly inside an already
+    verified prefix are not re-detected until the next restore (that requires code running in-process, outside the
+    stored-data tamper model)."""
     from app.core.audit import DEGRADED_HASH_VERSIONS, GENESIS, SUPPORTED_HASH_VERSIONS, UnknownHashVersion
 
     entries = chain.entries
     start, prev, degraded = 0, GENESIS, 0
-    if (cache and cache.get("ok") and 0 < cache.get("n", 0) <= len(entries)
-            and entries[cache["n"] - 1].entry_hash == cache["head"]):
+    if (cache and cache.get("ok") and cache.get("chain_id") == id(chain) and cache.get("entries_id") == id(entries)
+            and 0 < cache.get("n", 0) <= len(entries) and _head_intact(entries[cache["n"] - 1], cache["head"])):
         start, prev, degraded = cache["n"], cache["head"], cache["degraded"]
     ok = True
+    checked = start
     for e in entries[start:]:
         if e.hash_version not in SUPPORTED_HASH_VERSIONS:
             ok = False
@@ -103,11 +106,21 @@ def chain_status(chain, cache: dict | None = None) -> dict:
         if e.hash_version in DEGRADED_HASH_VERSIONS:
             degraded += 1
         prev = e.entry_hash
+        checked += 1
     if cache is not None:
         cache.clear()
-        if ok and entries:
-            cache.update(ok=True, n=len(entries), head=prev, degraded=degraded)
+        if ok and checked:
+            # n is the length actually verified (not a re-read of len(entries)), bound to this exact chain object
+            cache.update(ok=True, n=checked, head=prev, degraded=degraded, chain_id=id(chain), entries_id=id(entries))
     return {"ok": ok, "degraded": ok and degraded > 0}
+
+
+def _head_intact(entry, head: str) -> bool:
+    """The cached head entry still stores AND recomputes to the remembered hash (content changes are caught)."""
+    try:
+        return entry.entry_hash == head and entry.compute_hash() == head
+    except Exception:  # noqa: BLE001 - any failure to recompute means: do not resume, verify fully
+        return False
 
 
 def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, session_id: str, *,
