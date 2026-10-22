@@ -78,15 +78,18 @@ def chain_status(chain, cache: dict | None = None) -> dict:
     """``AuditChain.verify_status()`` ok/degraded, computed incrementally when ``cache`` (a dict owned by the
     in-memory session) remembers a verified prefix: only entries appended since then are recomputed and linked to the
     remembered head. The cache is bound to the exact chain object and entries list it verified, and the head entry is
-    recomputed before resuming; a replaced chain, a shorter chain or a changed head means a full re-verify. Callers
-    verify fully on creation and restore (empty cache); in-memory changes to entries strictly inside an already
-    verified prefix are not re-detected until the next restore (that requires code running in-process, outside the
-    stored-data tamper model)."""
+    recomputed before resuming; a replaced chain, a shorter chain or a changed head means a full re-verify. It is also
+    bound to ``chain.version()``, which changes on every modification other than a tail append (any entry attribute
+    re-assignment, any item/slice assignment, deletion, insertion or reordering of the entry list), so an in-place
+    change anywhere inside the verified prefix forces a full re-verify. Callers verify fully on creation and restore
+    (empty cache)."""
     from app.core.audit import DEGRADED_HASH_VERSIONS, GENESIS, SUPPORTED_HASH_VERSIONS, UnknownHashVersion
 
     entries = chain.entries
+    version = chain.version() if hasattr(chain, "version") else None
     start, prev, degraded = 0, GENESIS, 0
-    if (cache and cache.get("ok") and cache.get("chain_id") == id(chain) and cache.get("entries_id") == id(entries)
+    if (cache and cache.get("ok") and version is not None and cache.get("version") == version
+            and cache.get("chain_id") == id(chain) and cache.get("entries_id") == id(entries)
             and 0 < cache.get("n", 0) <= len(entries) and _head_intact(entries[cache["n"] - 1], cache["head"])):
         start, prev, degraded = cache["n"], cache["head"], cache["degraded"]
     ok = True
@@ -111,7 +114,8 @@ def chain_status(chain, cache: dict | None = None) -> dict:
         cache.clear()
         if ok and checked:
             # n is the length actually verified (not a re-read of len(entries)), bound to this exact chain object
-            cache.update(ok=True, n=checked, head=prev, degraded=degraded, chain_id=id(chain), entries_id=id(entries))
+            cache.update(ok=True, n=checked, head=prev, degraded=degraded, chain_id=id(chain), entries_id=id(entries),
+                         version=version)
     return {"ok": ok, "degraded": ok and degraded > 0}
 
 
