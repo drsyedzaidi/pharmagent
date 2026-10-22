@@ -2,18 +2,17 @@
 changes a computed number. Run provenance is guarded code and is deliberately not touched."""
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .catalog_io import load_catalog
+from .catalog_io import cached_catalog, load_catalog
 from .render import APPROVAL_MEANING, rule_text
 from .schema import Catalog
 
 
-@lru_cache(maxsize=1)
 def _catalog() -> Catalog:
-    return load_catalog()
+    """The same cached catalog that run provenance fingerprints (one load per process)."""
+    return cached_catalog().catalog
 
 
 def validate_catalog_at_startup(path: Path | str | None = None) -> str:
