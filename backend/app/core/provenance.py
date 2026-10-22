@@ -59,7 +59,7 @@ def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
     return dict(_collect(app_version))
 
 
-def verify_run_provenance(record: dict[str, str] | None, genesis) -> str:
+def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, genesis) -> str:
     """Check a session's stored run provenance against its genesis audit entry.
 
     ``legacy``: no stored record (session created before run provenance was kept in state).
@@ -71,7 +71,7 @@ def verify_run_provenance(record: dict[str, str] | None, genesis) -> str:
         return "legacy"
     if getattr(genesis, "index", None) != 0 or getattr(genesis, "action", None) != "session_created":
         return "mismatch"
-    return "verified" if hash_payload(record) == genesis.inputs_hash else "mismatch"
+    return "verified" if hash_payload(dict(record)) == genesis.inputs_hash else "mismatch"
 
 
 def file_sha256(path: str | Path) -> str:

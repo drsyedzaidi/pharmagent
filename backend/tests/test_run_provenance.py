@@ -72,8 +72,7 @@ def test_a_new_session_records_the_catalog_identity_at_creation(orch):
     from app.conventions.identity import catalog_identity
     from app.core.provenance import collect_provenance
 
-    prov = orch.create_session().state.run_provenance
-    assert prov is not None
+    prov = dict(orch.create_session().state.run_provenance)
     assert {k: prov[k] for k in catalog_identity()} == catalog_identity()
     assert prov == collect_provenance()                      # the same fingerprint the genesis entry hashes
 
@@ -84,17 +83,18 @@ def test_the_genesis_audit_entry_binds_the_recorded_provenance(orch):
     sess = orch.create_session()
     genesis = sess.audit.entries[0]
     assert genesis.action == "session_created"
-    assert hash_payload(sess.state.run_provenance) == genesis.inputs_hash
+    assert hash_payload(dict(sess.state.run_provenance)) == genesis.inputs_hash
     assert verify_run_provenance(sess.state.run_provenance, genesis) == "verified"
 
 
 def test_the_record_is_a_snapshot_taken_at_creation(orch, monkeypatch):
     sess = orch.create_session()
-    before = dict(sess.state.run_provenance)
+    before = sess.state.run_provenance
     import app.core.orchestrator as orch_mod
-    monkeypatch.setattr(orch_mod, "collect_provenance", lambda: {**before, "conventions_catalog_version": "9.9.9"})
+    monkeypatch.setattr(orch_mod, "collect_provenance",
+                        lambda: {**dict(before), "conventions_catalog_version": "9.9.9"})
     assert orch.get_session(sess.id).state.run_provenance == before
-    assert orch.create_session().state.run_provenance["conventions_catalog_version"] == "9.9.9"
+    assert dict(orch.create_session().state.run_provenance)["conventions_catalog_version"] == "9.9.9"
 
 
 # ── persistence, legacy records, tampering ─────────────────────────────────────────────────────
@@ -139,7 +139,10 @@ def test_a_tampered_stored_record_is_detected(tmp_path):
 
     db = str(tmp_path / "s.db")
     sid = Orchestrator(llm=MockLLM(), store=SessionStore(db)).create_session().id
-    _rewrite_state(db, sid, lambda s: s["run_provenance"].update(conventions_catalog_canonical_json_sha256="0" * 64))
+    def forge(state):
+        state["run_provenance"] = [[k, "0" * 64 if k == "conventions_catalog_canonical_json_sha256" else v]
+                                   for k, v in state["run_provenance"]]
+    _rewrite_state(db, sid, forge)
     sess = Orchestrator(llm=MockLLM(), store=SessionStore(db)).get_session(sid)
     assert sess.audit.verify()                                 # the chain itself was not touched ...
     assert verify_run_provenance(sess.state.run_provenance, sess.audit.entries[0]) == "mismatch"   # ... but this was
@@ -183,7 +186,27 @@ def test_concurrent_sessions_record_the_same_immutable_catalog_identity(orch):
     for t in threads:
         t.join()
     assert not errors and len(made) == 8
-    idents = {(s.state.run_provenance["conventions_catalog_version"], s.state.run_provenance["conventions_catalog_canonical_json_sha256"])
-              for s in made}
+    idents = {(dict(s.state.run_provenance)["conventions_catalog_version"],
+               dict(s.state.run_provenance)["conventions_catalog_canonical_json_sha256"]) for s in made}
     assert idents == {tuple(catalog_identity().values())}
-    assert len({id(s.state.run_provenance) for s in made}) == 8   # each session owns its own copy
+
+
+# ── immutability (review item 4) ───────────────────────────────────────────────────────────────
+def test_the_stored_record_cannot_be_changed_in_place(orch):
+    prov = orch.create_session().state.run_provenance
+    assert isinstance(prov, tuple) and all(isinstance(p, tuple) and len(p) == 2 for p in prov)
+    with pytest.raises(TypeError):
+        prov[0] = ("git_sha", "forged")                          # type: ignore[index]
+    with pytest.raises(AttributeError):
+        prov.update({"git_sha": "forged"})                       # type: ignore[attr-defined]
+
+
+def test_the_record_round_trips_through_json_as_an_immutable_value(orch):
+    state = orch.create_session().state
+    again = PharmState.model_validate(json.loads(json.dumps(state.model_dump())))
+    assert again.run_provenance == state.run_provenance and isinstance(again.run_provenance, tuple)
+
+
+def test_non_string_values_are_rejected():
+    with pytest.raises(ValueError):
+        PharmState(run_provenance=(("git_sha", 123),))

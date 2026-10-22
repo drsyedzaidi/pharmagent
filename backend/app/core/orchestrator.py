@@ -319,7 +319,7 @@ class Orchestrator:
     def create_session(self, owner: str | None = None) -> Session:
         sid = f"sess_{uuid.uuid4().hex[:8]}"
         prov = collect_provenance()     # recorded once, at creation: kept in state and bound into the genesis entry
-        sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=prov),
+        sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=tuple(prov.items())),
                        ctx=ToolContext(data_dir=str(settings.data_dir)),
                        owner=owner, created_at=self.clock())
         # Genesis provenance entry: stamp the software/platform fingerprint into
