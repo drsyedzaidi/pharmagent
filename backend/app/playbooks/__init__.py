@@ -1,0 +1,86 @@
+"""Scientific Playbooks (`app.playbooks`): authored procedural guidance for reviewed PharmAgent tools.
+
+Distinct from captured session skills (`app.core.skills`), which store replayable tool-call
+histories in SQLite. Scientific Playbooks are read-only, content-addressed `SKILL.md`
+bundles under `skills/` loaded on demand with progressive disclosure.
+"""
+from __future__ import annotations
+
+from .adapter import build_playbook_tools, run_playbook_adapter
+from .catalog import (
+    DEFAULT_SKILLS_ROOT,
+    catalog_provenance_snapshot,
+    check_tool_allowed,
+    compute_canonical_digest,
+    list_playbooks,
+    load_playbook,
+    playbook_provenance,
+    read_playbook_resource,
+    validate_all_playbooks,
+    validate_playbook,
+)
+from .schema import (
+    ALLOWED_APPROVAL_STATUSES,
+    ALLOWED_DOMAINS,
+    ALLOWED_RESOURCE_EXTENSIONS,
+    ALLOWED_STATUSES,
+    FORBIDDEN_SCRIPT_EXTENSIONS,
+    MAX_ADAPTER_OUTPUT_BYTES,
+    MAX_RESOURCE_BYTES,
+    MAX_SKILL_MD_BYTES,
+    UNTRUSTED_DATA_NOTICE,
+    CatalogValidationReport,
+    PlaybookCompatibility,
+    PlaybookDisabledError,
+    PlaybookError,
+    PlaybookLookupError,
+    PlaybookProvenance,
+    PlaybookResource,
+    PlaybookSecurityError,
+    PlaybookSummary,
+    PlaybookValidationError,
+    PlaybookValidationIssue,
+    PlaybookValidationResult,
+    PlaybookVersionError,
+    ScientificPlaybook,
+    freeze_value,
+)
+
+__all__ = [
+    "ALLOWED_APPROVAL_STATUSES",
+    "ALLOWED_DOMAINS",
+    "ALLOWED_RESOURCE_EXTENSIONS",
+    "ALLOWED_STATUSES",
+    "CatalogValidationReport",
+    "DEFAULT_SKILLS_ROOT",
+    "FORBIDDEN_SCRIPT_EXTENSIONS",
+    "MAX_ADAPTER_OUTPUT_BYTES",
+    "MAX_RESOURCE_BYTES",
+    "MAX_SKILL_MD_BYTES",
+    "PlaybookCompatibility",
+    "PlaybookDisabledError",
+    "PlaybookError",
+    "PlaybookLookupError",
+    "PlaybookProvenance",
+    "PlaybookResource",
+    "PlaybookSecurityError",
+    "PlaybookSummary",
+    "PlaybookValidationError",
+    "PlaybookValidationIssue",
+    "PlaybookValidationResult",
+    "PlaybookVersionError",
+    "ScientificPlaybook",
+    "UNTRUSTED_DATA_NOTICE",
+    "build_playbook_tools",
+    "catalog_provenance_snapshot",
+    "check_tool_allowed",
+    "compute_canonical_digest",
+    "freeze_value",
+    "list_playbooks",
+    "load_playbook",
+    "playbook_provenance",
+    "read_playbook_resource",
+    "run_playbook_adapter",
+    "validate_all_playbooks",
+    "validate_playbook",
+]
