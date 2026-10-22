@@ -69,6 +69,8 @@ class Session:
     # Keyed-seal baseline of this session ("fresh" = sealed since creation, "operator_attested_legacy" = enrolled
     # later); None in hash-only mode. Read from the seal at creation/restore; drives run_provenance_assurance.
     seal_baseline: str | None = None
+    # In-memory incremental chain-verification state (never persisted): see provenance.chain_status.
+    chain_cache: dict[str, Any] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -365,7 +367,7 @@ class Orchestrator:
 
     def _refresh_provenance_status(self, sess: Session) -> None:
         """Recompute run_provenance_status from the whole audit chain. Never trusts a stored value."""
-        status = verify_run_provenance(sess.state.run_provenance, sess.audit, sess.id)
+        status = verify_run_provenance(sess.state.run_provenance, sess.audit, sess.id, cache=sess.chain_cache)
         if self.audit_security is None:
             assurance = "hash_only"
         else:           # what THIS session's seal covers, not merely that keyed mode is on

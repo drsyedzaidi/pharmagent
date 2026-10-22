@@ -74,7 +74,44 @@ def genesis_outputs(session_id: str) -> dict:
     return {"session_id": session_id, "run_provenance_schema": RUN_PROVENANCE_SCHEMA}
 
 
-def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, session_id: str) -> str:
+def chain_status(chain, cache: dict | None = None) -> dict:
+    """``AuditChain.verify_status()`` ok/degraded, computed incrementally when ``cache`` (a dict owned by the
+    in-memory session) remembers a verified prefix: only entries appended since then are recomputed and linked to the
+    remembered head. A shorter chain or a changed head entry hash means a full re-verify. Callers verify fully on
+    creation and restore (empty cache); in-memory changes inside an already verified prefix are not re-detected until
+    the next restore (that requires code running in-process, outside the stored-data tamper model)."""
+    from app.core.audit import DEGRADED_HASH_VERSIONS, GENESIS, SUPPORTED_HASH_VERSIONS, UnknownHashVersion
+
+    entries = chain.entries
+    start, prev, degraded = 0, GENESIS, 0
+    if (cache and cache.get("ok") and 0 < cache.get("n", 0) <= len(entries)
+            and entries[cache["n"] - 1].entry_hash == cache["head"]):
+        start, prev, degraded = cache["n"], cache["head"], cache["degraded"]
+    ok = True
+    for e in entries[start:]:
+        if e.hash_version not in SUPPORTED_HASH_VERSIONS:
+            ok = False
+            break
+        try:
+            digest = e.compute_hash()
+        except (UnknownHashVersion, TypeError, ValueError):
+            ok = False
+            break
+        if e.prev_hash != prev or digest != e.entry_hash:
+            ok = False
+            break
+        if e.hash_version in DEGRADED_HASH_VERSIONS:
+            degraded += 1
+        prev = e.entry_hash
+    if cache is not None:
+        cache.clear()
+        if ok and entries:
+            cache.update(ok=True, n=len(entries), head=prev, degraded=degraded)
+    return {"ok": ok, "degraded": ok and degraded > 0}
+
+
+def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, session_id: str, *,
+                          cache: dict | None = None) -> str:
     """Check a session's stored run provenance against its audit chain.
 
     The whole chain must verify first (every entry recomputes and every link holds); field values alone prove nothing,
@@ -89,7 +126,7 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, ses
     from app.core.audit import hash_payload  # local: keep core import graph light
 
     entries = getattr(chain, "entries", None)
-    status = chain.verify_status() if entries else {}
+    status = chain_status(chain, cache) if entries else {}
     if not entries or not status.get("ok"):
         return "mismatch"
     genesis = entries[0]
