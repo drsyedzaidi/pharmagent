@@ -1,0 +1,101 @@
+{
+  "metadata": {
+    "description": "Hand-derived closed-form reference fixture for plot digitizer verification (affine/logarithmic projections, explicit plot_roi vs calibration-anchor extrapolation, directly digitized error-bar bounds, and linear-trapezoidal AUClast point estimate). Note: hand-derived mathematical fixture, not external-tool validation.",
+    "derivation": "Closed-form hand arithmetic (no calls to app.compute.digitize)."
+  },
+  "linear_cropped_reversed_y": {
+    "input": {
+      "x_axis": {
+        "p1_px": 150.0,
+        "p2_px": 630.0,
+        "v1": 0.0,
+        "v2": 24.0,
+        "scale": "linear",
+        "label": "Time",
+        "unit": "h"
+      },
+      "y_axis": {
+        "p1_px": 420.0,
+        "p2_px": 120.0,
+        "v1": 0.0,
+        "v2": 100.0,
+        "scale": "linear",
+        "label": "Concentration",
+        "unit": "ng/mL"
+      },
+      "plot_roi": {
+        "u_min_px": 140.0,
+        "u_max_px": 650.0,
+        "v_min_px": 100.0,
+        "v_max_px": 430.0
+      },
+      "pixel_sigma": 1.5,
+      "anchor_sigma_px": 1.0,
+      "error_type": "se",
+      "points": [
+        {"id": "pt_0", "series": "Oral_100mg", "u_px": 150.0, "v_px": 420.0, "v_low_px": 420.0, "v_high_px": 420.0, "verified": true},
+        {"id": "pt_1", "series": "Oral_100mg", "u_px": 170.0, "v_px": 285.0, "v_low_px": 297.0, "v_high_px": 273.0, "verified": true},
+        {"id": "pt_2", "series": "Oral_100mg", "u_px": 190.0, "v_px": 180.0, "v_low_px": 195.0, "v_high_px": 165.0, "verified": true},
+        {"id": "pt_3", "series": "Oral_100mg", "u_px": 230.0, "v_px": 240.0, "v_low_px": 252.0, "v_high_px": 228.0, "verified": true},
+        {"id": "pt_4", "series": "Oral_100mg", "u_px": 310.0, "v_px": 330.0, "v_low_px": 339.0, "v_high_px": 321.0, "verified": true},
+        {"id": "pt_5", "series": "Oral_100mg", "u_px": 390.0, "v_px": 375.0, "v_low_px": 381.0, "v_high_px": 369.0, "verified": true},
+        {"id": "pt_6", "series": "Oral_100mg", "u_px": 630.0, "v_px": 411.0, "v_low_px": 414.0, "v_high_px": 408.0, "verified": true}
+      ]
+    },
+    "expected": {
+      "series_name": "Oral_100mg",
+      "x": [0.0, 1.0, 2.0, 4.0, 8.0, 12.0, 24.0],
+      "y": [0.0, 45.0, 80.0, 60.0, 30.0, 15.0, 3.0],
+      "y_low": [0.0, 41.0, 75.0, 56.0, 27.0, 13.0, 2.0],
+      "y_high": [0.0, 49.0, 85.0, 64.0, 33.0, 17.0, 4.0],
+      "cmax": 80.0,
+      "tmax": 2.0,
+      "auclast": 603.0
+    }
+  },
+  "semilog10_cropped_offset": {
+    "input": {
+      "x_axis": {
+        "p1_px": 200.0,
+        "p2_px": 700.0,
+        "v1": 2.0,
+        "v2": 12.0,
+        "scale": "linear",
+        "label": "Time",
+        "unit": "h"
+      },
+      "y_axis": {
+        "p1_px": 500.0,
+        "p2_px": 200.0,
+        "v1": 1.0,
+        "v2": 1000.0,
+        "scale": "log10",
+        "label": "Concentration",
+        "unit": "ng/mL"
+      },
+      "plot_roi": {
+        "u_min_px": 180.0,
+        "u_max_px": 720.0,
+        "v_min_px": 180.0,
+        "v_max_px": 550.0
+      },
+      "pixel_sigma": 1.5,
+      "anchor_sigma_px": 0.0,
+      "error_type": "se",
+      "points": [
+        {"id": "s_1", "series": "IV_Bolus", "u_px": 200.0, "v_px": 500.0, "v_low_px": 530.102999566, "v_high_px": 469.897000434, "verified": true},
+        {"id": "s_2", "series": "IV_Bolus", "u_px": 350.0, "v_px": 400.0, "v_low_px": 430.102999566, "v_high_px": 369.897000434, "verified": true},
+        {"id": "s_3", "series": "IV_Bolus", "u_px": 500.0, "v_px": 350.0, "verified": true},
+        {"id": "s_4", "series": "IV_Bolus", "u_px": 600.0, "v_px": 300.0, "verified": true},
+        {"id": "s_5", "series": "IV_Bolus", "u_px": 700.0, "v_px": 200.0, "verified": true}
+      ]
+    },
+    "expected": {
+      "series_name": "IV_Bolus",
+      "x": [2.0, 5.0, 8.0, 10.0, 12.0],
+      "y": [1.0, 10.0, 31.622777, 100.0, 1000.0],
+      "y_low_first_two": [0.5, 5.0],
+      "y_high_first_two": [2.0, 20.0]
+    }
+  }
+}
