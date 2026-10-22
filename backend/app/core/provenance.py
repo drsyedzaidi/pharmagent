@@ -83,8 +83,9 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, chain, ses
     ``legacy_unverified``: a chain-valid genesis written before records were kept (outputs = {"session_id"}) and no
     record. ``mismatch``: anything else.
 
-    In hash-only mode a complete, consistent rebuild of the chain cannot be told from the original: that is why the
-    assurance level is reported separately (hash_only vs keyed_seal)."""
+    Disclosed hash-only limits: a complete, consistent rebuild of the chain, or the removal of trailing entries (which
+    leaves a valid prefix), cannot be told from the original without a keyed seal or external anchor. That is why the
+    assurance level is reported separately (hash_only vs keyed_seal); keyed-seal mode rejects both on restore."""
     from app.core.audit import hash_payload  # local: keep core import graph light
 
     entries = getattr(chain, "entries", None)
