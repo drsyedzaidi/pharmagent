@@ -10,7 +10,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
+from python_multipart.exceptions import FormParserError
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.formparsers import MultiPartException
 
 from app.config import settings
 from app.conventions.runtime import validate_catalog_at_startup
@@ -387,38 +389,44 @@ def writable_session(sess=Depends(owned_session)):
 @app.post("/api/sessions/{sid}/upload")
 async def upload_for_session(sid: str, request: Request, sess=Depends(writable_session)) -> dict:
     # The body is parsed here, only after writable_session has run: a quarantined session never reaches the parser.
-    form = await request.form(max_files=1, max_fields=5)
-    file = form.get("file")
-    if not isinstance(file, StarletteUploadFile):
-        raise HTTPException(422, "expected a multipart form with a 'file' field")
-    suffix = Path(file.filename or "upload").suffix.lower()
-    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
-    data_dir = Path(settings.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(file.filename or "upload").stem
-    dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
-    size = 0
-    with dest.open("wb") as f:
-        while chunk := await file.read(1 << 20):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                f.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
-            f.write(chunk)
-    import pandas as pd
-
-    from app.core.schema_extractor import extract_schema
-    from app.tools.data_tools import NONMEM_NA_VALUES
     try:
-        df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
-    except Exception as e:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(400, f"could not parse CSV: {e}")
-    meta = extract_schema(df, dataset_id=dest.stem)
-    meta["dataset_path"] = str(dest)
-    return {"dataset_id": dest.stem, "metadata": meta}
+        form = await request.form(max_files=1, max_fields=5)
+    except (MultiPartException, FormParserError) as e:   # malformed or over-limit multipart: a client error
+        raise HTTPException(400, f"malformed multipart upload: {getattr(e, 'message', None) or e}")
+    try:                                     # always release the parser's spooled temporary files
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(422, "expected a multipart form with a 'file' field")
+        suffix = Path(file.filename or "upload").suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
+        data_dir = Path(settings.data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(file.filename or "upload").stem
+        dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
+        size = 0
+        with dest.open("wb") as f:
+            while chunk := await file.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+                f.write(chunk)
+        import pandas as pd
+
+        from app.core.schema_extractor import extract_schema
+        from app.tools.data_tools import NONMEM_NA_VALUES
+        try:
+            df = pd.read_csv(dest, na_values=NONMEM_NA_VALUES)  # "." = missing (NONMEM)
+        except Exception as e:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, f"could not parse CSV: {e}")
+        meta = extract_schema(df, dataset_id=dest.stem)
+        meta["dataset_path"] = str(dest)
+        return {"dataset_id": dest.stem, "metadata": meta}
+    finally:
+        await form.close()
 
 
 @app.post("/api/sessions/{sid}/chat")
