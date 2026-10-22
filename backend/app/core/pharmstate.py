@@ -37,6 +37,9 @@ class PharmState(BaseModel):
 
     # --- session / routing -------------------------------------------------
     session_id: str = ""
+    # Run provenance captured once at session creation (software, platform, conventions catalog identity). Bound into
+    # the genesis audit entry; no agent may write it (absent from AGENT_WRITE_FIELDS). None for legacy sessions.
+    run_provenance: dict[str, str] | None = None
     last_agent: str | None = None
     workflow_name: str | None = None
     current_step: int = 0

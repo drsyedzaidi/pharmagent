@@ -318,13 +318,14 @@ class Orchestrator:
     # -- sessions ----------------------------------------------------------
     def create_session(self, owner: str | None = None) -> Session:
         sid = f"sess_{uuid.uuid4().hex[:8]}"
-        sess = Session(id=sid, state=PharmState(session_id=sid),
+        prov = collect_provenance()     # recorded once, at creation: kept in state and bound into the genesis entry
+        sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=prov),
                        ctx=ToolContext(data_dir=str(settings.data_dir)),
                        owner=owner, created_at=self.clock())
         # Genesis provenance entry: stamp the software/platform fingerprint into
         # the audit chain so every result traces to the run that produced it.
         sess.audit.append(agent="system", tool="session", action="session_created",
-                          inputs=collect_provenance(), outputs={"session_id": sid},
+                          inputs=prov, outputs={"session_id": sid},
                           timestamp=self.clock(), actor=owner or "anonymous")
         self.sessions[sid] = sess
         self._persist(sess)

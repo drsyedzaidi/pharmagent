@@ -38,8 +38,9 @@ def _git_sha() -> str:
 
 
 @lru_cache(maxsize=1)
-def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
-    """Software/platform fingerprint of this run (cached; constant per process)."""
+def _collect(app_version: str) -> tuple[tuple[str, str], ...]:
+    from app.conventions.identity import catalog_identity  # local: keep core import graph light
+
     prov = {
         "app_version": app_version,
         "git_sha": _git_sha(),
@@ -48,7 +49,29 @@ def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
     }
     for pkg in _PACKAGES:
         prov[pkg] = _pkg_version(pkg)
-    return dict(prov)
+    prov.update(catalog_identity())        # conventions catalog version + canonical SHA-256
+    return tuple(prov.items())
+
+
+def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
+    """Software/platform fingerprint of this run, including the conventions catalog identity. Constant per process;
+    a fresh dict each call, so a caller cannot alter the cached value."""
+    return dict(_collect(app_version))
+
+
+def verify_run_provenance(record: dict[str, str] | None, genesis) -> str:
+    """Check a session's stored run provenance against its genesis audit entry.
+
+    ``legacy``: no stored record (session created before run provenance was kept in state).
+    ``verified``: the record hashes to the genesis entry's inputs_hash. ``mismatch``: anything else, including a
+    record checked against an entry that is not the session's genesis entry."""
+    from app.core.audit import hash_payload  # local: keep core import graph light
+
+    if record is None:
+        return "legacy"
+    if getattr(genesis, "index", None) != 0 or getattr(genesis, "action", None) != "session_created":
+        return "mismatch"
+    return "verified" if hash_payload(record) == genesis.inputs_hash else "mismatch"
 
 
 def file_sha256(path: str | Path) -> str:
