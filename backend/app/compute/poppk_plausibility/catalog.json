@@ -1,0 +1,487 @@
+{
+  "catalog_version": "1.0.0",
+  "reference_physiology": {
+    "adult_reference_weight_kg": 70.0,
+    "adult_hepatic_blood_flow_l_h": 90.0,
+    "adult_cardiac_output_l_h": 300.0,
+    "adult_gfr_l_h": 7.5,
+    "adult_renal_plasma_flow_l_h": 36.0,
+    "plasma_volume_l_kg": 0.043,
+    "blood_volume_l_kg": 0.07,
+    "ecf_volume_l_kg": 0.20,
+    "tbw_volume_l_kg": 0.60,
+    "min_central_volume_l_kg": 0.03,
+    "max_central_volume_l_kg": 50.0,
+    "max_vss_volume_l_kg": 100.0
+  },
+  "rules": [
+    {
+      "rule_id": "PL-001",
+      "slug": "positive_finite_parameters",
+      "version": "1.0.0",
+      "title": "Positive finite structural PK parameters",
+      "category": "parameter_domain",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {
+        "strictly_positive": true
+      },
+      "scientific_rationale": "Clearances, physiological distribution volumes, inter-compartmental flows, rate constants, and half-lives represent physical mass-transfer rates or spaces and must be finite and strictly positive (> 0).",
+      "recommendation": "Constrain structural PK parameters to strictly positive finite domains (e.g., log-scale parameterization or positive lower bounds).",
+      "reference_basis": "Fundamental mass-balance and compartmental pharmacokinetic definition (Rowland & Tozer, Clinical Pharmacokinetics and Pharmacodynamics).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-002",
+      "slug": "unit_compatibility_and_normalization",
+      "version": "1.0.0",
+      "title": "Unit compatibility and deterministic normalization",
+      "category": "units",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {},
+      "scientific_rationale": "Every dimensional PK parameter must carry an explicit, unambiguous unit compatible with its physical dimension (flow for CL/Q, volume or weight-normalized volume for V, inverse time for rate constants, time for half-life, dimensionless fraction or percent for F).",
+      "recommendation": "Supply explicit, dimensionally compatible units for every model parameter before comparing against physiological thresholds.",
+      "reference_basis": "Dimensional analysis and pharmacometric reporting standards (FDA Population Pharmacokinetics Guidance).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-003",
+      "slug": "bioavailability_bounds",
+      "version": "1.0.0",
+      "title": "Absolute bioavailability F within (0, 1]",
+      "category": "absorption_bioavailability",
+      "applies_to_modalities": ["all"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "min_exclusive": 0.0,
+        "max_inclusive": 1.0
+      },
+      "scientific_rationale": "Absolute systemic bioavailability F represents the fraction of administered dose reaching systemic circulation and is bounded by (0, 1] (or (0, 100]% when typed as percent). Values > 1.0 are only plausible when F represents relative bioavailability against a lower-exposure reference formulation.",
+      "recommendation": "Use logit transformation to constrain absolute F to (0, 1), or document relative bioavailability if F > 1.0 is intentional.",
+      "reference_basis": "Rowland & Tozer, Clinical Pharmacokinetics and Pharmacodynamics (Bioavailability definition).",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-004",
+      "slug": "systemic_clearance_vs_hepatic_flow",
+      "version": "1.0.0",
+      "title": "Systemic clearance CL compared with context-scaled hepatic blood flow and cardiac output",
+      "category": "physiological_clearance",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "adult_qh_l_h": 90.0,
+        "adult_cardiac_output_l_h": 300.0,
+        "allometric_flow_exponent": 0.75
+      },
+      "scientific_rationale": "For a systemically cleared drug (distinguished from apparent oral CL/F), systemic clearance exceeding context-scaled hepatic blood flow (~90 L/h in a 70 kg adult) implies substantial extrahepatic elimination (e.g., renal + hepatic, pulmonary, or blood esterase hydrolysis) or high blood-to-plasma partitioning. Exceeding cardiac output (~300 L/h) is physiologically extreme.",
+      "recommendation": "Verify whether the parameter is apparent oral clearance (CL/F) rather than systemic CL, check unit scaling, or document extrahepatic/blood-esterase clearance.",
+      "reference_basis": "Davies & Morris 1993 (Physiological parameters in laboratory animals and humans, Pharm Res 10:1093-1095); Wilkinson & Shand 1975.",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-005",
+      "slug": "renal_clearance_vs_gfr_and_renal_flow",
+      "version": "1.0.0",
+      "title": "Renal clearance CL_R compared with glomerular filtration and effective renal plasma flow",
+      "category": "physiological_clearance",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "adult_gfr_l_h": 7.5,
+        "adult_renal_plasma_flow_l_h": 36.0
+      },
+      "scientific_rationale": "Passive renal filtration clearance cannot exceed fu * GFR (~7.5 L/h * fu in a healthy 70 kg adult). Renal clearance exceeding fu * GFR implies active tubular secretion; renal clearance exceeding effective renal plasma flow (~36 L/h = 600 mL/min in a 70 kg adult) is physiologically implausible unless blood-to-plasma partitioning is high.",
+      "recommendation": "Document active tubular secretion if CL_R > fu * GFR, or re-examine CL_R parameterization and units if CL_R exceeds effective renal plasma flow.",
+      "reference_basis": "Davies & Morris 1993; Rowland & Tozer (Renal elimination mechanisms).",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-006",
+      "slug": "central_volume_vs_physiological_space",
+      "version": "1.0.0",
+      "title": "Central volume Vc compared with plasma volume floor and tissue ceiling",
+      "category": "physiological_volume",
+      "applies_to_modalities": ["all"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "min_vc_l_kg": 0.03,
+        "warn_vc_l_kg": 20.0,
+        "high_vc_l_kg": 50.0
+      },
+      "scientific_rationale": "Central volume of distribution Vc cannot be smaller than vascular plasma volume (~0.043 L/kg, screening floor 0.03 L/kg or ~2.1 L in a 70 kg adult). Extremely large systemic Vc (> 20-50 L/kg) implies extensive peripheral tissue/lipid sequestration or confusion with apparent volume Vc/F.",
+      "recommendation": "Check whether Vc is less than plasma volume due to unit error (e.g., L/kg labeled as L), or whether high Vc reflects apparent oral Vc/F with low bioavailability.",
+      "reference_basis": "Davies & Morris 1993; Oie & Tozer 1979 (Volume of distribution relationships).",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-007",
+      "slug": "steady_state_volume_consistency",
+      "version": "1.0.0",
+      "title": "Steady-state volume Vss consistency with physiological spaces and compartmental sum",
+      "category": "physiological_volume",
+      "applies_to_modalities": ["all"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "min_vss_l_kg": 0.03,
+        "max_vss_l_kg": 100.0,
+        "sum_rel_tol": 0.05
+      },
+      "scientific_rationale": "Steady-state volume Vss must be at least plasma volume (~0.03 L/kg floor) and, when compartmental volumes (Vc, Vp, Vp2) are simultaneously reported, must equal Vc + sum(Vp) within numerical tolerance.",
+      "recommendation": "Ensure Vss = Vc + sum(Vp) in mammillary models and verify absolute (L) versus weight-normalized (L/kg) volume units.",
+      "reference_basis": "Gibaldi & Perrier, Pharmacokinetics (Steady-state volume of distribution in mammillary models).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-008",
+      "slug": "half_life_clearance_volume_consistency",
+      "version": "1.0.0",
+      "title": "Terminal/effective half-life consistency with clearance and volume",
+      "category": "derived_kinetics",
+      "applies_to_modalities": ["all"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "consistency_rel_tol": 0.10,
+        "min_plausible_thalf_h": 0.01,
+        "max_plausible_thalf_h": 5000.0
+      },
+      "scientific_rationale": "In linear compartmental models, half-life is deterministically linked to clearance and volume (t1/2 = ln(2)*Vc/CL for 1-compartment, or ln(2)/beta for multi-compartment). Reported half-life diverging from model parameters indicates calculation or unit error.",
+      "recommendation": "Recompute terminal half-life from the macro-rate eigenvalues (alpha, beta) or ln(2)*V/CL using consistent time and volume units.",
+      "reference_basis": "Gabrielsson & Weiner, Pharmacokinetic and Pharmacodynamic Data Analysis.",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-009",
+      "slug": "absorption_ka_and_flip_flop",
+      "version": "1.0.0",
+      "title": "Absorption rate constant ka bounds and flip-flop kinetics check",
+      "category": "absorption_bioavailability",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "warn_min_ka_per_h": 0.05,
+        "warn_max_ka_per_h": 10.0,
+        "high_min_ka_per_h": 0.01,
+        "high_max_ka_per_h": 20.0
+      },
+      "scientific_rationale": "First-order absorption rate constant ka outside typical physiological absorption rates ([0.05, 10] h^-1) or ka <= elimination rate ke (CL/Vc) indicates potential flip-flop kinetics or unidentifiable rapid absorption.",
+      "recommendation": "If ka <= ke, verify whether flip-flop kinetics are expected (e.g., extended-release or subcutaneous depot) or constrain ka > ke for immediate-release formulations.",
+      "reference_basis": "Yanez et al. 2011 (Flip-flop pharmacokinetics:delivering a reversal of disposition, Ther Deliv 2:643-672).",
+      "source_kind": "modeling_heuristic",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-010",
+      "slug": "allometric_clearance_exponent",
+      "version": "1.0.0",
+      "title": "Allometric body-weight exponent on clearance (CL, Q) near 0.75",
+      "category": "allometry",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "pass_min": 0.60,
+        "pass_max": 0.90,
+        "warn_min": 0.30,
+        "warn_max": 1.20
+      },
+      "scientific_rationale": "Theory-based allometric scaling relates metabolic/elimination flows (CL, Q) to body weight with an exponent near 0.75 (typical empirical range 0.60-0.90). Large deviations often reflect collinearity with age/maturation or sparse weight range.",
+      "recommendation": "Consider fixing the allometric clearance exponent to 0.75 or document empirical justification and covariate precision.",
+      "reference_basis": "Anderson & Holford 2008 (Mechanism-based concepts of size and maturity in pharmacokinetics, Annu Rev Pharmacol Toxicol 48:303-332).",
+      "source_kind": "allometric_theory",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-011",
+      "slug": "allometric_volume_exponent",
+      "version": "1.0.0",
+      "title": "Allometric body-weight exponent on volume (Vc, Vp, Vss) near 1.0",
+      "category": "allometry",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "pass_min": 0.80,
+        "pass_max": 1.20,
+        "warn_min": 0.50,
+        "warn_max": 1.50
+      },
+      "scientific_rationale": "Theory-based allometric scaling relates distribution volumes (Vc, Vp, Vss) proportionally to body mass with an exponent near 1.0 (typical range 0.80-1.20). Deviations outside this range require strong empirical support.",
+      "recommendation": "Consider fixing the allometric volume exponent to 1.0 or document body-composition rationale.",
+      "reference_basis": "Anderson & Holford 2008 (Annu Rev Pharmacol Toxicol 48:303-332).",
+      "source_kind": "allometric_theory",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-012",
+      "slug": "iiv_magnitude_review",
+      "version": "1.0.0",
+      "title": "Inter-individual variability (IIV omega^2 / %CV) magnitude plausibility",
+      "category": "random_effects",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "warn_cv_pct": 100.0,
+        "high_cv_pct": 200.0,
+        "consistency_rel_tol": 0.05
+      },
+      "scientific_rationale": "Log-normal IIV exceeding 100% CV (omega^2 > 0.693) or 200% CV (omega^2 > 1.609) often indicates structural misspecification, unmodeled subpopulations/outliers, or poor identifiability (e.g., on ka or Vp).",
+      "recommendation": "Inspect eta distributions, shrinkage, and outlier subjects; verify whether high IIV is driven by unmodeled covariates or bioavailability variability.",
+      "reference_basis": "Mould & Upton 2013 (Basic concepts in population modeling, simulation, and model-based drug development, CPT Pharmacometrics Syst Pharmacol).",
+      "source_kind": "modeling_heuristic",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-013",
+      "slug": "variance_nonnegative_finite",
+      "version": "1.0.0",
+      "title": "Random-effect variance terms (omega^2, sigma^2) finite and nonnegative",
+      "category": "random_effects",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {
+        "min_variance": 0.0
+      },
+      "scientific_rationale": "Variance of any real-valued random variable must be finite and nonnegative (>= 0). Negative variance is a mathematical impossibility.",
+      "recommendation": "Correct negative or non-finite variance estimates before accepting or simulating from the model.",
+      "reference_basis": "Probability theory axiom (Var(X) >= 0).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-014",
+      "slug": "covariance_matrix_psd",
+      "version": "1.0.0",
+      "title": "Omega and Sigma covariance matrices symmetric and positive semidefinite (PSD)",
+      "category": "random_effects",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {
+        "symmetry_abs_tol": 1e-8,
+        "min_eigenvalue_tol": -1e-9
+      },
+      "scientific_rationale": "Any valid covariance or correlation matrix must be square, symmetric, and positive semidefinite (all eigenvalues >= 0). Non-PSD matrices cannot represent a real multivariate random-effect distribution and fail Cholesky factorization.",
+      "recommendation": "Re-estimate Omega/Sigma with a Cholesky or log-Cholesky parameterization, or reduce block structure if covariance is boundary-collapsed.",
+      "reference_basis": "Matrix analysis and mixed-effects statistical theory (Pinheiro & Bates, Mixed-Effects Models in S and S-PLUS).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-015",
+      "slug": "correlation_bounds",
+      "version": "1.0.0",
+      "title": "Random-effect correlations r_ij within [-1, 1] and collinearity screen",
+      "category": "random_effects",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {
+        "hard_abs_limit": 1.0,
+        "warn_abs_collinear": 0.95
+      },
+      "scientific_rationale": "By Cauchy-Schwarz inequality, correlation coefficients r_ij must lie in [-1, 1]. Correlations with |r_ij| >= 0.95 indicate near-singular Omega blocks and over-parameterization.",
+      "recommendation": "Ensure |r_ij| <= 1.0; if |r_ij| >= 0.95, consider shared-eta parameterization or diagonal Omega.",
+      "reference_basis": "Cauchy-Schwarz inequality; Mould & Upton 2013.",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-016",
+      "slug": "residual_error_plausibility",
+      "version": "1.0.0",
+      "title": "Residual unexplained variability (RUV) nonnegativity and magnitude screen",
+      "category": "residual_error",
+      "applies_to_modalities": ["all"],
+      "default_severity": "WARN",
+      "override_allowed": true,
+      "thresholds": {
+        "warn_prop_cv_pct": 50.0,
+        "high_prop_cv_pct": 100.0
+      },
+      "scientific_rationale": "Residual error terms must be finite and nonnegative, cannot be identically zero across all active error components, and proportional RUV exceeding 50-100% CV suggests severe model misspecification or data errors.",
+      "recommendation": "Inspect CWRES/IWRES diagnostics, bioanalytical assay LLOQ, and dosing/sampling time records if residual error is extreme.",
+      "reference_basis": "Karlsson & Savic 2007 (Diagnosing model diagnostics, Clin Pharmacol Ther 82:17-20).",
+      "source_kind": "modeling_heuristic",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-017",
+      "slug": "mab_central_volume",
+      "version": "1.0.0",
+      "title": "Monoclonal antibody (mAb) central volume Vc near vascular plasma space",
+      "category": "biologics_mab",
+      "applies_to_modalities": ["monoclonal_antibody"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "pass_min_l_kg": 0.03,
+        "pass_max_l_kg": 0.10,
+        "warn_max_l_kg": 0.15
+      },
+      "scientific_rationale": "IgG monoclonal antibodies (~150 kDa) are largely restricted to vascular plasma and interstitial fluid; central volume Vc typically approximates plasma volume (~0.04-0.08 L/kg, or ~2.8-5.6 L in a 70 kg adult).",
+      "recommendation": "Verify mAb Vc units and bioavailability adjustment (Vc vs Vc/F for SC dosing) if Vc deviates substantially from 0.03-0.10 L/kg.",
+      "reference_basis": "Dirks & Meibohm 2010 (Population pharmacokinetics of therapeutic monoclonal antibodies, Clin Pharmacokinet 49:633-659).",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-018",
+      "slug": "mab_linear_clearance",
+      "version": "1.0.0",
+      "title": "Monoclonal antibody (mAb) linear clearance CL within FcRn-protected catabolic range",
+      "category": "biologics_mab",
+      "applies_to_modalities": ["monoclonal_antibody"],
+      "default_severity": "HIGH",
+      "override_allowed": true,
+      "thresholds": {
+        "pass_min_l_h_70kg": 0.003,
+        "pass_max_l_h_70kg": 0.05,
+        "warn_max_l_h_70kg": 0.15
+      },
+      "scientific_rationale": "Due to FcRn salvage, linear proteolytic clearance of IgG mAbs in reference adults is slow (~0.15-0.60 L/day = 0.006-0.025 L/h, screening window 0.003-0.05 L/h). Small-molecule-like clearance (> 0.15 L/h) is implausible for linear mAb elimination unless confusion between L/day and L/h or dominant TMDD occurred.",
+      "recommendation": "Check whether mAb CL was reported in L/day but labeled as L/h, or document nonlinear target-mediated drug disposition (TMDD).",
+      "reference_basis": "Dirks & Meibohm 2010 (Clin Pharmacokinet 49:633-659); Deng et al. 2011.",
+      "source_kind": "physiological_reference",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-019",
+      "slug": "intercompartmental_micro_rate_consistency",
+      "version": "1.0.0",
+      "title": "Inter-compartmental flow Q and micro-rate constant (k10, k12, k21) mass-balance consistency",
+      "category": "structural_consistency",
+      "applies_to_modalities": ["all"],
+      "default_severity": "HIGH",
+      "override_allowed": false,
+      "thresholds": {
+        "micro_rel_tol": 0.02,
+        "max_q_cardiac_output_l_h": 300.0
+      },
+      "scientific_rationale": "In mammillary compartmental models, micro-rate constants are exact ratios of clearance/flow to compartment volumes (k10 = CL/Vc, k12 = Q/Vc, k21 = Q/Vp), and inter-compartmental distribution flow Q cannot physically exceed cardiac output.",
+      "recommendation": "Ensure micro-rate constants match Q/Vc, Q/Vp, and CL/Vc using identical volume and time units.",
+      "reference_basis": "Gibaldi & Perrier, Pharmacokinetics (Linear mammillary compartmental systems).",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    },
+    {
+      "rule_id": "PL-020",
+      "slug": "model_prediction_plausibility",
+      "version": "1.0.0",
+      "title": "Model predictions (PRED/IPRED) finite, nonnegative, and within physical concentration ceiling",
+      "category": "predictions",
+      "applies_to_modalities": ["all"],
+      "default_severity": "CRITICAL",
+      "override_allowed": false,
+      "thresholds": {
+        "min_concentration": 0.0,
+        "max_concentration_mg_l": 1000000.0
+      },
+      "scientific_rationale": "Predicted drug concentrations (PRED, IPRED) represent physical mass per unit volume and must be finite (no NaN or Inf) and nonnegative (>= 0).",
+      "recommendation": "Check ODE solver tolerances, parameter domain bounds, and dosing inputs if negative or non-finite concentrations occur.",
+      "reference_basis": "Physical conservation of mass and positivity of compartmental ODE systems.",
+      "source_kind": "mathematical_identity",
+      "approval": {
+        "status": "pending_owner_review",
+        "by": null,
+        "date": null
+      }
+    }
+  ]
+}
