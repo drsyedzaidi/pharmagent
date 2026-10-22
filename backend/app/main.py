@@ -18,6 +18,7 @@ from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
+from app.core.provenance import ProvenanceQuarantined
 from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
@@ -79,6 +80,14 @@ async def job_rejected_handler(request: Request, exc: JobRejected) -> JSONRespon
                         content=_error_body("job_rejected", str(exc), rid))
 
 
+@app.exception_handler(ProvenanceQuarantined)
+async def provenance_quarantined_handler(request: Request, exc: ProvenanceQuarantined) -> JSONResponse:
+    # 423 Locked: the session is quarantined (run_provenance_status=mismatch). Read-only audit/state access remains.
+    rid = getattr(request.state, "request_id", "")
+    return JSONResponse(status_code=423, headers={"X-Request-ID": rid},
+                        content=_error_body("provenance_mismatch", str(exc), rid))
+
+
 @app.exception_handler(AuditSecurityError)
 async def audit_security_handler(
     request: Request, exc: AuditSecurityError
@@ -131,6 +140,15 @@ def owned_session(sid: str, owner: str | None = Depends(current_owner)):
         raise HTTPException(404, str(e))
     except AccessError as e:
         raise HTTPException(403, str(e))
+
+
+def trusted_session(sess=Depends(owned_session)):
+    """A session whose outputs may be exported as trusted: refused (423) while its run provenance is mismatched."""
+    if sess.state.run_provenance_status == "mismatch":
+        raise ProvenanceQuarantined(
+            f"session {sess.id} is quarantined (run_provenance_status=mismatch): trusted exports and reports are "
+            "refused; audit inspection and raw state remain available")
+    return sess
 
 
 def actor_id(owner: str | None = Depends(current_owner)) -> str:
@@ -803,7 +821,8 @@ def get_audit(sid: str, sess=Depends(owned_session)) -> dict:
         # current external anchor. Hash-only development mode is never presented
         # as authenticated, even when its public chain is internally consistent.
         return {"entries": entries, "verified": status["verified"],
-                "count": len(entries), "integrity": status}
+                "count": len(entries), "integrity": status,
+                "run_provenance_status": status.get("run_provenance_status")}
 
 
 @app.get("/api/sessions/{sid}/state")
@@ -819,7 +838,7 @@ def list_exports(sid: str, sess=Depends(owned_session)) -> dict:
 
 
 @app.get("/api/sessions/{sid}/export/{kind}")
-def export_csv(sid: str, kind: str, sess=Depends(owned_session)) -> Response:
+def export_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
     try:
         body = exporters.export_csv(sess.state, kind)
     except ValueError as e:
@@ -831,7 +850,7 @@ def export_csv(sid: str, kind: str, sess=Depends(owned_session)) -> Response:
 
 
 @app.get("/api/sessions/{sid}/export/control/{kind}")
-def export_control(sid: str, kind: str, sess=Depends(owned_session)) -> Response:
+def export_control(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
     """NONMEM (.ctl) or mrgsolve (.cpp) control stream seeded from the NLME fit."""
     try:
         text, ext = exporters.export_control(sess.state, kind)
@@ -842,7 +861,7 @@ def export_control(sid: str, kind: str, sess=Depends(owned_session)) -> Response
 
 
 @app.get("/api/sessions/{sid}/cdisc")
-def export_cdisc(sid: str, sess=Depends(owned_session)) -> Response:
+def export_cdisc(sid: str, sess=Depends(trusted_session)) -> Response:
     """Download a CDISC ADaM-aligned package (ADPC + ADPP + define.xml) as a zip."""
     if not sess.state.nca_parameters:
         raise HTTPException(404, "run NCA first — no parameters to export as ADaM")
@@ -962,7 +981,7 @@ def generate_report(sid: str, sess=Depends(owned_session),
 
 
 @app.get("/api/sessions/{sid}/report/{filename}")
-def download_report(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+def download_report(sid: str, filename: str, sess=Depends(trusted_session)) -> FileResponse:
     report_path = sess.state.report_path
     if not report_path or Path(report_path).name != filename:
         raise HTTPException(404, "report not found")
@@ -999,7 +1018,7 @@ def generate_report_272(sid: str, req: Report272Request,
 
 @app.get("/api/sessions/{sid}/report/272/{filename}")
 def download_report_272(sid: str, filename: str,
-                        sess=Depends(owned_session)) -> FileResponse:
+                        sess=Depends(trusted_session)) -> FileResponse:
     report_path = sess.state.regulatory_report_path
     if not report_path or Path(report_path).name != filename:
         raise HTTPException(404, "Module 2.7.2 report not found or filename mismatch")
@@ -1028,7 +1047,7 @@ def generate_memo(sid: str, req: MemoRequest | None = None, sess=Depends(owned_s
 
 
 @app.get("/api/sessions/{sid}/memo/{filename}")
-def download_memo(sid: str, filename: str, sess=Depends(owned_session)) -> FileResponse:
+def download_memo(sid: str, filename: str, sess=Depends(trusted_session)) -> FileResponse:
     memo_path = sess.state.memo_path
     if not memo_path or Path(memo_path).name != filename:
         raise HTTPException(404, "memo not found")

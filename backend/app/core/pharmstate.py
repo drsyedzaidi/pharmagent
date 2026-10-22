@@ -41,6 +41,9 @@ class PharmState(BaseModel):
     # immutable (key, value) pairs. Bound into the genesis audit entry; no agent may write it (absent from
     # AGENT_WRITE_FIELDS). None for legacy sessions.
     run_provenance: tuple[tuple[str, str], ...] | None = None
+    # verified | legacy_unverified | mismatch. Recomputed from the genesis entry on every load and access; a stored
+    # value is never trusted. "mismatch" quarantines the session (read-only). Not writable by any agent.
+    run_provenance_status: str | None = None
     last_agent: str | None = None
     workflow_name: str | None = None
     current_step: int = 0

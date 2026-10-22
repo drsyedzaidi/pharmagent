@@ -206,8 +206,9 @@ def test_review_loop_auto_remediate_resolves_incomplete_and_stale_memo(tmp_path,
     #    memo-stale fires without untraced numbers.
     from tests.memo_fixtures import full_chain, full_state
     sess = orch.get_session(sid)
-    sess.state = full_state()
-    sess.audit = full_chain()
+    sess.state = full_state().model_copy(update={"session_id": sess.id,    # keep its run-provenance record
+                                               "run_provenance": sess.state.run_provenance})
+    sess.audit = full_chain(genesis=(sess.id, dict(sess.state.run_provenance)))
     orch.run_tool(sid, "build_briefing_memo", "report", {}, actor="alice")
     nl = {**sess.state.nlme_results, "ofv": -220.2}
     sess.state = sess.state.model_copy(update={"nlme_results": nl})

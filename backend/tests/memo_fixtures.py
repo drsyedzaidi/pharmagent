@@ -171,8 +171,16 @@ def _er_steps() -> list[tuple[str, str, dict[str, Any]]]:
             ("er_dose", "bootstrap_exposure_response", boot)]
 
 
-def full_chain() -> AuditChain:
+def full_chain(genesis: tuple[str, dict] | None = None) -> AuditChain:
+    """``genesis=(session_id, provenance)`` makes step 0 a real genesis entry for that session, so a session given
+    this chain still verifies its run provenance. Without it, step 0 is the synthetic session step (unchanged)."""
     chain = AuditChain()
+    if genesis is not None:
+        from app.core.provenance import genesis_outputs
+
+        sid, prov = genesis
+        chain.append(agent="system", tool="session", action="session_created", inputs=prov,
+                     outputs=genesis_outputs(sid), timestamp="t")
     comps = indirect_comparisons()
     steps = [("system", "session", {}), ("data_manager", "load_dataset", {}),
              ("data_manager", "profile_pk_dataset", {}), ("nca", "compute_nca", {}),
@@ -182,7 +190,7 @@ def full_chain() -> AuditChain:
              ("statistician", "indirect_comparison", comps[0]),
              ("statistician", "indirect_comparison", comps[1]),
              *_er_steps(), ("er_dose", "select_optimal_dose", DOSE_SELECTION)]
-    for agent, tool, out in steps:
+    for agent, tool, out in (steps[1:] if genesis is not None else steps):
         chain.append(agent=agent, tool=tool, action=tool, inputs={}, outputs=out, timestamp="t")
     return chain
 

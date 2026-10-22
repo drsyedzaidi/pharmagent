@@ -60,6 +60,12 @@ def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
 
 
 RUN_PROVENANCE_SCHEMA = 1
+QUARANTINED_STATUS = "mismatch"
+
+
+class ProvenanceQuarantined(Exception):
+    """The session's run provenance does not match its genesis audit entry. The session is read-only: tools, state
+    writes and trusted exports are refused; audit inspection and raw state stay available."""
 
 
 def genesis_outputs(session_id: str) -> dict:

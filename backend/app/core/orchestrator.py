@@ -27,7 +27,12 @@ from app.core.audit_seal import (
 )
 from app.core.llm import LLM, get_llm
 from app.core.pharmstate import PharmState, apply_writes
-from app.core.provenance import collect_provenance, genesis_outputs
+from app.core.provenance import (
+    ProvenanceQuarantined,
+    collect_provenance,
+    genesis_outputs,
+    verify_run_provenance,
+)
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.core.store import SecureWriteConflict, SessionStore
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
@@ -187,15 +192,18 @@ class Orchestrator:
                 history=row["history"], pending_review=row["pending"],
                 params=row["params"], owner=row["owner"], created_at=row["created_at"],
                 commands=row.get("commands") or [])
+            self._refresh_provenance_status(sess)
             self.sessions[row["id"]] = sess
             if integrity_changed:
                 # Write the verdict AND its audit entry back, or the detection lives
                 # only in this process: the next restart would re-read the original
                 # row, re-detect, and the finding would never become part of the
                 # record. Persisting also makes the transition test above correct.
-                self._persist(sess)
+                self._persist(sess, system_record=True)
 
-    def _persist(self, sess: Session) -> None:
+    def _persist(self, sess: Session, *, system_record: bool = False) -> None:
+        if not system_record:
+            self._ensure_writable(sess)   # quarantined sessions are read-only (system integrity records excepted)
         values = {
             "id": sess.id,
             "owner": sess.owner,
@@ -273,9 +281,11 @@ class Orchestrator:
     def audit_status(self, sid: str) -> dict:
         """Return an honest structural/MAC/anchor status for the persisted row."""
         sess = self.get_session(sid)
+        prov_status = sess.state.run_provenance_status
         if self.audit_security is None:
             chain = sess.audit.verify_status()
             return {
+                "run_provenance_status": prov_status,
                 **chain,
                 "chain_ok": chain["ok"],
                 "mode": "hash_only",
@@ -290,6 +300,7 @@ class Orchestrator:
         row = self.store.get(sid)
         if row is None:
             return {
+                "run_provenance_status": prov_status,
                 "ok": False,
                 "chain_ok": False,
                 "mode": "enforced",
@@ -305,10 +316,10 @@ class Orchestrator:
                 "n_entries": 0,
                 "degraded": False,
             }
-        return self.audit_security.inspect(
+        return {**self.audit_security.inspect(
             sid, row["audit"], row["audit_seal"],
             owner=row["owner"], created_at=row["created_at"]
-        )
+        ), "run_provenance_status": prov_status}
 
     @staticmethod
     def _log_command(sess: Session, agent: str, tool: str, args: dict[str, Any]) -> None:
@@ -327,6 +338,7 @@ class Orchestrator:
         sess.audit.append(agent="system", tool="session", action="session_created",
                           inputs=prov, outputs=genesis_outputs(sid),
                           timestamp=self.clock(), actor=owner or "anonymous")
+        self._refresh_provenance_status(sess)
         self.sessions[sid] = sess
         self._persist(sess)
         return sess
@@ -337,7 +349,24 @@ class Orchestrator:
         sess = self.sessions[sid]
         if owner is not None and sess.owner is not None and sess.owner != owner:
             raise AccessError(f"session {sid} belongs to another user")
+        self._refresh_provenance_status(sess)
         return sess
+
+    @staticmethod
+    def _refresh_provenance_status(sess: Session) -> None:
+        """Recompute run_provenance_status from the genesis entry. Never trusts a stored value."""
+        genesis = sess.audit.entries[0] if sess.audit.entries else None
+        status = verify_run_provenance(sess.state.run_provenance, genesis, sess.id)
+        if sess.state.run_provenance_status != status:
+            sess.state = sess.state.model_copy(update={"run_provenance_status": status})
+
+    @staticmethod
+    def _ensure_writable(sess: Session) -> None:
+        if sess.state.run_provenance_status == "mismatch":
+            raise ProvenanceQuarantined(
+                f"session {sess.id} is quarantined: its run provenance does not match its audit record "
+                "(run_provenance_status=mismatch). Audit inspection and raw state remain available; tools, state "
+                "writes and trusted exports are refused.")
 
     # -- free chat ---------------------------------------------------------
     def chat(self, sid: str, message: str, actor: str | None = None) -> dict[str, Any]:
@@ -346,6 +375,7 @@ class Orchestrator:
         # nested get_session is fine), or concurrent chats can corrupt state/audit.
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             primary_agent, primary_method = self.supervisor.route(message)
             plan = self.supervisor.route_plan(message)
             all_messages: list[str] = []
@@ -424,6 +454,7 @@ class Orchestrator:
         # requests without the lock can lose updates or persist a torn snapshot.
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "modeler"})
             args: dict[str, Any] = {}
             if model_key:
@@ -446,6 +477,7 @@ class Orchestrator:
                     actor: str | None = None) -> dict[str, Any]:
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             sess.state = apply_writes(sess.state, "supervisor", {"last_agent": "simulator"})
             sess.state, res = self.registry.execute(
                 "simulate_pk_profile", state=sess.state, ctx=sess.ctx,
@@ -466,6 +498,7 @@ class Orchestrator:
         """
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             sess.state = apply_writes(sess.state, "supervisor", {"last_agent": agent})
             sess.state, res = self.registry.execute(
                 tool, state=sess.state, ctx=sess.ctx, args=args or {},
@@ -493,6 +526,7 @@ class Orchestrator:
         """
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             pending = sess.state.pending_tool
             if not pending:
                 raise KeyError("no pending tool proposal")
@@ -511,6 +545,7 @@ class Orchestrator:
         Raises KeyError when nothing is pending."""
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             pending = sess.state.pending_tool
             if not pending:
                 raise KeyError("no pending tool proposal")
@@ -555,6 +590,7 @@ class Orchestrator:
             remediated_this_pass = False
             if auto_remediate:
                 sess = self.get_session(sid)
+                self._ensure_writable(sess)
                 finding_ids = {f.get("id") for f in (res.get("findings") or [])}
                 # 1. INCOMPLETE with a loaded dataset: run deterministic NCA
                 if res.get("status") == "INCOMPLETE" and sess.state.dataset_id:
@@ -596,6 +632,7 @@ class Orchestrator:
         """Distill a session's command log into a named, replayable skill."""
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             steps = distill_steps(sess.commands)
             if not steps:
                 raise ValueError("nothing to capture: run an analysis on this session first")
@@ -657,6 +694,7 @@ class Orchestrator:
         downstream tool uses the corrected mapping. Recorded in the audit chain."""
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             meta = dict(sess.state.dataset_metadata or {})
             roles = dict(meta.get("detected_roles") or {})
             for col, role in (overrides or {}).items():
@@ -682,6 +720,7 @@ class Orchestrator:
         # against concurrent run_tool / background jobs on the same session.
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             wf = get_workflow(name)
             sess.state = apply_writes(sess.state, "supervisor",
                                       {"workflow_name": name, "current_step": 0})
@@ -694,6 +733,7 @@ class Orchestrator:
                         allow_expensive: bool = False) -> dict[str, Any]:
         with self.session_lock(sid):
             sess = self.get_session(sid)
+            self._ensure_writable(sess)
             if not sess.pending_review:
                 raise ValueError("no pending review to resume")
             wf = get_workflow(sess.state.workflow_name)
