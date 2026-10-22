@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.4.0",
+  "catalog_version": "1.4.1",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -148,7 +148,9 @@
         "reference": "PR #3 (drsyedzaidi/pharmagent#3), steady-state corrections."
       },
       "approval": {
-        "status": "pending_owner_review"
+        "status": "approved",
+        "by": "Syed Saoud Zaidi",
+        "date": "2026-10-22"
       },
       "tests": [
         "tests/test_nca_blq.py::test_steady_state_m1_is_scoped_to_the_final_interval_not_the_whole_history",

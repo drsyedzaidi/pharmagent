@@ -125,19 +125,21 @@ APPROVED_2026_10_21 = {
     "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_endpoint_closure",
     "nca.ss_incomplete_interval_fail_closed", "nca.lambda_z_window", "profile.ofv_cutoff",
 }
-# nca.ss_final_interval_scope was reworded on 2026-10-22 (v1.2.0) and is pending re-approval of the new text.
+# nca.ss_final_interval_scope was reworded (v1.2.0) and its new text re-approved on 2026-10-22.
+APPROVED_2026_10_22 = {"nca.ss_final_interval_scope"}
 
 
 def test_exactly_the_owner_confirmed_entries_are_approved():
     """Owner confirmation 2026-10-21: these 11 as accurate implementation descriptions; be.average_tost stays pending."""
     cat = load_catalog().conventions
     approved = {c.id for c in cat if c.approval.status == "approved"}
-    assert approved == APPROVED_2026_10_21
-    assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost",
-                                                                                  "nca.ss_final_interval_scope"}
+    assert approved == APPROVED_2026_10_21 | APPROVED_2026_10_22
+    assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost"}
     for c in cat:
-        if c.id in approved:
+        if c.id in APPROVED_2026_10_21:
             assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-21"), c.id
+        elif c.id in APPROVED_2026_10_22:
+            assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-22"), c.id
 
 
 # ── generated text and the report ──────────────────────────────────────────────────────────────
