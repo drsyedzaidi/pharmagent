@@ -95,6 +95,34 @@ def verify_run_provenance(record: tuple[tuple[str, str], ...] | None, genesis, s
     return "mismatch"
 
 
+def run_provenance_report_lines(state) -> list[str]:
+    """Report text for the run provenance RECORDED at session creation. Never reads the current server's provenance.
+
+    Raises ProvenanceQuarantined for a mismatched record, so no report or export is produced from it."""
+    status = getattr(state, "run_provenance_status", None)
+    if status == QUARANTINED_STATUS:
+        raise ProvenanceQuarantined("run provenance does not match the audit record (run_provenance_status="
+                                    "mismatch); the session is quarantined and no report may be generated")
+    rec = dict(state.run_provenance) if getattr(state, "run_provenance", None) else None
+    if status == "verified" and rec:
+        g = rec.get
+        return [
+            "Run provenance (recorded at session creation and verified against the audit record): "
+            f"PharmAgent v{g('app_version', 'n/a')} (git {g('git_sha', 'n/a')}) on Python {g('python', 'n/a')}, "
+            f"{g('platform', 'n/a')}. Numerical libraries: numpy {g('numpy', 'n/a')}, scipy {g('scipy', 'n/a')}, "
+            f"pandas {g('pandas', 'n/a')}.",
+            f"Conventions catalog: version {g('conventions_catalog_version', 'n/a')}, canonical-JSON SHA-256 "
+            f"{g('conventions_catalog_canonical_json_sha256', 'n/a')}.",
+            "Run provenance status: verified.",
+        ]
+    if status == "legacy_unverified":
+        return ["Run provenance status: legacy_unverified. This session was created before run provenance was "
+                "recorded, so the software and the conventions catalog that produced these results are not recorded. "
+                "They are not substituted from the current server."]
+    return ["Run provenance status: not recorded. This state carries no verified run-provenance record, so the "
+            "software and the conventions catalog that produced these results are not stated."]
+
+
 def file_sha256(path: str | Path) -> str:
     """SHA-256 of a file's bytes (for dataset integrity), or 'n/a' if unreadable."""
     try:
