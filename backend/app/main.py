@@ -6,10 +6,11 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.config import settings
 from app.conventions.runtime import validate_catalog_at_startup
@@ -373,9 +374,23 @@ def create_session(owner: str | None = Depends(current_owner)) -> dict:
     return {"id": sess.id, "created_at": sess.created_at}
 
 
+def writable_session(sess=Depends(owned_session)):
+    """A session that may be written to, including its file storage: refused (423) while quarantined. Resolved as a
+    dependency with no body parameters, so it runs BEFORE any request body is parsed."""
+    if sess.state.run_provenance_status == "mismatch":
+        raise ProvenanceQuarantined(
+            f"session {sess.id} is quarantined (run_provenance_status=mismatch): it is read-only, including file "
+            "storage; nothing was parsed or stored")
+    return sess
+
+
 @app.post("/api/sessions/{sid}/upload")
-async def upload_for_session(sid: str, file: UploadFile = File(...),
-                             sess=Depends(owned_session)) -> dict:
+async def upload_for_session(sid: str, request: Request, sess=Depends(writable_session)) -> dict:
+    # The body is parsed here, only after writable_session has run: a quarantined session never reaches the parser.
+    form = await request.form(max_files=1, max_fields=5)
+    file = form.get("file")
+    if not isinstance(file, StarletteUploadFile):
+        raise HTTPException(422, "expected a multipart form with a 'file' field")
     suffix = Path(file.filename or "upload").suffix.lower()
     if suffix not in ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
