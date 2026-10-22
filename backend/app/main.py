@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.conventions.runtime import validate_catalog_at_startup
-from app.core import cdisc, exporters
+from app.core import cdisc, export_provenance, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
@@ -837,32 +837,43 @@ def list_exports(sid: str, sess=Depends(owned_session)) -> dict:
             "control": exporters.control_available(sess.state)}
 
 
-@app.get("/api/sessions/{sid}/export/{kind}")
-def export_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
+def _csv_body(sess, kind: str) -> bytes:
     try:
         body = exporters.export_csv(sess.state, kind)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not body:
         raise HTTPException(404, f"no {kind} results to export")
+    return body.encode("utf-8")
+
+
+@app.get("/api/sessions/{sid}/export/{kind}")
+def export_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
+    body = _csv_body(sess, kind)              # CSV bytes unchanged: provenance travels in headers + manifest
     return Response(content=body, media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.csv"'})
+                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.csv"',
+                             **export_provenance.headers(sess.state)})
+
+
+def _control_body(sess, kind: str) -> tuple[bytes, str]:
+    try:
+        text, ext = exporters.export_control(sess.state, kind)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return (export_provenance.control_comment(sess.state, ext) + text).encode("utf-8"), ext
 
 
 @app.get("/api/sessions/{sid}/export/control/{kind}")
 def export_control(sid: str, kind: str, sess=Depends(trusted_session)) -> Response:
     """NONMEM (.ctl) or mrgsolve (.cpp) control stream seeded from the NLME fit."""
-    try:
-        text, ext = exporters.export_control(sess.state, kind)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    return Response(content=text, media_type="text/plain",
-                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.{ext}"'})
+    body, ext = _control_body(sess, kind)
+    return Response(content=body, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{kind}_{sid}.{ext}"',
+                             **export_provenance.headers(sess.state)})
 
 
-@app.get("/api/sessions/{sid}/cdisc")
-def export_cdisc(sid: str, sess=Depends(trusted_session)) -> Response:
-    """Download a CDISC ADaM-aligned package (ADPC + ADPP + define.xml) as a zip."""
+def _cdisc_body(sid: str, sess) -> bytes:
+    """The CDISC package with an embedded provenance.json; ADPC/ADPP/define.xml members are unchanged."""
     if not sess.state.nca_parameters:
         raise HTTPException(404, "run NCA first — no parameters to export as ADaM")
     roles = (sess.state.dataset_metadata or {}).get("detected_roles", {})
@@ -887,8 +898,17 @@ def export_cdisc(sid: str, sess=Depends(trusted_session)) -> Response:
         raise HTTPException(409, "ADPC would be empty: no usable concentration "
                                  "records in the source dataset")
     body = cdisc.build_package(sess.state, df, roles)
+    return export_provenance.zip_with_manifest(sess.state, body, session_id=sid, kind="cdisc",
+                                               filename=f"cdisc_adam_{sid}.zip")
+
+
+@app.get("/api/sessions/{sid}/cdisc")
+def export_cdisc(sid: str, sess=Depends(trusted_session)) -> Response:
+    """Download a CDISC ADaM-aligned package (ADPC + ADPP + define.xml) as a zip."""
+    body = _cdisc_body(sid, sess)
     return Response(content=body, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="cdisc_adam_{sid}.zip"',
+                             **export_provenance.headers(sess.state)})
 
 
 class CaptureSkillRequest(BaseModel):
@@ -988,7 +1008,7 @@ def download_report(sid: str, filename: str, sess=Depends(trusted_session)) -> F
     p = Path(report_path)
     if not p.exists():
         raise HTTPException(404, "report file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
@@ -1025,7 +1045,7 @@ def download_report_272(sid: str, filename: str,
     p = Path(report_path)
     if not p.exists():
         raise HTTPException(404, "report file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
@@ -1054,8 +1074,56 @@ def download_memo(sid: str, filename: str, sess=Depends(trusted_session)) -> Fil
     p = Path(memo_path)
     if not p.exists():
         raise HTTPException(404, "memo file missing")
-    return FileResponse(str(p), filename=filename,
+    return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+# ── companion provenance manifests (pharmagent.export_provenance/1) ─────────────
+# One per download, refused (423) for a quarantined session like the download itself.
+@app.get("/api/sessions/{sid}/provenance/export/control/{kind}")
+def provenance_control(sid: str, kind: str, sess=Depends(trusted_session)) -> dict:
+    body, ext = _control_body(sess, kind)
+    return export_provenance.manifest(sess.state, session_id=sid, kind=f"control/{kind}",
+                                      filename=f"{kind}_{sid}.{ext}", payload=body)
+
+
+@app.get("/api/sessions/{sid}/provenance/export/{kind}")
+def provenance_csv(sid: str, kind: str, sess=Depends(trusted_session)) -> dict:
+    return export_provenance.manifest(sess.state, session_id=sid, kind=kind, filename=f"{kind}_{sid}.csv",
+                                      payload=_csv_body(sess, kind))
+
+
+@app.get("/api/sessions/{sid}/provenance/cdisc")
+def provenance_cdisc(sid: str, sess=Depends(trusted_session)) -> dict:
+    import io
+    import zipfile
+    body = _cdisc_body(sid, sess)
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    members = {n: export_provenance._sha256(zf.read(n)) for n in zf.namelist()}
+    return export_provenance.manifest(sess.state, session_id=sid, kind="cdisc", filename=f"cdisc_adam_{sid}.zip",
+                                      payload=body, members=members)
+
+
+def _file_manifest(sid: str, sess, path: str | None, kind: str) -> dict:
+    if not path or not Path(path).exists():
+        raise HTTPException(404, f"no {kind} file")
+    p = Path(path)
+    return export_provenance.manifest(sess.state, session_id=sid, kind=kind, filename=p.name, payload=p.read_bytes())
+
+
+@app.get("/api/sessions/{sid}/provenance/report")
+def provenance_report(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.report_path, "report")
+
+
+@app.get("/api/sessions/{sid}/provenance/report/272")
+def provenance_report_272(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.regulatory_report_path, "report_272")
+
+
+@app.get("/api/sessions/{sid}/provenance/memo")
+def provenance_memo(sid: str, sess=Depends(trusted_session)) -> dict:
+    return _file_manifest(sid, sess, sess.state.memo_path, "memo")
 
 
 # ── static frontend (single-process desktop app) ───────────────────────────────
