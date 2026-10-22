@@ -11,11 +11,11 @@ Use this confined reference template when completing **Step 4** and **Step 10** 
 
 ## 2. Scenario Matrix Template
 
-| Scenario ID | Question / Stratum | Reviewed Tool | Key Inputs (`dose`, `tau`, `n_doses`, `wt`, `rate`) | Output Metrics (`cmax`, `auc_tau`, `cavg`, `ctrough`, `pta`) | Status |
+| Scenario ID | Question / Stratum | Reviewed Tool | Key Inputs (`dose`, `tau`, `n_doses`, `wt`, `rate`, `params`) | Output Metrics (`cmax`, `auc_tau`, `cavg`, `ctrough`, `pta`) | Status |
 |---|---|---|---|---|---|
-| `SCEN-01` | Reference regimen | `simulate_pk_profile` | `<from tool args>` | `<from tool result only>` | `computed` / `UNRESOLVED` |
-| `SCEN-02` | Candidate dose grid | `run_dose_sweep` | `<from tool args>` | `<from tool result only>` | `computed` / `UNRESOLVED` |
-| `SCEN-03` | Virtual population PTA | `run_clinsim` | `<from tool args>` | `<from tool result only>` | `computed` / `UNRESOLVED` |
+| `SCEN-01` | Reference trajectory / infusion | `simulate_pk_profile` | `<from tool args>` | `<cmax + profile from tool result only>` | `computed` / `UNRESOLVED` |
+| `SCEN-02` | Candidate dose grid (`rate=0`) | `run_dose_sweep` | `<from tool args>` | `<cmax, auc_tau, cavg, ctrough from tool result>` | `computed` / `UNRESOLVED` |
+| `SCEN-03` | Virtual population PTA | `run_clinsim` | `<from tool args>` | `<pta, median, p05, p95 from tool result>` | `computed` / `UNRESOLVED` |
 
 ## 3. Mandatory Verification Checklist
 - [ ] Dataset schema and units checked via `load_dataset`, `profile_pk_dataset`, and `validate_cdisc`.

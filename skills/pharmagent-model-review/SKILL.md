@@ -58,6 +58,7 @@ compatibility:
     - pharmagent_focei
     - pharmagent_saem
     - nlmixr2
+    - monolix
   notes: Scoped strictly to PharmAgent's built-in structural model registry and export mappings.
 runtime_available: true
 ---
@@ -95,7 +96,7 @@ Refer to [Translation Verification Checklist](references/translation-verificatio
 
 ### Step 2: Parameter and Unit Extraction
 1. For initial per-subject or two-stage screening, use `fit_compartmental`, `run_poppk`, or `fit_pk_model` (single model or `compare=True` across candidates ranked by AIC).
-2. For population mixed-effects estimation, propose or inspect `run_nlme` (`method` in `["focei", "saem", "focei_saem", "auto"]`; note that `run_nlme` is `expensive=True` and runs via the job-backed endpoint).
+2. For population mixed-effects estimation, propose or inspect `run_nlme` (`method` in `["focei", "saem", "focei_saem", "auto"]`; note that `run_nlme` supports the 10 PK-only structural models where `has_pd=False`, is `expensive=True`, and runs via the job-backed endpoint; `pkpd_*` models where `has_pd=True` are fitted via `fit_pk_model` and forward-simulated via `simulate_pk_profile`).
 3. Extract and tabulate:
    - Fixed-effect typical values (`theta`) and relative standard errors (`theta_rse_pct`),
    - Derived secondary parameters (`calc_half_life`, `calc_allometric`) with explicit units,
@@ -126,7 +127,7 @@ From a converged `run_nlme` result, inspect:
 When translating or comparing a PharmAgent model across engines or into NONMEM/mrgsolve exports:
 1. **Cross-engine execution (`run_engine_comparison`)**:
    - Note that `run_engine_comparison` is `expensive=True` (job-backed endpoint).
-   - It compares candidate models across available adapters (`pharmagent_focei`, `pharmagent_saem`, and if installed, `nlmixr2`) using **engine-agnostic prediction accuracy** (prediction RMSE and VPC coverage).
+   - It compares candidate models across available adapters (`pharmagent_focei`, `pharmagent_saem`, and if locally installed, `nlmixr2` or `monolix`) using **engine-agnostic prediction accuracy** (prediction RMSE and VPC coverage).
    - **Never compare native `OFV`, `AIC`, or `BIC` across different engines** because likelihood constants and approximations differ between estimators.
 2. **NONMEM (`.ctl`) and mrgsolve (`.cpp`) export review** (see [Translation Verification Checklist](references/translation-verification-checklist.md)):
    - Verify closed-form mapping eligibility (`iv_1cmt` -> `ADVAN1 TRANS2`, `oral_1cmt`/`oral_1cmt_lag` -> `ADVAN2 TRANS2`, `iv_2cmt` -> `ADVAN3 TRANS4`, `oral_2cmt` -> `ADVAN4 TRANS4`, `iv_3cmt` -> `ADVAN11 TRANS4`).

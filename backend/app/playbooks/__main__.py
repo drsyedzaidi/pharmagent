@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 
 from .catalog import DEFAULT_SKILLS_ROOT, validate_all_playbooks
+from .schema import CatalogValidationReport
 
 
-def render_check_text(report) -> str:
+def render_check_text(report: CatalogValidationReport) -> str:
     all_issues = [
         (r.playbook_id or r.name or "unknown", i)
         for r in report.results
@@ -44,7 +45,7 @@ def render_check_text(report) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_check_json(report) -> str:
+def render_check_json(report: CatalogValidationReport) -> str:
     all_issues = [
         {"playbook": r.playbook_id or r.name, **i.model_dump()}
         for r in report.results

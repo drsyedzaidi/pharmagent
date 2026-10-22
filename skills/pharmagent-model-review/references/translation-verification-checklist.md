@@ -12,7 +12,8 @@ Use this confined reference checklist during **Step 6** of `pharmagent.model_rev
 | `iv_2cmt` | `ADVAN3 TRANS4` | `S1 = V1`; `CL->CL, VC->V1, Q->Q, VP->V2` | `CENT PERIPH` | Yes |
 | `oral_2cmt` | `ADVAN4 TRANS4` | `S2 = V2`; `CL->CL, VC->V2, Q->Q, VP->V3, KA->KA` | `DEPOT CENT PERIPH` | Yes |
 | `iv_3cmt` | `ADVAN11 TRANS4` | `S1 = V1`; `CL->CL, VC->V1, Q2->Q2, VP2->V2, Q3->Q3, VP3->V3` | `CENT PERIPH2 PERIPH3` | Yes |
-| `oral_1cmt_transit`, `*_mm`, `iv_1cmt_mixed`, `pkpd_*` | None (refused) | No closed-form ADVAN mapping | None (refused) | **No** (fitted in PharmAgent via `fit_pk_model` / `run_nlme` / `simulate_pk_profile`) |
+| `oral_1cmt_transit`, `*_mm`, `iv_1cmt_mixed` | None (refused) | No closed-form ADVAN mapping | None (refused) | **No** (fitted in PharmAgent via `fit_pk_model` / `run_nlme` / `simulate_pk_profile`) |
+| `pkpd_*` (9 PK/PD models, `has_pd=True`) | None (refused) | Simultaneous PK/PD ODE/algebraic system | None (refused) | **No** (fitted in PharmAgent via `fit_pk_model` and simulated via `simulate_pk_profile`; `run_nlme` supports PK-only models) |
 
 ## 2. Translation Audit Checks
 
@@ -21,4 +22,4 @@ Use this confined reference checklist during **Step 6** of `pharmagent.model_rev
 - [ ] **Residual Error Variance vs SD**: Verified that `$SIGMA` writes variance ($\sigma_{\text{prop}}^2$, $\sigma_{\text{add}}^2$), whereas `run_nlme` reports `sigma.prop` and `sigma.add` on the standard-deviation scale.
 - [ ] **Categorical Covariate Flag**: Confirmed that any categorical covariate effect flagged with `; NOTE:` (NONMEM) or `// NOTE:` (mrgsolve) is completed and verified by the human modeler before external execution.
 - [ ] **Cross-Engine Metric Discipline**: Confirmed that `run_engine_comparison` rankings use engine-agnostic prediction RMSE and VPC coverage, never cross-engine `OFV`/`AIC`/`BIC`.
-- [ ] **Reference Trajectory**: Recorded `simulate_pk_profile` reference outputs (`cmax`, `params`, `regimen`) so the human reviewer can compare external NONMEM/mrgsolve runs against PharmAgent's trajectory.
+- [ ] **Reference Trajectory (`wt=70.0` Alignment)**: Recorded `simulate_pk_profile` reference outputs (`cmax`, `params`, `regimen`) at reference weight `wt=70.0` (since internal PK models apply `(wt/70)^exp` allometric scaling whereas `nmexport.py` writes only explicit `covariate_effects`) so the human reviewer can compare external NONMEM/mrgsolve runs against PharmAgent's trajectory.

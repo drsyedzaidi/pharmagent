@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import unquote
 
 import yaml
 from pydantic import ValidationError
@@ -43,7 +45,12 @@ from .schema import (
 DEFAULT_SKILLS_ROOT = Path(__file__).resolve().parents[3] / "skills"
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(?P<yaml>.*?)\n---[ \t]*(?:\n(?P<body>.*))?\Z", re.DOTALL)
-_MD_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+_MD_LINK_RE = re.compile(r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(([^)]*)\)")
+_MD_REF_DEF_RE = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*(\S+)")
+_MD_AUTOLINK_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9+.-]*:[^>\s]+)>")
+_URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_ZERO_WIDTH_RE = re.compile(r"[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f]")
+MAX_YAML_DEPTH = 16
 _SAFE_YAML_TAGS = frozenset({
     "tag:yaml.org,2002:str",
     "tag:yaml.org,2002:int",
@@ -89,27 +96,32 @@ class _UnsafeYamlError(ValueError):
 class _StrictSafeLoader(yaml.SafeLoader):
     """YAML SafeLoader subclass that forbids duplicate keys, custom tags, anchors, aliases, and implicit dates."""
 
-
-# Remove implicit timestamp resolution so ISO dates stay strings and invalid calendar dates
-# are caught by our deterministic validator rather than PyYAML's timestamp constructor.
-for _ch, _resolvers in list(_StrictSafeLoader.yaml_implicit_resolvers.items()):
-    _StrictSafeLoader.yaml_implicit_resolvers[_ch] = [
-        (tag, regexp) for tag, regexp in _resolvers if tag != "tag:yaml.org,2002:timestamp"
-    ]
+    # Copy yaml_implicit_resolvers into _StrictSafeLoader's own class dict without mutating yaml.SafeLoader
+    yaml_implicit_resolvers = {
+        ch: [(tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:timestamp"]
+        for ch, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
 
 
 def _strict_compose_node(self: _StrictSafeLoader, parent: Any, index: Any) -> Any:
-    if self.check_event(yaml.AliasEvent):
-        raise _UnsafeYamlError("YAML aliases and anchors are forbidden in playbook frontmatter")
-    event = self.peek_event()
-    if getattr(event, "anchor", None) is not None:
-        raise _UnsafeYamlError("YAML anchors are forbidden in playbook frontmatter")
-    if getattr(event, "tag", None) not in (None, "!", "?") and event.tag not in _SAFE_YAML_TAGS:
-        raise _UnsafeYamlError(f"Unsafe or unsupported YAML tag: {event.tag!r}")
-    node = yaml.SafeLoader.compose_node(self, parent, index)
-    if node.tag not in _SAFE_YAML_TAGS:
-        raise _UnsafeYamlError(f"Unsafe or unsupported YAML tag: {node.tag!r}")
-    return node
+    depth = getattr(self, "_yaml_depth", 0) + 1
+    if depth > MAX_YAML_DEPTH:
+        raise _UnsafeYamlError(f"YAML nesting depth exceeds maximum allowed ({MAX_YAML_DEPTH})")
+    self._yaml_depth = depth  # type: ignore[attr-defined]
+    try:
+        if self.check_event(yaml.AliasEvent):
+            raise _UnsafeYamlError("YAML aliases and anchors are forbidden in playbook frontmatter")
+        event = self.peek_event()
+        if getattr(event, "anchor", None) is not None:
+            raise _UnsafeYamlError("YAML anchors are forbidden in playbook frontmatter")
+        if getattr(event, "tag", None) not in (None, "!", "?") and event.tag not in _SAFE_YAML_TAGS:
+            raise _UnsafeYamlError(f"Unsafe or unsupported YAML tag: {event.tag!r}")
+        node = yaml.SafeLoader.compose_node(self, parent, index)
+        if node.tag not in _SAFE_YAML_TAGS:
+            raise _UnsafeYamlError(f"Unsafe or unsupported YAML tag: {node.tag!r}")
+        return node
+    finally:
+        self._yaml_depth = depth - 1  # type: ignore[attr-defined]
 
 
 def _strict_construct_mapping(self: _StrictSafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict[str, Any]:
@@ -143,27 +155,43 @@ def _sha256_text(text: str) -> str:
 def _canonical_metadata_dict(meta: Mapping[str, Any]) -> dict[str, Any]:
     compat = meta.get("compatibility")
     if isinstance(compat, PlaybookCompatibility):
-        compat_val: Any = compat.model_dump()
+        compat_dump = compat.model_dump()
+        compat_val: Any = {**compat_dump, "engines": list(compat_dump["engines"])}
     elif isinstance(compat, Mapping):
-        compat_val = dict(compat)
+        coerced_compat = PlaybookCompatibility.model_validate(dict(compat)).model_dump()
+        compat_val = {**coerced_compat, "engines": list(coerced_compat["engines"])}
     else:
-        compat_val = str(compat)
+        compat_val = str(compat).strip()
+
+    raw_source = meta.get("source")
+    if isinstance(raw_source, Mapping):
+        kind = str(raw_source.get("kind", "")).strip()
+        ref = str(raw_source.get("reference", "")).strip()
+        source_val = f"{kind}: {ref}" if (kind and ref) else str(raw_source)
+    else:
+        source_val = str(raw_source).strip()
+
+    raw_by = meta.get("approved_by")
+    approved_by = str(raw_by).strip() if isinstance(raw_by, str) and raw_by.strip() else raw_by
+    raw_dt = meta.get("approved_date")
+    approved_date = str(raw_dt).strip() if isinstance(raw_dt, str) and raw_dt.strip() else raw_dt
+
     return {
-        "playbook_id": str(meta["playbook_id"]),
-        "name": str(meta["name"]),
-        "description": str(meta["description"]),
-        "version": str(meta["version"]),
-        "domain": str(meta["domain"]),
-        "status": str(meta["status"]),
-        "approval_status": str(meta["approval_status"]),
-        "approved_by": meta.get("approved_by"),
-        "approved_date": meta.get("approved_date"),
-        "license": str(meta["license"]),
-        "source": str(meta["source"]),
-        "allowed_tools": list(meta.get("allowed_tools") or ()),
-        "required_inputs": list(meta.get("required_inputs") or ()),
-        "produced_artifacts": list(meta.get("produced_artifacts") or ()),
-        "limitations": list(meta.get("limitations") or ()),
+        "playbook_id": str(meta["playbook_id"]).strip(),
+        "name": str(meta["name"]).strip(),
+        "description": str(meta["description"]).strip(),
+        "version": str(meta["version"]).strip(),
+        "domain": str(meta["domain"]).strip(),
+        "status": str(meta["status"]).strip(),
+        "approval_status": str(meta["approval_status"]).strip(),
+        "approved_by": approved_by,
+        "approved_date": approved_date,
+        "license": str(meta["license"]).strip(),
+        "source": source_val,
+        "allowed_tools": [str(x).strip() for x in (meta.get("allowed_tools") or ())],
+        "required_inputs": [str(x).strip() for x in (meta.get("required_inputs") or ())],
+        "produced_artifacts": [str(x).strip() for x in (meta.get("produced_artifacts") or ())],
+        "limitations": [str(x).strip() for x in (meta.get("limitations") or ())],
         "requires_human_review": bool(meta["requires_human_review"]),
         "compatibility": compat_val,
         "runtime_available": bool(meta.get("runtime_available", True)),
@@ -265,12 +293,13 @@ def _parse_frontmatter(raw_text: str) -> tuple[dict[str, Any] | None, str, list[
                 severity="security",
             )
         ]
-    except _UnsafeYamlError as exc:
+    except (_UnsafeYamlError, RecursionError) as exc:
+        msg = str(exc) if isinstance(exc, _UnsafeYamlError) else "YAML nesting depth exceeded recursion limit"
         return None, body, [
             PlaybookValidationIssue(
                 code="unsafe_yaml",
                 field_or_path="frontmatter",
-                message=str(exc),
+                message=msg,
                 severity="security",
             )
         ]
@@ -344,9 +373,35 @@ def _read_utf8_bounded(path: Path, max_bytes: int, rel_label: str) -> tuple[str 
                 severity="security",
             )
         ]
+    open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        with open(path, "rb") as fh:
-            raw = fh.read(max_bytes + 1)
+        fd = os.open(path, open_flags)
+        try:
+            fst = os.fstat(fd)
+            if not stat.S_ISREG(fst.st_mode):
+                return None, [
+                    PlaybookValidationIssue(
+                        code="invalid_file_type",
+                        field_or_path=rel_label,
+                        message="Opened file descriptor is not a regular file",
+                        severity="security",
+                    )
+                ]
+            if fst.st_size > max_bytes:
+                return None, [
+                    PlaybookValidationIssue(
+                        code="oversized_file",
+                        field_or_path=rel_label,
+                        message=f"File size {fst.st_size} bytes exceeds limit of {max_bytes} bytes",
+                        severity="security",
+                    )
+                ]
+            with os.fdopen(fd, "rb") as fh:
+                fd = -1
+                raw = fh.read(max_bytes + 1)
+        finally:
+            if fd >= 0:
+                os.close(fd)
     except OSError as exc:
         return None, [
             PlaybookValidationIssue(
@@ -385,6 +440,15 @@ def _read_utf8_bounded(path: Path, max_bytes: int, rel_label: str) -> tuple[str 
                 severity="security",
             )
         ]
+    if _ZERO_WIDTH_RE.search(text):
+        return None, [
+            PlaybookValidationIssue(
+                code="invalid_encoding",
+                field_or_path=rel_label,
+                message="Zero-width or bidirectional control characters are forbidden in playbook files",
+                severity="security",
+            )
+        ]
     return text, []
 
 
@@ -394,22 +458,26 @@ def _scan_markdown_links(
     valid_resources: set[str],
 ) -> list[PlaybookValidationIssue]:
     issues: list[PlaybookValidationIssue] = []
-    for match in _MD_LINK_RE.finditer(text):
-        raw_target = match.group(1).strip()
-        if not raw_target:
+    raw_targets: list[str] = [m.group(1) for m in _MD_LINK_RE.finditer(text)]
+    raw_targets.extend(m.group(1) for m in _MD_REF_DEF_RE.finditer(text))
+    raw_targets.extend(m.group(1) for m in _MD_AUTOLINK_RE.finditer(text))
+
+    for raw_target in raw_targets:
+        cleaned = raw_target.strip()
+        if not cleaned:
             continue
-        target = raw_target.split()[0].strip("<>")
+        target = cleaned.split()[0].strip("<>")
         if target.startswith("#"):
             continue
         lower = target.lower()
         if lower.startswith(("http://", "https://", "mailto:")):
             continue
-        if lower.startswith("file://"):
+        if _URI_SCHEME_RE.match(lower) and not re.match(r"^[A-Za-z]:[/\\]", target):
             issues.append(
                 PlaybookValidationIssue(
                     code="absolute_path",
                     field_or_path=source_label,
-                    message=f"Forbidden file:// URI reference in markdown: {target!r}",
+                    message=f"Forbidden URI scheme in markdown reference: {target!r}",
                     severity="security",
                 )
             )
@@ -417,12 +485,17 @@ def _scan_markdown_links(
                 PlaybookValidationIssue(
                     code="external_reference",
                     field_or_path=source_label,
-                    message=f"External file URI reference is outside playbook directory: {target!r}",
+                    message=f"External URI reference is outside playbook directory: {target!r}",
                     severity="security",
                 )
             )
             continue
-        if "\\" in target:
+
+        target_path_only = target.split("#", 1)[0].split("?", 1)[0]
+        if not target_path_only:
+            continue
+        decoded_path = unquote(target_path_only)
+        if "\\" in target or "\\" in decoded_path:
             issues.append(
                 PlaybookValidationIssue(
                     code="path_traversal",
@@ -431,12 +504,17 @@ def _scan_markdown_links(
                     severity="security",
                 )
             )
+            issues.append(
+                PlaybookValidationIssue(
+                    code="external_reference",
+                    field_or_path=source_label,
+                    message=f"Markdown link with backslash is forbidden: {target!r}",
+                    severity="security",
+                )
+            )
             continue
-        target_path_only = target.split("#", 1)[0]
-        if not target_path_only:
-            continue
-        posix = PurePosixPath(target_path_only)
-        if posix.is_absolute() or re.match(r"^[A-Za-z]:", target_path_only):
+
+        if decoded_path.startswith("/") or re.match(r"^[A-Za-z]:", decoded_path):
             issues.append(
                 PlaybookValidationIssue(
                     code="absolute_path",
@@ -454,12 +532,14 @@ def _scan_markdown_links(
                 )
             )
             continue
-        if ".." in posix.parts or "." in posix.parts:
+
+        raw_segments = decoded_path.split("/")
+        if ".." in raw_segments or "." in raw_segments or "" in raw_segments:
             issues.append(
                 PlaybookValidationIssue(
                     code="path_traversal",
                     field_or_path=source_label,
-                    message=f"Path traversal in markdown link is forbidden: {target!r}",
+                    message=f"Path traversal or dot-segment in markdown link is forbidden: {target!r}",
                     severity="security",
                 )
             )
@@ -472,7 +552,8 @@ def _scan_markdown_links(
                 )
             )
             continue
-        norm_rel = posix.as_posix()
+
+        norm_rel = PurePosixPath(decoded_path).as_posix()
         if norm_rel != "SKILL.md" and norm_rel not in valid_resources:
             issues.append(
                 PlaybookValidationIssue(
@@ -568,8 +649,9 @@ def _inspect_playbook_resources(
                     )
                 )
                 if stat.S_ISREG(lst.st_mode):
-                    # Also check if hidden file is an executable or script
-                    if (lst.st_mode & 0o111) or entry.suffix.lower() in FORBIDDEN_SCRIPT_EXTENSIONS:
+                    if (lst.st_mode & 0o111) or any(
+                        s.lower() in FORBIDDEN_SCRIPT_EXTENSIONS for s in entry.suffixes
+                    ):
                         issues.append(
                             PlaybookValidationIssue(
                                 code="executable_or_script_file",
@@ -581,7 +663,7 @@ def _inspect_playbook_resources(
                 continue
 
             if stat.S_ISDIR(lst.st_mode):
-                if entry.name.lower() in {"scripts", "bin", "__pycache__"}:
+                if entry.name.lower() in {"scripts", "bin", "__pycache__", "hooks", "tools", "libexec"}:
                     issues.append(
                         PlaybookValidationIssue(
                             code="executable_or_script_file",
@@ -590,10 +672,30 @@ def _inspect_playbook_resources(
                             severity="security",
                         )
                     )
+                elif rel_posix != "references" and not rel_posix.startswith("references/"):
+                    issues.append(
+                        PlaybookValidationIssue(
+                            code="disallowed_resource_type",
+                            field_or_path=rel_posix,
+                            message=(
+                                f"Only `references/` subdirectory is permitted inside a playbook, got {rel_posix!r}"
+                            ),
+                            severity="security",
+                        )
+                    )
                 stack.append(entry)
                 continue
 
-            if rel_posix == "SKILL.md":
+            if rel_posix.lower() == "skill.md":
+                if rel_posix != "SKILL.md":
+                    issues.append(
+                        PlaybookValidationIssue(
+                            code="missing_skill_md",
+                            field_or_path=rel_posix,
+                            message=f"Playbook file must be named uppercase 'SKILL.md', got {rel_posix!r}",
+                            severity="error",
+                        )
+                    )
                 if lst.st_mode & 0o111:
                     issues.append(
                         PlaybookValidationIssue(
@@ -606,7 +708,7 @@ def _inspect_playbook_resources(
                 continue
 
             suffix = entry.suffix.lower()
-            if suffix in FORBIDDEN_SCRIPT_EXTENSIONS or (lst.st_mode & 0o111):
+            if any(s.lower() in FORBIDDEN_SCRIPT_EXTENSIONS for s in entry.suffixes) or (lst.st_mode & 0o111):
                 issues.append(
                     PlaybookValidationIssue(
                         code="executable_or_script_file",
@@ -636,7 +738,7 @@ def _inspect_playbook_resources(
                 issues.extend(read_issues)
                 continue
             assert text is not None
-            if text.startswith("#!"):
+            if text.lstrip("\ufeff \t\r\n").startswith("#!"):
                 issues.append(
                     PlaybookValidationIssue(
                         code="executable_or_script_file",
@@ -718,21 +820,21 @@ def _classify_frontmatter_issues(
     elif raw_approval in ALLOWED_APPROVAL_STATUSES:
         by = raw_meta.get("approved_by")
         dt = raw_meta.get("approved_date")
-        if raw_status == "approved" and raw_approval != "approved":
+        if (raw_status == "approved") != (raw_approval == "approved"):
             issues.append(
                 PlaybookValidationIssue(
                     code="invalid_approval_status",
                     field_or_path="approval_status",
-                    message="status='approved' requires approval_status='approved'",
+                    message="status='approved' and approval_status='approved' must both be set together",
                     severity="error",
                 )
             )
-        if raw_approval == "pending_owner_review" and (by is not None or dt is not None):
+        if raw_approval in ("pending_owner_review", "rejected") and (by is not None or dt is not None):
             issues.append(
                 PlaybookValidationIssue(
                     code="invalid_approval_status",
                     field_or_path="approval_status",
-                    message="pending_owner_review playbook cannot specify approved_by or approved_date",
+                    message=f"{raw_approval} playbook cannot specify approved_by or approved_date",
                     severity="error",
                 )
             )
@@ -804,6 +906,15 @@ def _classify_frontmatter_issues(
             )
         )
         runtime_avail = True
+    elif runtime_avail and (raw_approval == "rejected" or raw_status == "deprecated"):
+        issues.append(
+            PlaybookValidationIssue(
+                code="invalid_approval_status",
+                field_or_path="runtime_available",
+                message="rejected or deprecated playbooks must set runtime_available: false",
+                severity="error",
+            )
+        )
 
     raw_tools = raw_meta.get("allowed_tools")
     if not isinstance(raw_tools, list):
@@ -940,10 +1051,18 @@ def validate_playbook(
                 ),
             )
 
-    if not skill_file.exists() and not skill_file.is_symlink():
+    actual_dir_name = real_pb_dir.name or pb_dir.name
+    try:
+        dir_entry_names = {p.name for p in real_pb_dir.iterdir()}
+    except OSError:
+        dir_entry_names = set()
+
+    if ("SKILL.md" not in dir_entry_names and not skill_file.is_symlink()) or (
+        not skill_file.exists() and not skill_file.is_symlink()
+    ):
         return PlaybookValidationResult(
             valid=False,
-            name=pb_dir.name,
+            name=actual_dir_name,
             issues=(
                 PlaybookValidationIssue(
                     code="missing_skill_md",
@@ -961,12 +1080,12 @@ def validate_playbook(
     issues.extend(resource_issues)
 
     if raw_skill_text is None:
-        return PlaybookValidationResult(valid=False, name=pb_dir.name, issues=tuple(issues))
+        return PlaybookValidationResult(valid=False, name=actual_dir_name, issues=tuple(issues))
 
     raw_meta, body_text, parse_issues = _parse_frontmatter(raw_skill_text)
     issues.extend(parse_issues)
     if raw_meta is None:
-        return PlaybookValidationResult(valid=False, name=pb_dir.name, issues=tuple(issues))
+        return PlaybookValidationResult(valid=False, name=actual_dir_name, issues=tuple(issues))
 
     if "allowed_tools" in raw_meta and raw_meta["allowed_tools"] is None:
         raw_meta = {**raw_meta, "allowed_tools": []}
@@ -981,7 +1100,7 @@ def validate_playbook(
             )
         )
 
-    issues.extend(_classify_frontmatter_issues(raw_meta, pb_dir.name))
+    issues.extend(_classify_frontmatter_issues(raw_meta, actual_dir_name))
 
     # Validate tool references against the active ToolRegistry
     declared_tools: list[str] = []
@@ -1002,16 +1121,43 @@ def validate_playbook(
                 )
             )
 
-    # Scan SKILL.md body and confined resources for undeclared registered tools
+    # Scan frontmatter text fields, SKILL.md body, and confined resources for undeclared tools & external links
     texts_to_scan: list[tuple[str, str]] = [("SKILL.md", body_text)]
+    for fm_key in (
+        "description",
+        "source",
+        "license",
+        "approved_by",
+        "required_inputs",
+        "produced_artifacts",
+        "limitations",
+        "compatibility",
+    ):
+        fm_val = raw_meta.get(fm_key)
+        if isinstance(fm_val, str):
+            texts_to_scan.append((f"frontmatter.{fm_key}", fm_val))
+        elif isinstance(fm_val, list):
+            joined = "\n".join(str(x) for x in fm_val if isinstance(x, str))
+            if joined:
+                texts_to_scan.append((f"frontmatter.{fm_key}", joined))
+        elif isinstance(fm_val, Mapping):
+            joined = "\n".join(
+                str(v)
+                for v in fm_val.values()
+                if isinstance(v, (str, list))
+            )
+            if joined:
+                texts_to_scan.append((f"frontmatter.{fm_key}", joined))
+
     for rel_path, (res_text, _sha, _sz) in sorted(resources_map.items()):
         texts_to_scan.append((rel_path, res_text))
 
     for source_label, text_content in texts_to_scan:
+        cleaned_for_tools = _ZERO_WIDTH_RE.sub("", text_content).replace("\ufeff", "")
         for reg_tool in sorted(registered_tools):
             if reg_tool in declared_set:
                 continue
-            if re.search(rf"\b{re.escape(reg_tool)}\b", text_content):
+            if re.search(rf"\b{re.escape(reg_tool)}\b", cleaned_for_tools):
                 issues.append(
                     PlaybookValidationIssue(
                         code="undeclared_tool",
@@ -1026,7 +1172,7 @@ def validate_playbook(
         issues.extend(_scan_markdown_links(text_content, source_label, set(resources_map)))
 
     pb_id = raw_meta.get("playbook_id") if isinstance(raw_meta.get("playbook_id"), str) else None
-    pb_name = raw_meta.get("name") if isinstance(raw_meta.get("name"), str) else pb_dir.name
+    pb_name = raw_meta.get("name") if isinstance(raw_meta.get("name"), str) else actual_dir_name
     pb_ver = raw_meta.get("version") if isinstance(raw_meta.get("version"), str) else None
     pb_status = raw_meta.get("status") if isinstance(raw_meta.get("status"), str) else None
     pb_approval = raw_meta.get("approval_status") if isinstance(raw_meta.get("approval_status"), str) else None
@@ -1276,7 +1422,7 @@ def validate_all_playbooks(
     })
     security_violations = tuple(issue for issue in all_issues if issue.severity == "security")
 
-    approved_count = sum(1 for r in results if r.approval_status == "approved")
+    approved_count = sum(1 for r in results if r.valid and r.approval_status == "approved")
     pending_count = sum(1 for r in results if r.approval_status == "pending_owner_review")
     draft_count = sum(1 for r in results if r.status == "draft")
     reviewed_count = sum(1 for r in results if r.status == "reviewed")
@@ -1375,10 +1521,15 @@ def load_playbook(
         raise PlaybookVersionError(
             f"Playbook {matched.playbook_id!r} has version {matched.version!r}, not requested {version!r}"
         )
-    if not matched.runtime_available and not allow_disabled:
+    if (
+        not matched.runtime_available
+        or matched.approval_status == "rejected"
+        or matched.status == "deprecated"
+    ) and not allow_disabled:
         raise PlaybookDisabledError(
             f"Playbook {matched.playbook_id!r} is disabled for runtime execution "
-            f"(status={matched.status!r}, runtime_available=False)"
+            f"(status={matched.status!r}, approval_status={matched.approval_status!r}, "
+            f"runtime_available={matched.runtime_available})"
         )
     return matched
 
@@ -1387,6 +1538,7 @@ def read_playbook_resource(
     playbook_id: str,
     resource: str,
     *,
+    version: str | None = None,
     skills_root: Path | str | None = None,
     registry: ToolRegistry | None = None,
     allow_disabled: bool = False,
@@ -1394,37 +1546,41 @@ def read_playbook_resource(
     """Read a single validated, confined resource file from a playbook (progressive disclosure tier 3)."""
     if not isinstance(resource, str) or not resource.strip():
         raise PlaybookSecurityError("Resource path must be a non-empty relative path")
-    if "\x00" in resource or "\\" in resource:
+    raw_res = resource.strip()
+    decoded_res = unquote(raw_res)
+    if "\x00" in raw_res or "\x00" in decoded_res or "\\" in raw_res or "\\" in decoded_res:
         raise PlaybookSecurityError(f"Forbidden characters in resource path: {resource!r}")
-    lower = resource.strip().lower()
-    if lower.startswith(("http://", "https://", "file://", "ftp://", "data:")):
+    lower = decoded_res.lower()
+    if _URI_SCHEME_RE.match(lower) and not re.match(r"^[A-Za-z]:[/\\]", decoded_res):
         raise PlaybookSecurityError(f"Remote or URI resource retrieval is forbidden: {resource!r}")
-    if re.match(r"^[A-Za-z]:", resource.strip()):
-        raise PlaybookSecurityError(f"Absolute drive paths are forbidden: {resource!r}")
+    if re.match(r"^[A-Za-z]:", decoded_res) or decoded_res.startswith("/"):
+        raise PlaybookSecurityError(f"Absolute resource paths are forbidden: {resource!r}")
 
-    posix = PurePosixPath(resource.strip())
+    raw_segments = decoded_res.split("/")
+    if ".." in raw_segments or "." in raw_segments or "" in raw_segments:
+        raise PlaybookSecurityError(f"Path traversal or dot-segment in resource path is forbidden: {resource!r}")
+
+    posix = PurePosixPath(decoded_res)
     if posix.is_absolute():
         raise PlaybookSecurityError(f"Absolute resource paths are forbidden: {resource!r}")
-    if ".." in posix.parts or "." in posix.parts:
-        raise PlaybookSecurityError(f"Path traversal in resource path is forbidden: {resource!r}")
     if any(part.startswith(".") for part in posix.parts):
         raise PlaybookSecurityError(f"Hidden resource paths are forbidden: {resource!r}")
 
     norm_rel = posix.as_posix()
-    if norm_rel == "SKILL.md":
+    if norm_rel.lower() == "skill.md":
         raise PlaybookSecurityError("Use load_playbook() to read SKILL.md, not read_playbook_resource()")
 
-    suffix = posix.suffix.lower()
-    if suffix in FORBIDDEN_SCRIPT_EXTENSIONS or suffix not in ALLOWED_RESOURCE_EXTENSIONS:
+    if any(s.lower() in FORBIDDEN_SCRIPT_EXTENSIONS for s in posix.suffixes) or (
+        posix.suffix.lower() not in ALLOWED_RESOURCE_EXTENSIONS
+    ):
         raise PlaybookSecurityError(
-            f"Resource {norm_rel!r} has disallowed or executable extension {suffix!r}"
+            f"Resource {norm_rel!r} has disallowed or executable extension {posix.suffix.lower()!r}"
         )
 
-    # First check raw file path on disk if the target directory exists so symlink/escape
-    # attempts are always reported as PlaybookSecurityError.
     raw_root = Path(skills_root) if skills_root is not None else DEFAULT_SKILLS_ROOT
     pb = load_playbook(
         playbook_id,
+        version=version,
         skills_root=raw_root,
         registry=registry,
         allow_disabled=allow_disabled,
@@ -1458,7 +1614,7 @@ def read_playbook_resource(
     assert text is not None
     sha = _sha256_text(text)
     expected_sha = dict(pb.resource_digests).get(norm_rel)
-    if expected_sha and sha != expected_sha:
+    if not expected_sha or sha != expected_sha:
         raise PlaybookSecurityError(f"Resource {norm_rel!r} digest mismatch against playbook canonical digest")
 
     return PlaybookResource(
@@ -1494,9 +1650,13 @@ def check_tool_allowed(
         raise PlaybookSecurityError(
             f"non_existent_tool: Tool {clean_tool!r} does not exist in the current ToolRegistry"
         )
-    if not playbook.runtime_available:
+    if (
+        not playbook.runtime_available
+        or playbook.approval_status == "rejected"
+        or playbook.status == "deprecated"
+    ):
         raise PlaybookDisabledError(
-            f"Playbook {playbook.playbook_id!r} has runtime_available=False and cannot authorize tools"
+            f"Playbook {playbook.playbook_id!r} is not available for runtime execution and cannot authorize tools"
         )
     if clean_tool not in playbook.allowed_tools:
         raise PlaybookSecurityError(

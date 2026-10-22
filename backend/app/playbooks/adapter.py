@@ -35,6 +35,7 @@ from .schema import (
 
 _ALLOWED_OPERATIONS = ("list_playbooks", "load_playbook", "read_resource", "validate_catalog")
 _ALLOWED_ARG_KEYS = frozenset({"operation", "playbook_id", "version", "resource", "include_disabled"})
+_METADATA_RESERVE_BYTES = 4096
 
 
 def _identity_dict(pb: PlaybookSummary | ScientificPlaybook | PlaybookResource) -> dict[str, Any]:
@@ -85,6 +86,8 @@ def run_playbook_adapter(
 ) -> ToolResult:
     """Execute a read-only Scientific Playbook operation in complete isolation (`writes={}`)."""
     _ = (state, ctx)  # explicitly read-only; never mutates PharmState or ToolContext
+    if args is not None and not isinstance(args, Mapping):
+        return _error_result("invalid_arguments", "`args` must be a mapping")
     call_args = dict(args or {})
 
     illegal_keys = sorted(set(call_args) - _ALLOWED_ARG_KEYS)
@@ -103,7 +106,10 @@ def run_playbook_adapter(
 
     try:
         if op == "list_playbooks":
-            include_disabled = bool(call_args.get("include_disabled", True))
+            raw_inc = call_args.get("include_disabled", True)
+            if not isinstance(raw_inc, bool):
+                return _error_result("invalid_arguments", "`include_disabled` must be a boolean")
+            include_disabled = raw_inc
             summaries = list_playbooks(
                 skills_root=skills_root,
                 registry=registry,
@@ -141,7 +147,9 @@ def run_playbook_adapter(
                 registry=registry,
                 allow_disabled=False,
             )
-            instructions, truncated = _cap_text(pb.instructions, MAX_ADAPTER_OUTPUT_BYTES)
+            instructions, truncated = _cap_text(
+                pb.instructions, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES
+            )
             pb_dict = {
                 **_identity_dict(pb),
                 "domain": pb.domain,
@@ -166,6 +174,7 @@ def run_playbook_adapter(
         if op == "read_resource":
             playbook_id = call_args.get("playbook_id")
             resource_rel = call_args.get("resource")
+            version = call_args.get("version")
             if not isinstance(playbook_id, str) or not playbook_id.strip():
                 return _error_result("missing_playbook_id", "`playbook_id` is required for read_resource")
             if not isinstance(resource_rel, str) or not resource_rel.strip():
@@ -173,11 +182,14 @@ def run_playbook_adapter(
             res = read_playbook_resource(
                 playbook_id,
                 resource_rel,
+                version=version,
                 skills_root=skills_root,
                 registry=registry,
                 allow_disabled=False,
             )
-            content, truncated = _cap_text(res.content, MAX_ADAPTER_OUTPUT_BYTES)
+            content, truncated = _cap_text(
+                res.content, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES
+            )
             res_dict = {
                 **_identity_dict(res),
                 "resource_path": res.resource_path,

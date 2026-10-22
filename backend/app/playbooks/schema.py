@@ -107,13 +107,17 @@ class PlaybookDisabledError(PlaybookError, PermissionError, ValueError):
 
 
 def freeze_value(value: Any) -> Any:
-    """Recursively convert mutable dicts/lists into MappingProxyType and tuples."""
+    """Recursively convert mutable dicts/lists/sets/bytearrays into MappingProxyType, tuples, and bytes."""
     if isinstance(value, MappingProxyType):
-        return MappingProxyType({k: freeze_value(v) for k, v in value.items()})
+        return MappingProxyType({freeze_value(k): freeze_value(v) for k, v in value.items()})
     if isinstance(value, Mapping):
         return MappingProxyType({str(k): freeze_value(v) for k, v in value.items()})
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((freeze_value(item) for item in value), key=repr))
+    if isinstance(value, (list, tuple)):
         return tuple(freeze_value(item) for item in value)
+    if isinstance(value, (bytearray, memoryview)):
+        return bytes(value)
     if isinstance(value, BaseModel):
         return freeze_value(value.model_dump())
     return value
@@ -253,7 +257,11 @@ class PlaybookSummary(_Strict):
         if isinstance(v, Mapping):
             items = sorted((str(k), str(val)) for k, val in v.items())
         elif isinstance(v, (list, tuple)):
-            items = [(str(pair[0]), str(pair[1])) for pair in v]
+            items = []
+            for pair in v:
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    raise ValueError("`resource_digests` must be a sequence of (path, sha256) pairs")
+                items.append((str(pair[0]), str(pair[1])))
         else:
             raise ValueError("`resource_digests` must be a sequence of (path, sha256) pairs")
         for path_str, digest in items:
@@ -267,11 +275,19 @@ class PlaybookSummary(_Strict):
             raise ValueError("`requires_human_review` must be true for Scientific Playbooks")
         if self.runtime_available and not self.allowed_tools:
             raise ValueError("runtime-available playbooks must declare at least one tool in `allowed_tools`")
-        if self.status == "approved" and self.approval_status != "approved":
-            raise ValueError("a playbook with `status: approved` must also have `approval_status: approved`")
-        if self.approval_status == "pending_owner_review":
+        if (self.status == "approved") != (self.approval_status == "approved"):
+            raise ValueError(
+                "a playbook with `status: approved` must have `approval_status: approved` and vice versa"
+            )
+        if (self.approval_status == "rejected" or self.status == "deprecated") and self.runtime_available:
+            raise ValueError(
+                "a `rejected` or `deprecated` playbook must set `runtime_available: false`"
+            )
+        if self.approval_status in ("pending_owner_review", "rejected"):
             if self.approved_by is not None or self.approved_date is not None:
-                raise ValueError("a `pending_owner_review` playbook cannot set `approved_by` or `approved_date`")
+                raise ValueError(
+                    f"a `{self.approval_status}` playbook cannot set `approved_by` or `approved_date`"
+                )
         elif self.approval_status == "approved":
             if not (self.approved_by and self.approved_by.strip() and self.approved_date):
                 raise ValueError("an `approved` playbook requires non-empty `approved_by` and `approved_date`")
@@ -322,6 +338,21 @@ class PlaybookResource(_Strict):
     trust_notice: str = UNTRUSTED_DATA_NOTICE
     untrusted_data: Literal[True] = True
 
+    @field_validator("allowed_tools", mode="before")
+    @classmethod
+    def _validate_res_tools(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "allowed_tools", allow_empty=True)
+
+    @field_validator("required_inputs", mode="before")
+    @classmethod
+    def _validate_res_inputs(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "required_inputs", allow_empty=False)
+
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def _validate_res_limitations(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "limitations", allow_empty=False)
+
     def to_metadata_mapping(self) -> MappingProxyType[str, Any]:
         return freeze_value(self.model_dump())
 
@@ -343,6 +374,21 @@ class PlaybookProvenance(_Strict):
     required_inputs: tuple[str, ...]
     limitations: tuple[str, ...]
     requires_human_review: bool
+
+    @field_validator("allowed_tools", mode="before")
+    @classmethod
+    def _validate_prov_tools(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "allowed_tools", allow_empty=True)
+
+    @field_validator("required_inputs", mode="before")
+    @classmethod
+    def _validate_prov_inputs(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "required_inputs", allow_empty=False)
+
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def _validate_prov_limitations(cls, v: Any) -> tuple[str, ...]:
+        return _validate_nonempty_str_tuple(v, "limitations", allow_empty=False)
 
     def to_metadata_mapping(self) -> MappingProxyType[str, Any]:
         return freeze_value(self.model_dump())

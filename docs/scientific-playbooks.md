@@ -2,15 +2,15 @@
 
 ## 1. Executive Summary & Naming Rationale
 
-PharmAgent already uses the term **skills** (`backend/app/core/skills.py`) for **captured, replayable tool-call histories** recorded from completed user sessions (`Skill`, `SkillStep`, `extract_skill_from_session`, `prepare_skill_replay`, persisted under `data/skills/*.json`).
+PharmAgent already uses the term **skills** (`backend/app/core/skills.py`) for **captured, replayable tool-call histories** recorded from completed user sessions (`Skill`, `SkillStore`, `distill_steps`, persisted in the SQLite `skills` table inside the session database).
 
 To prevent domain collision, API ambiguity, or confusion in regulatory audit trails, this capability introduces **Scientific Playbooks**:
 
 | Dimension | Existing Session Skills (`app.core.skills`) | Scientific Playbooks (`app.playbooks`) |
 |---|---|---|
 | **User-facing term** | Session Skill / Replayable Skill | **Scientific Playbook** |
-| **Python domain model** | `Skill`, `SkillStep` (`backend/app/core/skills.py`) | `ScientificPlaybook`, `PlaybookSummary`, `PlaybookResource` (`backend/app/playbooks/`) |
-| **Artifact location** | `data/skills/*.json` (runtime session storage) | `skills/<playbook-name>/SKILL.md` + `references/*` (version-controlled Agent Skills format) |
+| **Python domain model** | `Skill`, `SkillStore`, `distill_steps` (`backend/app/core/skills.py`) | `ScientificPlaybook`, `PlaybookSummary`, `PlaybookResource` (`backend/app/playbooks/`) |
+| **Artifact location** | SQLite `skills` table (`SkillStore`, runtime session database) | `skills/<playbook-name>/SKILL.md` + `references/*` (version-controlled Agent Skills format) |
 | **What it represents** | A captured, concrete sequence of past tool calls with specific dataset arguments for replay | Authored, versioned, content-addressed procedural guidance teaching an agent how to sequence existing reviewed PharmAgent tools |
 | **Computes numbers?** | Re-runs recorded tool calls when replayed through the orchestrator | **Never** computes numbers or executes scripts; reviewed PharmAgent tools remain the sole numerical authority |
 | **Relationship** | **Separate systems** — not renamed, replaced, migrated, or merged | **Separate systems** — read-only procedural guidance layer |
@@ -23,7 +23,7 @@ Per `AGENTS.md`, `skills/` is the canonical repository directory for `SKILL.md` 
 
 Before designing or authoring any playbook, we audited the primary external source cited in the task specification:
 
-- **Primary source inspected**: ACoP 2026 Poster `M-019` (*"Empowering AI Agents for QSP and PBPK Modeling with Open-Source Agent Skills"*, J. Bourlier, S.aiser, P.ert, A.ert, Nova In Silico; official poster popup `PosterID=834010`).
+- **Primary source inspected**: ACoP 2026 Poster `M-019` (*"Empowering AI Agents for QSP and PBPK Modeling with Open-Source Agent Skills"*, J. Bourlier et al., Nova In Silico; official poster popup `PosterID=834010`).
 - **Findings**:
   1. The official poster abstract describes a modular collection of domain-specific skills built on the open `agentskills.io` format (`SKILL.md` with YAML frontmatter + Markdown instructions + progressive disclosure), organized across literature extraction, model building, trial simulation, and analysis/review.
   2. However, the poster's sole URL link points to `https://agentskills.io/specification` (the generic Agent Skills specification), **not** to an open-source QSP/PBPK modeling skill repository.
@@ -37,27 +37,27 @@ Before designing or authoring any playbook, we audited the primary external sour
 
 ## 3. Phase 0 Discovery: Verified PharmAgent Tool Inventory (`origin/main`)
 
-Inspection of `backend/app/tools/builtins.py` (`default_registry()`) verified **49 registered tools** across 7 specialist agents on `origin/main` (`5d099fd576e06dd6d18553202f1a0d87cd5729ec`):
+Inspection of `backend/app/tools/builtins.py` (`default_registry()`) verified **49 registered tools** across 22 `*_tools.py` modules on `origin/main` (`5d099fd576e06dd6d18553202f1a0d87cd5729ec`):
 
-| Category | Verified Registered Tools (`default_registry()`) | Runtime Engine / Backing Module |
+| Category | Verified Registered Tools (`default_registry()`, 49 total) | Backing Tool Module(s) |
 |---|---|---|
-| **Data Loading & Profiling** | `load_dataset`, `profile_pk_dataset`, `validate_cdisc`, `normalize_units`, `Flag_BLQ`, `export_272_dataset` | `app.compute.cdisc`, `app.compute.units` |
-| **Non-Compartmental Analysis (NCA)** | `compute_nca`, `run_bioequivalence`, `generate_nca_table`, `plot_conc_time`, `run_superposition` | `app.compute.nca` (deterministic trapezoidal NCA) |
-| **PK / PopPK Modeling & Covariates** | `list_pk_models`, `fit_compartmental`, `run_poppk`, `fit_pk_model`, `run_nlme`, `run_scm`, `compare_models`, `run_engine_comparison`, `compute_ebe`, `generate_pk_summary` | `app.compute.pk`, `app.compute.nlme` (`scipy_nlme`, `saem_npde`, `nlmixr2_r`, `map_ebe`, `naive_pooled`), `app.compute.scm` |
-| **Model Diagnostics & Plots** | `run_diagnostics`, `run_vpc`, `run_bootstrap`, `run_npde`, `run_sir`, `run_llp`, `run_covariate_forest`, `plot_goodness_of_fit`, `plot_vpc`, `plot_individual_fits` | `app.compute.diagnostics`, `app.compute.forest` |
-| **Simulation, Dose Sweeps & E-R** | `simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_special_population`, `run_pediatric_simulation`, `fit_exposure_response`, `select_optimal_dose`, `recommend_dosing_regimen` | `app.compute.simulation`, `app.compute.clinsim`, `app.compute.pediatric`, `app.compute.er` |
-| **Quality Control & Review** | `run_qc`, `verify_citations`, `check_regulatory_compliance`, `adversarial_review`, `explain_Concept` | `app.compute.qc`, `app.core.citations` |
-| **Regulatory & Report Exports** | `generate_272`, `generate_CSR_section`, `generate_model_report`, `export_report_bundle`, `draft_executive_summary` | `app.compute.nmexport` (`build_nonmem`, `build_mrgsolve` for 6 closed-form models: `iv_1cmt`, `oral_1cmt`, `oral_1cmt_lag`, `iv_2cmt`, `oral_2cmt`, `iv_3cmt`), `app.compute.reports` |
+| **Data Loading, Profiling & CDISC** | `load_dataset`, `profile_pk_dataset`, `generate_spaghetti_plot`, `validate_cdisc` | `data_tools.py`, `cdisc_tools.py` |
+| **Non-Compartmental Analysis & Dose Proportionality** | `compute_nca`, `run_dose_proportionality`, `run_be_analysis`, `run_ddi_analysis`, `generate_be_plot` | `nca_tools.py`, `be_tools.py` |
+| **Compartmental PK & PopPK Estimation** | `list_pk_models`, `fit_compartmental`, `run_poppk`, `fit_pk_model`, `run_nlme`, `run_scm`, `run_prior_check`, `run_engine_comparison` | `pk_tools.py`, `pk_model_tools.py`, `nlme_tools.py`, `scm_tools.py`, `prior_tools.py`, `engine_tools.py` |
+| **Model Diagnostics, Uncertainty & Covariate Forest** | `run_diagnostics`, `run_vpc`, `run_bootstrap`, `run_sir`, `run_profile`, `run_covariate_forest`, `run_simest` | `diagnostics_tools.py`, `vpc_tools.py`, `bootstrap_tools.py`, `sir_tools.py`, `profile_tools.py`, `forest_tools.py`, `simest_tools.py` |
+| **Simulation, Dose Sweeps, Special Pops & E-R** | `simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_exposure_forest`, `run_special_population`, `run_individual_exposures`, `run_pediatric_simulation`, `fit_exposure_response`, `bootstrap_exposure_response`, `select_optimal_dose` | `pk_model_tools.py`, `clinsim_tools.py`, `pediatric_tools.py`, `er_tools.py`, `dose_select_tools.py` |
+| **Deterministic PK Calculators** | `calc_half_life`, `calc_dose_regimen`, `calc_allometric`, `calc_accumulation`, `calc_renal_function`, `convert_concentration`, `quick_one_compartment` | `calculator_tools.py` |
+| **Quality Control, Adversarial Review & Reporting** | `run_qc`, `adversarial_review`, `build_briefing_memo`, `generate_report`, `get_regulatory_guidance`, `get_Submission_checklist`, `generate_regulatory_table`, `export_regulatory_package`, `assess_program_risk`, `recommend_next_studies`, `evaluate_go_nogo` | `qc_tools.py`, `review_tools.py`, `memo_tools.py`, `report_tools.py`, `regulatory_tools.py`, `strategy_tools.py` |
 
 ### Capability Boundaries Confirmed During Discovery
 
 1. **No PBPK or QSP Engine**: PharmAgent has **zero** PBPK or QSP solvers. No PBPK/QSP execution is claimed or implemented.
-2. **NONMEM & mrgsolve are Export-Only**: `app.compute.nmexport` deterministically generates NONMEM `.ctl` (`ADVAN1/2/3/4/11`) and mrgsolve `.cpp` (`$PARAM`, `$CMT`, `$MAIN`, `$ODE`/`$PK`, `$TABLE`) code for the 6 built-in closed-form models, but PharmAgent **cannot execute `nmfe` or `mrgsolve` at runtime**.
+2. **NONMEM & mrgsolve are Export-Only**: `app.compute.nmexport` deterministically generates NONMEM `.ctl` (`ADVAN1/2/3/4/11`) and mrgsolve `.cpp` (`$PARAM`, `$CMT`, `$MAIN`, `$ODE`/`$PK`, `$TABLE`) code for the 6 built-in closed-form models (`iv_1cmt`, `oral_1cmt`, `oral_1cmt_lag`, `iv_2cmt`, `oral_2cmt`, `iv_3cmt`), but PharmAgent **cannot execute `nmfe` or `mrgsolve` at runtime**.
 3. **Unmerged Branches Excluded**:
    - PR #21 (PopPK physiological plausibility checker) is unmerged and is not referenced as an active runtime tool.
    - PR #17 (plot digitizer) is unmerged and excluded.
    - PR #20 (conventions run provenance) is unmerged; `app.playbooks` provides standalone provenance helpers (`playbook_provenance()`, `catalog_provenance_snapshot()`) without modifying guarded `provenance.py` or `pharmstate.py`.
-4. **No Literature/PDF Extraction Backend**: Only `verify_citations` (which checks internal `PharmState` keys / artifact hashes / `NCT` / `PMID` strings) exists. There is no PDF/HTML/XML parser, OCR engine, table extractor, or unverified-evidence staging table on `origin/main`.
+4. **No Literature/PDF Extraction Backend**: Only `build_briefing_memo` and internal citation/audit helpers (which check internal `PharmState` keys and artifact hashes) exist. There is no PDF/HTML/XML parser, OCR engine, table extractor, or unverified-evidence staging table on `origin/main`.
 
 ---
 
@@ -67,8 +67,8 @@ All shipped playbooks live under the canonical `skills/` directory and keep `app
 
 | Playbook ID | Directory (`skills/<name>/`) | Version | Status | Approval Status | Runtime Available | Purpose |
 |---|---|---|---|---|---|---|
-| `pharmagent.protocol_simulation` | `skills/pharmagent-protocol-simulation/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 10-step clinical protocol simulation & dose-selection review using `load_dataset`, `profile_pk_dataset`, `validate_cdisc`, `compute_nca`, `simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_special_population`, `run_pediatric_simulation`, `fit_exposure_response`, `select_optimal_dose`, `run_qc`, and `adversarial_review`. Includes confined reference `references/scenario-audit-template.md`. |
-| `pharmagent.model_review` | `skills/pharmagent-model-review/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 10-step compartmental PK / PopPK model review and NONMEM/mrgsolve translation verification checklist using PharmAgent's 17 verified modeling, diagnostic, simulation, and QC tools. Explicitly forbids cross-engine raw `OFV`/`AIC`/`BIC` comparison and documents NONMEM/mrgsolve as export-only. Includes confined reference `references/translation-verification-checklist.md`. |
+| `pharmagent.protocol_simulation` | `skills/pharmagent-protocol-simulation/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 10-step clinical protocol simulation & dose-selection review across 31 allowed tools (`load_dataset`, `profile_pk_dataset`, `validate_cdisc`, `compute_nca`, `simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_special_population`, `run_pediatric_simulation`, `fit_exposure_response`, `select_optimal_dose`, `run_qc`, `adversarial_review`, etc.). Includes confined reference `references/scenario-audit-template.md`. |
+| `pharmagent.model_review` | `skills/pharmagent-model-review/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 6-step compartmental PK / PopPK model review and NONMEM/mrgsolve translation verification checklist across 22 verified modeling, diagnostic, simulation, and QC tools. Explicitly forbids cross-engine raw `OFV`/`AIC`/`BIC` comparison and documents NONMEM/mrgsolve as export-only. Includes confined reference `references/translation-verification-checklist.md`. |
 | `pharmagent.literature_extraction` | `skills/pharmagent-literature-extraction/` | `0.1.0` | `draft` | `pending_owner_review` | **`false`** (disabled) | Readiness assessment and security/provenance specification for future literature evidence extraction. Fails closed (`PlaybookDisabledError`) on runtime `load_playbook()` and `read_playbook_resource()` unless `allow_disabled=True` is passed for explicit specification review. Includes confined reference `references/evidence-record-schema-spec.md`. |
 
 ---
@@ -203,9 +203,9 @@ python -m app.playbooks --check --format json
 ```
 
 Current shipped digests:
-- `pharmagent.protocol_simulation` (`1.0.0`): `4a8ab71ef4941f964e2e362bb412c02b926787424d587ac4ac0cb112645a6fb7`
-- `pharmagent.model_review` (`1.0.0`): `5e99d8a20d6dc6281c2b89b2d3eb2977149a0148cfef1c01216c357262d61556`
-- `pharmagent.literature_extraction` (`0.1.0`, disabled spec): `0c4992eaded92678c0925cb90f5623338f605d5a7c0b7a98bc7874b68c0834eb`
+- `pharmagent.protocol_simulation` (`1.0.0`): `cc07a01a0f66b3e6f22199b0190b251dc19502c20f809cfd10d809a0a60c6d97`
+- `pharmagent.model_review` (`1.0.0`): `d13002412d421c0cfe0b1ff59e46c003157e693637b999c48230bd8f28c66f71`
+- `pharmagent.literature_extraction` (`0.1.0`, disabled spec): `45367880ff9e7f7f9961a3f0f18604e0c434c46705deace365d59f9b096149be`
 
 ---
 
@@ -228,14 +228,16 @@ When the repository owner approves wiring `inspect_scientific_playbook` and play
 ```diff
 --- a/backend/app/tools/builtins.py
 +++ b/backend/app/tools/builtins.py
-@@ -16,6 +16,7 @@ from app.tools.base import Tool, ToolContext, ToolRegistry, ToolResult
+@@ -25,6 +25,7 @@ from app.tools import (
+     stats_tools,
+     viz_tools,
+ )
 +from app.playbooks.adapter import build_playbook_tools
- 
- def default_registry() -> ToolRegistry:
-     reg = ToolRegistry()
-@@ -1520,5 +1521,7 @@ def default_registry() -> ToolRegistry:
-     for t in _ build_all_tools():
-         reg.register(t)
+ from app.tools.base import ToolRegistry
+@@ -37,4 +38,6 @@ def default_registry() -> ToolRegistry:
+                 stats_tools, clinpharm_tools, er_tools, indirect_tools, memo_tools):
+         for tool in mod.TOOLS:
+             reg.register(tool)
 +    for pb_tool in build_playbook_tools(registry=reg):
 +        reg.register(pb_tool)
      return reg
@@ -245,16 +247,18 @@ When the repository owner approves wiring `inspect_scientific_playbook` and play
 ```diff
 --- a/backend/app/core/pharmstate.py
 +++ b/backend/app/core/pharmstate.py
-@@ -88,6 +88,7 @@ class PharmState(BaseModel):
-     active_conventions: list[dict[str, Any]] = Field(default_factory=list)
+@@ -45,6 +45,7 @@ class PharmState(BaseModel):
+     pending_tool: dict[str, Any] | None = None
 +    active_playbooks: list[dict[str, Any]] = Field(default_factory=list)
 ```
 ```diff
 --- a/backend/app/core/provenance.py
 +++ b/backend/app/core/provenance.py
-@@ -45,6 +45,7 @@ class RunProvenance(BaseModel):
-     dataset_sha256: str | None = None
-+    playbooks_used: list[dict[str, Any]] = Field(default_factory=list)
+@@ -49,5 +49,6 @@ def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
+     for pkg in _PACKAGES:
+         prov[pkg] = _pkg_version(pkg)
++    # Optional: attach catalog_provenance_snapshot() in session audit metadata
+     return dict(prov)
 ```
 
 #### 3. `backend/app/main.py` (Optional read-only discovery endpoint)
