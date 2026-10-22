@@ -122,9 +122,10 @@ def test_the_lambda_z_entry_pins_the_threshold_and_the_tie_rule_with_dedicated_t
 
 APPROVED_2026_10_21 = {
     "nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_leading_middle_trailing", "nca.measured_zero",
-    "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_final_interval_scope", "nca.ss_endpoint_closure",
+    "nca.blq_flag_codes", "nca.pre_dose_records", "nca.ss_endpoint_closure",
     "nca.ss_incomplete_interval_fail_closed", "nca.lambda_z_window", "profile.ofv_cutoff",
 }
+# nca.ss_final_interval_scope was reworded on 2026-10-22 (v1.2.0) and is pending re-approval of the new text.
 
 
 def test_exactly_the_owner_confirmed_entries_are_approved():
@@ -132,7 +133,8 @@ def test_exactly_the_owner_confirmed_entries_are_approved():
     cat = load_catalog().conventions
     approved = {c.id for c in cat if c.approval.status == "approved"}
     assert approved == APPROVED_2026_10_21
-    assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost"}
+    assert {c.id for c in cat if c.approval.status == "pending_owner_review"} == {"be.average_tost",
+                                                                                  "nca.ss_final_interval_scope"}
     for c in cat:
         if c.id in approved:
             assert (c.approval.by, c.approval.date) == ("Syed Saoud Zaidi", "2026-10-21"), c.id
@@ -328,3 +330,14 @@ def test_the_endpoint_closure_states_the_separate_start_window():
 def test_every_entry_cites_at_least_two_behavioural_tests_except_where_a_gap_says_why():
     for c in load_catalog().conventions:
         assert len(c.tests) >= 2 or c.known_gaps, c.id
+
+
+def test_the_final_interval_scope_separates_unconditional_from_flag_conditional_rules():
+    c = {c.id: c for c in load_catalog().conventions}["nca.ss_final_interval_scope"]
+    text = c.statement
+    uncond, _, cond = text.partition("When a BLQ flag column is present")
+    assert cond, "the flag-conditional part must be introduced explicitly"
+    assert "final dosing interval" in uncond and "never concentrations" in uncond and "BLQ" not in uncond
+    assert "leading/middle/trailing" in cond and "within that interval" in cond
+    assert "all observation rows in the dataset" in cond          # the count is NOT limited to the interval (code)
+    assert c.version == "1.2.0"

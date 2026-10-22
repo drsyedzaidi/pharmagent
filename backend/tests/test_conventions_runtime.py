@@ -18,6 +18,8 @@ from app.core.store import SessionStore
 
 BACKEND = Path(__file__).resolve().parents[1]
 
+# These expected sets are written by hand from reading the code paths. They pin which conventions each path names;
+# they cannot show that a list is semantically complete. That judgement belongs to owner review.
 SD_FLAG = {"nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.blq_leading_middle_trailing",
            "nca.measured_zero", "nca.blq_flag_codes", "nca.pre_dose_records", "nca.lambda_z_window"}
 SD_NOFLAG = {"nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.pre_dose_records", "nca.lambda_z_window"}
