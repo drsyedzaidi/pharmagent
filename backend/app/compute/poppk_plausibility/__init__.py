@@ -6,6 +6,12 @@ human justification governance.
 """
 from __future__ import annotations
 
+from app.compute.poppk_plausibility.benchmark import (
+    BenchmarkCase,
+    BenchmarkSummary,
+    build_benchmark_cases,
+    run_plausibility_benchmark,
+)
 from app.compute.poppk_plausibility.context import (
     ResolvedPhysiologyContext,
     resolve_physiology_context,
@@ -52,6 +58,8 @@ from app.compute.poppk_plausibility.units import (
 )
 
 __all__ = [
+    "BenchmarkCase",
+    "BenchmarkSummary",
     "FindingStatus",
     "IIVSpec",
     "JustificationRecord",
@@ -78,6 +86,7 @@ __all__ = [
     "SeverityLevel",
     "UnitCompatibilityError",
     "apply_justifications",
+    "build_benchmark_cases",
     "build_plausibility_report",
     "classify_parameter",
     "evaluate_all_rules",
@@ -86,4 +95,5 @@ __all__ = [
     "normalize_parameter_spec",
     "normalize_parameter_unit",
     "resolve_physiology_context",
+    "run_plausibility_benchmark",
 ]
