@@ -230,3 +230,42 @@ def test_stochastic_and_structural_edge_branches() -> None:
     with pytest.raises(KeyError):
         load_rule_catalog().by_id("PL-999")
     assert len(build_benchmark_cases()) == 23
+
+
+def test_isolated_read_only_tool_adapter_executes_without_mutating_state() -> None:
+    from app.core.audit import AuditChain
+    from app.core.pharmstate import PharmState
+    from app.tools.base import ToolContext, ToolRegistry
+    from app.tools.poppk_plausibility_tools import TOOLS
+
+    reg = ToolRegistry()
+    for tool in TOOLS:
+        reg.register(tool)
+
+    initial_state = PharmState(session_id="test_sess")
+    ctx = ToolContext()
+    audit = AuditChain()
+    new_state, res = reg.execute(
+        "screen_poppk_plausibility",
+        state=initial_state,
+        ctx=ctx,
+        args={
+            "model_id": "adapter_test",
+            "context": {"population": "adult", "reference_weight_kg": 70.0, "route": "iv", "modality": "small_molecule"},
+            "parameters": [
+                {"name": "CL", "value": 10.0, "unit": "L/h"},
+                {"name": "Vc", "value": 30.0, "unit": "L"},
+            ],
+        },
+        audit=audit,
+        timestamp="2026-10-22T12:00:00Z",
+        actor="unit_test",
+        caller_agent="poppk",
+    )
+    assert new_state == initial_state
+    assert res.writes == {}
+    assert res.result["screening_status"] == "SCREENING_PASS"
+    assert "does not constitute regulatory validation" in res.summary
+    assert len(audit.entries) == 1
+    assert audit.verify() is True
+
