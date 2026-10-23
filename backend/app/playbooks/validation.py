@@ -97,8 +97,6 @@ def _check_single_markdown_target(
     if target.startswith("#"):
         return []
     lower = target.lower()
-    if lower.startswith(("http://", "https://", "mailto:")):
-        return []
     if _URI_SCHEME_RE.match(lower) and not re.match(r"^[A-Za-z]:[/\\]", target):
         return [
             _issue(

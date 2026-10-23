@@ -169,6 +169,15 @@ def _inspect_single_resource_entry(
             )
         return sk_issues
 
+    if not rel_posix.startswith("references/"):
+        return [
+            _fs_issue(
+                "disallowed_resource_type",
+                rel_posix,
+                f"Only SKILL.md and files under `references/` are permitted, got {rel_posix!r}",
+            )
+        ]
+
     suffix = entry.suffix.lower()
     if any(s.lower() in FORBIDDEN_SCRIPT_EXTENSIONS for s in entry.suffixes) or (lst.st_mode & 0o111):
         return [

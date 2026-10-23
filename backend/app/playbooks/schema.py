@@ -204,11 +204,12 @@ class PlaybookSummary(_Strict):
     @classmethod
     def _coerce_source(cls, v: Any) -> str:
         if isinstance(v, Mapping):
-            kind = str(v.get("kind", "")).strip()
-            ref = str(v.get("reference", "")).strip()
-            if kind and ref:
-                return f"{kind}: {ref}"
-            raise ValueError("mapping `source` must provide non-empty `kind` and `reference`")
+            if set(v.keys()) != {"kind", "reference"}:
+                raise ValueError("mapping `source` must contain exactly the keys `kind` and `reference`")
+            kind, ref = v["kind"], v["reference"]
+            if not (isinstance(kind, str) and isinstance(ref, str) and kind.strip() and ref.strip()):
+                raise ValueError("mapping `source` `kind` and `reference` must be non-empty strings")
+            return f"{kind.strip()}: {ref.strip()}"
         if isinstance(v, str) and v.strip():
             return v.strip()
         raise ValueError("`source` must be a non-empty string")

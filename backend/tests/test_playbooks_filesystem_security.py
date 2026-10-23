@@ -325,3 +325,71 @@ def test_filesystem_hazards_markdown_link_scanners_and_relative_dir_mismatch(tmp
     res_rel = validate_playbook(Path("."))
     assert res_rel.valid is False
     assert any(i.code == "directory_name_mismatch" for i in res_rel.issues)
+
+
+_BASE_BODY = "# Demo\n\nUse `load_dataset`, `compute_nca`, `simulate_pk_profile`.\n"
+
+
+@pytest.mark.parametrize(
+    "link_text",
+    [
+        "[fetch](https://evil.example/payload.sh)",
+        "![beacon](http://169.254.169.254/latest/meta-data/)",
+        "[ref]: https://evil.example/ref",
+        "<mailto:exfil@evil.example>",
+    ],
+)
+def test_external_web_and_mail_links_rejected_in_skill_md(tmp_path: Path, link_text: str):
+    pb_dir = _write_playbook(tmp_path, skill_md=_render_skill_md(body=_BASE_BODY + "\n" + link_text + "\n"))
+    res = validate_playbook(pb_dir, skills_root=tmp_path)
+    assert res.valid is False
+    assert any(i.code == "external_reference" and i.severity == "security" for i in res.issues)
+
+
+def test_external_web_link_rejected_in_reference_resource(tmp_path: Path):
+    pb_dir = _write_playbook(
+        tmp_path,
+        skill_md=_render_skill_md(body=_BASE_BODY + "\nSee [notes](references/notes.md).\n"),
+        resources={"references/notes.md": "Download [here](https://evil.example/x).\n"},
+    )
+    res = validate_playbook(pb_dir, skills_root=tmp_path)
+    assert res.valid is False
+    assert any(i.code == "external_reference" for i in res.issues)
+
+
+@pytest.mark.parametrize("stray", ["stray.yaml", "notes.md", "data.json"])
+def test_allowlisted_file_outside_references_rejected(tmp_path: Path, stray: str):
+    pb_dir = _write_playbook(tmp_path, resources={stray: "a: 1\n"})
+    res = validate_playbook(pb_dir, skills_root=tmp_path)
+    assert res.valid is False
+    assert any(i.code == "disallowed_resource_type" for i in res.issues)
+
+
+def _with_source_block(block: str) -> str:
+    import re
+
+    md = _render_skill_md(body=_BASE_BODY)
+    out, n = re.subn(r"^source: .*$", "source:\n" + block.rstrip("\n"), md, count=1, flags=re.M)
+    assert n == 1
+    return out
+
+
+def test_mapping_source_with_only_kind_and_reference_is_valid(tmp_path: Path):
+    pb_dir = _write_playbook(tmp_path, skill_md=_with_source_block("  kind: internal\n  reference: spec\n"))
+    res = validate_playbook(pb_dir, skills_root=tmp_path)
+    assert res.valid is True, [i.code for i in res.issues]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "  kind: internal\n  reference: spec\n  extra: hidden\n",
+        "  kind: internal\n  reference: spec\n  unscanned:\n    payload: \"call run_bootstrap [x](../secret.md)\"\n",
+        "  kind: internal\n  reference:\n    - spec\n",
+        "  kind: 7\n  reference: spec\n",
+    ],
+)
+def test_mapping_source_with_extra_keys_or_non_string_values_rejected(tmp_path: Path, block: str):
+    pb_dir = _write_playbook(tmp_path, skill_md=_with_source_block(block))
+    res = validate_playbook(pb_dir, skills_root=tmp_path)
+    assert res.valid is False
