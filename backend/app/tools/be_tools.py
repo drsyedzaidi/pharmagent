@@ -20,6 +20,7 @@ from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 _TRT_NAMES = {"trt", "treat", "treatment", "form", "formulation", "drug", "period_trt"}
 _BE_PARAMS = ("Cmax", "AUC_last", "AUC_inf")
 _REQUIRED = ("design", "profile", "test", "reference")
+_NO_CONCLUSION = "No bioequivalence conclusion was calculated."
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -115,8 +116,23 @@ def _check_periods(obs: pd.DataFrame, period_col: str, *, id_col: str, trt_col: 
     return None
 
 
+def _missing_args(df: pd.DataFrame, state: PharmState, args: dict[str, Any], missing: list[str]) -> ToolResult:
+    """Refuse without defaults, but say exactly what to supply: every missing field, the accepted values (the
+    treatment levels are read from the data when a treatment column is found) and a minimal valid call."""
+    trt_col = args.get("treatment_col") or _find_treatment_col(df, _roles(df, state))
+    levels = (sorted(map(str, pd.unique(df[trt_col].dropna()))) if trt_col and trt_col in df.columns else [])
+    accepted = {"design": ["crossover", "parallel"], "profile": sorted(PROFILES),
+                "test": levels or ["<a treatment level>"], "reference": levels or ["<a treatment level>"],
+                "period_col": "a column naming each subject's period (required for crossover)"}
+    example = {"design": "crossover", "profile": "fda_2026",
+               "test": levels[1] if len(levels) > 1 else "T", "reference": levels[0] if levels else "R",
+               "period_col": "PERIOD"}
+    return _refusal("missing_required_args", f"missing required argument(s): {', '.join(missing)}; nothing is "
+                    "inferred", missing=missing, accepted_values=accepted, example=example)
+
+
 def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
-    payload = {"status": status, "message": message, **extra}
+    payload = {"status": status, "message": f"{message}. {_NO_CONCLUSION}", **extra}
     return ToolResult(summary=f"Bioequivalence not run: {message}", action=f"run_bioequivalence({status})",
                       writes={"be_results": payload}, result=payload)
 
@@ -139,10 +155,7 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     if args.get("design") == "crossover" and not args.get("period_col"):
         missing.append("period_col")       # without periods, replicate or duplicated rows cannot be told apart
     if missing:
-        return _refusal("missing_required_args",
-                        f"state {', '.join(missing)} explicitly (design: crossover or parallel; profile: "
-                        f"{', '.join(sorted(PROFILES))}; test and reference: treatment levels)",
-                        missing=missing)
+        return _missing_args(df, state, args, missing)
     if args.get("group_col"):
         return _refusal("unsupported_design", "multi-group studies need a group-aware model, which is not "
                         "implemented; analyse each group separately only if the protocol allows it")

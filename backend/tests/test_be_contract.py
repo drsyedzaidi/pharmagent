@@ -191,3 +191,30 @@ def test_the_m13a_profile_compares_unrounded_bounds_and_says_so(monkeypatch):
 def test_the_result_names_the_interim_model():
     out = _run(_crossover())
     assert "interim" in out["model"] and "period" in out["model"]
+
+
+# ── owner decisions (rounding convention, constructive refusal) ────────────────────────────────
+def test_rounding_converts_with_decimal_str_and_records_the_mode():
+    import inspect
+
+    import app.compute.be_contract as bc
+
+    assert "Decimal(str(" in inspect.getsource(bc.regulatory_round)
+    out = _run(_crossover())
+    assert out["rounding_mode"] == "ROUND_HALF_UP"
+    assert "PharmAgent implementation convention" in out["rounding"]
+    assert _run(_crossover(), profile="ich_m13a")["rounding_mode"] is None
+
+
+@pytest.mark.parametrize("lo, hi, passes", [
+    (79.995, 125.0, True), (79.99499999, 125.0, False),          # lower boundary
+    (80.0, 125.005, False), (80.0, 125.00499999, True),          # upper boundary
+])
+def test_both_boundaries_around_the_tie(monkeypatch, lo, hi, passes):
+    import app.compute.be_contract as bc
+
+    monkeypatch.setattr(bc, "_estimate", lambda *a, **k: {"gmr_pct": 100.0, "ci_lower_pct": lo, "ci_upper_pct": hi,
+                                                            "cv_intra_pct": 1.0, "ci_lower_raw": lo,
+                                                            "ci_upper_raw": hi})
+    for profile in ("fda_2026", "ema_2010"):
+        assert _run(_crossover(), profile=profile)["parameters"]["Cmax"]["within_limits"] is passes

@@ -93,3 +93,15 @@ def test_an_unknown_level_is_a_validation_refusal_not_a_crash():
 def test_the_summary_states_profile_design_and_the_interim_model():
     out = _call(_frame(), **FULL)
     assert "fda_2026" in out.summary and "crossover" in out.summary and "interim" in out.summary
+
+
+def test_the_refusal_is_constructive_and_says_nothing_was_concluded():
+    res = _call(_frame()).result
+    assert set(res["missing"]) == {"design", "profile", "test", "reference"}
+    assert res["accepted_values"]["design"] == ["crossover", "parallel"]
+    assert res["accepted_values"]["profile"] == ["ema_2010", "fda_2026", "ich_m13a"]
+    assert set(res["accepted_values"]["test"]) == {"A", "B"} == set(res["accepted_values"]["reference"])
+    ex = res["example"]
+    assert {"design", "profile", "test", "reference", "period_col"} <= set(ex)
+    assert "No bioequivalence conclusion was calculated" in res["message"]
+    assert "bioequivalent" not in res and "parameters" not in res

@@ -78,11 +78,12 @@ PROFILES: dict[str, Profile] = {
 
 
 def regulatory_round(value: float) -> Decimal:
-    """Round to two decimals, half up, on the shortest decimal form of the float (``repr``).
+    """Round a computed bound to two decimals: ``Decimal(str(value))`` quantized with ROUND_HALF_UP.
 
-    Binary rounding misreads boundary values: ``round(1.005, 2)`` is 1.0 because the float is 1.00499...; the
-    reported value 1.005 rounds to 1.01 here. Half up is the stated tie rule; neither guidance names one."""
-    return Decimal(repr(float(value))).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
+    Binary rounding misreads boundary values: ``round(1.005, 2)`` is 1.0 because the float is 1.00499...; here the
+    computed value's decimal string 1.005 rounds to 1.01. Half up for exact .xx5 ties is a PharmAgent implementation
+    convention: neither the FDA nor the EMA text defines tie handling."""
+    return Decimal(str(float(value))).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
 
 
 def _estimate(test_vals: list[float], ref_vals: list[float], *, paired: bool, alpha: float) -> dict[str, Any]:
@@ -275,8 +276,10 @@ def _assess(records, design, profile, test, reference, prespecified_exclusions, 
         "test_level": test, "reference_level": reference,
         "ci_percent": prof.ci_percent, "alpha": prof.alpha, "limits": [str(lo), str(hi)],
         "limits_justification": limits_justification if custom else None,
-        "rounding": (f"two decimals, half up ({prof.rounding_source})" if prof.rounding_source
+        "rounding": (f"two decimals ({prof.rounding_source}); exact .xx5 ties round half up, a PharmAgent "
+                     "implementation convention (the guidance does not define tie handling)" if prof.rounding_source
                      else "none (the profile's source states no rounding rule)"),
+        "rounding_mode": "ROUND_HALF_UP" if prof.rounding_source else None,
         "model": INTERIM_MODEL,
         "ignored_treatments": sorted({r["treatment"] for r in records} - {test, reference}, key=str),
         "parameters": params, "exclusions": ledger,
