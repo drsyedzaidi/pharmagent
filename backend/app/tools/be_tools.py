@@ -1,8 +1,8 @@
 """Bioequivalence Agent tools: test/reference GMR + 90% CI from NCA exposures.
 
-Computes per-(subject, treatment) NCA exposures, then the average-bioequivalence
-ratio and confidence interval for Cmax and AUC against the 80-125% limits.
-Requires a treatment/formulation column distinguishing test from reference.
+Computes per-(subject, treatment) NCA exposures, then average bioequivalence for Cmax and AUC
+under the safety contract in app.compute.be_contract: the design, regulatory profile and test
+and reference levels are explicit, and every excluded value is listed.
 """
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from typing import Any
 
 import pandas as pd
 
-from app.compute.bioequivalence import assess_bioequivalence
+from app.compute.be_contract import PROFILES, BEContractError, assess_average_be
 from app.compute.nca import Profile, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _TRT_NAMES = {"trt", "treat", "treatment", "form", "formulation", "drug", "period_trt"}
-_REF_TOKENS = {"r", "ref", "reference", "rld"}
 _BE_PARAMS = ("Cmax", "AUC_last", "AUC_inf")
+_REQUIRED = ("design", "profile", "test", "reference")
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -37,37 +37,56 @@ def _find_treatment_col(df: pd.DataFrame, roles: dict[str, str]) -> str | None:
     return None
 
 
+def _py(v: Any) -> Any:
+    """numpy scalars -> plain Python, so ledger entries serialise and compare as the data shows them."""
+    return v.item() if hasattr(v, "item") else v
+
+
 def _exposures_by_treatment(
     obs: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, trt_col: str,
-) -> dict[Any, dict[Any, dict[str, float]]]:
-    """Return {treatment: {subject: {Cmax, AUC_last, AUC_inf}}}."""
-    out: dict[Any, dict[Any, dict[str, float]]] = {}
+) -> tuple[list[dict], list[dict]]:
+    """Per-(subject, treatment) NCA exposures as contract records, plus ledger entries for profiles too short to
+    analyse (fewer than 3 samples): those subjects are left out of every parameter for that treatment."""
+    records: list[dict] = []
+    ledger: list[dict] = []
     for (trt, sid), g in obs.groupby([trt_col, id_col]):
         g = g.dropna(subset=[time_col, dv_col]).sort_values(time_col)
         if len(g) < 3:
+            ledger.append({"subject": _py(sid), "treatment": _py(trt), "parameter": "*",
+                           "reason": "fewer_than_3_samples", "original_value": int(len(g)), "prespecified": False})
             continue
         prof = Profile(subject=sid, time=g[time_col].to_numpy(float),
                        conc=g[dv_col].to_numpy(float), dose=float("nan"))
         p = nca_subject(prof)
-        out.setdefault(trt, {})[sid] = {k: p.get(k) for k in _BE_PARAMS}
-    return out
+        records.append({"subject": _py(sid), "treatment": _py(trt), "params": {k: p.get(k) for k in _BE_PARAMS}})
+    return records, ledger
 
 
-def _pick_levels(levels: list[Any], ref_arg: Any, test_arg: Any) -> tuple[Any, Any] | None:
-    if ref_arg in levels and test_arg in levels and ref_arg != test_arg:
-        return test_arg, ref_arg
-    if len(levels) != 2:
-        return None
-    ref = next((lv for lv in levels if str(lv).strip().lower() in _REF_TOKENS), None)
-    if ref is None:
-        ordered = sorted(levels, key=lambda x: str(x))
-        return ordered[0], ordered[1]  # (test, reference)
-    test = next(lv for lv in levels if lv != ref)
-    return test, ref
+def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
+    payload = {"status": status, "message": message, **extra}
+    return ToolResult(summary=f"Bioequivalence not run: {message}", action=f"run_bioequivalence({status})",
+                      writes={"be_results": payload}, result=payload)
+
+
+def _match_level(levels: list[Any], wanted: Any) -> Any:
+    """The data's own level equal to the requested one, compared as text (a CSV may read 1 where the user typed
+    "1"). Unknown levels are returned unchanged so the contract names them in its refusal."""
+    return next((lv for lv in levels if str(lv) == str(wanted)), wanted)
 
 
 def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Average BE under the safety contract (app.compute.be_contract): design, profile, test and reference are
+    required, nothing is guessed, and every excluded value is listed."""
     dsid, df = require_dataset(ctx, state, args)
+    missing = [k for k in _REQUIRED if args.get(k) in (None, "")]
+    if missing:
+        return _refusal("missing_required_args",
+                        f"state {', '.join(missing)} explicitly (design: crossover or parallel; profile: "
+                        f"{', '.join(sorted(PROFILES))}; test and reference: treatment levels)",
+                        missing=missing)
+    if args.get("group_col"):
+        return _refusal("unsupported_design", "multi-group studies need a group-aware model, which is not "
+                        "implemented; analyse each group separately only if the protocol allows it")
     df = df.copy()
     roles = _roles(df, state)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
@@ -76,79 +95,70 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
     evid_col = next((c for c, r in roles.items() if r == "EVID"), None)
     trt_col = args.get("treatment_col") or _find_treatment_col(df, roles)
-
     if not (id_col and time_col and dv_col):
         raise ValueError("dataset missing required ID/TIME/DV roles for BE")
-
     if not trt_col:
-        status = {"status": "no_treatment_column",
-                  "message": ("No test/reference treatment column found. Add a column "
-                              "named TRT/TREATMENT/FORMULATION with two levels (e.g. T, R).")}
-        return ToolResult(
-            summary="Bioequivalence skipped: no treatment column (need test vs reference).",
-            action="run_bioequivalence(no_treatment_column)",
-            writes={"be_results": status}, result=status)
+        return _refusal("no_treatment_column", "no test/reference treatment column found; add a column named "
+                        "TRT/TREATMENT/FORMULATION or pass treatment_col")
 
     df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
     df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
     if evid_col:
-        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-        obs = df[ev == 0]
+        obs = df[pd.to_numeric(df[evid_col], errors="coerce").fillna(0) == 0]
     elif amt_col:
-        amt = pd.to_numeric(df[amt_col], errors="coerce").fillna(0)
-        obs = df[amt == 0]
+        obs = df[pd.to_numeric(df[amt_col], errors="coerce").fillna(0) == 0]
     else:
         obs = df
 
+    period_col = args.get("period_col")
+    if period_col:
+        if period_col not in obs.columns:
+            return _refusal("invalid_arguments", f"period_col {period_col!r} is not a column")
+        if (obs.groupby([id_col, trt_col])[period_col].nunique() > 1).any():
+            return _refusal("unsupported_design", "a subject received the same treatment in more than one period: "
+                            "replicate designs are not supported")
+
     levels = list(pd.unique(obs[trt_col].dropna()))
-    picked = _pick_levels(levels, args.get("reference"), args.get("test"))
-    if picked is None:
-        status = {"status": "ambiguous_treatments",
-                  "message": f"Need exactly two treatment levels; found {levels}."}
-        return ToolResult(
-            summary=f"Bioequivalence skipped: treatment levels {levels} not a clean test/reference pair.",
-            action="run_bioequivalence(ambiguous_treatments)",
-            writes={"be_results": status}, result=status)
-    test_lv, ref_lv = picked
-
-    exposures = _exposures_by_treatment(
-        obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
-    test_subj = exposures.get(test_lv, {})
-    ref_subj = exposures.get(ref_lv, {})
-
-    common = sorted(set(test_subj) & set(ref_subj), key=lambda x: str(x))
-    paired = len(common) >= 2 and len(common) == len(test_subj) == len(ref_subj)
-
-    if paired:
-        test_by_param = {p: [test_subj[s][p] for s in common] for p in _BE_PARAMS}
-        ref_by_param = {p: [ref_subj[s][p] for s in common] for p in _BE_PARAMS}
-    else:
-        test_by_param = {p: [v[p] for v in test_subj.values()] for p in _BE_PARAMS}
-        ref_by_param = {p: [v[p] for v in ref_subj.values()] for p in _BE_PARAMS}
-
-    res = assess_bioequivalence(test_by_param, ref_by_param, paired=paired)
-    res.update({"status": "ok", "test_level": str(test_lv), "reference_level": str(ref_lv),
-                "n_test": len(test_subj), "n_reference": len(ref_subj)})
-
-    verdict = "BIOEQUIVALENT" if res.get("bioequivalent") else "NOT bioequivalent"
+    test_lv, ref_lv = _match_level(levels, args["test"]), _match_level(levels, args["reference"])
+    records, short = _exposures_by_treatment(obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
+    limits = args.get("limits")
+    try:
+        res = assess_average_be(
+            records, design=args["design"], profile=args["profile"], test=_py(test_lv), reference=_py(ref_lv),
+            prespecified_exclusions=args.get("prespecified_exclusions"),
+            limits=tuple(limits) if limits else None, limits_justification=args.get("limits_justification"))
+    except BEContractError as exc:
+        status = "unsupported_design" if "replicate" in str(exc) else "invalid_arguments"
+        return _refusal(status, str(exc))
+    res = {**res, "status": "ok", "exclusions": short + res["exclusions"],
+           "test_level": str(test_lv), "reference_level": str(ref_lv)}
+    verdict = "BIOEQUIVALENT" if res["bioequivalent"] else "NOT bioequivalent"
     return ToolResult(
-        summary=(f"Bioequivalence ({res['design']}): {test_lv} vs {ref_lv} — {verdict} "
-                 f"(Cmax/AUC GMR + 90% CI vs 80-125%)."),
-        action=f"run_bioequivalence({dsid}, {test_lv} vs {ref_lv})",
+        summary=(f"Bioequivalence ({res['design']}, profile {res['profile']}): {test_lv} vs {ref_lv} - {verdict}; "
+                 f"{len(res['exclusions'])} excluded value(s) listed; model is interim (no period/sequence terms)."),
+        action=f"run_bioequivalence({dsid}, {res['profile']}, {res['design']}, {test_lv} vs {ref_lv})",
         writes={"be_results": res}, result=res)
 
 
 TOOLS = [
     Tool("run_bioequivalence",
-         "Assess average bioequivalence: test/reference geometric mean ratio and "
-         "90% confidence interval for Cmax and AUC against the 80-125% limits. "
-         "Requires a treatment/formulation column.",
+         "Assess average bioequivalence (test/reference geometric mean ratio and 90% CI for Cmax and AUC). "
+         "REQUIRES design ('crossover' or 'parallel'), profile ('fda_2026', 'ich_m13a' or 'ema_2010'), and the "
+         "test and reference treatment levels; nothing is inferred. Optional: treatment_col, period_col, "
+         "prespecified_exclusions [{subject, reason}], limits [lower, upper] with limits_justification.",
          "be",
          {"type": "object",
           "properties": {"dataset_id": {"type": "string"},
+                         "design": {"type": "string", "enum": ["crossover", "parallel"]},
+                         "profile": {"type": "string", "enum": ["fda_2026", "ich_m13a", "ema_2010"]},
                          "treatment_col": {"type": "string"},
+                         "period_col": {"type": "string"},
+                         "group_col": {"type": "string"},
                          "test": {"type": "string"},
-                         "reference": {"type": "string"}},
+                         "reference": {"type": "string"},
+                         "prespecified_exclusions": {"type": "array", "items": {"type": "object"}},
+                         "limits": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                         "limits_justification": {"type": "string"}},
           "required": []},
          run_bioequivalence),
 ]
