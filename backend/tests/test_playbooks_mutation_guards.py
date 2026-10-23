@@ -1,4 +1,5 @@
 """Explicit mutation guards verifying security, digest binding, AST execution bans, and deep immutability."""
+
 from __future__ import annotations
 
 import ast
@@ -9,31 +10,47 @@ import pytest
 import app.playbooks.catalog as catalog_mod
 from app.core.pharmstate import PharmState
 from app.playbooks import (
+    PlaybookApprovalError,
     PlaybookSecurityError,
     check_tool_allowed,
     compute_canonical_digest,
     freeze_value,
     load_playbook,
+    load_playbook_for_review,
     read_playbook_resource,
     run_playbook_adapter,
     validate_playbook,
 )
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
+from tests.test_playbooks_catalog import _render_skill_md, _write_playbook
 from tests.test_playbooks_digest_and_immutability import _assert_deeply_immutable
 
 
-def test_mutation_guard_1_bypass_tool_allowlist_is_caught():
+def test_mutation_guard_1_bypass_tool_allowlist_is_caught(tmp_path: Path):
     """Guard 1: If a mutant bypasses tool-allowlist enforcement, our security check fails."""
     reg = default_registry()
-    pb = load_playbook("pharmagent.protocol_simulation", registry=reg)
+    pending_pb = load_playbook_for_review("pharmagent.protocol_simulation", registry=reg)
+    with pytest.raises(PlaybookApprovalError):
+        check_tool_allowed(pending_pb, "load_dataset", registry=reg)
+
+    _write_playbook(
+        tmp_path,
+        skill_md=_render_skill_md(
+            status="approved",
+            approval_status="approved",
+            approved_by="Syed Saoud Zaidi",
+            approved_date="2026-10-22",
+        ),
+    )
+    pb = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path, registry=reg)
     assert "run_bioequivalence" in reg.names()
     assert "run_bioequivalence" not in pb.allowed_tools
 
     with pytest.raises(PlaybookSecurityError, match="undeclared_tool"):
-        check_tool_allowed(pb, "run_bioequivalence", registry=reg)
+        check_tool_allowed(pb, "run_bioequivalence", skills_root=tmp_path, registry=reg)
     with pytest.raises(PlaybookSecurityError, match="non_existent_tool"):
-        check_tool_allowed(pb, "non_existent_pbpk_tool", registry=reg)
+        check_tool_allowed(pb, "non_existent_pbpk_tool", skills_root=tmp_path, registry=reg)
 
 
 def test_mutation_guard_2_disable_traversal_rejection_is_caught(tmp_path: Path):
@@ -90,7 +107,7 @@ def test_mutation_guard_2_disable_traversal_rejection_is_caught(tmp_path: Path):
 
 def test_mutation_guard_3_remove_digest_binding_is_caught(tmp_path: Path):
     """Guard 3: Digest must bind metadata, instructions, AND resource contents; post-load resource tampering is caught."""
-    pb = load_playbook("pharmagent.protocol_simulation")
+    pb = load_playbook_for_review("pharmagent.protocol_simulation")
     base_digest = pb.canonical_digest
 
     d_meta = compute_canonical_digest(
@@ -119,8 +136,10 @@ def test_mutation_guard_3_remove_digest_binding_is_caught(tmp_path: Path):
         "playbook_id: pharmagent.tamper_test\n"
         "version: 1.0.0\n"
         "domain: nca\n"
-        "status: reviewed\n"
-        "approval_status: pending_owner_review\n"
+        "status: approved\n"
+        "approval_status: approved\n"
+        "approved_by: Syed Saoud Zaidi\n"
+        "approved_date: 2026-10-22\n"
         "license: MIT\n"
         "source: PharmAgent internal\n"
         "allowed_tools:\n"
@@ -235,7 +254,7 @@ def test_mutation_guard_4_allow_script_execution_is_caught(tmp_path: Path):
     assert {"references/sneaky.md", "references/double.py.md"} <= exec_paths
 
 
-def test_mutation_guard_5_make_returned_metadata_mutable_is_caught():
+def test_mutation_guard_5_make_returned_metadata_mutable_is_caught(tmp_path: Path):
     """Guard 5: Every returned model and metadata mapping must be deeply immutable; `_assert_deeply_immutable` catches any mutable dict/list."""
     with pytest.raises(AssertionError, match="Mutable container"):
         _assert_deeply_immutable({"mutable": [1, 2, 3]})
@@ -249,13 +268,41 @@ def test_mutation_guard_5_make_returned_metadata_mutable_is_caught():
     with pytest.raises(TypeError):
         frozen["nested"]["items"][2]["k"] = "mutated"  # type: ignore[index]
 
+    _write_playbook(
+        tmp_path,
+        skill_md=_render_skill_md(
+            status="approved",
+            approval_status="approved",
+            approved_by="Syed Saoud Zaidi",
+            approved_date="2026-10-22",
+        ),
+    )
     out1 = run_playbook_adapter(
         PharmState(),
         ToolContext(),
-        {"operation": "load_playbook", "playbook_id": "pharmagent.protocol_simulation"},
+        {"operation": "load_playbook", "playbook_id": "pharmagent.demo_protocol"},
+        skills_root=tmp_path,
     )
     out1.result["playbook"]["allowed_tools"].append("mutated_tool")
-    pb_fresh = load_playbook("pharmagent.protocol_simulation")
+    pb_fresh = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path)
     assert "mutated_tool" not in pb_fresh.allowed_tools
     _assert_deeply_immutable(pb_fresh)
     _assert_deeply_immutable(pb_fresh.to_summary())
+
+
+def test_mutation_guard_6_remove_owner_approval_gate_is_caught():
+    """Guard 6 (Blocker 3 item 9): Removing the owner-approval gate in runtime loader or tool auth must fail."""
+    import app.playbooks as pb_pkg
+
+    reg = default_registry()
+    pending_pb = pb_pkg.load_playbook_for_review("pharmagent.protocol_simulation", registry=reg)
+    assert pending_pb.approval_status == "pending_owner_review"
+
+    with pytest.raises(pb_pkg.PlaybookApprovalError):
+        pb_pkg.load_approved_playbook("pharmagent.protocol_simulation", registry=reg)
+    with pytest.raises(pb_pkg.PlaybookApprovalError):
+        pb_pkg.load_playbook("pharmagent.protocol_simulation", registry=reg)
+    with pytest.raises(pb_pkg.PlaybookApprovalError):
+        check_tool_allowed(pending_pb, "load_dataset", registry=reg)
+    with pytest.raises(pb_pkg.PlaybookApprovalError):
+        pb_pkg.authorize_playbook_tool(pending_pb, "load_dataset", registry=reg)

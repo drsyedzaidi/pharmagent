@@ -5,6 +5,7 @@ teach an agent how to sequence existing reviewed PharmAgent tools. They are
 strictly separate from captured session skills (`app.core.skills`), never
 execute bundled scripts, and never compute numerical results themselves.
 """
+
 from __future__ import annotations
 
 import re
@@ -104,6 +105,10 @@ class PlaybookVersionError(PlaybookError, ValueError):
 
 class PlaybookDisabledError(PlaybookError, PermissionError, ValueError):
     """Raised when attempting runtime loading of a disabled specification playbook."""
+
+
+class PlaybookApprovalError(PlaybookDisabledError):
+    """Raised when attempting runtime execution or tool authorization with an unapproved playbook."""
 
 
 def freeze_value(value: Any) -> Any:
@@ -276,19 +281,17 @@ class PlaybookSummary(_Strict):
         if self.runtime_available and not self.allowed_tools:
             raise ValueError("runtime-available playbooks must declare at least one tool in `allowed_tools`")
         if (self.status == "approved") != (self.approval_status == "approved"):
-            raise ValueError(
-                "a playbook with `status: approved` must have `approval_status: approved` and vice versa"
-            )
+            raise ValueError("a playbook with `status: approved` must have `approval_status: approved` and vice versa")
         if (self.approval_status == "rejected" or self.status == "deprecated") and self.runtime_available:
-            raise ValueError(
-                "a `rejected` or `deprecated` playbook must set `runtime_available: false`"
-            )
+            raise ValueError("a `rejected` or `deprecated` playbook must set `runtime_available: false`")
         if self.approval_status in ("pending_owner_review", "rejected"):
             if self.approved_by is not None or self.approved_date is not None:
-                raise ValueError(
-                    f"a `{self.approval_status}` playbook cannot set `approved_by` or `approved_date`"
-                )
+                raise ValueError(f"a `{self.approval_status}` playbook cannot set `approved_by` or `approved_date`")
         elif self.approval_status == "approved":
+            if not self.runtime_available:
+                raise ValueError("an `approved` playbook must have `runtime_available: true`")
+            if self.version.startswith("0."):
+                raise ValueError("an `approved` playbook must have a stable semantic version >= 1.0.0")
             if not (self.approved_by and self.approved_by.strip() and self.approved_date):
                 raise ValueError("an `approved` playbook requires non-empty `approved_by` and `approved_date`")
             if not _ISO_DATE_RE.fullmatch(self.approved_date):
@@ -310,6 +313,18 @@ class ScientificPlaybook(PlaybookSummary):
     instructions: str = Field(min_length=1)
     trust_notice: str = UNTRUSTED_DATA_NOTICE
     untrusted_data: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _verify_canonical_digest(self) -> ScientificPlaybook:
+        from .digest import compute_canonical_digest
+
+        expected = compute_canonical_digest(self)
+        if self.canonical_digest != expected:
+            raise ValueError(
+                f"canonical_digest mismatch for {self.playbook_id!r}@{self.version}: "
+                f"expected {expected}, got {self.canonical_digest}"
+            )
+        return self
 
     def to_summary(self) -> PlaybookSummary:
         data = self.model_dump(exclude={"instructions", "trust_notice", "untrusted_data"})

@@ -4,6 +4,7 @@ Touches no guarded files (`builtins.py`, `base.py`, `orchestrator.py`, `pharmsta
 Every call returns `writes={}`, enforces strict argument and path confinement, caps output
 size to `MAX_ADAPTER_OUTPUT_BYTES`, and includes full playbook identity and digest metadata.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,12 +17,13 @@ from app.tools.base import Tool, ToolContext, ToolRegistry, ToolResult
 
 from .catalog import (
     list_playbooks,
-    load_playbook,
+    load_approved_playbook,
     read_playbook_resource,
     validate_all_playbooks,
 )
 from .schema import (
     MAX_ADAPTER_OUTPUT_BYTES,
+    PlaybookApprovalError,
     PlaybookDisabledError,
     PlaybookError,
     PlaybookLookupError,
@@ -140,16 +142,13 @@ def run_playbook_adapter(
             if not isinstance(playbook_id, str) or not playbook_id.strip():
                 return _error_result("missing_playbook_id", "`playbook_id` is required for load_playbook")
             version = call_args.get("version")
-            pb = load_playbook(
+            pb = load_approved_playbook(
                 playbook_id,
                 version=version,
                 skills_root=skills_root,
                 registry=registry,
-                allow_disabled=False,
             )
-            instructions, truncated = _cap_text(
-                pb.instructions, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES
-            )
+            instructions, truncated = _cap_text(pb.instructions, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES)
             pb_dict = {
                 **_identity_dict(pb),
                 "domain": pb.domain,
@@ -185,11 +184,8 @@ def run_playbook_adapter(
                 version=version,
                 skills_root=skills_root,
                 registry=registry,
-                allow_disabled=False,
             )
-            content, truncated = _cap_text(
-                res.content, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES
-            )
+            content, truncated = _cap_text(res.content, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES)
             res_dict = {
                 **_identity_dict(res),
                 "resource_path": res.resource_path,
@@ -209,11 +205,9 @@ def run_playbook_adapter(
 
         # op == "validate_catalog"
         report = validate_all_playbooks(skills_root=skills_root, registry=registry)
-        issues = [
-            i.model_dump()
-            for r in report.results
-            for i in r.issues
-        ] + [i.model_dump() for i in report.catalog_issues]
+        issues = [i.model_dump() for r in report.results for i in r.issues] + [
+            i.model_dump() for i in report.catalog_issues
+        ]
         playbooks_meta = [
             {
                 "playbook_id": r.playbook_id,
@@ -248,14 +242,13 @@ def run_playbook_adapter(
             result_payload["issues"] = issues[:25]
             result_payload["truncated"] = True
         return ToolResult(
-            summary=(
-                f"Validated {report.total_playbooks} playbook(s): "
-                f"valid={report.valid}, issues={len(issues)}."
-            ),
+            summary=(f"Validated {report.total_playbooks} playbook(s): valid={report.valid}, issues={len(issues)}."),
             writes={},
             result=result_payload,
             action="playbook_adapter(validate_catalog)",
         )
+    except PlaybookApprovalError as exc:
+        return _error_result("playbook_not_approved", str(exc))
     except PlaybookDisabledError as exc:
         return _error_result("playbook_disabled", str(exc))
     except PlaybookSecurityError as exc:

@@ -1,4 +1,5 @@
 """Catalog discovery, progressive disclosure, shipped playbook contracts, and session-skill separation tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +12,7 @@ from app.core.skills import Skill, SkillStore, distill_steps
 from app.playbooks import (
     DEFAULT_SKILLS_ROOT,
     CatalogValidationReport,
+    PlaybookApprovalError,
     PlaybookCompatibility,
     PlaybookDisabledError,
     PlaybookLookupError,
@@ -23,8 +25,10 @@ from app.playbooks import (
     compute_canonical_digest,
     list_playbooks,
     load_playbook,
+    load_playbook_for_review,
     playbook_provenance,
     read_playbook_resource,
+    read_playbook_resource_for_review,
     run_playbook_adapter,
     validate_all_playbooks,
     validate_playbook,
@@ -59,10 +63,14 @@ def _render_skill_md(
     tools = allowed_tools if allowed_tools is not None else ["load_dataset", "compute_nca", "simulate_pk_profile"]
     inputs = required_inputs if required_inputs is not None else ["dataset_id", "dose_regimen"]
     artifacts = produced_artifacts if produced_artifacts is not None else ["simulation_results", "nca_summary"]
-    limits = limitations if limitations is not None else [
-        "Does not execute PBPK or QSP models.",
-        "Requires human pharmacometrician review before protocol recommendation.",
-    ]
+    limits = (
+        limitations
+        if limitations is not None
+        else [
+            "Does not execute PBPK or QSP models.",
+            "Requires human pharmacometrician review before protocol recommendation.",
+        ]
+    )
     lines = [
         "---",
         f"name: {name}",
@@ -77,21 +85,23 @@ def _render_skill_md(
         lines.append(f"approved_by: {approved_by}")
     if approved_date is not None:
         lines.append(f"approved_date: {approved_date}")
-    lines.extend([
-        f"license: {license_id}",
-        f"source: {source}",
-        "allowed_tools:",
-        *[f"  - {t}" for t in tools],
-        "required_inputs:",
-        *[f"  - {i}" for i in inputs],
-        "produced_artifacts:",
-        *[f"  - {a}" for a in artifacts],
-        "limitations:",
-        *[f"  - {lim}" for lim in limits],
-        f"requires_human_review: {'true' if requires_human_review else 'false'}",
-        f"compatibility: {compatibility}",
-        f"runtime_available: {'true' if runtime_available else 'false'}",
-    ])
+    lines.extend(
+        [
+            f"license: {license_id}",
+            f"source: {source}",
+            "allowed_tools:",
+            *[f"  - {t}" for t in tools],
+            "required_inputs:",
+            *[f"  - {i}" for i in inputs],
+            "produced_artifacts:",
+            *[f"  - {a}" for a in artifacts],
+            "limitations:",
+            *[f"  - {lim}" for lim in limits],
+            f"requires_human_review: {'true' if requires_human_review else 'false'}",
+            f"compatibility: {compatibility}",
+            f"runtime_available: {'true' if runtime_available else 'false'}",
+        ]
+    )
     if extra_frontmatter:
         lines.append(extra_frontmatter.strip("\n"))
     lines.append("---")
@@ -177,6 +187,16 @@ def test_valid_playbook_validates_and_returns_deeply_immutable_objects(tmp_path:
             {"approval_status": "approved", "approved_by": "owner", "approved_date": "2026-02-30"},
             "invalid_approval_status",
         ),
+        (
+            {
+                "status": "approved",
+                "approval_status": "approved",
+                "approved_by": "owner",
+                "approved_date": "2026-10-22",
+                "runtime_available": False,
+            },
+            "invalid_approval_status",
+        ),
         ({"requires_human_review": False}, "policy_violation"),
         ({"allowed_tools": []}, "empty_allowed_tools"),
         ({"extra_frontmatter": "unknown_field: 123"}, "unknown_field"),
@@ -208,9 +228,7 @@ def test_approved_playbook_requires_valid_approver_and_iso_date(tmp_path: Path):
 
 
 def test_missing_required_frontmatter_field_is_rejected(tmp_path: Path):
-    md_no_domain = "\n".join(
-        line for line in _render_skill_md().splitlines() if not line.startswith("domain:")
-    ) + "\n"
+    md_no_domain = "\n".join(line for line in _render_skill_md().splitlines() if not line.startswith("domain:")) + "\n"
     pb_dir = _write_playbook(tmp_path / "no_domain", skill_md=md_no_domain)
     res = validate_playbook(pb_dir, skills_root=tmp_path / "no_domain")
     assert res.valid is False
@@ -267,18 +285,24 @@ def test_progressive_disclosure_separates_discovery_from_instructions_and_resour
         assert s.source and s.license
         assert s.allowed_tools and s.required_inputs and s.limitations
 
-    pb = load_playbook("pharmagent.zeta", version="1.0.0", skills_root=tmp_path)
+    with pytest.raises(PlaybookApprovalError):
+        load_playbook("pharmagent.zeta", version="1.0.0", skills_root=tmp_path)
+
+    pb = load_playbook_for_review("pharmagent.zeta", version="1.0.0", skills_root=tmp_path)
     assert "Zeta Secret Marker" in pb.instructions
     assert "DEEP_RESOURCE_MARKER" not in pb.instructions
     assert pb.resource_paths == ("references/deep.md",)
 
     with pytest.raises(PlaybookVersionError):
-        load_playbook("pharmagent.zeta", version="9.9.9", skills_root=tmp_path)
+        load_playbook_for_review("pharmagent.zeta", version="9.9.9", skills_root=tmp_path)
 
     with pytest.raises(PlaybookLookupError):
-        load_playbook("pharmagent.does_not_exist", skills_root=tmp_path)
+        load_playbook_for_review("pharmagent.does_not_exist", skills_root=tmp_path)
 
-    res = read_playbook_resource("pharmagent.zeta", "references/deep.md", skills_root=tmp_path)
+    with pytest.raises(PlaybookApprovalError):
+        read_playbook_resource("pharmagent.zeta", "references/deep.md", skills_root=tmp_path)
+
+    res = read_playbook_resource_for_review("pharmagent.zeta", "references/deep.md", skills_root=tmp_path)
     assert isinstance(res, PlaybookResource)
     assert "DEEP_RESOURCE_MARKER" in res.content
     assert res.playbook_id == "pharmagent.zeta"
@@ -315,7 +339,7 @@ def test_disabled_playbook_is_blocked_at_runtime_unless_explicitly_inspected(tmp
     with pytest.raises(PlaybookDisabledError):
         read_playbook_resource("pharmagent.draft_spec", "references/spec.md", skills_root=tmp_path)
 
-    pb = load_playbook("pharmagent.draft_spec", skills_root=tmp_path, allow_disabled=True)
+    pb = load_playbook_for_review("pharmagent.draft_spec", skills_root=tmp_path, allow_disabled=True)
     assert pb.runtime_available is False
     assert pb.allowed_tools == ()
 
@@ -359,9 +383,7 @@ def test_shipped_playbooks_validate_against_real_default_registry():
         "pharmagent.model_review",
         "pharmagent.protocol_simulation",
     ]
-    runtime_only = list_playbooks(
-        skills_root=DEFAULT_SKILLS_ROOT, registry=reg, include_disabled=False
-    )
+    runtime_only = list_playbooks(skills_root=DEFAULT_SKILLS_ROOT, registry=reg, include_disabled=False)
     assert [s.playbook_id for s in runtime_only] == [
         "pharmagent.model_review",
         "pharmagent.protocol_simulation",
@@ -371,7 +393,9 @@ def test_shipped_playbooks_validate_against_real_default_registry():
 def test_protocol_simulation_playbook_content_contract():
     reg = default_registry()
     registered = set(reg.names())
-    pb = load_playbook("pharmagent.protocol_simulation", registry=reg)
+    with pytest.raises(PlaybookApprovalError):
+        load_playbook("pharmagent.protocol_simulation", registry=reg)
+    pb = load_playbook_for_review("pharmagent.protocol_simulation", registry=reg)
 
     assert pb.name == "pharmagent-protocol-simulation"
     assert pb.version == "1.0.0"
@@ -427,7 +451,7 @@ def test_protocol_simulation_playbook_content_contract():
     assert "no automatic dose recommendation without human review" in text
     assert "allowlist" in text
 
-    res = read_playbook_resource(
+    res = read_playbook_resource_for_review(
         "pharmagent.protocol_simulation",
         "references/scenario-audit-template.md",
         registry=reg,
@@ -439,7 +463,9 @@ def test_protocol_simulation_playbook_content_contract():
 def test_model_review_playbook_content_contract():
     reg = default_registry()
     registered = set(reg.names())
-    pb = load_playbook("pharmagent.model_review", registry=reg)
+    with pytest.raises(PlaybookApprovalError):
+        load_playbook("pharmagent.model_review", registry=reg)
+    pb = load_playbook_for_review("pharmagent.model_review", registry=reg)
 
     assert pb.name == "pharmagent-model-review"
     assert pb.version == "1.0.0"
@@ -484,7 +510,7 @@ def test_model_review_playbook_content_contract():
     ):
         assert phrase in text, f"Missing required phrase {phrase!r} in model-review playbook"
 
-    res = read_playbook_resource(
+    res = read_playbook_resource_for_review(
         "pharmagent.model_review",
         "references/translation-verification-checklist.md",
         registry=reg,
@@ -515,7 +541,7 @@ def test_literature_extraction_playbook_disabled_state_and_specification_contrac
     assert adapter_res.result["status"] == "error"
     assert adapter_res.result["error_code"] == "playbook_disabled"
 
-    pb = load_playbook("pharmagent.literature_extraction", registry=reg, allow_disabled=True)
+    pb = load_playbook_for_review("pharmagent.literature_extraction", registry=reg, allow_disabled=True)
     assert pb.status == "draft"
     assert pb.approval_status == "pending_owner_review"
     assert pb.runtime_available is False
@@ -544,7 +570,7 @@ def test_literature_extraction_playbook_disabled_state_and_specification_contrac
     ):
         assert required_spec_topic in text, f"Missing spec topic {required_spec_topic!r}"
 
-    res = read_playbook_resource(
+    res = read_playbook_resource_for_review(
         "pharmagent.literature_extraction",
         "references/evidence-record-schema-spec.md",
         registry=reg,
@@ -556,10 +582,12 @@ def test_literature_extraction_playbook_disabled_state_and_specification_contrac
 
 def test_existing_captured_skills_remain_unchanged():
     store = SkillStore(":memory:")
-    steps = distill_steps([
-        {"agent": "data_manager", "tool": "load_dataset", "args": {"path": "x.csv"}},
-        {"agent": "nca", "tool": "compute_nca", "args": {}},
-    ])
+    steps = distill_steps(
+        [
+            {"agent": "data_manager", "tool": "load_dataset", "args": {"path": "x.csv"}},
+            {"agent": "nca", "tool": "compute_nca", "args": {}},
+        ]
+    )
     sk = Skill(
         name="captured-nca",
         description="captured session workflow",

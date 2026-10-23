@@ -1,4 +1,5 @@
 """Canonical SHA-256 digest determinism, 1-byte sensitivity, and deep immutability tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,9 +13,9 @@ from app.playbooks import (
     catalog_provenance_snapshot,
     compute_canonical_digest,
     list_playbooks,
-    load_playbook,
+    load_playbook_for_review,
     playbook_provenance,
-    read_playbook_resource,
+    read_playbook_resource_for_review,
     validate_all_playbooks,
     validate_playbook,
 )
@@ -51,7 +52,7 @@ def test_canonical_digest_changes_on_single_byte_change_in_metadata_body_or_reso
         tmp_path,
         resources={"references/note.md": "Reference value tolerance: 0.01\n"},
     )
-    base_pb = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path)
+    base_pb = load_playbook_for_review("pharmagent.demo_protocol", skills_root=tmp_path)
     d0 = base_pb.canonical_digest
 
     (pb_dir / "SKILL.md").write_text(
@@ -60,7 +61,7 @@ def test_canonical_digest_changes_on_single_byte_change_in_metadata_body_or_reso
         ),
         encoding="utf-8",
     )
-    d_body = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
+    d_body = load_playbook_for_review("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
     assert d_body != d0
 
     (pb_dir / "SKILL.md").write_text(
@@ -70,11 +71,11 @@ def test_canonical_digest_changes_on_single_byte_change_in_metadata_body_or_reso
         ),
         encoding="utf-8",
     )
-    d_meta = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
+    d_meta = load_playbook_for_review("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
     assert d_meta not in {d0, d_body}
 
     (pb_dir / "references" / "note.md").write_text("Reference value tolerance: 0.02\n", encoding="utf-8")
-    d_res = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
+    d_res = load_playbook_for_review("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
     assert d_res not in {d0, d_body, d_meta}
 
 
@@ -120,9 +121,9 @@ def test_canonical_digest_is_reproducible_and_newline_normalized(tmp_path: Path)
     _write_playbook(crlf_dir, skill_md=md_crlf, resources={"references/a.md": "line1\r\nline2\r\n"})
     _write_playbook(reordered_dir, skill_md=md_reordered, resources={"references/a.md": "line1\rline2\r"})
 
-    pb_lf = load_playbook("pharmagent.demo_protocol", skills_root=lf_dir)
-    pb_crlf = load_playbook("pharmagent.demo_protocol", skills_root=crlf_dir)
-    pb_reordered = load_playbook("pharmagent.demo_protocol", skills_root=reordered_dir)
+    pb_lf = load_playbook_for_review("pharmagent.demo_protocol", skills_root=lf_dir)
+    pb_crlf = load_playbook_for_review("pharmagent.demo_protocol", skills_root=crlf_dir)
+    pb_reordered = load_playbook_for_review("pharmagent.demo_protocol", skills_root=reordered_dir)
     assert pb_lf.canonical_digest == pb_crlf.canonical_digest == pb_reordered.canonical_digest
     assert pb_lf.canonical_digest == compute_canonical_digest(pb_lf)
 
@@ -130,8 +131,8 @@ def test_canonical_digest_is_reproducible_and_newline_normalized(tmp_path: Path)
 def test_caller_isolation_and_deep_immutability_across_all_returned_types():
     reg = default_registry()
     summaries_a = list_playbooks(registry=reg)
-    pb_a = load_playbook("pharmagent.protocol_simulation", registry=reg)
-    res_a = read_playbook_resource(
+    pb_a = load_playbook_for_review("pharmagent.protocol_simulation", registry=reg)
+    res_a = read_playbook_resource_for_review(
         "pharmagent.protocol_simulation",
         "references/scenario-audit-template.md",
         registry=reg,
@@ -148,7 +149,7 @@ def test_caller_isolation_and_deep_immutability_across_all_returned_types():
     with pytest.raises(TypeError):
         snap_a["playbooks"][0]["status"] = "approved"  # type: ignore[index]
 
-    pb_b = load_playbook("pharmagent.protocol_simulation", registry=reg)
+    pb_b = load_playbook_for_review("pharmagent.protocol_simulation", registry=reg)
     assert pb_b == pb_a
     assert pb_b.canonical_digest == pb_a.canonical_digest
 
@@ -159,7 +160,7 @@ def test_deterministic_output_regardless_of_filesystem_enumeration_order(monkeyp
     monkeypatch.setattr(Path, "iterdir", lambda self: iter(sorted(orig_iterdir(self), key=lambda p: p.name)))
     list_fwd = list_playbooks()
     rep_fwd = validate_all_playbooks()
-    pb_fwd = load_playbook("pharmagent.protocol_simulation")
+    pb_fwd = load_playbook_for_review("pharmagent.protocol_simulation")
 
     monkeypatch.setattr(
         Path,
@@ -168,7 +169,7 @@ def test_deterministic_output_regardless_of_filesystem_enumeration_order(monkeyp
     )
     list_rev = list_playbooks()
     rep_rev = validate_all_playbooks()
-    pb_rev = load_playbook("pharmagent.protocol_simulation")
+    pb_rev = load_playbook_for_review("pharmagent.protocol_simulation")
 
     assert list_fwd == list_rev
     assert rep_fwd.model_dump() == rep_rev.model_dump()
@@ -177,7 +178,7 @@ def test_deterministic_output_regardless_of_filesystem_enumeration_order(monkeyp
 
 
 def test_digest_computation_from_summary_and_mapping_and_source_mapping(tmp_path: Path):
-    pb = load_playbook("pharmagent.protocol_simulation")
+    pb = load_playbook_for_review("pharmagent.protocol_simulation")
     summary = pb.to_summary()
     assert compute_canonical_digest(summary, instructions=pb.instructions) == pb.canonical_digest
     assert (

@@ -1,4 +1,5 @@
 """Strict YAML frontmatter security, depth bounds, resolver isolation, and schema governance tests."""
+
 from __future__ import annotations
 
 import datetime
@@ -19,6 +20,7 @@ from app.playbooks import (
     freeze_value,
     list_playbooks,
     load_playbook,
+    load_playbook_for_review,
     run_playbook_adapter,
     validate_all_playbooks,
     validate_playbook,
@@ -205,7 +207,7 @@ def test_global_yaml_safe_loader_is_not_mutated_and_deep_nesting_is_bounded(tmp_
     )
     with pytest.raises(PlaybookDisabledError):
         load_playbook("pharmagent.dep_pb", skills_root=dep_root)
-    pb_dep = load_playbook("pharmagent.dep_pb", skills_root=dep_root, allow_disabled=True)
+    pb_dep = load_playbook_for_review("pharmagent.dep_pb", skills_root=dep_root, allow_disabled=True)
     with pytest.raises(PlaybookDisabledError):
         check_tool_allowed(pb_dep, "compute_nca")
 
@@ -372,4 +374,3 @@ def test_pyyaml_declared_directly_in_requirements_txt() -> None:
     assert pyyaml_pins == [f"PyYAML=={yaml.__version__}"], (
         f"Expected PyYAML=={yaml.__version__} pinned in backend/requirements.txt, got {pyyaml_pins}"
     )
-

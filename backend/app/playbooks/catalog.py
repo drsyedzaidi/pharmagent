@@ -1,7 +1,9 @@
-"""Deterministic catalog discovery, progressive-disclosure loader, resource reader, and provenance API."""
+"""Deterministic catalog discovery, review vs runtime loaders, tool authorization, and provenance API."""
+
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -20,6 +22,7 @@ from .filesystem import (
 )
 from .schema import (
     MAX_RESOURCE_BYTES,
+    PlaybookApprovalError,
     PlaybookDisabledError,
     PlaybookLookupError,
     PlaybookProvenance,
@@ -60,16 +63,23 @@ __all__ = [
     "_parse_frontmatter",
     "_read_utf8_bounded",
     "_scan_markdown_links",
+    "authorize_playbook_tool",
     "catalog_provenance_snapshot",
     "check_tool_allowed",
     "compute_canonical_digest",
     "list_playbooks",
+    "load_approved_playbook",
     "load_playbook",
+    "load_playbook_for_review",
     "playbook_provenance",
     "read_playbook_resource",
+    "read_playbook_resource_for_review",
     "validate_all_playbooks",
     "validate_playbook",
 ]
+
+_ISO_DATE_FULL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SEMVER_FULL_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
 def _require_valid_catalog(
@@ -95,6 +105,51 @@ def _require_valid_catalog(
     return root.resolve(strict=True), playbooks
 
 
+def _verify_runtime_approved(
+    pb: ScientificPlaybook | PlaybookSummary,
+    *,
+    expected_digest: str | None = None,
+) -> None:
+    """Enforce that a playbook is enabled, owner-approved, version-stable, and digest-valid for runtime use."""
+    if not pb.runtime_available or pb.approval_status == "rejected" or pb.status == "deprecated":
+        raise PlaybookDisabledError(
+            f"Playbook {pb.playbook_id!r} is disabled for runtime execution "
+            f"(status={pb.status!r}, approval_status={pb.approval_status!r}, "
+            f"runtime_available={pb.runtime_available})"
+        )
+    if (
+        pb.approval_status != "approved"
+        or pb.status != "approved"
+        or not (isinstance(pb.approved_by, str) and pb.approved_by.strip())
+        or not (isinstance(pb.approved_date, str) and _ISO_DATE_FULL_RE.fullmatch(pb.approved_date))
+    ):
+        raise PlaybookApprovalError(
+            f"Playbook {pb.playbook_id!r} requires owner approval before runtime execution or tool authorization "
+            f"(status={pb.status!r}, approval_status={pb.approval_status!r})"
+        )
+    try:
+        _date.fromisoformat(pb.approved_date)
+    except ValueError as exc:
+        raise PlaybookApprovalError(
+            f"Playbook {pb.playbook_id!r} has invalid approved_date {pb.approved_date!r}"
+        ) from exc
+    if pb.version.startswith("0."):
+        raise PlaybookApprovalError(
+            f"Playbook {pb.playbook_id!r} version {pb.version!r} is a 0.x.y pre-release and cannot execute at runtime"
+        )
+    if isinstance(pb, ScientificPlaybook):
+        actual_digest = compute_canonical_digest(pb)
+        if actual_digest != pb.canonical_digest:
+            raise PlaybookSecurityError(
+                f"digest_mismatch: Playbook {pb.playbook_id!r} canonical digest does not match content"
+            )
+    if expected_digest is not None and pb.canonical_digest != expected_digest:
+        raise PlaybookSecurityError(
+            f"digest_mismatch: Playbook {pb.playbook_id!r} digest {pb.canonical_digest!r} "
+            f"!= expected {expected_digest!r}"
+        )
+
+
 def list_playbooks(
     skills_root: Path | str | None = None,
     *,
@@ -103,27 +158,22 @@ def list_playbooks(
 ) -> tuple[PlaybookSummary, ...]:
     """Return deterministic discovery summaries for all playbooks (progressive disclosure tier 1)."""
     _root, playbooks = _require_valid_catalog(skills_root=skills_root, registry=registry)
-    return tuple(
-        pb.to_summary()
-        for pb in playbooks
-        if include_disabled or pb.runtime_available
-    )
+    return tuple(pb.to_summary() for pb in playbooks if include_disabled or pb.runtime_available)
 
 
-def load_playbook(
+def load_playbook_for_review(
     playbook_id: str,
     version: str | None = None,
     *,
     skills_root: Path | str | None = None,
     registry: ToolRegistry | None = None,
     allow_disabled: bool = False,
+    expected_digest: str | None = None,
 ) -> ScientificPlaybook:
-    """Load and validate full instructions for a single playbook (progressive disclosure tier 2)."""
+    """Explicit human-review API: load a validated playbook's full text (including `pending_owner_review`)."""
     clean_id = _validate_identifier_arg(playbook_id, "playbook_id")
     if version is not None:
-        if not isinstance(version, str) or not re.fullmatch(
-            r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$", version.strip()
-        ):
+        if not isinstance(version, str) or not _SEMVER_FULL_RE.fullmatch(version.strip()):
             raise PlaybookVersionError(f"Invalid semantic version requested: {version!r}")
         version = version.strip()
 
@@ -136,45 +186,73 @@ def load_playbook(
             f"Playbook {matched.playbook_id!r} has version {matched.version!r}, not requested {version!r}"
         )
     if (
-        not matched.runtime_available
-        or matched.approval_status == "rejected"
-        or matched.status == "deprecated"
+        not matched.runtime_available or matched.approval_status == "rejected" or matched.status == "deprecated"
     ) and not allow_disabled:
         raise PlaybookDisabledError(
             f"Playbook {matched.playbook_id!r} is disabled for runtime execution "
             f"(status={matched.status!r}, approval_status={matched.approval_status!r}, "
             f"runtime_available={matched.runtime_available})"
         )
+    if compute_canonical_digest(matched) != matched.canonical_digest:
+        raise PlaybookSecurityError(f"Digest mismatch when loading {matched.playbook_id!r}")
+    if expected_digest is not None and matched.canonical_digest != expected_digest:
+        raise PlaybookSecurityError(
+            f"digest_mismatch: Playbook {matched.playbook_id!r} digest {matched.canonical_digest!r} "
+            f"!= expected {expected_digest!r}"
+        )
     return matched
 
 
-def read_playbook_resource(
+def load_approved_playbook(
     playbook_id: str,
-    resource: str,
-    *,
     version: str | None = None,
+    *,
     skills_root: Path | str | None = None,
     registry: ToolRegistry | None = None,
-    allow_disabled: bool = False,
-) -> PlaybookResource:
-    """Read a single validated, confined resource file from a playbook (progressive disclosure tier 3)."""
-    posix, norm_rel = _validate_and_normalize_resource_arg(resource)
-
-    raw_root = Path(skills_root) if skills_root is not None else DEFAULT_SKILLS_ROOT
-    pb = load_playbook(
+    expected_digest: str | None = None,
+) -> ScientificPlaybook:
+    """Runtime loader: load a playbook ONLY if it is owner-approved, runtime-enabled, and digest-valid."""
+    pb = load_playbook_for_review(
         playbook_id,
         version=version,
-        skills_root=raw_root,
+        skills_root=skills_root,
         registry=registry,
-        allow_disabled=allow_disabled,
+        allow_disabled=False,
     )
+    _verify_runtime_approved(pb, expected_digest=expected_digest)
+    return pb
+
+
+def load_playbook(
+    playbook_id: str,
+    version: str | None = None,
+    *,
+    skills_root: Path | str | None = None,
+    registry: ToolRegistry | None = None,
+    expected_digest: str | None = None,
+) -> ScientificPlaybook:
+    """Load a validated playbook for runtime execution (`approval_status == 'approved'` unconditionally required)."""
+    return load_approved_playbook(
+        playbook_id,
+        version=version,
+        skills_root=skills_root,
+        registry=registry,
+        expected_digest=expected_digest,
+    )
+
+
+def _read_resource_from_loaded_playbook(
+    pb: ScientificPlaybook,
+    raw_root: Path,
+    posix: Any,
+    norm_rel: str,
+) -> PlaybookResource:
     real_root = raw_root.resolve(strict=True)
     pb_dir = (real_root / pb.name).resolve(strict=True)
     if not pb_dir.is_relative_to(real_root):
         raise PlaybookSecurityError("Playbook directory escapes skills_root")
 
     real_candidate = _resolve_confined_resource_path(pb_dir, posix, norm_rel, pb.playbook_id)
-
     if norm_rel not in pb.resource_paths:
         raise PlaybookLookupError(f"Resource {norm_rel!r} is not registered in playbook {pb.playbook_id!r}")
 
@@ -205,13 +283,62 @@ def read_playbook_resource(
     )
 
 
-def check_tool_allowed(
-    playbook: ScientificPlaybook | PlaybookSummary,
+def read_playbook_resource_for_review(
+    playbook_id: str,
+    resource: str,
+    *,
+    version: str | None = None,
+    skills_root: Path | str | None = None,
+    registry: ToolRegistry | None = None,
+    allow_disabled: bool = False,
+    expected_digest: str | None = None,
+) -> PlaybookResource:
+    """Explicit human-review API: read a confined resource from a playbook (including `pending_owner_review`)."""
+    posix, norm_rel = _validate_and_normalize_resource_arg(resource)
+    raw_root = Path(skills_root) if skills_root is not None else DEFAULT_SKILLS_ROOT
+    pb = load_playbook_for_review(
+        playbook_id,
+        version=version,
+        skills_root=raw_root,
+        registry=registry,
+        allow_disabled=allow_disabled,
+        expected_digest=expected_digest,
+    )
+    return _read_resource_from_loaded_playbook(pb, raw_root, posix, norm_rel)
+
+
+def read_playbook_resource(
+    playbook_id: str,
+    resource: str,
+    *,
+    version: str | None = None,
+    skills_root: Path | str | None = None,
+    registry: ToolRegistry | None = None,
+    expected_digest: str | None = None,
+) -> PlaybookResource:
+    """Read a confined resource from an owner-approved playbook (progressive disclosure tier 3)."""
+    posix, norm_rel = _validate_and_normalize_resource_arg(resource)
+    raw_root = Path(skills_root) if skills_root is not None else DEFAULT_SKILLS_ROOT
+    pb = load_playbook(
+        playbook_id,
+        version=version,
+        skills_root=raw_root,
+        registry=registry,
+        expected_digest=expected_digest,
+    )
+    return _read_resource_from_loaded_playbook(pb, raw_root, posix, norm_rel)
+
+
+def authorize_playbook_tool(
+    playbook_or_id: ScientificPlaybook | PlaybookSummary | str,
     tool_name: str,
     *,
+    version: str | None = None,
+    skills_root: Path | str | None = None,
     registry: ToolRegistry | None = None,
+    expected_digest: str | None = None,
 ) -> bool:
-    """Enforce that `tool_name` exists in `ToolRegistry` and is allowlisted by `playbook`."""
+    """Authorize `tool_name` only if the playbook is owner-approved on disk, digest-valid, and allowlists the tool."""
     if not isinstance(tool_name, str) or not tool_name.strip():
         raise PlaybookSecurityError("non_existent_tool: tool_name must be a non-empty string")
     clean_tool = tool_name.strip()
@@ -220,19 +347,56 @@ def check_tool_allowed(
         raise PlaybookSecurityError(
             f"non_existent_tool: Tool {clean_tool!r} does not exist in the current ToolRegistry"
         )
-    if (
-        not playbook.runtime_available
-        or playbook.approval_status == "rejected"
-        or playbook.status == "deprecated"
-    ):
-        raise PlaybookDisabledError(
-            f"Playbook {playbook.playbook_id!r} is not available for runtime execution and cannot authorize tools"
+
+    if isinstance(playbook_or_id, (ScientificPlaybook, PlaybookSummary)):
+        _verify_runtime_approved(playbook_or_id, expected_digest=expected_digest)
+        target_root = Path(skills_root) if skills_root is not None else DEFAULT_SKILLS_ROOT
+        on_disk = load_approved_playbook(
+            playbook_or_id.playbook_id,
+            version=version or playbook_or_id.version,
+            skills_root=target_root,
+            registry=reg,
+            expected_digest=expected_digest or playbook_or_id.canonical_digest,
         )
-    if clean_tool not in playbook.allowed_tools:
+        expected_summary = (
+            playbook_or_id.to_summary() if isinstance(playbook_or_id, ScientificPlaybook) else playbook_or_id
+        )
+        if on_disk.to_summary() != expected_summary:
+            raise PlaybookSecurityError("digest_mismatch: in-memory playbook metadata differs from on-disk playbook")
+    elif isinstance(playbook_or_id, str):
+        on_disk = load_approved_playbook(
+            playbook_or_id,
+            version=version,
+            skills_root=skills_root,
+            registry=reg,
+            expected_digest=expected_digest,
+        )
+    else:
+        raise PlaybookSecurityError(f"Invalid playbook reference type: {type(playbook_or_id).__name__}")
+
+    if clean_tool not in on_disk.allowed_tools:
         raise PlaybookSecurityError(
-            f"undeclared_tool: Tool {clean_tool!r} is not in allowed_tools for playbook {playbook.playbook_id!r}"
+            f"undeclared_tool: Tool {clean_tool!r} is not in allowed_tools for playbook {on_disk.playbook_id!r}"
         )
     return True
+
+
+def check_tool_allowed(
+    playbook: ScientificPlaybook | PlaybookSummary,
+    tool_name: str,
+    *,
+    skills_root: Path | str | None = None,
+    registry: ToolRegistry | None = None,
+    expected_digest: str | None = None,
+) -> bool:
+    """Enforce that `playbook` is owner-approved, digest-valid on disk, and allowlists `tool_name` in `ToolRegistry`."""
+    return authorize_playbook_tool(
+        playbook,
+        tool_name,
+        skills_root=skills_root,
+        registry=registry,
+        expected_digest=expected_digest,
+    )
 
 
 def playbook_provenance(
@@ -243,8 +407,8 @@ def playbook_provenance(
     registry: ToolRegistry | None = None,
     allow_disabled: bool = False,
 ) -> PlaybookProvenance:
-    """Return an immutable provenance identity record for a loaded Scientific Playbook."""
-    pb = load_playbook(
+    """Return an immutable provenance identity record for a Scientific Playbook."""
+    pb = load_playbook_for_review(
         playbook_id,
         version=version,
         skills_root=skills_root,
@@ -276,17 +440,19 @@ def catalog_provenance_snapshot(
 ) -> MappingProxyType[str, Any]:
     """Return a deeply immutable snapshot of all catalog playbooks for future provenance hooks."""
     summaries = list_playbooks(skills_root=skills_root, registry=registry, include_disabled=True)
-    return freeze_value({
-        "playbooks": [
-            {
-                "playbook_id": s.playbook_id,
-                "name": s.name,
-                "version": s.version,
-                "canonical_digest": s.canonical_digest,
-                "status": s.status,
-                "approval_status": s.approval_status,
-                "runtime_available": s.runtime_available,
-            }
-            for s in summaries
-        ]
-    })
+    return freeze_value(
+        {
+            "playbooks": [
+                {
+                    "playbook_id": s.playbook_id,
+                    "name": s.name,
+                    "version": s.version,
+                    "canonical_digest": s.canonical_digest,
+                    "status": s.status,
+                    "approval_status": s.approval_status,
+                    "runtime_available": s.runtime_available,
+                }
+                for s in summaries
+            ]
+        }
+    )

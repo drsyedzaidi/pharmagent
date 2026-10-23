@@ -1,4 +1,5 @@
 """Deterministic canonical metadata normalization, newline normalization, and SHA-256 digest generation."""
+
 from __future__ import annotations
 
 import hashlib

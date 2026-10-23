@@ -1,4 +1,5 @@
 """Strict YAML frontmatter loader with duplicate-key, alias/anchor/merge, custom-tag, and depth guards."""
+
 from __future__ import annotations
 
 import re
@@ -11,16 +12,18 @@ from .schema import PlaybookValidationIssue
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(?P<yaml>.*?)\n---[ \t]*(?:\n(?P<body>.*))?\Z", re.DOTALL)
 _ZERO_WIDTH_RE = re.compile(r"[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f]")
-MAX_YAML_DEPTH = 16
-_SAFE_YAML_TAGS = frozenset({
-    "tag:yaml.org,2002:str",
-    "tag:yaml.org,2002:int",
-    "tag:yaml.org,2002:float",
-    "tag:yaml.org,2002:bool",
-    "tag:yaml.org,2002:null",
-    "tag:yaml.org,2002:seq",
-    "tag:yaml.org,2002:map",
-})
+MAX_YAML_DEPTH = 8
+_SAFE_YAML_TAGS = frozenset(
+    {
+        "tag:yaml.org,2002:str",
+        "tag:yaml.org,2002:int",
+        "tag:yaml.org,2002:float",
+        "tag:yaml.org,2002:bool",
+        "tag:yaml.org,2002:null",
+        "tag:yaml.org,2002:seq",
+        "tag:yaml.org,2002:map",
+    }
+)
 
 
 class _DuplicateYamlKeyError(ValueError):
@@ -87,63 +90,87 @@ def _parse_frontmatter(raw_text: str) -> tuple[dict[str, Any] | None, str, list[
     normalized = _normalize_newlines(raw_text)
     m = _FRONTMATTER_RE.match(normalized)
     if not m:
-        return None, "", [
-            PlaybookValidationIssue(
-                code="invalid_frontmatter",
-                field_or_path="SKILL.md",
-                message="SKILL.md must begin with YAML frontmatter delimited by `---` lines",
-                severity="error",
-            )
-        ]
+        return (
+            None,
+            "",
+            [
+                PlaybookValidationIssue(
+                    code="invalid_frontmatter",
+                    field_or_path="SKILL.md",
+                    message="SKILL.md must begin with YAML frontmatter delimited by `---` lines",
+                    severity="error",
+                )
+            ],
+        )
     yaml_block = m.group("yaml")
     body = (m.group("body") or "").strip()
     try:
         parsed = yaml.load(yaml_block, Loader=_StrictSafeLoader)
     except _DuplicateYamlKeyError as exc:
-        return None, body, [
-            PlaybookValidationIssue(
-                code="duplicate_yaml_key",
-                field_or_path="frontmatter",
-                message=str(exc),
-                severity="security",
-            )
-        ]
+        return (
+            None,
+            body,
+            [
+                PlaybookValidationIssue(
+                    code="duplicate_yaml_key",
+                    field_or_path="frontmatter",
+                    message=str(exc),
+                    severity="security",
+                )
+            ],
+        )
     except (_UnsafeYamlError, RecursionError) as exc:
         msg = str(exc) if isinstance(exc, _UnsafeYamlError) else "YAML nesting depth exceeded recursion limit"
-        return None, body, [
-            PlaybookValidationIssue(
-                code="unsafe_yaml",
-                field_or_path="frontmatter",
-                message=msg,
-                severity="security",
-            )
-        ]
+        return (
+            None,
+            body,
+            [
+                PlaybookValidationIssue(
+                    code="unsafe_yaml",
+                    field_or_path="frontmatter",
+                    message=msg,
+                    severity="security",
+                )
+            ],
+        )
     except yaml.constructor.ConstructorError as exc:
-        return None, body, [
-            PlaybookValidationIssue(
-                code="unsafe_yaml",
-                field_or_path="frontmatter",
-                message=f"Unsafe YAML constructor rejected: {exc}",
-                severity="security",
-            )
-        ]
+        return (
+            None,
+            body,
+            [
+                PlaybookValidationIssue(
+                    code="unsafe_yaml",
+                    field_or_path="frontmatter",
+                    message=f"Unsafe YAML constructor rejected: {exc}",
+                    severity="security",
+                )
+            ],
+        )
     except yaml.YAMLError as exc:
-        return None, body, [
-            PlaybookValidationIssue(
-                code="invalid_frontmatter",
-                field_or_path="frontmatter",
-                message=f"Invalid YAML syntax in frontmatter: {exc}",
-                severity="error",
-            )
-        ]
+        return (
+            None,
+            body,
+            [
+                PlaybookValidationIssue(
+                    code="invalid_frontmatter",
+                    field_or_path="frontmatter",
+                    message=f"Invalid YAML syntax in frontmatter: {exc}",
+                    severity="error",
+                )
+            ],
+        )
 
     if not isinstance(parsed, dict):
-        return None, body, [
-            PlaybookValidationIssue(
-                code="invalid_frontmatter",
-                field_or_path="frontmatter",
-                message="YAML frontmatter must be a key-value mapping",
-                severity="error",
-            )
-        ]
+        return (
+            None,
+            body,
+            [
+                PlaybookValidationIssue(
+                    code="invalid_frontmatter",
+                    field_or_path="frontmatter",
+                    message="YAML frontmatter must be a key-value mapping",
+                    severity="error",
+                )
+            ],
+        )
     return parsed, body, []

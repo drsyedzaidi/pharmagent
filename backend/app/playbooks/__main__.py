@@ -1,4 +1,5 @@
 """CLI: `python -m app.playbooks [--check] [--format text|json] [--skills-root DIR]`."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,11 +12,9 @@ from .schema import CatalogValidationReport
 
 
 def render_check_text(report: CatalogValidationReport) -> str:
-    all_issues = [
-        (r.playbook_id or r.name or "unknown", i)
-        for r in report.results
-        for i in r.issues
-    ] + [("catalog", i) for i in report.catalog_issues]
+    all_issues = [(r.playbook_id or r.name or "unknown", i) for r in report.results for i in r.issues] + [
+        ("catalog", i) for i in report.catalog_issues
+    ]
 
     lines = [
         f"Playbooks: {report.total_playbooks}",
@@ -39,18 +38,14 @@ def render_check_text(report: CatalogValidationReport) -> str:
             f"runtime={r.runtime_available} digest={digest_short} valid={r.valid}"
         )
     for owner, issue in all_issues:
-        lines.append(
-            f"  ! [{issue.severity}] {owner} ({issue.code} @ {issue.field_or_path}): {issue.message}"
-        )
+        lines.append(f"  ! [{issue.severity}] {owner} ({issue.code} @ {issue.field_or_path}): {issue.message}")
     return "\n".join(lines) + "\n"
 
 
 def render_check_json(report: CatalogValidationReport) -> str:
-    all_issues = [
-        {"playbook": r.playbook_id or r.name, **i.model_dump()}
-        for r in report.results
-        for i in r.issues
-    ] + [{"playbook": "catalog", **i.model_dump()} for i in report.catalog_issues]
+    all_issues = [{"playbook": r.playbook_id or r.name, **i.model_dump()} for r in report.results for i in r.issues] + [
+        {"playbook": "catalog", **i.model_dump()} for i in report.catalog_issues
+    ]
 
     payload = {
         "valid": report.valid,

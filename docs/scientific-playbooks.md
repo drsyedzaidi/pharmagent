@@ -37,7 +37,7 @@ Before designing or authoring any playbook, we audited the primary external sour
 
 ## 3. Phase 0 Discovery: Verified PharmAgent Tool Inventory (`origin/main`)
 
-Inspection of `backend/app/tools/builtins.py` (`default_registry()`) verified **49 registered tools** across 22 `*_tools.py` modules on `origin/main` (`5d099fd576e06dd6d18553202f1a0d87cd5729ec`):
+Inspection of `backend/app/tools/builtins.py` (`default_registry()`) verified **49 registered tools** across 22 `*_tools.py` modules on `origin/main` (`524d4b0c47a78bff0dfa6a67ff411e46ba76caa1`):
 
 | Category | Verified Registered Tools (`default_registry()`, 49 total) | Backing Tool Module(s) |
 |---|---|---|
@@ -53,10 +53,10 @@ Inspection of `backend/app/tools/builtins.py` (`default_registry()`) verified **
 
 1. **No PBPK or QSP Engine**: PharmAgent has **zero** PBPK or QSP solvers. No PBPK/QSP execution is claimed or implemented.
 2. **NONMEM & mrgsolve are Export-Only**: `app.compute.nmexport` deterministically generates NONMEM `.ctl` (`ADVAN1/2/3/4/11`) and mrgsolve `.cpp` (`$PARAM`, `$CMT`, `$MAIN`, `$ODE`/`$PK`, `$TABLE`) code for the 6 built-in closed-form models (`iv_1cmt`, `oral_1cmt`, `oral_1cmt_lag`, `iv_2cmt`, `oral_2cmt`, `iv_3cmt`), but PharmAgent **cannot execute `nmfe` or `mrgsolve` at runtime**.
-3. **Unmerged Branches Excluded**:
+3. **Unmerged Branches & Guarded Provenance Boundary**:
    - PR #21 (PopPK physiological plausibility checker) is unmerged and is not referenced as an active runtime tool.
    - PR #17 (plot digitizer) is unmerged and excluded.
-   - PR #20 (conventions run provenance) is unmerged; `app.playbooks` provides standalone provenance helpers (`playbook_provenance()`, `catalog_provenance_snapshot()`) without modifying guarded `provenance.py` or `pharmstate.py`.
+   - PR #20 (conventions run provenance) is merged on `origin/main` (`524d4b0c47a78bff0dfa6a67ff411e46ba76caa1`); to preserve guarded-file isolation, `app.playbooks` provides standalone provenance helpers (`playbook_provenance()`, `catalog_provenance_snapshot()`) without modifying guarded `provenance.py` or `pharmstate.py`.
 4. **No Literature/PDF Extraction Backend**: Only `build_briefing_memo` and internal citation/audit helpers (which check internal `PharmState` keys and artifact hashes) exist. There is no PDF/HTML/XML parser, OCR engine, table extractor, or unverified-evidence staging table on `origin/main`.
 
 ---
@@ -69,7 +69,7 @@ All shipped playbooks live under the canonical `skills/` directory and keep `app
 |---|---|---|---|---|---|---|
 | `pharmagent.protocol_simulation` | `skills/pharmagent-protocol-simulation/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 10-step clinical protocol simulation & dose-selection review across 31 allowed tools (`load_dataset`, `profile_pk_dataset`, `validate_cdisc`, `compute_nca`, `simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_special_population`, `run_pediatric_simulation`, `fit_exposure_response`, `select_optimal_dose`, `run_qc`, `adversarial_review`, etc.). Includes confined reference `references/scenario-audit-template.md`. |
 | `pharmagent.model_review` | `skills/pharmagent-model-review/` | `1.0.0` | `reviewed` | `pending_owner_review` | `true` | 6-step compartmental PK / PopPK model review and NONMEM/mrgsolve translation verification checklist across 22 verified modeling, diagnostic, simulation, and QC tools. Explicitly forbids cross-engine raw `OFV`/`AIC`/`BIC` comparison and documents NONMEM/mrgsolve as export-only. Includes confined reference `references/translation-verification-checklist.md`. |
-| `pharmagent.literature_extraction` | `skills/pharmagent-literature-extraction/` | `0.1.0` | `draft` | `pending_owner_review` | **`false`** (disabled) | Readiness assessment and security/provenance specification for future literature evidence extraction. Fails closed (`PlaybookDisabledError`) on runtime `load_playbook()` and `read_playbook_resource()` unless `allow_disabled=True` is passed for explicit specification review. Includes confined reference `references/evidence-record-schema-spec.md`. |
+| `pharmagent.literature_extraction` | `skills/pharmagent-literature-extraction/` | `0.1.0` | `draft` | `pending_owner_review` | **`false`** (disabled) | Readiness assessment and security/provenance specification for future literature evidence extraction. Fails closed (`PlaybookDisabledError`) on runtime `load_playbook()` and `read_playbook_resource()`; inspectable only via explicit review APIs (`load_playbook_for_review(..., allow_disabled=True)` and `read_playbook_resource_for_review(..., allow_disabled=True)`). Includes confined reference `references/evidence-record-schema-spec.md`. |
 
 ---
 
@@ -81,23 +81,32 @@ To prevent prompt bloat and context pollution, `backend/app/playbooks/` implemen
 Tier 1: list_playbooks()
   └─> Returns tuple[PlaybookSummary, ...]
       (Discovery metadata, governance status, canonical_digest, allowed_tools,
-       required_inputs, limitations, resource_paths — NO instructions or resource bodies)
+       required_inputs, limitations, resource_paths — NO instructions or resource bodies.
+       Lists both approved and pending_owner_review playbooks.)
 
-Tier 2: load_playbook(playbook_id, version=None)
-  └─> Returns ScientificPlaybook
-      (Validated instructions body + full identity/governance metadata + untrusted_data=True;
-       blocks disabled playbooks unless allow_disabled=True; never executes scripts)
+Tier 2 (Runtime): load_approved_playbook(playbook_id, version=None) / load_playbook(playbook_id, version=None)
+  └─> Returns ScientificPlaybook ONLY when status=="approved", approval_status=="approved",
+      runtime_available is True, approved_by/approved_date are valid, version >= 1.0.0,
+      and canonical_digest is verified. Rejects pending_owner_review playbooks with PlaybookApprovalError.
+      Accepts NO bypass parameter (`allow_disabled` is forbidden on all runtime APIs).
 
-Tier 3: read_playbook_resource(playbook_id, resource)
-  └─> Returns PlaybookResource
-      (Reads a single allowlisted static file confined inside the playbook directory,
-       verifies SHA-256 against the playbook's resource_digests, and returns identity metadata)
+Tier 2 (Human Review): load_playbook_for_review(playbook_id, version=None, allow_disabled=False)
+  └─> Returns ScientificPlaybook for explicit human inspection of pending_owner_review
+      (or disabled draft when allow_disabled=True) playbooks.
+
+Tier 3 (Runtime): read_playbook_resource(playbook_id, resource)
+  └─> Reads a single allowlisted static file confined inside an owner-approved playbook directory,
+      verifies SHA-256 against resource_digests, and returns identity metadata.
+      Accepts NO bypass parameter (`allow_disabled` is forbidden on all runtime APIs).
+      (Human review counterpart: read_playbook_resource_for_review(..., allow_disabled=False))
 ```
 
 Additional deterministic validation and governance entrypoints:
 - `validate_playbook(playbook_dir_or_file, *, skills_root=None, registry=None) -> PlaybookValidationResult`
 - `validate_all_playbooks(skills_root=None, *, registry=None) -> CatalogValidationReport`
-- `check_tool_allowed(playbook, tool_name, *, registry=None) -> bool`
+- `authorize_playbook_tool(playbook_or_id, tool_name, *, skills_root=None, registry=None, expected_digest=None) -> bool`
+- `check_tool_allowed(playbook, tool_name, *, skills_root=None, registry=None, expected_digest=None) -> bool`
+  (Both `authorize_playbook_tool` and `check_tool_allowed` re-verify owner approval and canonical digest against the on-disk catalog on every call, preventing bypass via in-memory object construction/mutation or stale cached state.)
 - `playbook_provenance(playbook_id, ...) -> PlaybookProvenance`
 - `catalog_provenance_snapshot(skills_root=None, ...) -> MappingProxyType[str, Any]`
 - CLI check command:
@@ -152,7 +161,18 @@ All playbook files (`SKILL.md` and `references/*`) are treated as **untrusted da
 - **Governance invariants**:
   - `requires_human_review` must always be `true`.
   - All new or modified playbooks default to `approval_status: pending_owner_review` and must not set `approved_by` or `approved_date`.
-  - A playbook with `status: approved` must also have `approval_status: approved`, a non-empty `approved_by`, and a valid calendar `approved_date` (`YYYY-MM-DD`).
+  - A playbook with `status: approved` must also have `approval_status: approved`, `runtime_available: true`, stable semantic `version >= 1.0.0`, a non-empty `approved_by`, and a valid calendar `approved_date` (`YYYY-MM-DD`).
+  - Runtime APIs (`load_playbook`, `load_approved_playbook`, `read_playbook_resource`, `authorize_playbook_tool`, `check_tool_allowed`, `run_playbook_adapter`) expose **no bypass flags** (`allow_disabled` exists only on the explicit human-review functions `load_playbook_for_review` and `read_playbook_resource_for_review`).
+
+### Approval Trust Anchor Requirement (Prerequisite Before Marking Any Playbook `approved` or Enabling Runtime Registration)
+
+In the current unregistered MVP, all three shipped playbooks remain `approval_status: pending_owner_review` and cannot execute at runtime.
+
+Because `approval_status`, `approved_by`, and `approved_date` are stored in `SKILL.md` frontmatter and hashed into `canonical_digest`, **frontmatter fields alone are not a standalone cryptographic trust anchor against an actor who can edit `skills/*/SKILL.md` on disk** (who could edit `SKILL.md` to set `approval_status: approved` and let the loader compute a new digest).
+
+Before any playbook is promoted to `approved` or wired into production runtime registration (`builtins.py` / `orchestrator.py`), PharmAgent must anchor approval outside the untrusted `skills/` directory via at least one of the following controls:
+1. **Trusted Python Pin Registry (Guarded Code / Manifest)**: A read-only mapping in guarded backend code (or a signed manifest outside `skills/`) that pins `(playbook_id, version) -> expected_canonical_digest` (comparable to `backend/app/core/conventions.py` digest pins) and passes `expected_digest` into `load_approved_playbook(...)` and `authorize_playbook_tool(...)`. Any edit to `SKILL.md` or `references/*`—even one claiming `approval_status: approved`—will then fail with `PlaybookSecurityError("digest_mismatch")` unless the guarded pin table is updated in an owner-approved PR.
+2. **Repository CODEOWNERS & Signed-Commit Governance**: Protect both `skills/**` and the guarded digest-pin registry via `.github/CODEOWNERS` and branch-protection rules requiring signed repository-owner review before merge.
 
 ### Reproducing the Canonical Digest (`canonical_digest`)
 
@@ -273,3 +293,30 @@ When the repository owner approves wiring `inspect_scientific_playbook` and play
 ```
 
 None of the diffs above have been applied in this branch; `git diff origin/main -- <guarded_files>` is completely empty.
+
+---
+
+## 9. Independent Review & Correction Cycle Disposition
+
+### 9.1 Correction Cycle Blockers Addressed
+
+| Blocker | Requirement | Resolution |
+|---|---|---|
+| **Blocker 1** | Split oversized files (`catalog.py`, `test_playbooks_security_and_mutation.py`) below the 800-line `AGENTS.md` limit | Refactored `backend/app/playbooks/` into 9 focused modules (`schema.py`, `yaml_loader.py`, `filesystem.py`, `digest.py`, `validation.py`, `catalog.py`, `adapter.py`, `__main__.py`, `__init__.py`; max 715 lines) and split tests into 7 focused files (`test_playbooks_catalog.py`, `test_playbooks_yaml_security.py`, `test_playbooks_filesystem_security.py`, `test_playbooks_tool_allowlist.py`, `test_playbooks_digest_and_immutability.py`, `test_playbooks_adapter_and_cli.py`, `test_playbooks_mutation_guards.py`; max 605 lines). Removed `test_playbooks_security_and_mutation.py`. |
+| **Blocker 2** | Declare PyYAML as a direct runtime dependency and audit advisories | Pinned `PyYAML==6.0.3` in `backend/requirements.txt` (zero sub-dependencies, zero PyYAML advisories under `pip-audit -r backend/requirements.txt`), verified in an isolated throwaway venv without `uvicorn[standard]`, and added `test_pyyaml_declared_directly_in_requirements_txt`. |
+| **Blocker 3** | Enforce that `pending_owner_review` playbooks cannot execute at runtime or authorize tools | Added `PlaybookApprovalError(PlaybookDisabledError)`, explicit review APIs (`load_playbook_for_review`, `read_playbook_resource_for_review`), and runtime APIs (`load_approved_playbook`, `authorize_playbook_tool`, plus default runtime enforcement on `load_playbook`, `read_playbook_resource`, `check_tool_allowed`, and `run_playbook_adapter`). Enforces `status=="approved"`, `approval_status=="approved"`, `runtime_available is True`, `version >= 1.0.0`, valid `approved_by`/`approved_date`, and fresh on-disk digest re-verification. |
+| **Blocker 4** | Rebase-aware final verification on `origin/main` (`524d4b0c`) | Verified `git merge-base HEAD origin/main == 524d4b0c47a78bff0dfa6a67ff411e46ba76caa1`, 0 guarded files changed, unchanged canonical digests for all 3 shipped playbooks, >94% statement coverage across `app/playbooks/`, and full backend test suite green alongside merged PR #20 provenance/audit/quarantine tests. |
+
+### 9.2 Independent Follow-Up Review Findings & Dispositions
+
+| Finding ID | Reviewer | Severity | Summary | Disposition |
+|---|---|---|---|---|
+| `ARCH-C-HIGH-1` | Architecture | `high` | Unstaged deletion of old 1,500-line `backend/tests/test_playbooks_security_and_mutation.py` in Git index | **Fixed**: Staged `git rm backend/tests/test_playbooks_security_and_mutation.py` so the file is completely removed from the branch diff. |
+| `TQ-C-MED-1` | Test-Quality | `medium` | `test_prompt_injection_in_instructions_and_resources_cannot_escalate_permissions` short-circuited on `PlaybookApprovalError` before reaching `undeclared_tool` and adapter load paths | **Fixed**: Tested both the `pending_owner_review` rejection (`PlaybookApprovalError`) and an `approved` injected playbook (`PlaybookSecurityError("undeclared_tool")` on all 4 forbidden tools + adapter `status=="ok"` with `writes=={}`). |
+| `TQ-C-MED-2` | Test-Quality | `medium` | `forged_pb` and on-disk modification tests in `test_playbooks_tool_allowlist.py` did not separately assert `expected_digest` mismatch vs `PlaybookApprovalError` | **Fixed**: Added explicit assertions for both stale-digest forgery (`PlaybookSecurityError("digest_mismatch")`), recomputed-digest forgery (`PlaybookApprovalError`), in-memory `PlaybookSummary` tampering (`PlaybookSecurityError("digest_mismatch")`), and on-disk modification to a different approved digest (`PlaybookSecurityError("digest_mismatch")`). |
+| `TQ-C-MED-3` | Test-Quality | `medium` | Module-level mutable `_VALIDATED_PLAYBOOK_ROOTS` cache in `validation.py` introduced global state | **Fixed**: Removed `_VALIDATED_PLAYBOOK_ROOTS` so `authorize_playbook_tool` and `check_tool_allowed` are 100% stateless and default strictly to `DEFAULT_SKILLS_ROOT` unless `skills_root` is explicitly provided. |
+| `SEC-C-LOW-1` / `ARCH-C-LOW-1` | Security / Architecture | `low` | `MAX_YAML_DEPTH` was `16` in `yaml_loader.py` vs `8` in documentation | **Fixed**: Set `MAX_YAML_DEPTH = 8` in `backend/app/playbooks/yaml_loader.py`. |
+| `SEC-C-LOW-2` | Security | `low` | `load_playbook_for_review` and `read_playbook_resource_for_review` did not forward/check `expected_digest` | **Fixed**: Added `expected_digest` verification to `load_playbook_for_review` and `read_playbook_resource_for_review`, and removed `allow_disabled` from runtime `load_playbook` and `read_playbook_resource`. |
+| `SEC-C-LOW-3` | Security | `low` | `authorize_playbook_tool` checked `allowed_tools` equality rather than full `PlaybookSummary` equality against `on_disk.to_summary()` | **Fixed**: Enforced `on_disk.to_summary() == expected_summary` in `authorize_playbook_tool` and added a test for tampered `PlaybookSummary` metadata. |
+| `TQ-C-LOW-1` / `TQ-C-LOW-2` | Test-Quality | `low` | Direct test coverage for `_scan_tools_and_links` zero-width stripping, `approved` + `runtime_available=False`, and `_read_utf8_bounded` defensive branches | **Fixed**: Added direct assertions in `test_playbooks_filesystem_security.py`, `test_playbooks_catalog.py`, and `test_playbooks_tool_allowlist.py`. |
+| `ARCH-C-LOW-2` | Architecture | `low` | `docs/scientific-playbooks.md` referenced pre-rebase `origin/main` SHA and unmerged PR #20 | **Fixed**: Updated documentation to cite `origin/main` `524d4b0c47a78bff0dfa6a67ff411e46ba76caa1` (PR #20 merged). |

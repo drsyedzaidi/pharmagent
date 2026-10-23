@@ -1,4 +1,5 @@
 """Isolated, unregistered read-only tool adapter (`app.playbooks.adapter`) and CLI (`__main__`) tests."""
+
 from __future__ import annotations
 
 import json
@@ -25,6 +26,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 def test_isolated_adapter_is_read_only_capped_and_unregistered(tmp_path: Path):
     _write_playbook(
         tmp_path,
+        skill_md=_render_skill_md(
+            status="approved",
+            approval_status="approved",
+            approved_by="Syed Saoud Zaidi",
+            approved_date="2026-10-22",
+        ),
         resources={"references/guide.md": "Guide text referencing `load_dataset`.\n"},
     )
     reg = default_registry()
@@ -34,9 +41,7 @@ def test_isolated_adapter_is_read_only_capped_and_unregistered(tmp_path: Path):
     state = PharmState(session_id="s_test")
     ctx = ToolContext()
 
-    r_list = run_playbook_adapter(
-        state, ctx, {"operation": "list_playbooks"}, skills_root=tmp_path, registry=reg
-    )
+    r_list = run_playbook_adapter(state, ctx, {"operation": "list_playbooks"}, skills_root=tmp_path, registry=reg)
     assert r_list.writes == {}
     assert r_list.result["status"] == "ok"
     assert len(r_list.result["playbooks"]) == 1
@@ -204,8 +209,10 @@ def test_adapter_output_truncation_when_instructions_exceed_cap(tmp_path: Path):
         "playbook_id: pharmagent.large_valid\n"
         "version: 1.0.0\n"
         "domain: nca\n"
-        "status: reviewed\n"
-        "approval_status: pending_owner_review\n"
+        "status: approved\n"
+        "approval_status: approved\n"
+        "approved_by: Syed Saoud Zaidi\n"
+        "approved_date: 2026-10-22\n"
         "license: MIT\n"
         "source: PharmAgent\n"
         "allowed_tools:\n"
@@ -218,8 +225,7 @@ def test_adapter_output_truncation_when_instructions_exceed_cap(tmp_path: Path):
         "  - None.\n"
         "requires_human_review: true\n"
         "compatibility: PharmAgent >=0.1.0\n"
-        "---\n\n"
-        + large_body,
+        "---\n\n" + large_body,
         encoding="utf-8",
     )
     out = run_playbook_adapter(

@@ -220,6 +220,23 @@ def _validate_approval_fields(raw_meta: dict[str, Any]) -> list[PlaybookValidati
             )
         )
     if raw_approval == "approved":
+        raw_ver = raw_meta.get("version")
+        if isinstance(raw_ver, str) and raw_ver.startswith("0."):
+            issues.append(
+                _issue(
+                    "invalid_approval_status",
+                    "version",
+                    f"approved playbook must have stable semantic version >= 1.0.0, got {raw_ver!r}",
+                )
+            )
+        if raw_meta.get("runtime_available", True) is False:
+            issues.append(
+                _issue(
+                    "invalid_approval_status",
+                    "runtime_available",
+                    "approved playbook must set runtime_available: true",
+                )
+            )
         if not (isinstance(by, str) and by.strip() and isinstance(dt, str) and dt.strip()):
             issues.append(
                 _issue(
@@ -271,17 +288,13 @@ def _classify_frontmatter_issues(
 
     raw_status = raw_meta.get("status")
     if raw_status is not None and raw_status not in ALLOWED_STATUSES:
-        issues.append(
-            _issue("invalid_status", "status", f"Invalid status {raw_status!r}; allowed: {ALLOWED_STATUSES}")
-        )
+        issues.append(_issue("invalid_status", "status", f"Invalid status {raw_status!r}; allowed: {ALLOWED_STATUSES}"))
 
     issues.extend(_validate_approval_fields(raw_meta))
 
     raw_domain = raw_meta.get("domain")
     if raw_domain is not None and raw_domain not in ALLOWED_DOMAINS:
-        issues.append(
-            _issue("invalid_domain", "domain", f"Invalid domain {raw_domain!r}; allowed: {ALLOWED_DOMAINS}")
-        )
+        issues.append(_issue("invalid_domain", "domain", f"Invalid domain {raw_domain!r}; allowed: {ALLOWED_DOMAINS}"))
 
     if raw_meta.get("requires_human_review") is not True:
         issues.append(
@@ -411,15 +424,11 @@ def _resolve_playbook_dir_for_validation(
     except OSError as exc:
         return None, _issue("missing_playbook_dir", str(pb_dir), f"Playbook directory does not exist: {exc}")
     if stat.S_ISLNK(dir_lstat.st_mode):
-        return None, _issue(
-            "symlink_escape", str(pb_dir.name), "Playbook directory must not be a symlink", "security"
-        )
+        return None, _issue("symlink_escape", str(pb_dir.name), "Playbook directory must not be a symlink", "security")
     try:
         real_pb_dir = pb_dir.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
-        return None, _issue(
-            "symlink_escape", str(pb_dir.name), f"Cannot resolve playbook directory: {exc}", "security"
-        )
+        return None, _issue("symlink_escape", str(pb_dir.name), f"Cannot resolve playbook directory: {exc}", "security")
     if skills_root is not None:
         try:
             real_skills_root = Path(skills_root).resolve(strict=True)

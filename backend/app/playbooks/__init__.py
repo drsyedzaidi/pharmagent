@@ -4,18 +4,23 @@ Distinct from captured session skills (`app.core.skills`), which store replayabl
 histories in SQLite. Scientific Playbooks are read-only, content-addressed `SKILL.md`
 bundles under `skills/` loaded on demand with progressive disclosure.
 """
+
 from __future__ import annotations
 
 from .adapter import build_playbook_tools, run_playbook_adapter
 from .catalog import (
     DEFAULT_SKILLS_ROOT,
+    authorize_playbook_tool,
     catalog_provenance_snapshot,
     check_tool_allowed,
     compute_canonical_digest,
     list_playbooks,
+    load_approved_playbook,
     load_playbook,
+    load_playbook_for_review,
     playbook_provenance,
     read_playbook_resource,
+    read_playbook_resource_for_review,
     validate_all_playbooks,
     validate_playbook,
 )
@@ -30,6 +35,7 @@ from .schema import (
     MAX_SKILL_MD_BYTES,
     UNTRUSTED_DATA_NOTICE,
     CatalogValidationReport,
+    PlaybookApprovalError,
     PlaybookCompatibility,
     PlaybookDisabledError,
     PlaybookError,
@@ -57,6 +63,7 @@ __all__ = [
     "MAX_ADAPTER_OUTPUT_BYTES",
     "MAX_RESOURCE_BYTES",
     "MAX_SKILL_MD_BYTES",
+    "PlaybookApprovalError",
     "PlaybookCompatibility",
     "PlaybookDisabledError",
     "PlaybookError",
@@ -71,15 +78,19 @@ __all__ = [
     "PlaybookVersionError",
     "ScientificPlaybook",
     "UNTRUSTED_DATA_NOTICE",
+    "authorize_playbook_tool",
     "build_playbook_tools",
     "catalog_provenance_snapshot",
     "check_tool_allowed",
     "compute_canonical_digest",
     "freeze_value",
     "list_playbooks",
+    "load_approved_playbook",
     "load_playbook",
+    "load_playbook_for_review",
     "playbook_provenance",
     "read_playbook_resource",
+    "read_playbook_resource_for_review",
     "run_playbook_adapter",
     "validate_all_playbooks",
     "validate_playbook",

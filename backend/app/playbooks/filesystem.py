@@ -34,9 +34,7 @@ def _fs_issue(
     return PlaybookValidationIssue(code=code, field_or_path=field_or_path, message=message, severity=severity)
 
 
-def _read_utf8_bounded(
-    path: Path, max_bytes: int, rel_label: str
-) -> tuple[str | None, list[PlaybookValidationIssue]]:
+def _read_utf8_bounded(path: Path, max_bytes: int, rel_label: str) -> tuple[str | None, list[PlaybookValidationIssue]]:
     """Safely read a regular non-symlink UTF-8 file using O_NOFOLLOW and fstat size bounds."""
     try:
         st = path.lstat()
@@ -57,9 +55,7 @@ def _read_utf8_bounded(
         try:
             fst = os.fstat(fd)
             if not stat.S_ISREG(fst.st_mode):
-                return None, [
-                    _fs_issue("invalid_file_type", rel_label, "Opened file descriptor is not a regular file")
-                ]
+                return None, [_fs_issue("invalid_file_type", rel_label, "Opened file descriptor is not a regular file")]
             if fst.st_size > max_bytes:
                 return None, [
                     _fs_issue(
@@ -109,9 +105,7 @@ def _inspect_single_resource_entry(
         return [_fs_issue("unreadable_file", rel_posix, f"Cannot stat entry: {exc}", "error")]
 
     if stat.S_ISLNK(lst.st_mode):
-        return [
-            _fs_issue("symlink_escape", rel_posix, f"Symlink {rel_posix!r} is forbidden inside playbook directory")
-        ]
+        return [_fs_issue("symlink_escape", rel_posix, f"Symlink {rel_posix!r} is forbidden inside playbook directory")]
 
     try:
         resolved_entry = entry.resolve(strict=True)

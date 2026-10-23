@@ -1,4 +1,5 @@
 """Filesystem confinement, path traversal, symlink escape, encoding, and executable/script rejection tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.playbooks import (
     PlaybookVersionError,
     load_playbook,
     read_playbook_resource,
+    read_playbook_resource_for_review,
     validate_playbook,
 )
 from tests.test_playbooks_catalog import _render_skill_md, _write_playbook
@@ -30,9 +32,7 @@ from tests.test_playbooks_catalog import _render_skill_md, _write_playbook
         "SKILL.md",
     ],
 )
-def test_read_playbook_resource_rejects_traversal_absolute_and_hidden_paths(
-    tmp_path: Path, bad_resource: str
-):
+def test_read_playbook_resource_rejects_traversal_absolute_and_hidden_paths(tmp_path: Path, bad_resource: str):
     (tmp_path / "secret.md").write_text("TOP_SECRET", encoding="utf-8")
     _write_playbook(
         tmp_path,
@@ -54,9 +54,7 @@ def test_rejects_symlink_escape_in_playbook_and_resources(tmp_path: Path):
     assert any(i.code == "symlink_escape" for i in res.issues)
 
     with pytest.raises(PlaybookSecurityError):
-        read_playbook_resource(
-            "pharmagent.demo_protocol", "references/leak.md", skills_root=tmp_path / "catalog"
-        )
+        read_playbook_resource("pharmagent.demo_protocol", "references/leak.md", skills_root=tmp_path / "catalog")
 
 
 def test_rejects_bundled_scripts_executables_and_hidden_files(tmp_path: Path):
@@ -121,10 +119,7 @@ def test_rejects_invalid_utf8_in_skill_md_or_resource(tmp_path: Path):
     (pb_bad_res_utf8 / "references" / "bad.md").write_bytes(b"\xff\xfeinvalid_utf8_resource")
     res_bad_res = validate_playbook(pb_bad_res_utf8, skills_root=tmp_path / "bad_res_utf8")
     assert res_bad_res.valid is False
-    assert any(
-        i.code == "invalid_encoding" and i.field_or_path == "references/bad.md"
-        for i in res_bad_res.issues
-    )
+    assert any(i.code == "invalid_encoding" and i.field_or_path == "references/bad.md" for i in res_bad_res.issues)
 
 
 def test_rejects_external_path_references_in_markdown(tmp_path: Path):
@@ -162,8 +157,7 @@ def test_filesystem_hazards_markdown_link_scanners_and_relative_dir_mismatch(tmp
     other_root.mkdir()
     assert validate_playbook(empty_pb, skills_root=other_root).issues[0].code == "symlink_escape"
     assert (
-        validate_playbook(empty_pb, skills_root=tmp_path / "nonexistent-root").issues[0].code
-        == "invalid_skills_root"
+        validate_playbook(empty_pb, skills_root=tmp_path / "nonexistent-root").issues[0].code == "invalid_skills_root"
     )
 
     # Classifier and resource file edge cases
@@ -234,6 +228,8 @@ def test_filesystem_hazards_markdown_link_scanners_and_relative_dir_mismatch(tmp
     zw_dir = tmp_path / "zw-pb"
     (zw_dir / "hooks").mkdir(parents=True)
     (zw_dir / "hooks" / "hook.md").write_text("unconfined subdir\n", encoding="utf-8")
+    (zw_dir / "notes").mkdir(parents=True)
+    (zw_dir / "notes" / "extra.md").write_text("non-references subdir\n", encoding="utf-8")
     (zw_dir / "SKILL.md").write_text(
         "---\n"
         "name: zw-pb\n"
@@ -262,8 +258,22 @@ def test_filesystem_hazards_markdown_link_scanners_and_relative_dir_mismatch(tmp
     res_zw = validate_playbook(zw_dir)
     assert res_zw.valid is False
     zw_codes = {i.code for i in res_zw.issues}
-    assert "undeclared_tool" in zw_codes or "invalid_encoding" in zw_codes
-    assert "disallowed_resource_type" in zw_codes or "executable_or_script_file" in zw_codes
+    assert zw_codes == {"disallowed_resource_type", "executable_or_script_file", "invalid_encoding"}
+
+    from app.playbooks.filesystem import _read_utf8_bounded
+    from app.playbooks.validation import _scan_tools_and_links
+
+    zw_scan_issues = _scan_tools_and_links(
+        {"allowed_tools": ["load_dataset"]},
+        "Run `load_dataset` and `run_\u200bnlme`.",
+        {},
+        {"load_dataset", "run_nlme"},
+    )
+    assert any(i.code == "undeclared_tool" for i in zw_scan_issues)
+
+    assert _read_utf8_bounded(tmp_path / "no-such-file.md", 1024, "no-such-file.md")[1][0].code == "unreadable_file"
+    assert _read_utf8_bounded(sym_pb, 1024, "sym-pb")[1][0].code == "symlink_escape"
+    assert _read_utf8_bounded(empty_pb, 1024, "empty-pb")[1][0].code == "invalid_file_type"
 
     # Identifier, version, and resource path argument checks
     with pytest.raises(PlaybookSecurityError):
@@ -278,8 +288,10 @@ def test_filesystem_hazards_markdown_link_scanners_and_relative_dir_mismatch(tmp
         read_playbook_resource("pharmagent.protocol_simulation", "SKILL.md")
     with pytest.raises(PlaybookSecurityError):
         read_playbook_resource("pharmagent.protocol_simulation", "C:/Windows/win.ini")
+    with pytest.raises(PlaybookSecurityError):
+        read_playbook_resource_for_review("pharmagent.protocol_simulation", "references/evil.py")
     with pytest.raises(PlaybookLookupError):
-        read_playbook_resource("pharmagent.protocol_simulation", "references/does-not-exist.md")
+        read_playbook_resource_for_review("pharmagent.protocol_simulation", "references/does-not-exist.md")
 
     # Relative `.` directory validation still checks directory_name_mismatch
     rel_dir = tmp_path / "rel-mismatch"
