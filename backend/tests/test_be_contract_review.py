@@ -228,3 +228,15 @@ def test_an_unrounded_profile_report_does_not_show_a_misleading_ci():
          "ci_lower_rounded": None, "ci_upper_rounded": None}
     assert "79.99996" in report_ci(v)
 
+
+
+def test_a_replicate_with_different_sampling_times_is_refused_as_replicate():
+    """The same treatment in two periods, sampled at different times so the duplicate-time check does not fire:
+    the period check itself must refuse it (owner gate on be_tools.py:104)."""
+    df = _pframe(13)
+    again = df[(df.ID == 1) & (df.TRT == "B")].assign(PERIOD=3, TIME=lambda d: d.TIME + 0.25)
+    both = pd.concat([df, again])
+    assert not both.duplicated(["ID", "TRT", "TIME"]).any()           # precondition: no duplicate sampling times
+    res = _call(both, **FULL).result
+    assert res["status"] == "unsupported_design" and "replicate" in res["message"]
+    assert "bioequivalent" not in res and "No bioequivalence conclusion was calculated" in res["message"]
