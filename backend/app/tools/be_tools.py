@@ -81,9 +81,38 @@ def _row_ledger(obs: pd.DataFrame, raw_dv: pd.Series, *, id_col: str, time_col: 
             keep.append(idx)
             continue
         ledger.append({"subject": _py(row[id_col]), "treatment": _py(row[trt_col]), "parameter": "*",
-                       "reason": reason, "original_value": _py(raw), "time": None if pd.isna(t) else float(t),
+                       "reason": reason, "original_value": None if pd.isna(raw) else _py(raw),  # strict JSON
+                       "time": None if pd.isna(t) else float(t),
                        "prespecified": False})
     return obs.loc[keep], ledger
+
+
+def _check_periods(obs: pd.DataFrame, period_col: str, *, id_col: str, trt_col: str, roles: set[str],
+                   crossover: bool) -> ToolResult | None:
+    """The period column must be its own column, set on every observation row, give each subject one period per
+    treatment, and (crossover) put test and reference in different periods in at least two sequences."""
+    if period_col not in obs.columns:
+        return _refusal("invalid_arguments", f"period_col {period_col!r} is not a column")
+    if period_col in roles:
+        return _refusal("invalid_arguments", f"period_col {period_col!r} is the subject, treatment, time or "
+                        "concentration column")
+    if obs[period_col].isna().any():
+        return _refusal("invalid_arguments", "observation rows without a period cannot be assigned; a missing "
+                        "period could hide a repeated treatment")
+    if (obs.groupby([id_col, trt_col])[period_col].nunique() > 1).any():
+        return _refusal("unsupported_design", "a subject received the same treatment in more than one period: "
+                        "replicate designs are not supported")
+    if not crossover:
+        return None
+    per = obs.groupby([id_col, trt_col], as_index=False)[period_col].first()
+    if per.duplicated([id_col, period_col]).any():
+        return _refusal("invalid_arguments", "a subject has test and reference in the same period, which is not a "
+                        "crossover")
+    sequences = {tuple(g.sort_values(period_col)[trt_col].map(str)) for _, g in per.groupby(id_col) if len(g) > 1}
+    if len(sequences) < 2:
+        return _refusal("invalid_arguments", "every subject received the treatments in the same order: one "
+                        "sequence is not a randomised crossover, and period and formulation cannot be separated")
+    return None
 
 
 def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
@@ -117,7 +146,7 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     if args.get("group_col"):
         return _refusal("unsupported_design", "multi-group studies need a group-aware model, which is not "
                         "implemented; analyse each group separately only if the protocol allows it")
-    df = df.copy()
+    df = df.copy().reset_index(drop=True)      # a unique index: ledger rows are looked up by label
     roles = _roles(df, state)
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
@@ -144,21 +173,16 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     if obs[id_col].isna().any() or obs[trt_col].isna().any():
         return _refusal("invalid_arguments", "observation rows without a subject id or treatment cannot be "
                         "assigned; fix the data")
-    if obs.duplicated([id_col, trt_col, time_col]).any():
+    timed = obs[obs[time_col].notna()]          # rows without a time are ledgered below, not called duplicates
+    if timed.duplicated([id_col, trt_col, time_col]).any():
         return _refusal("unsupported_design", "duplicate sampling rows (same subject, treatment and time): "
                         "replicate or duplicated data is not pooled")
     period_col = args.get("period_col")
     if period_col:
-        if period_col not in obs.columns:
-            return _refusal("invalid_arguments", f"period_col {period_col!r} is not a column")
-        if (obs.groupby([id_col, trt_col])[period_col].nunique() > 1).any():
-            return _refusal("unsupported_design", "a subject received the same treatment in more than one period: "
-                            "replicate designs are not supported")
-        if args["design"] == "crossover":
-            per = obs.groupby([id_col, trt_col])[period_col].first().reset_index()
-            if per.duplicated([id_col, period_col]).any():
-                return _refusal("invalid_arguments", "a subject has test and reference in the same period, which "
-                                "is not a crossover")
+        refusal = _check_periods(obs, period_col, id_col=id_col, trt_col=trt_col, roles={
+            id_col, trt_col, time_col, dv_col}, crossover=args["design"] == "crossover")
+        if refusal:
+            return refusal
 
     obs, dropped = _row_ledger(obs, raw_dv, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
     levels = list(pd.unique(obs[trt_col]))

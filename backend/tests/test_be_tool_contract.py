@@ -25,7 +25,8 @@ def _frame(n=12, levels=("A", "B"), drop=()):
                 continue
             scale = 1.0 + 0.02 * i + (0.01 if k else 0.0)
             for t, c in zip(TIMES, _profile(scale)):
-                rows.append({"ID": i + 1, "TIME": t, "DV": c, "TRT": trt, "EVID": 0, "PERIOD": k + 1})
+                rows.append({"ID": i + 1, "TIME": t, "DV": c, "TRT": trt, "EVID": 0,
+                             "PERIOD": (k if i % 2 else 1 - k) + 1})   # two sequences: AB and BA
     return pd.DataFrame(rows)
 
 
