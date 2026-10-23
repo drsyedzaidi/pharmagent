@@ -1,15 +1,4 @@
-"""Contract and security boundary tests for Scientific Playbooks (`app.playbooks`).
-
-Verifies:
-- Schema and frontmatter contracts (required fields, SemVer, status/approval rules, deep immutability)
-- Deterministic canonical SHA-256 digest over metadata, instructions, and confined resources
-- Progressive disclosure (`list_playbooks`, `load_playbook`, `read_playbook_resource`)
-- Validation (`validate_playbook`, `validate_all_playbooks`) and CLI (`python -m app.playbooks --check`)
-- Security boundaries (path traversal, symlink escape, duplicate YAML keys, unsafe YAML tags,
-  oversized files, invalid UTF-8, hidden/executable/script files, undeclared/non-existent tools)
-- Isolated, unregistered read-only tool adapter (`writes={}`)
-- Non-interference with existing captured PharmAgent skills (`app.core.skills`)
-"""
+"""Catalog discovery, progressive disclosure, shipped playbook contracts, and session-skill separation tests."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,37 +9,28 @@ import pytest
 from app.core.pharmstate import PharmState
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.playbooks import (
-    MAX_ADAPTER_OUTPUT_BYTES,
-    MAX_RESOURCE_BYTES,
-    MAX_SKILL_MD_BYTES,
+    DEFAULT_SKILLS_ROOT,
     CatalogValidationReport,
     PlaybookCompatibility,
     PlaybookDisabledError,
     PlaybookLookupError,
     PlaybookProvenance,
     PlaybookResource,
-    PlaybookSecurityError,
     PlaybookSummary,
     PlaybookValidationResult,
     PlaybookVersionError,
     ScientificPlaybook,
-    check_tool_allowed,
     compute_canonical_digest,
     list_playbooks,
     load_playbook,
     playbook_provenance,
     read_playbook_resource,
+    run_playbook_adapter,
     validate_all_playbooks,
     validate_playbook,
 )
-from app.playbooks.__main__ import main as cli_main
-from app.playbooks.adapter import build_playbook_tools, run_playbook_adapter
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = BACKEND_ROOT.parent
-SKILLS_ROOT = REPO_ROOT / "skills"
 
 
 def _render_skill_md(
@@ -145,9 +125,6 @@ def _write_playbook(
     return pb_dir
 
 
-# ── 1. Schema, Frontmatter & Deep Immutability Contracts ─────────────────────
-
-
 def test_valid_playbook_validates_and_returns_deeply_immutable_objects(tmp_path: Path):
     pb_dir = _write_playbook(
         tmp_path,
@@ -172,7 +149,6 @@ def test_valid_playbook_validates_and_returns_deeply_immutable_objects(tmp_path:
     assert pb.resource_paths == ("references/checklist.md",)
     assert len(pb.canonical_digest) == 64
 
-    # Deep immutability: top-level attributes and nested collections cannot be mutated
     with pytest.raises((TypeError, ValueError)):
         pb.version = "2.0.0"  # type: ignore[misc]
     with pytest.raises(AttributeError):
@@ -257,97 +233,6 @@ def test_structured_compatibility_mapping_is_supported_and_immutable(tmp_path: P
     assert isinstance(summary.compatibility, PlaybookCompatibility)
 
 
-# ── 2. Canonical Digest Determinism & 1-Byte Sensitivity ─────────────────────
-
-
-def test_canonical_digest_changes_on_single_byte_change_in_metadata_body_or_resource(tmp_path: Path):
-    pb_dir = _write_playbook(
-        tmp_path,
-        resources={"references/note.md": "Reference value tolerance: 0.01\n"},
-    )
-    base_pb = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path)
-    d0 = base_pb.canonical_digest
-
-    # 1-byte change in instruction body
-    (pb_dir / "SKILL.md").write_text(
-        _render_skill_md(
-            body="# Demo Protocol Playbook\n\nUse `load_dataset`, `compute_nca`, and `simulate_pk_profile` in sequence!\n"
-        ),
-        encoding="utf-8",
-    )
-    d_body = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
-    assert d_body != d0
-
-    # 1-byte change in metadata description
-    (pb_dir / "SKILL.md").write_text(
-        _render_skill_md(
-            description="Demo protocol simulation playbook using reviewed tools!",
-            body="# Demo Protocol Playbook\n\nUse `load_dataset`, `compute_nca`, and `simulate_pk_profile` in sequence!\n",
-        ),
-        encoding="utf-8",
-    )
-    d_meta = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
-    assert d_meta not in {d0, d_body}
-
-    # 1-byte change in confined resource file
-    (pb_dir / "references" / "note.md").write_text("Reference value tolerance: 0.02\n", encoding="utf-8")
-    d_res = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path).canonical_digest
-    assert d_res not in {d0, d_body, d_meta}
-
-
-def test_canonical_digest_is_reproducible_and_newline_normalized(tmp_path: Path):
-    lf_dir = tmp_path / "lf"
-    crlf_dir = tmp_path / "crlf"
-    reordered_dir = tmp_path / "reordered"
-    md_lf = _render_skill_md()
-    md_crlf = md_lf.replace("\n", "\r\n")
-    # Permute frontmatter key order (reverse key blocks while preserving identical values)
-    md_reordered = (
-        "---\n"
-        "runtime_available: true\n"
-        "compatibility: PharmAgent >=0.1.0\n"
-        "requires_human_review: true\n"
-        "limitations:\n"
-        "  - Does not execute PBPK or QSP models.\n"
-        "  - Requires human pharmacometrician review before protocol recommendation.\n"
-        "produced_artifacts:\n"
-        "  - simulation_results\n"
-        "  - nca_summary\n"
-        "required_inputs:\n"
-        "  - dataset_id\n"
-        "  - dose_regimen\n"
-        "allowed_tools:\n"
-        "  - load_dataset\n"
-        "  - compute_nca\n"
-        "  - simulate_pk_profile\n"
-        "source: PharmAgent authored; inspired by agentskills.io and Nova In Silico ACoP 2026 M-019\n"
-        "license: LicenseRef-PharmAgent-Internal\n"
-        "approval_status: pending_owner_review\n"
-        "status: reviewed\n"
-        "domain: clinical_trial_simulation\n"
-        "version: 1.0.0\n"
-        "playbook_id: pharmagent.demo_protocol\n"
-        "description: Demo protocol simulation playbook using reviewed tools.\n"
-        "name: demo-protocol-playbook\n"
-        "---\n\n"
-        "# Demo Protocol Playbook\n\n"
-        "Use `load_dataset`, `compute_nca`, and `simulate_pk_profile` in sequence.\n"
-        "All numerical claims must originate from deterministic PharmAgent tools.\n"
-    )
-    _write_playbook(lf_dir, skill_md=md_lf, resources={"references/a.md": "line1\nline2\n"})
-    _write_playbook(crlf_dir, skill_md=md_crlf, resources={"references/a.md": "line1\r\nline2\r\n"})
-    _write_playbook(reordered_dir, skill_md=md_reordered, resources={"references/a.md": "line1\rline2\r"})
-
-    pb_lf = load_playbook("pharmagent.demo_protocol", skills_root=lf_dir)
-    pb_crlf = load_playbook("pharmagent.demo_protocol", skills_root=crlf_dir)
-    pb_reordered = load_playbook("pharmagent.demo_protocol", skills_root=reordered_dir)
-    assert pb_lf.canonical_digest == pb_crlf.canonical_digest == pb_reordered.canonical_digest
-    assert pb_lf.canonical_digest == compute_canonical_digest(pb_lf)
-
-
-# ── 3. Progressive Disclosure & Provenance Contracts ─────────────────────────
-
-
 def test_progressive_disclosure_separates_discovery_from_instructions_and_resources(tmp_path: Path):
     _write_playbook(
         tmp_path,
@@ -369,7 +254,6 @@ def test_progressive_disclosure_separates_discovery_from_instructions_and_resour
         ),
     )
 
-    # 1. list_playbooks returns deterministic sorted PlaybookSummary objects without instructions or resource content
     summaries = list_playbooks(skills_root=tmp_path)
     assert [s.playbook_id for s in summaries] == ["pharmagent.alpha", "pharmagent.zeta"]
     for s in summaries:
@@ -383,21 +267,17 @@ def test_progressive_disclosure_separates_discovery_from_instructions_and_resour
         assert s.source and s.license
         assert s.allowed_tools and s.required_inputs and s.limitations
 
-    # 2. load_playbook loads full instructions for one playbook (without loading resource bodies)
     pb = load_playbook("pharmagent.zeta", version="1.0.0", skills_root=tmp_path)
     assert "Zeta Secret Marker" in pb.instructions
     assert "DEEP_RESOURCE_MARKER" not in pb.instructions
     assert pb.resource_paths == ("references/deep.md",)
 
-    # Lookup by version mismatch fails closed
     with pytest.raises(PlaybookVersionError):
         load_playbook("pharmagent.zeta", version="9.9.9", skills_root=tmp_path)
 
-    # Lookup of unknown playbook fails closed
     with pytest.raises(PlaybookLookupError):
         load_playbook("pharmagent.does_not_exist", skills_root=tmp_path)
 
-    # 3. read_playbook_resource loads one confined resource with full identity/digest metadata
     res = read_playbook_resource("pharmagent.zeta", "references/deep.md", skills_root=tmp_path)
     assert isinstance(res, PlaybookResource)
     assert "DEEP_RESOURCE_MARKER" in res.content
@@ -410,7 +290,6 @@ def test_progressive_disclosure_separates_discovery_from_instructions_and_resour
     assert res.limitations == pb.limitations
     assert res.untrusted_data is True
 
-    # Provenance hook returns immutable identity metadata
     prov = playbook_provenance("pharmagent.zeta", skills_root=tmp_path)
     assert isinstance(prov, PlaybookProvenance)
     assert prov.canonical_digest == pb.canonical_digest
@@ -441,193 +320,6 @@ def test_disabled_playbook_is_blocked_at_runtime_unless_explicitly_inspected(tmp
     assert pb.allowed_tools == ()
 
 
-# ── 4. Security Boundaries ───────────────────────────────────────────────────
-
-
-def test_rejects_duplicate_yaml_keys_and_unsafe_yaml_tags(tmp_path: Path):
-    dup_md = _render_skill_md(extra_frontmatter="version: 2.0.0")
-    pb_dup = _write_playbook(tmp_path / "dup", skill_md=dup_md)
-    res_dup = validate_playbook(pb_dup, skills_root=tmp_path / "dup")
-    assert res_dup.valid is False
-    assert any(i.code == "duplicate_yaml_key" for i in res_dup.issues)
-
-    unsafe_md = _render_skill_md(extra_frontmatter="exploit: !!python/object/apply:os.system ['echo pwned']")
-    pb_unsafe = _write_playbook(tmp_path / "unsafe", skill_md=unsafe_md)
-    res_unsafe = validate_playbook(pb_unsafe, skills_root=tmp_path / "unsafe")
-    assert res_unsafe.valid is False
-    assert any(i.code == "unsafe_yaml" for i in res_unsafe.issues)
-
-
-@pytest.mark.parametrize(
-    "bad_resource",
-    [
-        "../secret.md",
-        "references/../../secret.md",
-        "/etc/passwd",
-        "\\windows\\system32\\drivers\\etc\\hosts",
-        "references/.hidden.md",
-        "SKILL.md",
-    ],
-)
-def test_read_playbook_resource_rejects_traversal_absolute_and_hidden_paths(
-    tmp_path: Path, bad_resource: str
-):
-    (tmp_path / "secret.md").write_text("TOP_SECRET", encoding="utf-8")
-    _write_playbook(
-        tmp_path,
-        resources={"references/ok.md": "safe content\n"},
-    )
-    with pytest.raises(PlaybookSecurityError):
-        read_playbook_resource("pharmagent.demo_protocol", bad_resource, skills_root=tmp_path)
-
-
-def test_rejects_symlink_escape_in_playbook_and_resources(tmp_path: Path):
-    outside = tmp_path / "outside.md"
-    outside.write_text("OUTSIDE_SECRET", encoding="utf-8")
-    pb_dir = _write_playbook(tmp_path / "catalog")
-    (pb_dir / "references").mkdir(exist_ok=True)
-    (pb_dir / "references" / "leak.md").symlink_to(outside)
-
-    res = validate_playbook(pb_dir, skills_root=tmp_path / "catalog")
-    assert res.valid is False
-    assert any(i.code == "symlink_escape" for i in res.issues)
-
-    with pytest.raises(PlaybookSecurityError):
-        read_playbook_resource(
-            "pharmagent.demo_protocol", "references/leak.md", skills_root=tmp_path / "catalog"
-        )
-
-
-def test_rejects_bundled_scripts_executables_and_hidden_files(tmp_path: Path):
-    pb_script = _write_playbook(
-        tmp_path / "script_case",
-        resources={"scripts/run.py": "import os\nos.system('id')\n"},
-    )
-    res_script = validate_playbook(pb_script, skills_root=tmp_path / "script_case")
-    assert res_script.valid is False
-    assert any(i.code == "executable_or_script_file" for i in res_script.issues)
-
-    pb_hidden = _write_playbook(
-        tmp_path / "hidden_case",
-        resources={".hidden_exec": "#!/bin/sh\necho pwn\n"},
-    )
-    res_hidden = validate_playbook(pb_hidden, skills_root=tmp_path / "hidden_case")
-    assert res_hidden.valid is False
-    codes = {i.code for i in res_hidden.issues}
-    assert "hidden_file" in codes
-
-    pb_chmod = _write_playbook(
-        tmp_path / "chmod_case",
-        resources={"references/exec_note.md": "Safe text with executable bit.\n"},
-    )
-    (pb_chmod / "references" / "exec_note.md").chmod(0o755)
-    res_chmod = validate_playbook(pb_chmod, skills_root=tmp_path / "chmod_case")
-    assert res_chmod.valid is False
-    assert any(i.code == "executable_or_script_file" for i in res_chmod.issues)
-
-
-def test_rejects_oversized_skill_md_and_oversized_resources(tmp_path: Path):
-    huge_body = "# Huge\n\n" + ("A" * (MAX_SKILL_MD_BYTES + 1024))
-    pb_huge = _write_playbook(tmp_path / "huge_skill", skill_md=_render_skill_md(body=huge_body))
-    res_huge = validate_playbook(pb_huge, skills_root=tmp_path / "huge_skill")
-    assert res_huge.valid is False
-    assert any(i.code == "oversized_file" for i in res_huge.issues)
-
-    # Exact MAX_RESOURCE_BYTES boundary is accepted; MAX_RESOURCE_BYTES + 1 is rejected
-    pb_exact_res = _write_playbook(
-        tmp_path / "exact_res",
-        resources={"references/exact.md": "B" * MAX_RESOURCE_BYTES},
-    )
-    assert validate_playbook(pb_exact_res, skills_root=tmp_path / "exact_res").valid is True
-
-    pb_huge_res = _write_playbook(
-        tmp_path / "huge_res",
-        resources={"references/big.md": "B" * (MAX_RESOURCE_BYTES + 1)},
-    )
-    res_huge_res = validate_playbook(pb_huge_res, skills_root=tmp_path / "huge_res")
-    assert res_huge_res.valid is False
-    assert any(i.code == "oversized_file" for i in res_huge_res.issues)
-
-
-def test_rejects_invalid_utf8_in_skill_md_or_resource(tmp_path: Path):
-    pb_bad_utf8 = _write_playbook(tmp_path / "bad_utf8")
-    (pb_bad_utf8 / "SKILL.md").write_bytes(b"---\nname: x\n---\n\xff\xfeinvalid")
-    res = validate_playbook(pb_bad_utf8, skills_root=tmp_path / "bad_utf8")
-    assert res.valid is False
-    assert any(i.code == "invalid_encoding" for i in res.issues)
-
-    pb_bad_res_utf8 = _write_playbook(tmp_path / "bad_res_utf8")
-    (pb_bad_res_utf8 / "references").mkdir(exist_ok=True)
-    (pb_bad_res_utf8 / "references" / "bad.md").write_bytes(b"\xff\xfeinvalid_utf8_resource")
-    res_bad_res = validate_playbook(pb_bad_res_utf8, skills_root=tmp_path / "bad_res_utf8")
-    assert res_bad_res.valid is False
-    assert any(
-        i.code == "invalid_encoding" and i.field_or_path == "references/bad.md"
-        for i in res_bad_res.issues
-    )
-
-
-def test_rejects_nonexistent_and_undeclared_tools(tmp_path: Path):
-    reg = default_registry()
-
-    # Non-existent tool in allowed_tools
-    pb_nonexistent = _write_playbook(
-        tmp_path / "nonexistent",
-        skill_md=_render_skill_md(allowed_tools=["load_dataset", "run_pbpk_organ_model"]),
-    )
-    res_ne = validate_playbook(pb_nonexistent, skills_root=tmp_path / "nonexistent", registry=reg)
-    assert res_ne.valid is False
-    assert any(i.code == "non_existent_tool" for i in res_ne.issues)
-
-    # Undeclared real tool referenced in SKILL.md instructions
-    pb_undeclared = _write_playbook(
-        tmp_path / "undeclared",
-        skill_md=_render_skill_md(
-            allowed_tools=["load_dataset", "compute_nca"],
-            body="# Sneaky Playbook\n\nFirst run `load_dataset`, then invoke `run_nlme` without declaring it.\n",
-        ),
-    )
-    res_un = validate_playbook(pb_undeclared, skills_root=tmp_path / "undeclared", registry=reg)
-    assert res_un.valid is False
-    assert any(i.code == "undeclared_tool" for i in res_un.issues)
-
-    # Undeclared real tool referenced inside a confined resource file
-    pb_res_undeclared = _write_playbook(
-        tmp_path / "res_undeclared",
-        skill_md=_render_skill_md(allowed_tools=["load_dataset", "compute_nca", "simulate_pk_profile"]),
-        resources={"references/sneaky_ref.md": "When needed, also run `run_nlme`.\n"},
-    )
-    res_ref_un = validate_playbook(pb_res_undeclared, skills_root=tmp_path / "res_undeclared", registry=reg)
-    assert res_ref_un.valid is False
-    assert any(
-        i.code == "undeclared_tool" and i.field_or_path == "references/sneaky_ref.md"
-        for i in res_ref_un.issues
-    )
-    rep_ref_un = validate_all_playbooks(skills_root=tmp_path / "res_undeclared", registry=reg)
-    assert len(rep_ref_un.missing_tool_references) == 1
-
-    # Runtime allowlist check helper also enforces both
-    _write_playbook(tmp_path / "ok")
-    pb_ok = load_playbook("pharmagent.demo_protocol", skills_root=tmp_path / "ok", registry=reg)
-    assert check_tool_allowed(pb_ok, "compute_nca", registry=reg) is True
-    with pytest.raises(PlaybookSecurityError, match="undeclared_tool"):
-        check_tool_allowed(pb_ok, "run_nlme", registry=reg)
-    with pytest.raises(PlaybookSecurityError, match="non_existent_tool"):
-        check_tool_allowed(pb_ok, "invented_pbpk_tool", registry=reg)
-
-
-def test_rejects_external_path_references_in_markdown(tmp_path: Path):
-    pb_ext = _write_playbook(
-        tmp_path / "ext_ref",
-        skill_md=_render_skill_md(
-            body="# External Ref\n\nSee [secret](../outside.md) and `load_dataset`, `compute_nca`, `simulate_pk_profile`.\n"
-        ),
-    )
-    res = validate_playbook(pb_ext, skills_root=tmp_path / "ext_ref")
-    assert res.valid is False
-    assert any(i.code in {"path_traversal", "external_reference"} for i in res.issues)
-
-
 def test_validate_all_playbooks_detects_duplicate_ids_and_names(tmp_path: Path):
     _write_playbook(
         tmp_path,
@@ -645,114 +337,221 @@ def test_validate_all_playbooks_detects_duplicate_ids_and_names(tmp_path: Path):
     assert "pharmagent.dup_id" in report.duplicate_identities
 
 
-# ── 5. Isolated Unregistered Tool Adapter & CLI Contracts ────────────────────
-
-
-def test_isolated_adapter_is_read_only_capped_and_unregistered(tmp_path: Path):
-    _write_playbook(
-        tmp_path,
-        resources={"references/guide.md": "Guide text referencing `load_dataset`.\n"},
-    )
+def test_shipped_playbooks_validate_against_real_default_registry():
     reg = default_registry()
-    # Adapter tools must NOT be registered in default_registry()
-    for tool in build_playbook_tools(skills_root=tmp_path, registry=reg):
-        assert tool.name not in reg.names()
+    report = validate_all_playbooks(skills_root=DEFAULT_SKILLS_ROOT, registry=reg)
+    assert report.valid is True
+    assert report.total_playbooks == 3
+    assert report.approved_count == 0
+    assert report.pending_approval_count == 3
+    assert report.draft_count == 1
+    assert report.reviewed_count == 2
+    assert report.deprecated_count == 0
+    assert report.runtime_available_count == 2
+    assert report.disabled_count == 1
+    assert report.missing_tool_references == ()
+    assert report.duplicate_identities == ()
+    assert report.security_violations == ()
 
-    state = PharmState(session_id="s_test")
-    ctx = ToolContext()
-
-    # 1. list_playbooks operation
-    r_list = run_playbook_adapter(
-        state, ctx, {"operation": "list_playbooks"}, skills_root=tmp_path, registry=reg
+    summaries = list_playbooks(skills_root=DEFAULT_SKILLS_ROOT, registry=reg)
+    assert [s.playbook_id for s in summaries] == [
+        "pharmagent.literature_extraction",
+        "pharmagent.model_review",
+        "pharmagent.protocol_simulation",
+    ]
+    runtime_only = list_playbooks(
+        skills_root=DEFAULT_SKILLS_ROOT, registry=reg, include_disabled=False
     )
-    assert r_list.writes == {}
-    assert r_list.result["status"] == "ok"
-    assert len(r_list.result["playbooks"]) == 1
-    item = r_list.result["playbooks"][0]
-    assert item["playbook_id"] == "pharmagent.demo_protocol"
-    assert len(item["canonical_digest"]) == 64
+    assert [s.playbook_id for s in runtime_only] == [
+        "pharmagent.model_review",
+        "pharmagent.protocol_simulation",
+    ]
 
-    # 2. load_playbook operation
-    r_load = run_playbook_adapter(
-        state,
-        ctx,
-        {"operation": "load_playbook", "playbook_id": "pharmagent.demo_protocol"},
-        skills_root=tmp_path,
+
+def test_protocol_simulation_playbook_content_contract():
+    reg = default_registry()
+    registered = set(reg.names())
+    pb = load_playbook("pharmagent.protocol_simulation", registry=reg)
+
+    assert pb.name == "pharmagent-protocol-simulation"
+    assert pb.version == "1.0.0"
+    assert pb.domain == "clinical_trial_simulation"
+    assert pb.status == "reviewed"
+    assert pb.approval_status == "pending_owner_review"
+    assert pb.requires_human_review is True
+    assert pb.runtime_available is True
+    assert set(pb.allowed_tools) <= registered
+
+    expected_tools = {
+        "load_dataset",
+        "profile_pk_dataset",
+        "validate_cdisc",
+        "compute_nca",
+        "simulate_pk_profile",
+        "run_dose_sweep",
+        "run_clinsim",
+        "run_special_population",
+        "run_pediatric_simulation",
+        "fit_exposure_response",
+        "select_optimal_dose",
+        "run_qc",
+        "adversarial_review",
+    }
+    assert expected_tools <= set(pb.allowed_tools)
+
+    text = pb.instructions.lower()
+    for required_concept in (
+        "scientific question",
+        "population",
+        "route",
+        "formulation",
+        "dose",
+        "treatment duration",
+        "covariates",
+        "endpoints",
+        "comparator",
+        "uncertainty",
+        "scenario matrix",
+        "scenario_id",
+        "exposure-response",
+        "unresolved",
+        "human",
+        "canonical_digest",
+    ):
+        assert required_concept in text, f"Missing concept {required_concept!r} in protocol playbook"
+
+    assert "no invented simulation outputs" in text
+    assert "no silent unit conversion" in text
+    assert "no silent imputation" in text
+    assert "no claim of regulatory endorsement" in text
+    assert "no automatic dose recommendation without human review" in text
+    assert "allowlist" in text
+
+    res = read_playbook_resource(
+        "pharmagent.protocol_simulation",
+        "references/scenario-audit-template.md",
         registry=reg,
     )
-    assert r_load.writes == {}
-    assert r_load.result["status"] == "ok"
-    assert r_load.result["playbook"]["playbook_id"] == "pharmagent.demo_protocol"
-    assert r_load.result["playbook"]["canonical_digest"] == item["canonical_digest"]
-    assert r_load.result["playbook"]["untrusted_data"] is True
+    assert res.canonical_digest == pb.canonical_digest
+    assert "SCEN-01" in res.content
 
-    # 3. read_resource operation
-    r_res = run_playbook_adapter(
-        state,
-        ctx,
-        {
-            "operation": "read_resource",
-            "playbook_id": "pharmagent.demo_protocol",
-            "resource": "references/guide.md",
-        },
-        skills_root=tmp_path,
+
+def test_model_review_playbook_content_contract():
+    reg = default_registry()
+    registered = set(reg.names())
+    pb = load_playbook("pharmagent.model_review", registry=reg)
+
+    assert pb.name == "pharmagent-model-review"
+    assert pb.version == "1.0.0"
+    assert pb.domain == "pharmacometrics_model_review"
+    assert pb.status == "reviewed"
+    assert pb.approval_status == "pending_owner_review"
+    assert pb.requires_human_review is True
+    assert pb.runtime_available is True
+    assert set(pb.allowed_tools) <= registered
+
+    expected_tools = {
+        "list_pk_models",
+        "fit_compartmental",
+        "run_poppk",
+        "fit_pk_model",
+        "run_nlme",
+        "run_scm",
+        "run_diagnostics",
+        "run_vpc",
+        "run_covariate_forest",
+        "run_engine_comparison",
+        "simulate_pk_profile",
+        "adversarial_review",
+    }
+    assert expected_tools <= set(pb.allowed_tools)
+
+    text = pb.instructions.lower()
+    for phrase in (
+        "model structure inventory",
+        "parameter and unit extraction",
+        "random-effects",
+        "residual-error",
+        "covariate",
+        "translation checklist",
+        "run_engine_comparison",
+        "simulate_pk_profile",
+        "no pbpk or qsp",
+        "cannot execute nonmem or mrgsolve at runtime",
+        "pr #21",
+        "unmerged",
+        "never compare native `ofv`, `aic`, or `bic` across different engines",
+    ):
+        assert phrase in text, f"Missing required phrase {phrase!r} in model-review playbook"
+
+    res = read_playbook_resource(
+        "pharmagent.model_review",
+        "references/translation-verification-checklist.md",
         registry=reg,
     )
-    assert r_res.writes == {}
-    assert r_res.result["status"] == "ok"
-    assert r_res.result["resource"]["canonical_digest"] == item["canonical_digest"]
-    assert len(r_res.result["resource"]["content"]) <= MAX_ADAPTER_OUTPUT_BYTES
+    assert res.canonical_digest == pb.canonical_digest
+    assert "ADVAN" in res.content and "mrgsolve" in res.content
 
-    # 4. Rejects arbitrary path or shell/script arguments
-    r_bad = run_playbook_adapter(
-        state,
-        ctx,
-        {"operation": "load_playbook", "playbook_id": "pharmagent.demo_protocol", "skills_root": "/etc"},
-        skills_root=tmp_path,
+
+def test_literature_extraction_playbook_disabled_state_and_specification_contract():
+    reg = default_registry()
+
+    with pytest.raises(PlaybookDisabledError):
+        load_playbook("pharmagent.literature_extraction", registry=reg)
+    with pytest.raises(PlaybookDisabledError):
+        read_playbook_resource(
+            "pharmagent.literature_extraction",
+            "references/evidence-record-schema-spec.md",
+            registry=reg,
+        )
+
+    adapter_res = run_playbook_adapter(
+        PharmState(),
+        ToolContext(),
+        {"operation": "load_playbook", "playbook_id": "pharmagent.literature_extraction"},
         registry=reg,
     )
-    assert r_bad.writes == {}
-    assert r_bad.result["status"] == "error"
+    assert adapter_res.writes == {}
+    assert adapter_res.result["status"] == "error"
+    assert adapter_res.result["error_code"] == "playbook_disabled"
 
+    pb = load_playbook("pharmagent.literature_extraction", registry=reg, allow_disabled=True)
+    assert pb.status == "draft"
+    assert pb.approval_status == "pending_owner_review"
+    assert pb.runtime_available is False
+    assert pb.requires_human_review is True
+    assert pb.allowed_tools == ()
 
-def test_cli_check_reports_counts_and_exits_nonzero_on_invalid_catalog(tmp_path: Path, capsys):
-    _write_playbook(tmp_path / "valid_cat")
-    rc = cli_main(["--check", "--skills-root", str(tmp_path / "valid_cat")])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "Playbooks: 1" in out
-    assert "Pending owner review: 1" in out
-    assert "Validation failures: 0" in out
-    assert "Missing tool references: 0" in out
-    assert "Duplicate identities: 0" in out
-    assert "Security violations: 0" in out
+    text = pb.instructions.lower()
+    for required_spec_topic in (
+        "source_sha256",
+        "license",
+        "source_locator",
+        "verbatim",
+        "derived",
+        "raw_unit",
+        "canonical_unit",
+        "ocr_confidence",
+        "dispersion",
+        "table_provenance",
+        "prompt-injection",
+        "private-document",
+        "no external upload",
+        "human verification",
+        "immutable",
+        "conflicting sources",
+        "retraction",
+    ):
+        assert required_spec_topic in text, f"Missing spec topic {required_spec_topic!r}"
 
-    # Invalid catalog in both text and JSON formats exits with rc == 1 and reports issues
-    _write_playbook(
-        tmp_path / "invalid_cat",
-        skill_md=_render_skill_md(version="bad_semver", allowed_tools=["load_dataset", "no_such_tool"]),
+    res = read_playbook_resource(
+        "pharmagent.literature_extraction",
+        "references/evidence-record-schema-spec.md",
+        registry=reg,
+        allow_disabled=True,
     )
-    rc_bad_text = cli_main(["--check", "--skills-root", str(tmp_path / "invalid_cat")])
-    out_bad_text = capsys.readouterr().out
-    assert rc_bad_text == 1
-    assert "valid=False" in out_bad_text
-    assert "! [" in out_bad_text
-    assert "invalid_version" in out_bad_text
-
-    rc_bad_json = cli_main(["--check", "--format", "json", "--skills-root", str(tmp_path / "invalid_cat")])
-    out_bad_json = capsys.readouterr().out
-    assert rc_bad_json == 1
-    assert '"valid": false' in out_bad_json
-    assert '"non_existent_tool"' in out_bad_json
-
-
-def test_no_runtime_module_imports_playbooks_package():
-    importers = sorted(
-        str(p.relative_to(BACKEND_ROOT))
-        for p in (BACKEND_ROOT / "app").rglob("*.py")
-        if "playbooks" not in p.parts and "app.playbooks" in p.read_text(encoding="utf-8")
-    )
-    assert importers == []
+    assert res.canonical_digest == pb.canonical_digest
+    assert "proposed_unverified" in res.content
 
 
 def test_existing_captured_skills_remain_unchanged():
