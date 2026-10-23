@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 
-from app.compute.bootstrap import run_bootstrap as compute_run_bootstrap
 from app.compute.clinsim import (
     _covariate_applier,
     _cv_pct_to_omega2,
@@ -26,10 +25,21 @@ from app.compute.clinsim import (
 from app.compute.dose_sweep import _interval_metrics
 from app.compute.pk_models import REGISTRY, get_model
 from app.compute.pk_simulate import simulate_timecourse
-from app.compute.profile import run_profile as compute_run_profile
-from app.compute.sir import run_sir as compute_run_sir
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
+
+#: Draws from the fit's asymptotic theta RSE% (diagonal log-normal). Named for what
+#: it is; never presented under the name of an engine that did not run.
+ASYMPTOTIC_METHOD = "asymptotic_lognormal"
+#: Engines whose REAL result may be stored in state, in plan-default preference order.
+ENGINE_METHODS: tuple[str, ...] = ("sir", "bootstrap", "profile")
+UNCERTAINTY_METHODS: tuple[str, ...] = ENGINE_METHODS + (ASYMPTOTIC_METHOD,)
+#: Per-parameter (centre, lower, upper) keys exactly as each engine writes them.
+_ENGINE_INTERVAL_KEYS: dict[str, tuple[str, str, str]] = {
+    "sir": ("sir_median", "sir_lo", "sir_hi"),
+    "bootstrap": ("boot_median", "boot_lo", "boot_hi"),
+    "profile": ("estimate", "profile_lo", "profile_hi"),
+}
 
 
 def canonical_hash(obj: Any) -> str:
@@ -95,9 +105,8 @@ def extract_approved_fit(
         for k, v in (nlme_results.get("theta_rse_pct") or {}).items()
         if v is not None and math.isfinite(float(v)) and float(v) > 0
     }
-    if not theta_rse_pct:
-        # Provide conservative 15% RSE fallback if estimator omitted RSEs
-        theta_rse_pct = {k: 15.0 for k in theta}
+    # No default: a parameter without a finite RSE is listed, never invented.
+    theta_rse_missing = sorted(p for p in theta if p not in theta_rse_pct)
 
     cov_ranges: dict[str, list[float]] = {
         "wt_kg": [45.0, 110.0],
@@ -136,6 +145,7 @@ def extract_approved_fit(
         "omega_cv_pct": omega_cv_pct,
         "iiv_params": iiv_params,
         "theta_rse_pct": theta_rse_pct,
+        "theta_rse_missing": theta_rse_missing,
         "sigma": nlme_results.get("sigma") or {"prop": 0.1, "add": 0.0},
         "ofv": float(nlme_results.get("ofv") or 0.0),
         "covariate_effects": list(nlme_results.get("covariate_effects") or []),
@@ -153,11 +163,24 @@ def extract_approved_fit(
     return source_fit, provenance
 
 
+def default_uncertainty_method(available_methods: list[str] | None) -> str:
+    """The plan default is the most rigorous engine whose REAL result is stored in
+    state (SIR, then bootstrap, then profile); otherwise the asymptotic approximation,
+    named as such so the plan gate approves what will actually run."""
+    present = set(available_methods or [])
+    return next((m for m in ENGINE_METHODS if m in present), ASYMPTOTIC_METHOD)
+
+
 def build_simulation_plan(
     source_fit: dict[str, Any],
     args: dict[str, Any] | None = None,
+    available_methods: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Construct the structured simulation plan data object for human gate review."""
+    """Construct the structured simulation plan data object for human gate review.
+
+    ``available_methods`` names the uncertainty engines whose result is already in
+    state; the plan's ``uncertainty_method`` defaults to the best of them.
+    """
     args = args or {}
     cov_ranges = source_fit.get("covariate_ranges") or {}
     wt_lo, wt_hi = cov_ranges.get("wt_kg", [50.0, 95.0])
@@ -205,10 +228,13 @@ def build_simulation_plan(
     }
     target_window = dict(args.get("target_window") or default_window)
 
-    uncertainty_method = str(args.get("uncertainty_method") or "sir").lower()
-    if uncertainty_method not in ("bootstrap", "sir", "profile"):
+    available = [m for m in ENGINE_METHODS if m in set(available_methods or [])]
+    uncertainty_method = str(
+        args.get("uncertainty_method") or default_uncertainty_method(available)).lower()
+    if uncertainty_method not in UNCERTAINTY_METHODS:
         raise ValueError(
-            f"uncertainty_method must be 'bootstrap', 'sir', or 'profile'; got {uncertainty_method!r}"
+            "uncertainty_method must be one of "
+            f"{', '.join(repr(m) for m in UNCERTAINTY_METHODS)}; got {uncertainty_method!r}"
         )
 
     plan = {
@@ -220,6 +246,7 @@ def build_simulation_plan(
         "replicates": int(args.get("replicates", 10)),
         "seed": int(args.get("seed", 42)),
         "uncertainty_method": uncertainty_method,
+        "uncertainty_methods_available": available,
         "target_pta": float(args.get("target_pta", 0.75)),
     }
     return plan
@@ -579,6 +606,38 @@ def run_plan_special_populations(
     }
 
 
+def _engine_intervals(method: str, result: dict[str, Any] | None,
+                      ) -> dict[str, tuple[float, float, float]] | None:
+    """Per-parameter (centre, lower, upper) read from a REAL engine result stored in
+    state, using that engine's own keys. None when the result is absent, not ``ok``
+    or carries none of those keys -- never a reconstruction from RSE."""
+    keys = _ENGINE_INTERVAL_KEYS.get(method)
+    if not keys or not isinstance(result, dict) or result.get("status") != "ok":
+        return None
+    out: dict[str, tuple[float, float, float]] = {}
+    for rec in result.get("parameters") or []:
+        name = rec.get("parameter")
+        try:
+            c, lo, hi = (float(rec.get(k)) for k in keys)
+        except (TypeError, ValueError):
+            continue
+        if name and all(math.isfinite(x) and x > 0 for x in (c, lo, hi)) and hi > lo:
+            out[str(name)] = (c, lo, hi)
+    return out or None
+
+
+def _lognormal_draws(centres: dict[str, tuple[float, float]], fixed: dict[str, float],
+                     n_draws: int, rng: np.random.Generator) -> list[dict[str, float]]:
+    """Independent log-normal draws: ``centres`` maps a parameter to (log-centre,
+    log-sd); ``fixed`` parameters stay at their point estimate."""
+    draws: list[dict[str, float]] = []
+    for _ in range(n_draws):
+        d = {p: float(math.exp(rng.normal(mu, sd))) for p, (mu, sd) in centres.items()}
+        d.update(fixed)
+        draws.append(d)
+    return draws
+
+
 def _obtain_parameter_draws(
     source_fit: dict[str, Any],
     method: str,
@@ -588,166 +647,64 @@ def _obtain_parameter_draws(
     existing_sir: dict[str, Any] | None = None,
     existing_profile: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, float]], dict[str, Any]]:
-    """Run or reuse the requested uncertainty engine ('bootstrap', 'sir', or
-    'profile') and return ``(theta_draws, engine_summary)``."""
+    """Parameter draws for the outer uncertainty loop, labelled by what they ARE.
+
+    * ``method`` is sir / bootstrap / profile AND that engine's result is stored in
+      state -> log-normal draws matched to the engine's own per-parameter interval
+      (``approximation: False``, ``interval_source: <method>_results``).
+    * otherwise -> ``asymptotic_lognormal``: a diagonal log-normal from the fit's
+      theta RSE% (``approximation: True``; ``requested_method`` is kept). The
+      requested engine is never run here and its name is never attached to the
+      result.
+    * no finite RSE at all -> ``status: unverifiable`` and no draws.
+    """
+    method = str(method or ASYMPTOTIC_METHOD).lower()
+    if method not in UNCERTAINTY_METHODS:
+        raise ValueError(f"Unsupported uncertainty_method: {method!r}")
     theta = {k: float(v) for k, v in (source_fit.get("theta") or {}).items()}
-    rse_pct = {k: float(v) for k, v in (source_fit.get("theta_rse_pct") or {}).items()}
-    param_names = list(theta.keys())
+    rse_pct = {k: float(v) for k, v in (source_fit.get("theta_rse_pct") or {}).items()
+               if v is not None and math.isfinite(float(v)) and float(v) > 0}
+    param_names = list(theta)
     rng = np.random.default_rng(seed)
+    existing = {"sir": existing_sir, "bootstrap": existing_bootstrap, "profile": existing_profile}
 
-    # Log-scale estimates and covariance matrix from asymptotic RSE%
-    x_hat = np.array([math.log(max(theta[p], 1e-9)) for p in param_names], dtype=float)
-    se_log = np.array([max(rse_pct.get(p, 15.0) / 100.0, 0.02) for p in param_names], dtype=float)
-    cov_log = np.diag(se_log ** 2)
-    inv_cov = np.diag(1.0 / (se_log ** 2))
-    ofv_hat = float(source_fit.get("ofv") or 100.0)
-
-    def decode_fn(vec: np.ndarray) -> dict[str, float]:
-        return {p: float(math.exp(float(vec[i]))) for i, p in enumerate(param_names)}
-
-    def ofv_fn(vec: np.ndarray) -> float:
-        diff = np.asarray(vec, dtype=float) - x_hat
-        return float(ofv_hat + diff @ inv_cov @ diff)
-
-    if method == "sir":
-        if isinstance(existing_sir, dict) and existing_sir.get("status") == "ok":
-            sir_out = existing_sir
-        else:
-            sir_out = compute_run_sir(
-                ofv_fn=ofv_fn,
-                x_hat=x_hat,
-                cov=cov_log,
-                ofv_hat=ofv_hat,
-                decode_fn=decode_fn,
-                n_resample=max(30, n_draws * 2),
-                n_samples=max(150, n_draws * 6),
-                seed=seed,
-            )
-        # Sample parameter vectors bounded by SIR parameter intervals
-        p_map = {p["parameter"]: p for p in (sir_out.get("parameters") or []) if "parameter" in p}
-        draws: list[dict[str, float]] = []
-        for _ in range(n_draws):
-            d: dict[str, float] = {}
-            for i, p in enumerate(param_names):
-                info = p_map.get(p)
-                if info and info.get("sir_ci_lower") and info.get("sir_ci_upper"):
-                    lo = math.log(max(float(info["sir_ci_lower"]), 1e-9))
-                    hi = math.log(max(float(info["sir_ci_upper"]), 1e-9))
-                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
-                    med = math.log(max(float(info.get("sir_median") or theta[p]), 1e-9))
-                    d[p] = float(math.exp(rng.normal(med, sd)))
-                else:
-                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
-            draws.append(d)
-        return draws, {
-            "method": "sir",
-            "status": sir_out.get("status", "ok"),
-            "parameters": sir_out.get("parameters", []),
-        }
-
-    if method == "bootstrap":
-        if isinstance(existing_bootstrap, dict) and existing_bootstrap.get("status") == "ok":
-            boot_out = existing_bootstrap
-        else:
-            # Deterministic subject-level resampling around the fitted model
-            n_subj = 24
-            synth_subjects = [{"id": str(i), "wt": 70.0} for i in range(n_subj)]
-            subj_offsets = rng.normal(0.0, se_log * math.sqrt(n_subj), size=(n_subj, len(param_names)))
-            nl_stub = {
-                "status": "ok",
-                "converged": True,
-                "theta": theta,
-                "theta_rse_pct": rse_pct,
-                "omega_cv_pct": source_fit.get("omega_cv_pct") or {},
-                "sigma": source_fit.get("sigma") or {"prop": 0.1},
+    if method in ENGINE_METHODS:
+        ivals = _engine_intervals(method, existing.get(method))
+        if ivals:
+            centres = {
+                p: (math.log(c), max((math.log(hi) - math.log(lo)) / (2.0 * 1.96), 1e-4))
+                for p, (c, lo, hi) in ivals.items() if p in theta
             }
+            fixed = {p: theta[p] for p in param_names if p not in centres}
+            summary = {
+                "status": "ok", "method": method, "requested_method": method,
+                "approximation": False, "interval_source": f"{method}_results",
+                "parameters_drawn": sorted(centres), "parameters_fixed": sorted(fixed),
+                "note": (f"log-normal draws matched to the stored {method} per-parameter "
+                         "interval (centre and 95% bounds); between-parameter correlation "
+                         "is not carried"),
+            }
+            return _lognormal_draws(centres, fixed, n_draws, rng), summary
 
-            def fast_fit_fn(rep_subjects: list[dict], rep_seed: int) -> dict[str, Any]:
-                idx = [int(s["id"]) for s in rep_subjects]
-                mean_off = np.mean(subj_offsets[idx], axis=0)
-                rep_theta = {
-                    p: float(math.exp(x_hat[i] + mean_off[i]))
-                    for i, p in enumerate(param_names)
-                }
-                return {
-                    "status": "ok",
-                    "converged": True,
-                    "theta": rep_theta,
-                    "omega_cv_pct": source_fit.get("omega_cv_pct") or {},
-                    "sigma": source_fit.get("sigma") or {"prop": 0.1},
-                }
-
-            boot_out = compute_run_bootstrap(
-                _resolve_model_key(source_fit.get("model_key")),
-                synth_subjects,
-                nl_stub,
-                fit_fn=fast_fit_fn,
-                n_boot=max(25, n_draws),
-                params=tuple(param_names),
-                seed=seed,
-            )
-        p_map = {p["parameter"]: p for p in (boot_out.get("parameters") or []) if "parameter" in p}
-        draws = []
-        for _ in range(n_draws):
-            d = {}
-            for i, p in enumerate(param_names):
-                info = p_map.get(p)
-                if info and info.get("ci_lower") and info.get("ci_upper"):
-                    lo = math.log(max(float(info["ci_lower"]), 1e-9))
-                    hi = math.log(max(float(info["ci_upper"]), 1e-9))
-                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
-                    med = math.log(max(float(info.get("median") or theta[p]), 1e-9))
-                    d[p] = float(math.exp(rng.normal(med, sd)))
-                else:
-                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
-            draws.append(d)
-        return draws, {
-            "method": "bootstrap",
-            "status": boot_out.get("status", "ok"),
-            "parameters": boot_out.get("parameters", []),
-        }
-
-    if method == "profile":
-        if isinstance(existing_profile, dict) and existing_profile.get("status") == "ok":
-            prof_out = existing_profile
-        else:
-            def profile_ofv_fn(pname: str, val: float) -> float:
-                if val <= 0:
-                    return float("inf")
-                idx = param_names.index(pname)
-                z = (math.log(val) - x_hat[idx]) / se_log[idx]
-                return float(ofv_hat + z * z)
-
-            initial_step = {p: max(theta[p] * (rse_pct.get(p, 15.0) / 100.0) * 0.5, 1e-3) for p in param_names}
-            prof_out = compute_run_profile(
-                profile_ofv_fn=profile_ofv_fn,
-                estimates=theta,
-                ofv_hat=ofv_hat,
-                initial_step=initial_step,
-                params=tuple(param_names),
-            )
-        p_map = {p["parameter"]: p for p in (prof_out.get("parameters") or []) if "parameter" in p}
-        draws = []
-        for _ in range(n_draws):
-            d = {}
-            for i, p in enumerate(param_names):
-                info = p_map.get(p)
-                if info and info.get("profile_lo") and info.get("profile_hi"):
-                    lo = math.log(max(float(info["profile_lo"]), 1e-9))
-                    hi = math.log(max(float(info["profile_hi"]), 1e-9))
-                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
-                    d[p] = float(math.exp(rng.normal(x_hat[i], sd)))
-                else:
-                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
-            draws.append(d)
-        return draws, {
-            "method": "profile",
-            "status": prof_out.get("status", "ok"),
-            "parameters": prof_out.get("parameters", []),
-        }
-
-    raise ValueError(f"Unsupported uncertainty_method: {method!r}")
-
+    # Asymptotic approximation: requested explicitly, or the fallback when the
+    # requested engine has no stored result.
+    drawable = [p for p in param_names if p in rse_pct]
+    fixed = {p: theta[p] for p in param_names if p not in rse_pct}
+    base = {"method": ASYMPTOTIC_METHOD, "requested_method": method, "approximation": True,
+            "interval_source": "source_fit.theta_rse_pct",
+            "parameters_drawn": drawable, "parameters_fixed": sorted(fixed)}
+    if not drawable:
+        asked = "" if method == ASYMPTOTIC_METHOD else f" and no {method} result is stored in state"
+        return [], {**base, "status": "unverifiable",
+                    "reason": (f"the source fit carries no finite theta RSE%{asked}; "
+                               "parameter uncertainty cannot be propagated without inventing it")}
+    if method == ASYMPTOTIC_METHOD:
+        note = "diagonal log-normal from the fit's asymptotic theta RSE%, as the approved plan requested"
+    else:
+        note = (f"diagonal log-normal from the fit's asymptotic theta RSE%: no {method} result "
+                f"is stored in state, so this is NOT a {method} interval")
+    centres = {p: (math.log(max(theta[p], 1e-9)), max(rse_pct[p] / 100.0, 1e-4)) for p in drawable}
+    return _lognormal_draws(centres, fixed, n_draws, rng), {**base, "status": "ok", "note": note}
 
 def propagate_uncertainty_to_pta(
     source_fit: dict[str, Any],
@@ -758,12 +715,15 @@ def propagate_uncertainty_to_pta(
     existing_sir: dict[str, Any] | None = None,
     existing_profile: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Propagate parameter uncertainty (bootstrap, SIR, or profile) as an outer
-    loop into PTA per band per regimen.
+    """Propagate parameter uncertainty as an outer loop into PTA per band per regimen.
 
+    The payload's ``method`` is what the draws really are (see
+    ``_obtain_parameter_draws``); ``requested_method`` is what the plan asked for.
+    With no usable uncertainty source the payload is ``status: unverifiable`` and
+    the PTA table is returned without intervals.
     Returns ``(uncertainty_payload, updated_pta_result)``.
     """
-    method = str(plan.get("uncertainty_method") or "sir").lower()
+    requested = str(plan.get("uncertainty_method") or ASYMPTOTIC_METHOD).lower()
     seed = int(plan.get("seed", 42))
     n_draws = max(5, int(n_draws))
 
@@ -774,13 +734,22 @@ def propagate_uncertainty_to_pta(
 
     theta_draws, engine_summary = _obtain_parameter_draws(
         source_fit=source_fit,
-        method=method,
+        method=requested,
         n_draws=n_draws,
         seed=seed,
         existing_bootstrap=existing_bootstrap,
         existing_sir=existing_sir,
         existing_profile=existing_profile,
     )
+    if engine_summary.get("status") == "unverifiable":
+        payload = {
+            "status": "unverifiable", "method": engine_summary["method"],
+            "requested_method": requested, "approximation": True,
+            "reason": engine_summary["reason"], "seed": seed, "n_draws": 0,
+            "engine_summary": engine_summary, "intervals": [],
+        }
+        return payload, pta_result
+    method = str(engine_summary["method"])   # what the draws really are
 
     model_key = _resolve_model_key(source_fit.get("model_key"))
     omega_cv_pct = dict(source_fit.get("omega_cv_pct") or {})
@@ -845,6 +814,8 @@ def propagate_uncertainty_to_pta(
     uncertainty_payload = {
         "status": "ok",
         "method": method,
+        "requested_method": requested,
+        "approximation": bool(engine_summary.get("approximation")),
         "seed": seed,
         "n_draws": len(theta_draws),
         "engine_summary": engine_summary,

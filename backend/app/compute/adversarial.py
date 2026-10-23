@@ -314,7 +314,7 @@ _CIRCULAR_SOURCES = frozenset({
 
 
 def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
-    """Six simulation-specific refutations for the governed protocol_simulation workflow.
+    """Seven simulation-specific refutations for the governed protocol_simulation workflow.
 
     Every check emits HIGH severity so any violation blocks the review gate:
       1. Target window provenance missing or circular.
@@ -323,6 +323,7 @@ def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
       4. Regimen recommended on PTA alone while trough or peak metric fails its limit.
       5. Parameter uncertainty omitted when a recommendation is made.
       6. Pediatric band below the maturation function's data range (or fit lacks that range).
+      7. The uncertainty actually propagated is not the method the approved plan named.
     """
     import math
 
@@ -492,21 +493,42 @@ def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
             if ci_lo is None or ci_hi is None:
                 missing_ci_bands.append(f"{bname}:{rec_reg}")
         if not unc_ok or missing_ci_bands:
-            ev = (
-                "protocol_sim.uncertainty is missing or incomplete"
-                if not unc_ok
-                else (
-                    f"recommended regimen(s) {missing_ci_bands} lack "
-                    "parameter-uncertainty PTA intervals (pta_ci_lo/pta_ci_hi)"
-                )
-            )
+            if unc_ok:
+                ev = (f"recommended regimen(s) {missing_ci_bands} lack "
+                      "parameter-uncertainty PTA intervals (pta_ci_lo/pta_ci_hi)")
+            elif isinstance(unc, dict) and unc.get("status") == "unverifiable":
+                ev = f"protocol_sim.uncertainty is unverifiable: {unc.get('reason')}"
+            else:
+                ev = "protocol_sim.uncertainty is missing or incomplete"
             out.append(_finding(
                 "sim-uncertainty-omitted",
                 HIGH,
                 "protocol_sim.uncertainty",
                 "Regimen recommendations include outer-loop parameter uncertainty intervals in PTA",
                 ev,
-                "Run propagate_parameter_uncertainty (bootstrap, SIR, or profile) before recommending a regimen",
+                "Store a bootstrap, SIR or profile result on the source fit (run_bootstrap / "
+                "run_sir / run_profile) and run propagate_parameter_uncertainty before "
+                "recommending a regimen",
+            ))
+
+    # 7. The uncertainty actually propagated is not what the approved plan requested
+    unc = ps.get("uncertainty")
+    plan_method = str(plan.get("uncertainty_method") or "").lower()
+    if isinstance(unc, dict) and unc.get("status") == "ok" and plan_method:
+        actual = str(unc.get("method") or "").lower()
+        if actual != plan_method:
+            out.append(_finding(
+                "sim-uncertainty-method-deviation",
+                HIGH,
+                "protocol_sim.uncertainty",
+                f"PTA parameter-uncertainty intervals come from the approved method ({plan_method})",
+                f"protocol_sim.uncertainty.method = {actual} but the approved plan requested "
+                f"{plan_method}"
+                + ("; the intervals are an asymptotic approximation from theta RSE%"
+                   if unc.get("approximation") else ""),
+                f"Run run_{plan_method} on the source fit and re-run propagate_parameter_uncertainty, "
+                "or re-propose the plan with uncertainty_method='asymptotic_lognormal' and "
+                "re-approve it at the plan gate",
             ))
 
     # 6. Pediatric band below the maturation function's data range (fit must carry that range)

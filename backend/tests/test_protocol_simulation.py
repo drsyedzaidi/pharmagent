@@ -25,6 +25,7 @@ from docx import Document
 
 from app.agents.supervisor import Supervisor
 from app.compute import adversarial
+from app.compute.protocol_sim import build_simulation_plan
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.pharmstate import PharmState, apply_writes
@@ -200,18 +201,72 @@ def test_simulate_special_populations_runs_only_plan_bands_with_plan_seed(tmp_pa
     assert [s["label"] for s in sp["strata"]] == ["mild_renal_adult", "normal_renal_adult"]
 
 
-@pytest.mark.parametrize("method", ["bootstrap", "sir", "profile"])
-def test_propagate_parameter_uncertainty_supports_bootstrap_sir_and_profile(tmp_path: Path, method: str):
+def _real_engine_result(method: str, theta: dict[str, float]) -> dict[str, Any]:
+    """A result shaped exactly as the real engine writes it to state
+    (sir.py: sir_median/sir_lo/sir_hi; bootstrap.py: boot_median/boot_lo/boot_hi;
+    profile.py: estimate/profile_lo/profile_hi)."""
+    keys = {
+        "sir": ("sir_median", "sir_lo", "sir_hi"),
+        "bootstrap": ("boot_median", "boot_lo", "boot_hi"),
+        "profile": ("estimate", "profile_lo", "profile_hi"),
+    }[method]
+    return {
+        "status": "ok",
+        "parameters": [
+            {"parameter": name, "estimate": est,
+             keys[0]: est, keys[1]: round(est * 0.8, 4), keys[2]: round(est * 1.3, 4)}
+            for name, est in theta.items()
+        ],
+    }
+
+
+def _planned_state(tmp_path: Path, plan_args: dict[str, Any]) -> tuple[PharmState, ToolContext]:
     ctx = ToolContext(data_dir=str(tmp_path))
     st = _approved_nlme_state()
     st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
-    st = apply_writes(
-        st,
-        "simulator",
-        propose_simulation_plan(
-            st, ctx, {"n_subjects": 30, "replicates": 4, "seed": 55, "uncertainty_method": method}
-        ).writes,
-    )
+    st = apply_writes(st, "simulator", propose_simulation_plan(st, ctx, plan_args).writes)
+    st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
+    return st, ctx
+
+
+@pytest.mark.parametrize("method", ["bootstrap", "sir", "profile"])
+def test_propagate_without_a_real_engine_result_is_labelled_asymptotic_not_the_requested_method(
+    tmp_path: Path, method: str,
+):
+    st, ctx = _planned_state(
+        tmp_path, {"n_subjects": 30, "replicates": 4, "seed": 55, "uncertainty_method": method})
+    res = propagate_parameter_uncertainty(st, ctx, {"n_draws": 8})
+    st = apply_writes(st, "simulator", res.writes)
+
+    unc = st.protocol_sim["uncertainty"]
+    assert unc["status"] == "ok"
+    assert unc["method"] == "asymptotic_lognormal"
+    assert unc["requested_method"] == method
+    assert unc["approximation"] is True
+    assert unc["n_draws"] == 8
+    # The summary a human reads at the gate names both the approximation and what was asked for.
+    assert "asymptotic" in res.summary and method in res.summary
+    assert res.action == "propagate_parameter_uncertainty(asymptotic_lognormal)"
+    for row in st.protocol_sim["pta"]["rows"]:
+        assert row["uncertainty_method"] == "asymptotic_lognormal"
+        assert 0.0 <= row["pta_ci_lo"] <= row["pta_ci_hi"] <= 1.0
+    for rec in st.protocol_sim["recommendations"]:
+        if rec.get("recommended_regimen"):
+            assert rec["uncertainty_method"] == "asymptotic_lognormal"
+
+
+@pytest.mark.parametrize("method", ["bootstrap", "sir", "profile"])
+def test_propagate_reuses_the_real_engine_result_stored_in_state(tmp_path: Path, method: str):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    st = _approved_nlme_state()
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    st = apply_writes(st, "simulator",
+                      {f"{method}_results": _real_engine_result(method, st.nlme_results["theta"])})
+    st = apply_writes(st, "simulator",
+                      propose_simulation_plan(st, ctx, {"n_subjects": 30, "replicates": 4, "seed": 55}).writes)
+    # The proposed plan defaults to the engine whose result is actually present.
+    assert st.protocol_sim["plan"]["uncertainty_method"] == method
+    assert st.protocol_sim["plan"]["uncertainty_methods_available"] == [method]
     st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
     res = propagate_parameter_uncertainty(st, ctx, {"n_draws": 8})
     st = apply_writes(st, "simulator", res.writes)
@@ -219,11 +274,90 @@ def test_propagate_parameter_uncertainty_supports_bootstrap_sir_and_profile(tmp_
     unc = st.protocol_sim["uncertainty"]
     assert unc["status"] == "ok"
     assert unc["method"] == method
-    assert unc["n_draws"] == 8
+    assert unc["requested_method"] == method
+    assert unc["approximation"] is False
+    assert unc["engine_summary"]["interval_source"] == f"{method}_results"
+    assert sorted(unc["engine_summary"]["parameters_drawn"]) == sorted(st.nlme_results["theta"])
+    assert res.action == f"propagate_parameter_uncertainty({method})"
     for row in st.protocol_sim["pta"]["rows"]:
-        assert row["pta_ci_lo"] is not None
-        assert row["pta_ci_hi"] is not None
-        assert 0.0 <= row["pta_ci_lo"] <= row["pta_ci_hi"] <= 1.0
+        assert row["uncertainty_method"] == method
+
+
+def test_propagate_fails_closed_when_the_fit_has_no_rse_and_no_engine_result(tmp_path: Path):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    st = _approved_nlme_state()
+    nl = dict(st.nlme_results)
+    nl.pop("theta_rse_pct")
+    st = apply_writes(st, "modeler", {"nlme_results": nl})
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    fit = st.protocol_sim["source_fit"]
+    assert fit["theta_rse_pct"] == {}                       # no silent 15 % default
+    assert set(nl["theta"]) <= set(fit["theta_rse_missing"])
+    st = apply_writes(st, "simulator",
+                      propose_simulation_plan(st, ctx, {"n_subjects": 30, "replicates": 4, "seed": 55}).writes)
+    st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
+    res = propagate_parameter_uncertainty(st, ctx, {"n_draws": 8})
+    st = apply_writes(st, "simulator", res.writes)
+
+    unc = st.protocol_sim["uncertainty"]
+    assert unc["status"] == "unverifiable"
+    assert res.result["status"] == "unverifiable"
+    assert res.action == "propagate_parameter_uncertainty(unverifiable)"
+    assert "RSE" in unc["reason"]
+    for row in st.protocol_sim["pta"]["rows"]:
+        assert row.get("pta_ci_lo") is None and row.get("pta_ci_hi") is None
+    rev = adversarial.review(st.model_dump(), None, None)
+    assert rev["goal_met"] is False
+    f = next(f for f in rev["findings"] if f["id"] == "sim-uncertainty-omitted")
+    assert f["severity"] == "HIGH"
+    assert "RSE" in f["evidence"]
+
+
+def test_review_check7_flags_an_approximation_used_in_place_of_the_approved_method(tmp_path: Path):
+    st, ctx = _planned_state(
+        tmp_path, {"n_subjects": 30, "replicates": 4, "seed": 55, "uncertainty_method": "sir"})
+    st = apply_writes(st, "simulator", propagate_parameter_uncertainty(st, ctx, {"n_draws": 8}).writes)
+    rev = adversarial.review(st.model_dump(), None, None)
+    assert rev["goal_met"] is False
+    f = next(f for f in rev["findings"] if f["id"] == "sim-uncertainty-method-deviation")
+    assert f["severity"] == "HIGH"
+    assert f["target"] == "protocol_sim.uncertainty"
+    assert "sir" in f["evidence"] and "asymptotic_lognormal" in f["evidence"]
+
+
+def test_review_check7_passes_when_the_plan_itself_requested_the_approximation(tmp_path: Path):
+    st = _complete_clean_protocol_sim_state(tmp_path)
+    assert st.protocol_sim["plan"]["uncertainty_method"] == "asymptotic_lognormal"
+    rev = adversarial.review(st.model_dump(), None, None)
+    assert not any(f["id"] == "sim-uncertainty-method-deviation" for f in rev["findings"])
+    assert rev["goal_met"] is True
+
+
+def test_build_simulation_plan_defaults_to_an_engine_result_present_else_asymptotic():
+    fit = {"theta": {"CL": 4.8, "V": 38.0}, "covariate_ranges": {}, "route": "oral"}
+    assert build_simulation_plan(fit, {})["uncertainty_method"] == "asymptotic_lognormal"
+    assert build_simulation_plan(fit, {}, available_methods=["profile"])["uncertainty_method"] == "profile"
+    assert build_simulation_plan(fit, {}, available_methods=["profile", "sir"])["uncertainty_method"] == "sir"
+    assert build_simulation_plan(fit, {"uncertainty_method": "asymptotic_lognormal"},
+                                 available_methods=["sir"])["uncertainty_method"] == "asymptotic_lognormal"
+    with pytest.raises(ValueError, match="uncertainty_method"):
+        build_simulation_plan(fit, {"uncertainty_method": "delta"})
+
+
+def test_report_discloses_the_uncertainty_approximation_and_what_was_requested(tmp_path: Path):
+    st, ctx = _planned_state(
+        tmp_path, {"n_subjects": 30, "replicates": 4, "seed": 55, "uncertainty_method": "sir"})
+    st = apply_writes(st, "simulator", propagate_parameter_uncertainty(st, ctx, {"n_draws": 8}).writes)
+    res = generate_report(st, ctx, {"study_title": "Approximation disclosure"})
+    sec = res.writes["report_sections"]["protocol_simulation"]
+    assert sec["uncertainty_method"] == "asymptotic_lognormal"
+    assert sec["uncertainty_requested"] == "sir"
+    assert sec["uncertainty_approximation"] is True
+    md = sec["rendered_markdown"]
+    assert "asymptotic log-normal approximation" in md
+    assert "requested: sir" in md
+    assert "| uncertainty_method | asymptotic_lognormal |" in md
+    assert "| uncertainty_requested | sir |" in md
 
 
 # ── 2. Determinism Test ──────────────────────────────────────────────────────

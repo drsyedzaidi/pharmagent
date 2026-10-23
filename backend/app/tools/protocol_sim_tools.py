@@ -17,6 +17,7 @@ import pandas as pd
 
 from app.compute.protocol_sim import (
     TOOL_VERSION,
+    UNCERTAINTY_METHODS,
     build_simulation_plan,
     canonical_hash,
     extract_approved_fit,
@@ -49,6 +50,13 @@ def _dataset_covariate_ranges(state: PharmState, ctx: ToolContext) -> dict[str, 
                     ranges[target_key] = [round(float(vals.min()), 2), round(float(vals.max()), 2)]
                 break
     return ranges
+
+
+def _available_uncertainty_methods(state: PharmState) -> list[str]:
+    """Engines whose REAL result is stored in state; the plan defaults to the best."""
+    stored = (("sir", state.sir_results), ("bootstrap", state.bootstrap_results),
+              ("profile", state.profile_results))
+    return [m for m, res in stored if isinstance(res, dict) and res.get("status") == "ok"]
 
 
 def load_approved_fit(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -94,7 +102,8 @@ def propose_simulation_plan(state: PharmState, ctx: ToolContext, args: dict[str,
         )
         ps["source_fit"] = source_fit
 
-    plan = build_simulation_plan(source_fit, args)
+    plan = build_simulation_plan(source_fit, args,
+                                 available_methods=_available_uncertainty_methods(state))
     plan_hash = canonical_hash(plan)
     elapsed = round(time.perf_counter() - t0, 6)
 
@@ -219,7 +228,12 @@ def simulate_special_populations(state: PharmState, ctx: ToolContext, args: dict
 
 
 def propagate_parameter_uncertainty(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    """Propagate parameter uncertainty (bootstrap, SIR, or profile) as an outer loop into PTA."""
+    """Propagate parameter uncertainty as an outer loop into PTA.
+
+    Uses the bootstrap / SIR / profile result stored in state when the plan names
+    one; otherwise an asymptotic log-normal approximation that is labelled as such
+    (and that the adversarial review flags when the plan asked for an engine).
+    """
     t0 = time.perf_counter()
     ps = dict(state.protocol_sim or {})
     source_fit = ps.get("source_fit")
@@ -264,17 +278,36 @@ def propagate_parameter_uncertainty(state: PharmState, ctx: ToolContext, args: d
     ps["uncertainty"] = unc_out
     ps["provenance"] = provenance
     wrapped = ProtocolSimDict(ps)
+    requested = unc_out.get("requested_method")
+    if unc_out["status"] == "unverifiable":
+        summary = (
+            f"Parameter uncertainty NOT propagated: {unc_out['reason']}. Run run_sir, "
+            "run_bootstrap or run_profile on the source fit, then re-run this step."
+        )
+        action = "propagate_parameter_uncertainty(unverifiable)"
+    else:
+        if not unc_out.get("approximation"):
+            how = f"from the stored {unc_out['method']} result"
+        elif requested == unc_out["method"]:
+            how = "asymptotic log-normal approximation from theta RSE%, as the approved plan requested"
+        else:
+            how = (f"asymptotic log-normal approximation from theta RSE%; the approved plan "
+                   f"requested {requested} but no {requested} result is stored in state")
+        summary = (
+            f"Propagated parameter uncertainty ({unc_out['method']}: {how}) over "
+            f"{unc_out['n_draws']} outer-loop draws into PTA intervals (seed={unc_out['seed']})."
+        )
+        action = f"propagate_parameter_uncertainty({unc_out['method']})"
     return ToolResult(
-        summary=(
-            f"Propagated parameter uncertainty ({unc_out['method']}) over "
-            f"{unc_out['n_draws']} outer-loop draws into PTA intervals "
-            f"(seed={unc_out['seed']})."
-        ),
-        action=f"propagate_parameter_uncertainty({unc_out['method']})",
+        summary=summary,
+        action=action,
         writes={"protocol_sim": wrapped},
         result={
-            "status": "ok",
+            "status": unc_out["status"],
             "method": unc_out["method"],
+            "requested_method": requested,
+            "approximation": bool(unc_out.get("approximation")),
+            "reason": unc_out.get("reason"),
             "n_draws": unc_out["n_draws"],
             "seed": unc_out["seed"],
         },
@@ -308,7 +341,7 @@ TOOLS = [
                 "n_subjects": {"type": "integer"},
                 "replicates": {"type": "integer"},
                 "seed": {"type": "integer"},
-                "uncertainty_method": {"type": "string", "enum": ["bootstrap", "sir", "profile"]},
+                "uncertainty_method": {"type": "string", "enum": list(UNCERTAINTY_METHODS)},
                 "target_pta": {"type": "number"},
             },
             "required": [],
@@ -334,15 +367,17 @@ TOOLS = [
     ),
     Tool(
         "propagate_parameter_uncertainty",
-        "Propagate parameter uncertainty (from bootstrap, SIR, or likelihood "
-        "profile as chosen in protocol_sim.plan) as an outer loop into PTA per "
-        "band per regimen so PTA carries a 95% parameter-uncertainty interval.",
+        "Propagate parameter uncertainty as an outer loop into PTA per band per "
+        "regimen so PTA carries a 95% parameter-uncertainty interval. Uses the "
+        "bootstrap, SIR or likelihood-profile result stored in state when the "
+        "approved plan names one; otherwise an asymptotic log-normal approximation "
+        "from theta RSE%, labelled as such.",
         "simulator",
         {
             "type": "object",
             "properties": {
                 "confirm": {"type": "boolean"},
-                "method": {"type": "string", "enum": ["bootstrap", "sir", "profile"]},
+                "method": {"type": "string", "enum": list(UNCERTAINTY_METHODS)},
                 "n_draws": {"type": "integer"},
                 "seed": {"type": "integer"},
             },

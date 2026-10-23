@@ -373,6 +373,16 @@ def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5
         if not (unc and unc.get("status") == "ok"):
             skipped_steps.append("propagate_parameter_uncertainty")
             unc_msg = "Skipped step: propagate_parameter_uncertainty (parameter-uncertainty intervals not computed)."
+            if unc and unc.get("status") == "unverifiable":
+                unc_msg = f"Parameter-uncertainty intervals not computed: {unc.get('reason')}."
+            doc.add_paragraph(unc_msg)
+            md_lines.append(unc_msg)
+        elif unc.get("approximation"):
+            unc_msg = (
+                "Parameter-uncertainty intervals are an asymptotic log-normal approximation "
+                "from the fit's theta RSE%, not a bootstrap, SIR or profile result "
+                f"(requested: {unc.get('requested_method')})."
+            )
             doc.add_paragraph(unc_msg)
             md_lines.append(unc_msg)
         tbl_rows = []
@@ -479,13 +489,18 @@ def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5
     # 5. Provenance block
     doc.add_heading(f"{section_num}.5 Simulation provenance", level=2)
     md_lines.append(f"### {section_num}.5 Simulation provenance")
-    unc_method = unc.get("method") or plan.get("uncertainty_method") or "n/a"
+    unc_method = unc.get("method") or "n/a"
+    unc_requested = unc.get("requested_method") or plan.get("uncertainty_method") or "n/a"
+    unc_approx = bool(unc.get("approximation")) if unc else None
     prov_rows = [
         ["source_fit_id", prov.get("source_fit_id") or source_fit.get("fit_id") or "n/a"],
         ["review_hash", prov.get("review_hash") or "n/a"],
         ["plan_hash", prov.get("plan_hash") or "n/a"],
         ["seed", prov.get("seed") if prov.get("seed") is not None else plan.get("seed", "n/a")],
         ["uncertainty_method", unc_method],
+        ["uncertainty_requested", unc_requested],
+        ["uncertainty_approximation",
+         "n/a" if unc_approx is None else ("yes" if unc_approx else "no")],
     ]
     _kv_table(doc, ["Field", "Value"], prov_rows)
     md_lines.append("| Field | Value |")
@@ -499,6 +514,8 @@ def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5
         "plan_hash": prov.get("plan_hash"),
         "seed": prov.get("seed") if prov.get("seed") is not None else plan.get("seed"),
         "uncertainty_method": unc_method,
+        "uncertainty_requested": unc_requested,
+        "uncertainty_approximation": unc_approx,
         "n_pta_rows": len(pta_rows),
         "recommendations": recs,
         "high_critical_findings": high_crit,
