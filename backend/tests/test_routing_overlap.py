@@ -217,3 +217,52 @@ def test_round4_audit_probes(message, expected):
     old = types.ModuleType("supervisor_54bc72d")
     exec(compile(src.stdout, "supervisor_54bc72d", "exec"), old.__dict__)
     assert new == old.Supervisor(_Spy()).route(message)
+
+
+def test_worktree_path_keywords_never_pollute_routing_or_route_plan(tmp_path, monkeypatch):
+    """Dataset file paths containing domain keywords (e.g. a worktree named
+    'pharmagent-poppk-er-evidence-review' or 'memo-briefing') must not trigger
+    spurious keyword/anchor matches or unintended multi-agent handoffs."""
+    import shutil
+    from pathlib import Path
+
+    from app.config import settings
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    sup = Supervisor(_NeverLLM())
+    wt_path = "/Users/dev/pharmagent-poppk-er-evidence-review/backend/sample_data/oral_pk.csv"
+
+    assert sup.route(f"load {wt_path}") == ("data_manager", "keyword")
+    assert sup.route_plan(f"load {wt_path}") == [("data_manager", "keyword")]
+    assert Supervisor(MockLLM()).route_plan(
+        f"load {wt_path} and then compute NCA and then run the QC checklist and then generate the report"
+    ) == [
+        ("data_manager", "llm"),
+        ("nca", "handoff"),
+        ("qc", "handoff"),
+        ("report", "handoff"),
+    ]
+
+    anchor_path = "/Users/dev/memo-briefing-exposure-response/oral_pk.csv"
+    assert sup.route(f"load {anchor_path}") == ("data_manager", "keyword")
+    assert sup.route_plan(f"load {anchor_path}") == [("data_manager", "keyword")]
+
+    # Full Orchestrator.chat + capture_skill verification on a real file inside a
+    # directory named 'pharmagent-poppk-er-evidence-review'
+    wt_dir = tmp_path / "pharmagent-poppk-er-evidence-review" / "sample_data"
+    wt_dir.mkdir(parents=True, exist_ok=True)
+    sample_src = Path(__file__).parent.parent / "sample_data" / "oral_pk.csv"
+    sample_dst = wt_dir / "oral_pk.csv"
+    shutil.copyfile(sample_src, sample_dst)
+
+    orch = Orchestrator(llm=MockLLM(), store=SessionStore(":memory:"))
+    sid = orch.create_session(owner="alice").id
+    out = orch.chat(sid, f"load {sample_dst}", actor="alice")
+    assert out["agents_executed"] == ["data_manager"]
+    orch.chat(sid, "run NCA", actor="alice")
+    orch.chat(sid, "run the QC checklist", actor="alice")
+    captured = orch.capture_skill(sid, "wt-path-skill", actor="alice")
+    assert [s["tool"] for s in captured["skill"]["steps"]] == ["compute_nca", "run_qc"]
+
