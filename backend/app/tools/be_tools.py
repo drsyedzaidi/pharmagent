@@ -6,6 +6,7 @@ and reference levels are explicit, and every excluded value is listed.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pandas as pd
@@ -62,6 +63,29 @@ def _exposures_by_treatment(
     return records, ledger
 
 
+def _row_ledger(obs: pd.DataFrame, raw_dv: pd.Series, *, id_col: str, time_col: str, dv_col: str,
+                trt_col: str) -> tuple[pd.DataFrame, list[dict]]:
+    """Drop observation rows that cannot be concentrations, listing each one with its original value."""
+    ledger: list[dict] = []
+    keep = []
+    for idx, row in obs.iterrows():
+        t, dv, raw = row[time_col], row[dv_col], raw_dv.loc[idx]
+        reason = None
+        if pd.isna(t):
+            reason = "missing_time"
+        elif pd.isna(dv):
+            reason = "missing_dv" if pd.isna(raw) else "non_numeric_dv"
+        elif not math.isfinite(float(dv)):
+            reason = "non_finite_dv"
+        if reason is None:
+            keep.append(idx)
+            continue
+        ledger.append({"subject": _py(row[id_col]), "treatment": _py(row[trt_col]), "parameter": "*",
+                       "reason": reason, "original_value": _py(raw), "time": None if pd.isna(t) else float(t),
+                       "prespecified": False})
+    return obs.loc[keep], ledger
+
+
 def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
     payload = {"status": status, "message": message, **extra}
     return ToolResult(summary=f"Bioequivalence not run: {message}", action=f"run_bioequivalence({status})",
@@ -70,8 +94,12 @@ def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
 
 def _match_level(levels: list[Any], wanted: Any) -> Any:
     """The data's own level equal to the requested one, compared as text (a CSV may read 1 where the user typed
-    "1"). Unknown levels are returned unchanged so the contract names them in its refusal."""
-    return next((lv for lv in levels if str(lv) == str(wanted)), wanted)
+    "1"). Unknown levels are returned unchanged so the contract names them in its refusal; text matching two
+    different data levels is refused."""
+    hits = [lv for lv in levels if str(lv) == str(wanted)]
+    if len(hits) > 1:
+        raise BEContractError(f"treatment level {wanted!r} is ambiguous: it matches {hits!r}")
+    return hits[0] if hits else wanted
 
 
 def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -79,6 +107,8 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     required, nothing is guessed, and every excluded value is listed."""
     dsid, df = require_dataset(ctx, state, args)
     missing = [k for k in _REQUIRED if args.get(k) in (None, "")]
+    if args.get("design") == "crossover" and not args.get("period_col"):
+        missing.append("period_col")       # without periods, replicate or duplicated rows cannot be told apart
     if missing:
         return _refusal("missing_required_args",
                         f"state {', '.join(missing)} explicitly (design: crossover or parallel; profile: "
@@ -101,6 +131,7 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
         return _refusal("no_treatment_column", "no test/reference treatment column found; add a column named "
                         "TRT/TREATMENT/FORMULATION or pass treatment_col")
 
+    raw_dv = df[dv_col].copy()
     df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
     df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
     if evid_col:
@@ -110,6 +141,12 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     else:
         obs = df
 
+    if obs[id_col].isna().any() or obs[trt_col].isna().any():
+        return _refusal("invalid_arguments", "observation rows without a subject id or treatment cannot be "
+                        "assigned; fix the data")
+    if obs.duplicated([id_col, trt_col, time_col]).any():
+        return _refusal("unsupported_design", "duplicate sampling rows (same subject, treatment and time): "
+                        "replicate or duplicated data is not pooled")
     period_col = args.get("period_col")
     if period_col:
         if period_col not in obs.columns:
@@ -117,20 +154,26 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
         if (obs.groupby([id_col, trt_col])[period_col].nunique() > 1).any():
             return _refusal("unsupported_design", "a subject received the same treatment in more than one period: "
                             "replicate designs are not supported")
+        if args["design"] == "crossover":
+            per = obs.groupby([id_col, trt_col])[period_col].first().reset_index()
+            if per.duplicated([id_col, period_col]).any():
+                return _refusal("invalid_arguments", "a subject has test and reference in the same period, which "
+                                "is not a crossover")
 
-    levels = list(pd.unique(obs[trt_col].dropna()))
-    test_lv, ref_lv = _match_level(levels, args["test"]), _match_level(levels, args["reference"])
-    records, short = _exposures_by_treatment(obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
-    limits = args.get("limits")
+    obs, dropped = _row_ledger(obs, raw_dv, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
+    levels = list(pd.unique(obs[trt_col]))
     try:
+        test_lv, ref_lv = _match_level(levels, args["test"]), _match_level(levels, args["reference"])
+        records, short = _exposures_by_treatment(obs, id_col=id_col, time_col=time_col, dv_col=dv_col,
+                                                 trt_col=trt_col)
         res = assess_average_be(
             records, design=args["design"], profile=args["profile"], test=_py(test_lv), reference=_py(ref_lv),
             prespecified_exclusions=args.get("prespecified_exclusions"),
-            limits=tuple(limits) if limits else None, limits_justification=args.get("limits_justification"))
+            limits=args.get("limits"), limits_justification=args.get("limits_justification"))
     except BEContractError as exc:
         status = "unsupported_design" if "replicate" in str(exc) else "invalid_arguments"
         return _refusal(status, str(exc))
-    res = {**res, "status": "ok", "exclusions": short + res["exclusions"],
+    res = {**res, "status": "ok", "exclusions": dropped + short + res["exclusions"],
            "test_level": str(test_lv), "reference_level": str(ref_lv)}
     verdict = "BIOEQUIVALENT" if res["bioequivalent"] else "NOT bioequivalent"
     return ToolResult(

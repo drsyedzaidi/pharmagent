@@ -25,7 +25,7 @@ def _frame(n=12, levels=("A", "B"), drop=()):
                 continue
             scale = 1.0 + 0.02 * i + (0.01 if k else 0.0)
             for t, c in zip(TIMES, _profile(scale)):
-                rows.append({"ID": i + 1, "TIME": t, "DV": c, "TRT": trt, "EVID": 0})
+                rows.append({"ID": i + 1, "TIME": t, "DV": c, "TRT": trt, "EVID": 0, "PERIOD": k + 1})
     return pd.DataFrame(rows)
 
 
@@ -35,7 +35,7 @@ def _call(df, **args):
     return run_bioequivalence(state, ctx, args)
 
 
-FULL = {"design": "crossover", "profile": "fda_2026", "test": "B", "reference": "A"}
+FULL = {"design": "crossover", "profile": "fda_2026", "test": "B", "reference": "A", "period_col": "PERIOD"}
 
 
 @pytest.mark.parametrize("missing", sorted(FULL))
@@ -48,7 +48,7 @@ def test_missing_contract_arguments_fail_closed_with_a_named_list(missing):
 
 
 def test_the_reference_is_never_guessed_from_level_names():
-    out = _call(_frame(levels=("X", "Y")), design="crossover", profile="fda_2026")
+    out = _call(_frame(levels=("X", "Y")), design="crossover", profile="fda_2026", period_col="PERIOD")
     assert out.result["status"] == "missing_required_args"
     assert set(out.result["missing"]) == {"test", "reference"}
 
@@ -79,8 +79,8 @@ def test_a_group_column_is_refused_as_unsupported():
 def test_a_replicate_dataset_is_refused():
     df = _frame()
     extra = df[(df.ID == 1) & (df.TRT == "A")].assign(PERIOD=3)
-    df = pd.concat([df.assign(PERIOD=np.where(df.TRT == "A", 1, 2)), extra])
-    res = _call(df, **FULL, period_col="PERIOD").result
+    df = pd.concat([df, extra])
+    res = _call(df, **FULL).result
     assert res["status"] == "unsupported_design" and "replicate" in res["message"]
 
 
