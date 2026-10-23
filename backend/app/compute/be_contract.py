@@ -27,9 +27,13 @@ change, and every result says the model is interim.
 """
 from __future__ import annotations
 
+import math
+import numbers
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
+
+from numpy import bool_ as np_bool
 
 from app.compute.bioequivalence import be_one_parameter
 
@@ -81,7 +85,21 @@ def regulatory_round(value: float) -> Decimal:
 
 def _estimate(test_vals: list[float], ref_vals: list[float], *, paired: bool, alpha: float) -> dict[str, Any]:
     r = be_one_parameter(test_vals, ref_vals, paired=paired, alpha=alpha)
-    return {k: r[k] for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct")}
+    return {k: r.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
+                                  "ci_lower_raw", "ci_upper_raw")}
+
+
+def _real(x) -> bool:
+    return isinstance(x, numbers.Real) and not isinstance(x, (bool, np_bool))
+
+
+def _limit(x) -> Decimal:
+    if not _real(x) or not math.isfinite(float(x)):
+        raise BEContractError(f"limits must be finite numbers; got {x!r}")
+    d = Decimal(repr(float(x)))
+    if d != d.quantize(_TWO_DP):
+        raise BEContractError(f"limits are stated to two decimals; {x!r} has more")
+    return d.quantize(_TWO_DP)
 
 
 def _validate(records, design, profile, test, reference, limits, limits_justification):
@@ -102,7 +120,9 @@ def _validate(records, design, profile, test, reference, limits, limits_justific
     prof = PROFILES[profile]
     lo, hi = prof.lower, prof.upper
     if limits is not None:
-        lo, hi = (Decimal(repr(float(x))).quantize(_TWO_DP) for x in limits)
+        if not isinstance(limits, (list, tuple)) or len(limits) != 2:
+            raise BEContractError(f"limits must be [lower, upper]; got {limits!r}")
+        lo, hi = (_limit(x) for x in limits)
         if (lo, hi) != (prof.lower, prof.upper) and not (limits_justification or "").strip():
             raise BEContractError("custom limits need a written justification (limits_justification)")
         if not lo < 100 < hi:
@@ -134,21 +154,29 @@ def _entry(subject, treatment, parameter, reason, value, prespecified):
 
 
 def _value_problem(v) -> str | None:
-    if v is None or v != v:                                         # None or NaN
+    if v is None:
         return "missing_value"
+    if not _real(v):
+        return "invalid_type"
+    if math.isnan(float(v)):
+        return "missing_value"
+    if math.isinf(float(v)):
+        return "non_finite_value"
     return None if v > 0 else "non_positive_value"
 
 
 def _verdict(est, prof, lo, hi, enough):
-    if est["ci_lower_pct"] is None:
+    lower_raw = est.get("ci_lower_raw", est["ci_lower_pct"])
+    upper_raw = est.get("ci_upper_raw", est["ci_upper_pct"])
+    if lower_raw is None or upper_raw is None:
         return {"within_limits": False, "acceptance": "not_estimable",
                 "ci_lower_rounded": None, "ci_upper_rounded": None}
     if prof.rounding_source:
-        cl, cu = regulatory_round(est["ci_lower_pct"]), regulatory_round(est["ci_upper_pct"])
+        cl, cu = regulatory_round(lower_raw), regulatory_round(upper_raw)
         inside = cl >= lo and cu <= hi
         rounded = (str(cl), str(cu))
     else:
-        inside = Decimal(repr(est["ci_lower_pct"])) >= lo and Decimal(repr(est["ci_upper_pct"])) <= hi
+        inside = Decimal(repr(float(lower_raw))) >= lo and Decimal(repr(float(upper_raw))) <= hi
         rounded = (None, None)
     acceptance = ("insufficient_evaluable_subjects" if not enough
                   else "within_limits" if inside else "outside_limits")
@@ -183,7 +211,8 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
         n_t, n_r = len(tv), len(rv)
         enough = min(n_t, n_r) >= prof.min_evaluable
     est = _estimate(tv, rv, paired=design == "crossover", alpha=prof.alpha)
-    return {**est, **_verdict(est, prof, lo, hi, enough),
+    shown = {k: est.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct")}
+    return {**shown, **_verdict(est, prof, lo, hi, enough),
             "n_evaluable": n_t if design == "crossover" else n_t + n_r, "n_test": n_t, "n_reference": n_r,
             "min_evaluable": prof.min_evaluable}
 
@@ -191,18 +220,47 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
 def assess_average_be(records: list[dict], *, design: str | None, profile: str | None, test: Any, reference: Any,
                       prespecified_exclusions: list[dict] | None = None, limits: tuple[float, float] | None = None,
                       limits_justification: str | None = None) -> dict[str, Any]:
-    """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``)."""
+    """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``).
+
+    Any malformed input is a BEContractError, never another exception."""
+    try:
+        return _assess(records, design, profile, test, reference, prespecified_exclusions, limits,
+                       limits_justification)
+    except BEContractError:
+        raise
+    except (TypeError, ValueError, ArithmeticError, InvalidOperation, KeyError, AttributeError) as exc:
+        raise BEContractError(f"invalid input: {type(exc).__name__}: {exc}") from exc
+
+
+def _exclusion_map(prespecified_exclusions, subjects) -> dict[Any, str]:
+    if prespecified_exclusions is None:
+        return {}
+    if not isinstance(prespecified_exclusions, (list, tuple)):
+        raise BEContractError("prespecified_exclusions must be a list of {subject, reason}")
+    excluded: dict[Any, str] = {}
+    for ex in prespecified_exclusions:
+        if not isinstance(ex, dict):
+            raise BEContractError(f"each pre-specified exclusion must be {{subject, reason}}; got {ex!r}")
+        s, reason = ex.get("subject"), ex.get("reason")
+        try:
+            known = s in subjects
+        except TypeError:
+            raise BEContractError(f"pre-specified exclusion subject {s!r} is not a valid id") from None
+        if not known:
+            raise BEContractError(f"pre-specified exclusion names unknown subject {s!r}")
+        if not isinstance(reason, str) or not reason.strip():
+            raise BEContractError(f"pre-specified exclusion of {s!r} has no reason")
+        if s in excluded:
+            raise BEContractError(f"subject {s!r} is pre-specified for exclusion more than once")
+        excluded[s] = reason.strip()
+    return excluded
+
+
+def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification):
     prof, lo, hi = _validate(records, design, profile, test, reference, limits, limits_justification)
     by = _index(records, design, test, reference)
     subjects = set(by[test]) | set(by[reference])
-    excluded: dict[Any, str] = {}
-    for ex in prespecified_exclusions or []:
-        s, reason = ex.get("subject"), (ex.get("reason") or "").strip()
-        if s not in subjects:
-            raise BEContractError(f"pre-specified exclusion names unknown subject {s!r}")
-        if not reason:
-            raise BEContractError(f"pre-specified exclusion of {s!r} has no reason")
-        excluded[s] = reason
+    excluded = _exclusion_map(prespecified_exclusions, subjects)
     names = sorted({k for arm in by.values() for p in arm.values() for k in p})
     ledger: list[dict] = []
     params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger) for n in names}
@@ -219,3 +277,19 @@ def assess_average_be(records: list[dict], *, design: str | None, profile: str |
         "parameters": params, "exclusions": ledger,
         "bioequivalent": bool(params) and all(p["within_limits"] for p in params.values()),
     }
+
+
+def report_disclosure(res: dict[str, Any]) -> str:
+    """One sentence a report prints next to any BE verdict: profile, rounding rule, model status, exclusions."""
+    n = len(res.get("exclusions") or [])
+    custom = f" Custom limits, justified as: {res['limits_justification']}." if res.get("limits_justification") else ""
+    return (f"Profile {res.get('profile')} ({res.get('profile_source')}); rounding: {res.get('rounding')}. "
+            f"Model: {res.get('model')} {n} excluded value(s) are listed in the exclusion ledger.{custom}")
+
+
+def report_ci(v: dict[str, Any]) -> str:
+    """The CI the verdict used: the rounded bounds where the profile rounds, else the unrounded ones."""
+    if v.get("ci_lower_rounded") is not None:
+        return f"{v['ci_lower_rounded']}–{v['ci_upper_rounded']}"
+    lo, hi = v.get("ci_lower_pct"), v.get("ci_upper_pct")
+    return "n/a" if lo is None else f"{lo}–{hi}"

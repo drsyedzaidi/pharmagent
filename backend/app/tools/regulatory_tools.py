@@ -17,6 +17,7 @@ from typing import Any
 from docx import Document
 from docx.shared import Pt
 
+from app.compute.be_contract import report_ci, report_disclosure
 from app.core.pharmstate import PharmState, StudyInfo
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -172,6 +173,11 @@ def _section_23_analyses(doc: Document, state: PharmState) -> None:
             f"acceptance limits {be['limits'][0]}–{be['limits'][1]}%). "
             f"Overall conclusion: {overall}."
         )
+        if be.get("profile"):
+            doc.add_paragraph(report_disclosure(be))
+            for k, v in (be.get("parameters") or {}).items():
+                doc.add_paragraph(f"{k}: GMR {v.get('gmr_pct')}%, 90% CI {report_ci(v)}%, "
+                                  f"n {v.get('n_evaluable')}, {v.get('acceptance')}.")
 
 
 def _section_24_special_pops(doc: Document, state: PharmState) -> None:
