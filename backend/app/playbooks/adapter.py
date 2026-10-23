@@ -8,7 +8,7 @@ size to `MAX_ADAPTER_OUTPUT_BYTES`, and includes full playbook identity and dige
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,6 @@ from .schema import (
 
 _ALLOWED_OPERATIONS = ("list_playbooks", "load_playbook", "read_resource", "validate_catalog")
 _ALLOWED_ARG_KEYS = frozenset({"operation", "playbook_id", "version", "resource", "include_disabled"})
-_METADATA_RESERVE_BYTES = 4096
 
 
 def _identity_dict(pb: PlaybookSummary | ScientificPlaybook | PlaybookResource) -> dict[str, Any]:
@@ -70,12 +69,52 @@ def _error_result(code: str, message: str, *, action: str = "playbook_adapter(er
     )
 
 
-def _cap_text(text: str, max_bytes: int = MAX_ADAPTER_OUTPUT_BYTES) -> tuple[str, bool]:
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return text, False
-    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
-    return truncated, True
+def _json_size(payload: Mapping[str, Any]) -> int:
+    """Byte size of `payload` as a consumer serializes it (default `json.dumps`, ASCII-escaped)."""
+    return len(json.dumps(payload).encode("utf-8"))
+
+
+def _fit_text(build: Callable[[str, bool], dict[str, Any]], text: str) -> dict[str, Any] | None:
+    """Return build(text, False) if it fits the cap; else the longest prefix that fits, marked truncated.
+
+    Sizes are measured after JSON serialization, so escaping of quotes, backslashes,
+    newlines and non-ASCII characters can never push the result over the cap.
+    """
+    full = build(text, False)
+    if _json_size(full) <= MAX_ADAPTER_OUTPUT_BYTES:
+        return full
+    lo, hi, best = 0, len(text) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = build(text[:mid], True)
+        if _json_size(candidate) <= MAX_ADAPTER_OUTPUT_BYTES:
+            best, lo = candidate, mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _fit_items(build: Callable[[list[Any], bool], dict[str, Any]], items: Sequence[Any]) -> dict[str, Any] | None:
+    """Like `_fit_text`, but keeps the longest leading run of list items that fits the cap."""
+    full = build(list(items), False)
+    if _json_size(full) <= MAX_ADAPTER_OUTPUT_BYTES:
+        return full
+    lo, hi, best = 0, len(items) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = build(list(items[:mid]), True)
+        if _json_size(candidate) <= MAX_ADAPTER_OUTPUT_BYTES:
+            best, lo = candidate, mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _too_large(op: str) -> ToolResult:
+    return _error_result(
+        "output_too_large",
+        f"{op} metadata alone exceeds the {MAX_ADAPTER_OUTPUT_BYTES}-byte adapter output cap",
+    )
 
 
 def run_playbook_adapter(
@@ -130,10 +169,15 @@ def run_playbook_adapter(
                 }
                 for s in summaries
             ]
+            listed = _fit_items(
+                lambda kept, cut: {"status": "ok", "operation": op, "playbooks": kept, "truncated": cut}, items
+            )
+            if listed is None:
+                return _too_large(op)
             return ToolResult(
-                summary=f"Listed {len(items)} Scientific Playbook(s).",
+                summary=f"Listed {len(listed['playbooks'])} of {len(items)} Scientific Playbook(s).",
                 writes={},
-                result={"status": "ok", "operation": op, "playbooks": items},
+                result=listed,
                 action="playbook_adapter(list_playbooks)",
             )
 
@@ -148,8 +192,7 @@ def run_playbook_adapter(
                 skills_root=skills_root,
                 registry=registry,
             )
-            instructions, truncated = _cap_text(pb.instructions, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES)
-            pb_dict = {
+            pb_meta = {
                 **_identity_dict(pb),
                 "domain": pb.domain,
                 "description": pb.description,
@@ -158,15 +201,23 @@ def run_playbook_adapter(
                 "requires_human_review": pb.requires_human_review,
                 "runtime_available": pb.runtime_available,
                 "resource_paths": list(pb.resource_paths),
-                "instructions": instructions,
-                "truncated": truncated,
                 "trust_notice": pb.trust_notice,
                 "untrusted_data": True,
             }
+            loaded = _fit_text(
+                lambda text, cut: {
+                    "status": "ok",
+                    "operation": op,
+                    "playbook": {**pb_meta, "instructions": text, "truncated": cut},
+                },
+                pb.instructions,
+            )
+            if loaded is None:
+                return _too_large(op)
             return ToolResult(
                 summary=f"Loaded Scientific Playbook {pb.playbook_id} v{pb.version} ({pb.canonical_digest[:12]}).",
                 writes={},
-                result={"status": "ok", "operation": op, "playbook": pb_dict},
+                result=loaded,
                 action=f"playbook_adapter(load_playbook:{pb.playbook_id}@{pb.version})",
             )
 
@@ -185,21 +236,28 @@ def run_playbook_adapter(
                 skills_root=skills_root,
                 registry=registry,
             )
-            content, truncated = _cap_text(res.content, MAX_ADAPTER_OUTPUT_BYTES - _METADATA_RESERVE_BYTES)
-            res_dict = {
+            res_meta = {
                 **_identity_dict(res),
                 "resource_path": res.resource_path,
-                "content": content,
                 "sha256": res.sha256,
                 "size_bytes": res.size_bytes,
-                "truncated": truncated,
                 "trust_notice": res.trust_notice,
                 "untrusted_data": True,
             }
+            read = _fit_text(
+                lambda text, cut: {
+                    "status": "ok",
+                    "operation": op,
+                    "resource": {**res_meta, "content": text, "truncated": cut},
+                },
+                res.content,
+            )
+            if read is None:
+                return _too_large(op)
             return ToolResult(
                 summary=f"Read resource {res.resource_path} from {res.playbook_id} v{res.version}.",
                 writes={},
-                result={"status": "ok", "operation": op, "resource": res_dict},
+                result=read,
                 action=f"playbook_adapter(read_resource:{res.playbook_id}:{res.resource_path})",
             )
 
@@ -237,14 +295,18 @@ def run_playbook_adapter(
             "issues": issues,
             "playbooks": playbooks_meta,
         }
-        raw_json = json.dumps(result_payload, sort_keys=True)
-        if len(raw_json.encode("utf-8")) > MAX_ADAPTER_OUTPUT_BYTES:
-            result_payload["issues"] = issues[:25]
-            result_payload["truncated"] = True
+        validated = _fit_items(lambda kept, cut: {**result_payload, "issues": kept, "truncated": cut}, issues)
+        if validated is None:
+            validated = _fit_items(
+                lambda kept, cut: {**result_payload, "issues": [], "playbooks": kept, "truncated": True},
+                playbooks_meta,
+            )
+        if validated is None:
+            return _too_large(op)
         return ToolResult(
             summary=(f"Validated {report.total_playbooks} playbook(s): valid={report.valid}, issues={len(issues)}."),
             writes={},
-            result=result_payload,
+            result=validated,
             action="playbook_adapter(validate_catalog)",
         )
     except PlaybookApprovalError as exc:

@@ -283,6 +283,8 @@ class PlaybookSummary(_Strict):
             raise ValueError("runtime-available playbooks must declare at least one tool in `allowed_tools`")
         if (self.status == "approved") != (self.approval_status == "approved"):
             raise ValueError("a playbook with `status: approved` must have `approval_status: approved` and vice versa")
+        if self.runtime_available and self.version.startswith("0."):
+            raise ValueError("a pre-release `0.x` playbook must set `runtime_available: false`")
         if (self.approval_status == "rejected" or self.status == "deprecated") and self.runtime_available:
             raise ValueError("a `rejected` or `deprecated` playbook must set `runtime_available: false`")
         if self.approval_status in ("pending_owner_review", "rejected"):

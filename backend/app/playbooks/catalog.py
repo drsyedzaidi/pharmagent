@@ -156,9 +156,21 @@ def list_playbooks(
     registry: ToolRegistry | None = None,
     include_disabled: bool = True,
 ) -> tuple[PlaybookSummary, ...]:
-    """Return deterministic discovery summaries for all playbooks (progressive disclosure tier 1)."""
+    """Return deterministic discovery summaries (progressive disclosure tier 1).
+
+    With `include_disabled=False` (runtime discovery), only playbooks that pass the same
+    approval gate as `load_playbook` are returned, so every discovered playbook is loadable.
+    """
     _root, playbooks = _require_valid_catalog(skills_root=skills_root, registry=registry)
-    return tuple(pb.to_summary() for pb in playbooks if include_disabled or pb.runtime_available)
+    return tuple(pb.to_summary() for pb in playbooks if include_disabled or _is_runtime_loadable(pb))
+
+
+def _is_runtime_loadable(pb: ScientificPlaybook) -> bool:
+    try:
+        _verify_runtime_approved(pb)
+    except PlaybookDisabledError:
+        return False
+    return True
 
 
 def load_playbook_for_review(

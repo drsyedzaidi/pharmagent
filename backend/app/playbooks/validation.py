@@ -217,6 +217,15 @@ def _validate_approval_fields(raw_meta: dict[str, Any]) -> list[PlaybookValidati
                 f"{raw_approval} playbook cannot specify approved_by or approved_date",
             )
         )
+    pre_ver = raw_meta.get("version")
+    if raw_meta.get("runtime_available", True) is True and isinstance(pre_ver, str) and pre_ver.startswith("0."):
+        issues.append(
+            _issue(
+                "invalid_approval_status",
+                "runtime_available",
+                f"pre-release version {pre_ver!r} must set runtime_available: false",
+            )
+        )
     if raw_approval == "approved":
         raw_ver = raw_meta.get("version")
         if isinstance(raw_ver, str) and raw_ver.startswith("0."):

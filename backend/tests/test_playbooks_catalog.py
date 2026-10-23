@@ -384,10 +384,8 @@ def test_shipped_playbooks_validate_against_real_default_registry():
         "pharmagent.protocol_simulation",
     ]
     runtime_only = list_playbooks(skills_root=DEFAULT_SKILLS_ROOT, registry=reg, include_disabled=False)
-    assert [s.playbook_id for s in runtime_only] == [
-        "pharmagent.model_review",
-        "pharmagent.protocol_simulation",
-    ]
+    # Runtime discovery lists only loadable playbooks; all shipped playbooks await owner approval.
+    assert [s.playbook_id for s in runtime_only] == []
 
 
 def test_protocol_simulation_playbook_content_contract():

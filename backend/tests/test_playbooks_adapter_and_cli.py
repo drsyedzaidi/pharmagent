@@ -190,7 +190,8 @@ def test_adapter_validate_catalog_and_error_paths_and_truncation(tmp_path: Path)
     (tool,) = build_playbook_tools(registry=reg)
     t_res = tool.run(state, ctx, {"operation": "list_playbooks", "include_disabled": False})
     assert t_res.writes == {}
-    assert len(t_res.result["playbooks"]) == 2
+    # Runtime discovery lists only loadable playbooks; all shipped playbooks await owner approval.
+    assert t_res.result["playbooks"] == []
 
     rc_ok = cli_main(["--check", "--format", "json"])
     assert rc_ok == 0
