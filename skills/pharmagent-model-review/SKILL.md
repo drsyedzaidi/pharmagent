@@ -96,7 +96,7 @@ Refer to [Translation Verification Checklist](references/translation-verificatio
 
 ### Step 2: Parameter and Unit Extraction
 1. For initial per-subject or two-stage screening, use `fit_compartmental`, `run_poppk`, or `fit_pk_model` (single model or `compare=True` across candidates ranked by AIC).
-2. For population mixed-effects estimation, propose or inspect `run_nlme` (`method` in `["focei", "saem", "focei_saem", "auto"]`; note that `run_nlme` supports the 10 PK-only structural models where `has_pd=False`, is `expensive=True`, and runs via the job-backed endpoint; `pkpd_*` models where `has_pd=True` are fitted via `fit_pk_model` and forward-simulated via `simulate_pk_profile`).
+2. For population mixed-effects estimation, inspect an existing `run_nlme` result, or ask the user to start `run_nlme` through the job-backed endpoint (it is expensive and not proposable, so never propose it in chat) (`method` in `["focei", "saem", "focei_saem", "auto"]`; note that `run_nlme` supports the 10 PK-only structural models where `has_pd=False`, is `expensive=True`, and runs via the job-backed endpoint; `pkpd_*` models where `has_pd=True` are fitted via `fit_pk_model` and forward-simulated via `simulate_pk_profile`).
 3. Extract and tabulate:
    - Fixed-effect typical values (`theta`) and relative standard errors (`theta_rse_pct`),
    - Derived secondary parameters (`calc_half_life`, `calc_allometric`) with explicit units,

@@ -59,7 +59,7 @@ produced_artifacts:
 limitations:
   - PharmAgent does not contain a PBPK or QSP execution engine; simulations are restricted to the 19 compartmental PK and PK/PD models in the reviewed library.
   - All numerical outputs must come from deterministic PharmAgent tools; the agent must never calculate or interpolate exposure metrics in prose.
-  - Expensive tools (run_nlme, run_simest, bootstrap_exposure_response) require job admission control and human gate approval.
+  - Expensive tools run only as admission-controlled jobs. run_nlme is not proposable and is started by the user through the job-backed endpoint; run_simest and bootstrap_exposure_response may be proposed and run only after human approval.
   - Approval status is pending_owner_review; this playbook is procedural guidance, not regulatory validation or endorsement.
 requires_human_review: true
 compatibility:
