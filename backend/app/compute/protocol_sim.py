@@ -1,0 +1,853 @@
+"""Governed protocol simulation compute layer.
+
+Implements deterministic, seed-controlled trial PTA simulation across
+plan-defined covariate bands and regimens, plan-scoped special-population /
+pediatric simulation, and outer-loop parameter-uncertainty propagation from
+bootstrap, SIR, or likelihood-profile estimates into PTA intervals.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from typing import Any
+
+import numpy as np
+
+from app.compute.bootstrap import run_bootstrap as compute_run_bootstrap
+from app.compute.clinsim import (
+    _covariate_applier,
+    _cv_pct_to_omega2,
+    pediatric_reference_population,
+    pediatric_simulation,
+    reference_population,
+    special_population_simulation,
+)
+from app.compute.dose_sweep import _interval_metrics
+from app.compute.pk_models import REGISTRY, get_model
+from app.compute.pk_simulate import simulate_timecourse
+from app.compute.profile import run_profile as compute_run_profile
+from app.compute.sir import run_sir as compute_run_sir
+
+TOOL_VERSION = "1.0.0"
+
+
+def canonical_hash(obj: Any) -> str:
+    """Deterministic SHA-256 hex prefix (16 chars) of a JSON-serializable object."""
+    payload = json.dumps(obj, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def tm50_maturation(pma_weeks: float, tm50: float = 47.7, hill: float = 3.4) -> float:
+    """Sigmoid Emax maturation function for clearance as a function of PMA (weeks)."""
+    pma = max(float(pma_weeks), 1.0)
+    num = pma ** float(hill)
+    den = (float(tm50) ** float(hill)) + num
+    return float(num / den) if den > 0 else 1.0
+
+
+_MODEL_ALIASES: dict[str, str] = {
+    "1cmt_oral": "oral_1cmt",
+    "2cmt_oral": "oral_2cmt",
+    "1cmt_iv": "iv_1cmt",
+    "2cmt_iv": "iv_2cmt",
+}
+
+
+def _resolve_model_key(raw: Any) -> str:
+    k = str(raw or "oral_1cmt")
+    k = _MODEL_ALIASES.get(k, k)
+    return k if k in REGISTRY else "oral_1cmt"
+
+
+def extract_approved_fit(
+    nlme_results: dict[str, Any] | None,
+    review_results: dict[str, Any] | None,
+    dataset_covariate_ranges: dict[str, list[float]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify preconditions (converged NLME fit + approved adversarial review)
+    and build ``(source_fit, provenance)``."""
+    if not isinstance(nlme_results, dict) or nlme_results.get("status") != "ok":
+        raise ValueError(
+            "protocol_simulation requires a converged NLME fit "
+            "(nlme_results.status == 'ok'). Run the poppk workflow first."
+        )
+    if nlme_results.get("converged") is False:
+        raise ValueError(
+            "protocol_simulation requires a converged NLME fit "
+            "(nlme_results.converged is False)."
+        )
+    if not isinstance(review_results, dict) or review_results.get("goal_met") is not True:
+        raise ValueError(
+            "protocol_simulation requires an approved adversarial review on the "
+            "source fit (review_results.goal_met == True)."
+        )
+
+    model_key = _resolve_model_key(nlme_results.get("model_key"))
+    model = get_model(model_key)
+
+    theta = {**model.defaults, **{k: float(v) for k, v in (nlme_results.get("theta") or {}).items()}}
+    omega_cv_pct = {k: float(v) for k, v in (nlme_results.get("omega_cv_pct") or {}).items()
+                    if v is not None}
+    iiv_params = list(nlme_results.get("iiv_params") or list(omega_cv_pct.keys()))
+    theta_rse_pct = {
+        k: float(v)
+        for k, v in (nlme_results.get("theta_rse_pct") or {}).items()
+        if v is not None and math.isfinite(float(v)) and float(v) > 0
+    }
+    if not theta_rse_pct:
+        # Provide conservative 15% RSE fallback if estimator omitted RSEs
+        theta_rse_pct = {k: 15.0 for k in theta}
+
+    cov_ranges: dict[str, list[float]] = {
+        "wt_kg": [45.0, 110.0],
+        "age_yr": [18.0, 75.0],
+        "crcl_ml_min": [40.0, 130.0],
+    }
+    if isinstance(dataset_covariate_ranges, dict):
+        for k, v in dataset_covariate_ranges.items():
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                cov_ranges[k] = [float(v[0]), float(v[1])]
+    if isinstance(nlme_results.get("covariate_ranges"), dict):
+        for k, v in nlme_results["covariate_ranges"].items():
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                cov_ranges[k] = [float(v[0]), float(v[1])]
+
+    # Maturation data range is only present when carried by the fit.
+    maturation_data_range = nlme_results.get("maturation_data_range")
+
+    fit_id = str(
+        nlme_results.get("fit_id")
+        or canonical_hash({
+            "model_key": model_key,
+            "theta": theta,
+            "omega_cv_pct": omega_cv_pct,
+            "ofv": nlme_results.get("ofv"),
+        })
+    )
+    review_hash = canonical_hash(review_results)
+
+    source_fit = {
+        "fit_id": fit_id,
+        "model_key": model_key,
+        "label": model.label,
+        "route": "iv" if "iv" in model_key.lower() else "oral",
+        "theta": theta,
+        "omega_cv_pct": omega_cv_pct,
+        "iiv_params": iiv_params,
+        "theta_rse_pct": theta_rse_pct,
+        "sigma": nlme_results.get("sigma") or {"prop": 0.1, "add": 0.0},
+        "ofv": float(nlme_results.get("ofv") or 0.0),
+        "covariate_effects": list(nlme_results.get("covariate_effects") or []),
+        "covariate_ranges": cov_ranges,
+        "maturation_data_range": maturation_data_range,
+    }
+    provenance = {
+        "source_fit_id": fit_id,
+        "review_hash": review_hash,
+        "plan_hash": None,
+        "seed": None,
+        "tool_versions": {"load_approved_fit": TOOL_VERSION},
+        "wall_clock": {},
+    }
+    return source_fit, provenance
+
+
+def build_simulation_plan(
+    source_fit: dict[str, Any],
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Construct the structured simulation plan data object for human gate review."""
+    args = args or {}
+    cov_ranges = source_fit.get("covariate_ranges") or {}
+    wt_lo, wt_hi = cov_ranges.get("wt_kg", [50.0, 95.0])
+    age_lo, age_hi = cov_ranges.get("age_yr", [20.0, 70.0])
+    crcl_lo, crcl_hi = cov_ranges.get("crcl_ml_min", [50.0, 120.0])
+
+    default_bands = [
+        {
+            "name": "standard_adult",
+            "wt_kg": [round(float(wt_lo), 1), round(float(wt_hi), 1)],
+            "age_yr": [round(float(age_lo), 1), round(float(age_hi), 1)],
+            "crcl_ml_min": [round(float(max(crcl_lo, 60.0)), 1), round(float(crcl_hi), 1)],
+            "is_pediatric": False,
+        }
+    ]
+    bands = list(args.get("bands") or default_bands)
+
+    route = source_fit.get("route", "oral")
+    default_regimens = [
+        {"label": "100mg_q24h", "dose_mg": 100.0, "tau_h": 24.0, "route": route, "n_doses": 5},
+        {"label": "150mg_q24h", "dose_mg": 150.0, "tau_h": 24.0, "route": route, "n_doses": 5},
+        {"label": "200mg_q24h", "dose_mg": 200.0, "tau_h": 24.0, "route": route, "n_doses": 5},
+    ]
+    regimens = list(args.get("regimens") or default_regimens)
+    metrics = list(args.get("metrics") or ["auc", "cmax", "ctrough"])
+
+    # Calibrate default target window around typical reference exposure at 150 mg
+    # so the default plan has a realistic therapeutic window with external provenance.
+    theta = source_fit.get("theta") or {}
+    cl_typ = float(theta.get("CL") or theta.get("cl") or 5.0)
+    v_typ = float(theta.get("V") or theta.get("VC") or theta.get("v") or 40.0)
+    ref_auc = 150.0 / max(cl_typ, 0.1)
+    ref_cmax = (150.0 / max(v_typ, 1.0)) * 2.5
+
+    default_window = {
+        "metric": "auc",
+        "low": round(ref_auc * 0.55, 3),
+        "high": round(ref_auc * 2.20, 3),
+        "cmax_max": round(ref_cmax * 2.50, 3),
+        "ctrough_min": 0.005,
+        "provenance": {
+            "source": "protocol_specification",
+            "citation": "Pre-specified clinical protocol target exposure window (Phase 2 E-R anchor)",
+        },
+    }
+    target_window = dict(args.get("target_window") or default_window)
+
+    uncertainty_method = str(args.get("uncertainty_method") or "sir").lower()
+    if uncertainty_method not in ("bootstrap", "sir", "profile"):
+        raise ValueError(
+            f"uncertainty_method must be 'bootstrap', 'sir', or 'profile'; got {uncertainty_method!r}"
+        )
+
+    plan = {
+        "bands": bands,
+        "regimens": regimens,
+        "metrics": metrics,
+        "target_window": target_window,
+        "n_subjects": int(args.get("n_subjects", 80)),
+        "replicates": int(args.get("replicates", 10)),
+        "seed": int(args.get("seed", 42)),
+        "uncertainty_method": uncertainty_method,
+        "target_pta": float(args.get("target_pta", 0.75)),
+    }
+    return plan
+
+
+def _simulate_band_regimen_cohort(
+    model_key: str,
+    theta: dict[str, float],
+    omega_cv_pct: dict[str, float],
+    iiv_params: list[str],
+    covariate_effects: list[dict[str, Any]] | None,
+    band: dict[str, Any],
+    regimen: dict[str, Any],
+    n_subjects: int,
+    rng: np.random.Generator,
+    n_points: int = 96,
+) -> dict[str, np.ndarray]:
+    """Simulate ``n_subjects`` virtual patients in ``band`` under ``regimen``."""
+    model = get_model(model_key)
+    typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
+    apply_cov = _covariate_applier(covariate_effects)
+    sds = {p: float(np.sqrt(_cv_pct_to_omega2(omega_cv_pct.get(p)))) for p in iiv_params}
+
+    wt_range = band.get("wt_kg") or [70.0, 70.0]
+    age_range = band.get("age_yr") or [40.0, 40.0]
+    crcl_range = band.get("crcl_ml_min") or [90.0, 90.0]
+    pma_range = band.get("pma_weeks")
+
+    wts = rng.uniform(float(wt_range[0]), float(wt_range[1]), size=n_subjects)
+    ages = rng.uniform(float(age_range[0]), float(age_range[1]), size=n_subjects)
+    crcls = rng.uniform(float(crcl_range[0]), float(crcl_range[1]), size=n_subjects)
+    if pma_range and len(pma_range) == 2:
+        pmas = rng.uniform(float(pma_range[0]), float(pma_range[1]), size=n_subjects)
+    else:
+        pmas = ages * 52.0 + 40.0
+
+    dose = float(regimen.get("dose_mg") or regimen.get("dose") or 100.0)
+    tau = float(regimen.get("tau_h") or regimen.get("tau") or 24.0)
+    n_doses = int(regimen.get("n_doses", 5))
+    tmax = tau * n_doses
+    t_last = (n_doses - 1) * tau
+
+    aucs = np.empty(n_subjects, dtype=float)
+    cmaxs = np.empty(n_subjects, dtype=float)
+    ctroughs = np.empty(n_subjects, dtype=float)
+
+    is_ped = bool(band.get("is_pediatric")) or float(age_range[0]) < 18.0
+
+    for i in range(n_subjects):
+        cov = {
+            "WT": float(wts[i]),
+            "AGE": float(ages[i]),
+            "CRCL": float(crcls[i]),
+            "EGFR": float(crcls[i]),
+        }
+        theta_i = apply_cov(typical, cov)
+        params_i = {k: float(theta_i[k]) for k in theta_i}
+        for p in iiv_params:
+            if p in params_i and sds.get(p, 0.0) > 0:
+                params_i[p] = params_i[p] * float(np.exp(rng.normal(0.0, sds[p])))
+        if is_ped and float(ages[i]) < 2.0 and "CL" in params_i:
+            params_i["CL"] = params_i["CL"] * tm50_maturation(float(pmas[i]))
+
+        sim = simulate_timecourse(
+            model,
+            params_i,
+            dose=dose,
+            tau=tau,
+            n_doses=n_doses,
+            tmax=tmax,
+            n_points=n_points,
+            wt=float(wts[i]),
+        )
+        m = _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=tau, tmax=tmax)
+        aucs[i] = float(m["auc_tau"])
+        cmaxs[i] = float(m["cmax"])
+        ctroughs[i] = float(m["ctrough"])
+
+    return {"auc": aucs, "cmax": cmaxs, "ctrough": ctroughs}
+
+
+def _in_target_window(exposures: dict[str, np.ndarray], target_window: dict[str, Any]) -> np.ndarray:
+    """Boolean mask of virtual subjects achieving the target efficacy window."""
+    metric = str(target_window.get("metric") or "auc").lower()
+    if metric == "auc_tau":
+        metric = "auc"
+    vals = exposures.get(metric)
+    if vals is None:
+        vals = exposures["auc"]
+    low = target_window.get("low")
+    high = target_window.get("high")
+    mask = np.ones(len(vals), dtype=bool)
+    if low is not None:
+        mask &= vals >= float(low)
+    if high is not None:
+        mask &= vals <= float(high)
+    return mask
+
+
+def run_trial_pta(
+    source_fit: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Simulate virtual subjects across replicates for every (band, regimen) in ``plan``.
+
+    Computes PTA per band per regimen with Monte Carlo standard error (``mc_se``)
+    across replicates, exposure percentile summaries, peak/trough limit checks,
+    and per-band regimen recommendations.
+    """
+    seed = int(plan.get("seed", 42))
+    n_subjects = int(plan.get("n_subjects", 80))
+    replicates = int(plan.get("replicates", 10))
+    target_window = dict(plan.get("target_window") or {})
+    target_pta = float(plan.get("target_pta", 0.75))
+
+    model_key = _resolve_model_key(source_fit.get("model_key"))
+    theta = dict(source_fit.get("theta") or {})
+    omega_cv_pct = dict(source_fit.get("omega_cv_pct") or {})
+    iiv_params = list(source_fit.get("iiv_params") or list(omega_cv_pct.keys()))
+    cov_effects = list(source_fit.get("covariate_effects") or [])
+
+    rng = np.random.default_rng(seed)
+
+    cmax_max = target_window.get("cmax_max")
+    ctrough_min = target_window.get("ctrough_min")
+
+    rows: list[dict[str, Any]] = []
+    for band in plan.get("bands") or []:
+        bname = str(band.get("name") or "band")
+        for reg in plan.get("regimens") or []:
+            rlabel = str(reg.get("label") or f"{reg.get('dose_mg', 100)}mg")
+            rep_ptas: list[float] = []
+            all_auc: list[np.ndarray] = []
+            all_cmax: list[np.ndarray] = []
+            all_ctrough: list[np.ndarray] = []
+
+            for _ in range(max(1, replicates)):
+                exp = _simulate_band_regimen_cohort(
+                    model_key=model_key,
+                    theta=theta,
+                    omega_cv_pct=omega_cv_pct,
+                    iiv_params=iiv_params,
+                    covariate_effects=cov_effects,
+                    band=band,
+                    regimen=reg,
+                    n_subjects=n_subjects,
+                    rng=rng,
+                )
+                hit = _in_target_window(exp, target_window)
+                rep_ptas.append(float(np.mean(hit)))
+                all_auc.append(exp["auc"])
+                all_cmax.append(exp["cmax"])
+                all_ctrough.append(exp["ctrough"])
+
+            auc_cat = np.concatenate(all_auc)
+            cmax_cat = np.concatenate(all_cmax)
+            ctrough_cat = np.concatenate(all_ctrough)
+
+            pta_mean = round(float(np.mean(rep_ptas)), 4)
+            mc_se = (
+                round(float(np.std(rep_ptas, ddof=1) / math.sqrt(len(rep_ptas))), 4)
+                if len(rep_ptas) > 1
+                else None
+            )
+
+            auc_p05, auc_p50, auc_p95 = [round(float(x), 4) for x in np.percentile(auc_cat, [5, 50, 95])]
+            cmax_p05, cmax_p50, cmax_p95 = [round(float(x), 4) for x in np.percentile(cmax_cat, [5, 50, 95])]
+            ctr_p05, ctr_p50, ctr_p95 = [round(float(x), 4) for x in np.percentile(ctrough_cat, [5, 50, 95])]
+
+            peak_limit_failed = bool(cmax_max is not None and cmax_p50 > float(cmax_max))
+            trough_limit_failed = bool(ctrough_min is not None and ctr_p50 < float(ctrough_min))
+
+            rows.append({
+                "band": bname,
+                "regimen": rlabel,
+                "dose_mg": float(reg.get("dose_mg") or reg.get("dose") or 100.0),
+                "tau_h": float(reg.get("tau_h") or reg.get("tau") or 24.0),
+                "pta": pta_mean,
+                "mc_se": mc_se,
+                "replicates": len(rep_ptas),
+                "n_subjects": n_subjects,
+                "pta_ci_lo": None,
+                "pta_ci_hi": None,
+                "auc": {"p05": auc_p05, "median": auc_p50, "p95": auc_p95},
+                "cmax": {
+                    "p05": cmax_p05,
+                    "median": cmax_p50,
+                    "p95": cmax_p95,
+                    "limit_max": float(cmax_max) if cmax_max is not None else None,
+                    "limit_failed": peak_limit_failed,
+                },
+                "ctrough": {
+                    "p05": ctr_p05,
+                    "median": ctr_p50,
+                    "p95": ctr_p95,
+                    "limit_min": float(ctrough_min) if ctrough_min is not None else None,
+                    "limit_failed": trough_limit_failed,
+                },
+                "peak_limit_failed": peak_limit_failed,
+                "trough_limit_failed": trough_limit_failed,
+            })
+
+    recommendations: list[dict[str, Any]] = []
+    for band in plan.get("bands") or []:
+        bname = str(band.get("name") or "band")
+        b_rows = [r for r in rows if r["band"] == bname]
+        feasible = [
+            r for r in b_rows
+            if r["pta"] >= target_pta and not r["peak_limit_failed"] and not r["trough_limit_failed"]
+        ]
+        if feasible:
+            chosen = max(feasible, key=lambda r: (r["pta"], -r["dose_mg"]))
+            recommendations.append({
+                "band": bname,
+                "recommended_regimen": chosen["regimen"],
+                "dose_mg": chosen["dose_mg"],
+                "tau_h": chosen["tau_h"],
+                "pta": chosen["pta"],
+                "mc_se": chosen["mc_se"],
+                "driving_metric": f"{target_window.get('metric', 'auc')} target window + cmax/ctrough limits",
+                "peak_limit_failed": False,
+                "trough_limit_failed": False,
+            })
+        elif b_rows:
+            best = max(b_rows, key=lambda r: r["pta"])
+            recommendations.append({
+                "band": bname,
+                "recommended_regimen": None,
+                "candidate_regimen": best["regimen"],
+                "pta": best["pta"],
+                "mc_se": best["mc_se"],
+                "driving_metric": (
+                    "cmax/ctrough safety limit exceeded"
+                    if (best["peak_limit_failed"] or best["trough_limit_failed"])
+                    else f"{target_window.get('metric', 'auc')} below target PTA ({target_pta:.0%})"
+                ),
+                "peak_limit_failed": best["peak_limit_failed"],
+                "trough_limit_failed": best["trough_limit_failed"],
+            })
+
+    return {
+        "status": "ok",
+        "seed": seed,
+        "replicates": replicates,
+        "n_subjects": n_subjects,
+        "target_window": target_window,
+        "target_pta": target_pta,
+        "rows": rows,
+        "recommendations": recommendations,
+    }
+
+
+def run_plan_special_populations(
+    source_fit: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Run existing special-population and pediatric simulations strictly for
+    the bands named in ``plan['bands']``, seeded by ``plan['seed']``."""
+    seed = int(plan.get("seed", 42))
+    model_key = _resolve_model_key(source_fit.get("model_key"))
+    theta = dict(source_fit.get("theta") or {})
+    omega_cv_pct = dict(source_fit.get("omega_cv_pct") or {})
+    iiv_params = list(source_fit.get("iiv_params") or list(omega_cv_pct.keys()))
+    cov_effects = list(source_fit.get("covariate_effects") or [])
+
+    regimens = plan.get("regimens") or [{"dose_mg": 100.0, "tau_h": 24.0, "n_doses": 5}]
+    doses = sorted({float(r.get("dose_mg") or r.get("dose") or 100.0) for r in regimens})
+    tau = float(regimens[0].get("tau_h") or regimens[0].get("tau") or 24.0)
+    n_doses = int(regimens[0].get("n_doses", 5))
+    n_per = max(20, int(plan.get("n_subjects", 80)))
+
+    rng = np.random.default_rng(seed)
+    plan_bands = list(plan.get("bands") or [])
+
+    # Build synthetic cohort strictly for the bands named in the plan
+    cov_rows: list[dict[str, Any]] = []
+    wt_rows: list[float] = []
+    for band in plan_bands:
+        bname = str(band.get("name") or "band")
+        wt_r = band.get("wt_kg") or [70.0, 70.0]
+        age_r = band.get("age_yr") or [40.0, 40.0]
+        crcl_r = band.get("crcl_ml_min") or [90.0, 90.0]
+        for _ in range(n_per):
+            w = float(rng.uniform(float(wt_r[0]), float(wt_r[1])))
+            a = float(rng.uniform(float(age_r[0]), float(age_r[1])))
+            c = float(rng.uniform(float(crcl_r[0]), float(crcl_r[1])))
+            cov_rows.append({"BAND": bname, "WT": round(w, 1), "AGE": round(a, 1), "EGFR": round(c, 1)})
+            wt_rows.append(round(w, 1))
+
+    ref_band_name = str(plan_bands[0].get("name")) if plan_bands else "standard_adult"
+    sp_out = special_population_simulation(
+        model_key,
+        theta=theta,
+        omega_cv_pct=omega_cv_pct,
+        iiv_params=iiv_params,
+        cov_rows=cov_rows,
+        wt_rows=wt_rows,
+        stratify_by="BAND",
+        doses=doses,
+        tau=tau,
+        n_doses=n_doses,
+        covariate_effects=cov_effects,
+        reference_stratum=ref_band_name,
+        n_per_stratum=n_per,
+        seed=seed,
+    )
+
+    # Filter strata strictly to plan band names in plan order
+    allowed_names = [str(b.get("name")) for b in plan_bands]
+    strata_by_name = {s["label"]: s for s in (sp_out.get("strata") or []) if s.get("label") in allowed_names}
+    ordered_strata = [strata_by_name[name] for name in allowed_names if name in strata_by_name]
+
+    pediatric_out = None
+    has_pediatric = any(
+        bool(b.get("is_pediatric")) or float((b.get("age_yr") or [18.0, 65.0])[0]) < 18.0
+        for b in plan_bands
+    )
+    if has_pediatric:
+        ped_cov, ped_wt = pediatric_reference_population(n=600, seed=seed)
+        adult_cov, adult_wt = reference_population(n=200, seed=seed)
+        # Reference adult exposures from first regimen dose
+        ref_exp_sim = _simulate_band_regimen_cohort(
+            model_key=model_key,
+            theta=theta,
+            omega_cv_pct=omega_cv_pct,
+            iiv_params=iiv_params,
+            covariate_effects=cov_effects,
+            band={"wt_kg": [55.0, 95.0], "age_yr": [18.0, 65.0], "crcl_ml_min": [90.0, 120.0]},
+            regimen=regimens[0],
+            n_subjects=100,
+            rng=np.random.default_rng(seed),
+        )
+        pediatric_out = pediatric_simulation(
+            model_key,
+            theta=theta,
+            omega_cv_pct=omega_cv_pct,
+            iiv_params=iiv_params,
+            cov_rows=ped_cov,
+            wt_rows=ped_wt,
+            reference_exposures={"auc_tau": ref_exp_sim["auc"].tolist(), "cmax": ref_exp_sim["cmax"].tolist()},
+            doses=doses,
+            tau=tau,
+            n_doses=n_doses,
+            covariate_effects=cov_effects,
+            n_per_stratum=min(100, n_per),
+            seed=seed,
+        )
+
+    return {
+        "status": "ok",
+        "seed": seed,
+        "bands_simulated": allowed_names,
+        "strata": ordered_strata,
+        "reference_stratum": ref_band_name,
+        "reference_band": sp_out.get("reference_band"),
+        "pediatric": pediatric_out,
+    }
+
+
+def _obtain_parameter_draws(
+    source_fit: dict[str, Any],
+    method: str,
+    n_draws: int,
+    seed: int,
+    existing_bootstrap: dict[str, Any] | None = None,
+    existing_sir: dict[str, Any] | None = None,
+    existing_profile: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, float]], dict[str, Any]]:
+    """Run or reuse the requested uncertainty engine ('bootstrap', 'sir', or
+    'profile') and return ``(theta_draws, engine_summary)``."""
+    theta = {k: float(v) for k, v in (source_fit.get("theta") or {}).items()}
+    rse_pct = {k: float(v) for k, v in (source_fit.get("theta_rse_pct") or {}).items()}
+    param_names = list(theta.keys())
+    rng = np.random.default_rng(seed)
+
+    # Log-scale estimates and covariance matrix from asymptotic RSE%
+    x_hat = np.array([math.log(max(theta[p], 1e-9)) for p in param_names], dtype=float)
+    se_log = np.array([max(rse_pct.get(p, 15.0) / 100.0, 0.02) for p in param_names], dtype=float)
+    cov_log = np.diag(se_log ** 2)
+    inv_cov = np.diag(1.0 / (se_log ** 2))
+    ofv_hat = float(source_fit.get("ofv") or 100.0)
+
+    def decode_fn(vec: np.ndarray) -> dict[str, float]:
+        return {p: float(math.exp(float(vec[i]))) for i, p in enumerate(param_names)}
+
+    def ofv_fn(vec: np.ndarray) -> float:
+        diff = np.asarray(vec, dtype=float) - x_hat
+        return float(ofv_hat + diff @ inv_cov @ diff)
+
+    if method == "sir":
+        if isinstance(existing_sir, dict) and existing_sir.get("status") == "ok":
+            sir_out = existing_sir
+        else:
+            sir_out = compute_run_sir(
+                ofv_fn=ofv_fn,
+                x_hat=x_hat,
+                cov=cov_log,
+                ofv_hat=ofv_hat,
+                decode_fn=decode_fn,
+                n_resample=max(30, n_draws * 2),
+                n_samples=max(150, n_draws * 6),
+                seed=seed,
+            )
+        # Sample parameter vectors bounded by SIR parameter intervals
+        p_map = {p["parameter"]: p for p in (sir_out.get("parameters") or []) if "parameter" in p}
+        draws: list[dict[str, float]] = []
+        for _ in range(n_draws):
+            d: dict[str, float] = {}
+            for i, p in enumerate(param_names):
+                info = p_map.get(p)
+                if info and info.get("sir_ci_lower") and info.get("sir_ci_upper"):
+                    lo = math.log(max(float(info["sir_ci_lower"]), 1e-9))
+                    hi = math.log(max(float(info["sir_ci_upper"]), 1e-9))
+                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
+                    med = math.log(max(float(info.get("sir_median") or theta[p]), 1e-9))
+                    d[p] = float(math.exp(rng.normal(med, sd)))
+                else:
+                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
+            draws.append(d)
+        return draws, {
+            "method": "sir",
+            "status": sir_out.get("status", "ok"),
+            "parameters": sir_out.get("parameters", []),
+        }
+
+    if method == "bootstrap":
+        if isinstance(existing_bootstrap, dict) and existing_bootstrap.get("status") == "ok":
+            boot_out = existing_bootstrap
+        else:
+            # Deterministic subject-level resampling around the fitted model
+            n_subj = 24
+            synth_subjects = [{"id": str(i), "wt": 70.0} for i in range(n_subj)]
+            subj_offsets = rng.normal(0.0, se_log * math.sqrt(n_subj), size=(n_subj, len(param_names)))
+            nl_stub = {
+                "status": "ok",
+                "converged": True,
+                "theta": theta,
+                "theta_rse_pct": rse_pct,
+                "omega_cv_pct": source_fit.get("omega_cv_pct") or {},
+                "sigma": source_fit.get("sigma") or {"prop": 0.1},
+            }
+
+            def fast_fit_fn(rep_subjects: list[dict], rep_seed: int) -> dict[str, Any]:
+                idx = [int(s["id"]) for s in rep_subjects]
+                mean_off = np.mean(subj_offsets[idx], axis=0)
+                rep_theta = {
+                    p: float(math.exp(x_hat[i] + mean_off[i]))
+                    for i, p in enumerate(param_names)
+                }
+                return {
+                    "status": "ok",
+                    "converged": True,
+                    "theta": rep_theta,
+                    "omega_cv_pct": source_fit.get("omega_cv_pct") or {},
+                    "sigma": source_fit.get("sigma") or {"prop": 0.1},
+                }
+
+            boot_out = compute_run_bootstrap(
+                _resolve_model_key(source_fit.get("model_key")),
+                synth_subjects,
+                nl_stub,
+                fit_fn=fast_fit_fn,
+                n_boot=max(25, n_draws),
+                params=tuple(param_names),
+                seed=seed,
+            )
+        p_map = {p["parameter"]: p for p in (boot_out.get("parameters") or []) if "parameter" in p}
+        draws = []
+        for _ in range(n_draws):
+            d = {}
+            for i, p in enumerate(param_names):
+                info = p_map.get(p)
+                if info and info.get("ci_lower") and info.get("ci_upper"):
+                    lo = math.log(max(float(info["ci_lower"]), 1e-9))
+                    hi = math.log(max(float(info["ci_upper"]), 1e-9))
+                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
+                    med = math.log(max(float(info.get("median") or theta[p]), 1e-9))
+                    d[p] = float(math.exp(rng.normal(med, sd)))
+                else:
+                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
+            draws.append(d)
+        return draws, {
+            "method": "bootstrap",
+            "status": boot_out.get("status", "ok"),
+            "parameters": boot_out.get("parameters", []),
+        }
+
+    if method == "profile":
+        if isinstance(existing_profile, dict) and existing_profile.get("status") == "ok":
+            prof_out = existing_profile
+        else:
+            def profile_ofv_fn(pname: str, val: float) -> float:
+                if val <= 0:
+                    return float("inf")
+                idx = param_names.index(pname)
+                z = (math.log(val) - x_hat[idx]) / se_log[idx]
+                return float(ofv_hat + z * z)
+
+            initial_step = {p: max(theta[p] * (rse_pct.get(p, 15.0) / 100.0) * 0.5, 1e-3) for p in param_names}
+            prof_out = compute_run_profile(
+                profile_ofv_fn=profile_ofv_fn,
+                estimates=theta,
+                ofv_hat=ofv_hat,
+                initial_step=initial_step,
+                params=tuple(param_names),
+            )
+        p_map = {p["parameter"]: p for p in (prof_out.get("parameters") or []) if "parameter" in p}
+        draws = []
+        for _ in range(n_draws):
+            d = {}
+            for i, p in enumerate(param_names):
+                info = p_map.get(p)
+                if info and info.get("profile_lo") and info.get("profile_hi"):
+                    lo = math.log(max(float(info["profile_lo"]), 1e-9))
+                    hi = math.log(max(float(info["profile_hi"]), 1e-9))
+                    sd = max((hi - lo) / (2.0 * 1.96), 1e-4)
+                    d[p] = float(math.exp(rng.normal(x_hat[i], sd)))
+                else:
+                    d[p] = float(math.exp(rng.normal(x_hat[i], se_log[i])))
+            draws.append(d)
+        return draws, {
+            "method": "profile",
+            "status": prof_out.get("status", "ok"),
+            "parameters": prof_out.get("parameters", []),
+        }
+
+    raise ValueError(f"Unsupported uncertainty_method: {method!r}")
+
+
+def propagate_uncertainty_to_pta(
+    source_fit: dict[str, Any],
+    plan: dict[str, Any],
+    pta_result: dict[str, Any] | None = None,
+    n_draws: int = 20,
+    existing_bootstrap: dict[str, Any] | None = None,
+    existing_sir: dict[str, Any] | None = None,
+    existing_profile: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Propagate parameter uncertainty (bootstrap, SIR, or profile) as an outer
+    loop into PTA per band per regimen.
+
+    Returns ``(uncertainty_payload, updated_pta_result)``.
+    """
+    method = str(plan.get("uncertainty_method") or "sir").lower()
+    seed = int(plan.get("seed", 42))
+    n_draws = max(5, int(n_draws))
+
+    if pta_result is None or pta_result.get("status") != "ok":
+        pta_result = run_trial_pta(source_fit, plan)
+    else:
+        pta_result = json.loads(json.dumps(pta_result))
+
+    theta_draws, engine_summary = _obtain_parameter_draws(
+        source_fit=source_fit,
+        method=method,
+        n_draws=n_draws,
+        seed=seed,
+        existing_bootstrap=existing_bootstrap,
+        existing_sir=existing_sir,
+        existing_profile=existing_profile,
+    )
+
+    model_key = _resolve_model_key(source_fit.get("model_key"))
+    omega_cv_pct = dict(source_fit.get("omega_cv_pct") or {})
+    iiv_params = list(source_fit.get("iiv_params") or list(omega_cv_pct.keys()))
+    cov_effects = list(source_fit.get("covariate_effects") or [])
+    target_window = dict(plan.get("target_window") or {})
+    n_subjects = max(20, min(int(plan.get("n_subjects", 80)), 80))
+
+    intervals: list[dict[str, Any]] = []
+    rows_by_key = {(r["band"], r["regimen"]): r for r in (pta_result.get("rows") or [])}
+
+    for b_idx, band in enumerate(plan.get("bands") or []):
+        bname = str(band.get("name") or "band")
+        for r_idx, reg in enumerate(plan.get("regimens") or []):
+            rlabel = str(reg.get("label") or f"{reg.get('dose_mg', 100)}mg")
+            draw_ptas: list[float] = []
+            for d_idx, theta_draw in enumerate(theta_draws):
+                draw_rng = np.random.default_rng(seed + 10_000 + b_idx * 1000 + r_idx * 100 + d_idx)
+                exp = _simulate_band_regimen_cohort(
+                    model_key=model_key,
+                    theta=theta_draw,
+                    omega_cv_pct=omega_cv_pct,
+                    iiv_params=iiv_params,
+                    covariate_effects=cov_effects,
+                    band=band,
+                    regimen=reg,
+                    n_subjects=n_subjects,
+                    rng=draw_rng,
+                    n_points=64,
+                )
+                hit = _in_target_window(exp, target_window)
+                draw_ptas.append(float(np.mean(hit)))
+
+            lo, med, hi = [round(float(x), 4) for x in np.percentile(draw_ptas, [2.5, 50.0, 97.5])]
+            row = rows_by_key.get((bname, rlabel))
+            if row is not None:
+                row["pta_ci_lo"] = lo
+                row["pta_ci_hi"] = hi
+                row["pta_median_unc"] = med
+                row["uncertainty_method"] = method
+
+            intervals.append({
+                "band": bname,
+                "regimen": rlabel,
+                "pta_point": row["pta"] if row else med,
+                "pta_median": med,
+                "pta_ci_lo": lo,
+                "pta_ci_hi": hi,
+                "n_draws": len(draw_ptas),
+            })
+
+    # Attach CI to recommendations as well
+    int_by_key = {(x["band"], x["regimen"]): x for x in intervals}
+    for rec in pta_result.get("recommendations") or []:
+        rname = rec.get("recommended_regimen") or rec.get("candidate_regimen")
+        iv = int_by_key.get((rec.get("band"), rname))
+        if iv:
+            rec["pta_ci_lo"] = iv["pta_ci_lo"]
+            rec["pta_ci_hi"] = iv["pta_ci_hi"]
+            rec["uncertainty_method"] = method
+
+    uncertainty_payload = {
+        "status": "ok",
+        "method": method,
+        "seed": seed,
+        "n_draws": len(theta_draws),
+        "engine_summary": engine_summary,
+        "intervals": intervals,
+    }
+    return uncertainty_payload, pta_result

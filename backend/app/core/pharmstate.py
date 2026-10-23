@@ -32,6 +32,24 @@ class PharmStateError(Exception):
     """Raised when an agent writes to a field it does not own."""
 
 
+class ProtocolSimDict(dict):
+    """Dict subclass supporting both key and attribute access for protocol_sim."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            val = self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+        if isinstance(val, dict) and not isinstance(val, ProtocolSimDict):
+            val = ProtocolSimDict(val)
+            self[name] = val
+        return val
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
+
+
+
 class PharmState(BaseModel):
     """Shared analysis state. Extend with new fields as agents are added."""
 
@@ -138,6 +156,8 @@ class PharmState(BaseModel):
     model_results: dict[str, Any] | None = None
     covariate_results: dict[str, Any] | None = None
     simulation_results: dict[str, Any] | None = None
+    protocol_sim: dict[str, Any] | None = None
+
 
     # --- visualization data (pre- and post-NCA plots) ---------------------
     spaghetti_data: dict[str, Any] | None = None
@@ -162,14 +182,15 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "poppk": {"poppk_results", "covariate_results", "widgets"},
     "modeler": {"pk_model_results", "nlme_results", "scm_results", "forecast_results",
                 "vpc_results", "diagnostics_results", "engine_comparison_results",
-                "forest_results", "prior_check_results", "widgets"},
+                "forest_results", "prior_check_results", "protocol_sim", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
     "reviewer": {"review_results"},
     "report": {"report_path", "report_sections", "memo_path", "memo_results"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
                   "clinsim_results", "exposure_forest_results", "special_pop_results",
                   "individual_exposures", "pediatric_results",
-                  "bootstrap_results", "sir_results", "profile_results", "widgets"},
+                  "bootstrap_results", "sir_results", "profile_results",
+                  "protocol_sim", "widgets"},
     "regulatory": {"study_info", "regulatory_report_path", "regulatory_refs"},
     "statistician": {"stats_advice", "indirect_results", "widgets"},
     "clinpharm": {"clinpharm_results", "clinpharm_history", "widgets"},
@@ -188,4 +209,6 @@ def apply_writes(state: PharmState, agent: str, writes: dict[str, Any]) -> Pharm
         raise PharmStateError(
             f"Agent '{agent}' may not write {sorted(illegal)}; allowed: {sorted(allowed)}"
         )
+    if "protocol_sim" in writes and isinstance(writes["protocol_sim"], dict):
+        writes = {**writes, "protocol_sim": ProtocolSimDict(writes["protocol_sim"])}
     return state.model_copy(update=writes)
