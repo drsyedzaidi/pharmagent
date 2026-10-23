@@ -120,9 +120,10 @@ All playbook files (`SKILL.md` and `references/*`) are treated as **untrusted da
 1. **Deep Immutability**:
    - All models (`PlaybookSummary`, `ScientificPlaybook`, `PlaybookResource`, `PlaybookCompatibility`, `PlaybookValidationIssue`, `PlaybookValidationResult`, `CatalogValidationReport`, `PlaybookProvenance`) use `ConfigDict(extra="forbid", frozen=True)` with `tuple` collections.
    - `to_metadata_mapping()` and `freeze_value()` recursively wrap dictionaries in `types.MappingProxyType` and sequences in `tuple`. Callers cannot mutate cached or returned state.
-2. **Strict YAML Frontmatter Parsing (`_StrictSafeLoader`)**:
+2. **Strict YAML Frontmatter Parsing (`yaml_loader.py` / `_StrictSafeLoader`)**:
+   - Explicitly pins `PyYAML==6.0.3` (MIT license, zero sub-dependencies, zero known vulnerabilities under `pip-audit`) as a direct runtime dependency in `backend/requirements.txt` rather than relying on transitive `uvicorn[standard]` installation.
    - Subclasses `yaml.SafeLoader`.
-   - Rejects duplicate YAML keys (`duplicate_yaml_key`), custom YAML tags/constructors (`!!python/...`, `!!binary`), YAML anchors (`&`) and aliases (`*`) (`unsafe_yaml`), and non-string mapping keys.
+   - Rejects duplicate YAML keys (`duplicate_yaml_key`), custom YAML tags/constructors (`!!python/...`, `!!binary`), YAML anchors (`&`), aliases (`*`), merge keys (`<<`), exceeding nesting depth (`MAX_YAML_DEPTH = 8`) (`unsafe_yaml`), and non-string mapping keys.
    - Disables implicit YAML timestamp conversion so calendar dates are validated deterministically as ISO `YYYY-MM-DD` strings.
 3. **Filesystem Confinement & Size Caps**:
    - `SKILL.md` capped at `128 KiB` (`MAX_SKILL_MD_BYTES`); resource files capped at `64 KiB` (`MAX_RESOURCE_BYTES`); adapter payloads capped at `64 KiB` (`MAX_ADAPTER_OUTPUT_BYTES`).

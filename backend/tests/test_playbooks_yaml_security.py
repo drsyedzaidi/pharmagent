@@ -356,3 +356,20 @@ def test_catalog_duplicate_name_conflicting_version_and_cross_collision(tmp_path
         "duplicate_name",
     } <= cat_codes
     assert any("collides with another playbook's name" in i.message for i in cat_rep.catalog_issues)
+
+
+def test_pyyaml_declared_directly_in_requirements_txt() -> None:
+    """Blocker 2: PyYAML must be pinned as a direct runtime dependency in backend/requirements.txt."""
+    import yaml
+
+    req_file = Path(__file__).resolve().parents[1] / "requirements.txt"
+    req_lines = [
+        line.strip()
+        for line in req_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    pyyaml_pins = [line for line in req_lines if line.lower().startswith("pyyaml==")]
+    assert pyyaml_pins == [f"PyYAML=={yaml.__version__}"], (
+        f"Expected PyYAML=={yaml.__version__} pinned in backend/requirements.txt, got {pyyaml_pins}"
+    )
+
