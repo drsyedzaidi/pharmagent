@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.4.1",
+  "catalog_version": "1.5.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -288,32 +288,35 @@
       "applies_to": [
         "bioequivalence"
       ],
-      "statement": "Average bioequivalence is assessed on the natural-log scale with a {ci_percent}% confidence interval of the geometric mean ratio (alpha {alpha}). A parameter passes when the whole interval lies within {lower} to {upper} percent. Paired (crossover) and parallel designs are supported. Implementation behaviour: non-positive or missing values are dropped before the analysis, and the result reports the number used, not the number excluded.",
-      "parameters": {
-        "ci_percent": 90,
-        "alpha": 0.1,
-        "lower": 80.0,
-        "upper": 125.0
-      },
-      "version": "1.1.0",
+      "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile currently controls the confidence level, acceptance limits and rounding policy; the estimator is interim (paired log differences for a crossover, pooled two-sample log means for a parallel design, with no period or sequence terms) and is not the final profile-specific regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
+      "parameters": {},
+      "version": "2.0.0",
       "source": {
-        "kind": "implementation_convention",
-        "reference": "app/compute/bioequivalence.py (module docstring and defaults); not independently re-verified against guidance in this slice."
+        "kind": "owner_decision",
+        "reference": "Owner decisions of 2026-10-23 on the BE safety contract (app/compute/be_contract.py). Profiles: FDA, Statistical Approaches to Establishing Bioequivalence (May 2026); ICH M13A, EMA/CHMP/ICH/953493/2022; EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr**."
       },
       "approval": {
         "status": "pending_owner_review"
       },
       "tests": [
+        "tests/test_be_contract.py::test_each_required_argument_is_required",
+        "tests/test_be_contract.py::test_one_incomplete_crossover_subject_is_excluded_and_the_design_stays_crossover",
+        "tests/test_be_contract.py::test_every_dropped_value_is_in_the_ledger_with_its_original_value",
+        "tests/test_be_contract.py::test_eleven_evaluable_crossover_subjects_cannot_pass",
+        "tests/test_be_contract.py::test_both_boundaries_around_the_tie",
+        "tests/test_be_contract.py::test_rounding_converts_with_decimal_str_and_records_the_mode",
+        "tests/test_be_tool_contract.py::test_the_reference_is_never_guessed_from_level_names",
+        "tests/test_be_tool_contract.py::test_the_refusal_is_constructive_and_says_nothing_was_concluded",
+        "tests/test_be_contract_review.py::test_a_single_sequence_is_not_a_randomised_crossover",
+        "tests/test_be_contract_review.py::test_every_dropped_concentration_row_is_in_the_ledger",
         "tests/test_be_compute.py::test_paired_gmr_matches_hand_computed",
-        "tests/test_be_compute.py::test_paired_clearly_outside_limits_not_be",
-        "tests/test_be_compute.py::test_parallel_gmr_and_ci_hand_computed",
-        "tests/test_be_compute.py::test_identical_vectors_gmr_100_and_be",
-        "tests/test_be_compute.py::test_paired_drops_nonpositive_and_none",
-        "tests/test_nca_convention_pins.py::test_parallel_be_drops_nonpositive_and_missing_values"
+        "tests/test_be_compute.py::test_parallel_gmr_and_ci_hand_computed"
       ],
       "known_gaps": [
-        "Dropped (non-positive or missing) observations are not counted or reported as excluded. This is implementation behaviour and must not be read as an endorsed silent-deletion rule; a follow-up should count and report them.",
-        "Not yet checked against the applicable FDA/EMA bioequivalence guidance; the entry stays pending until that check is done."
+        "Half-up rounding of exact .xx5 ties is a PharmAgent implementation convention; the guidance does not define tie handling.",
+        "The period/sequence/formulation model required by the regulatory profiles (sequence, subject within sequence, period and formulation effects) is not implemented; the current estimator is interim.",
+        "NTI (narrow therapeutic index), highly variable, replicate and reference-scaled designs are unsupported and are refused.",
+        "The estimator is interim (paired log differences or pooled two-sample log means, no period or sequence terms); independent live cross-validation of the final estimator remains required."
       ]
     },
     {
