@@ -136,7 +136,7 @@ Do not silently substitute a simpler question (for example, do not replace a vir
 ### Step 5: Execute Simulations via Reviewed Tools
 Invoke the selected tools in sequence. Respect execution governance:
 - Synchronous tools (`simulate_pk_profile`, `run_dose_sweep`, `run_clinsim`, `run_special_population`, `run_pediatric_simulation`, `run_exposure_forest`, `run_individual_exposures`) execute directly through the audited `ToolRegistry`.
-- Expensive or proposable tools (`run_nlme`, `run_simest`, `bootstrap_exposure_response`) must be proposed for human approval and job-backed execution; never claim their results exist while pending approval.
+- Expensive tools never run synchronously from chat. `run_nlme` is expensive but not proposable: it runs only through the job-backed endpoint, so the agent must ask the user to start it there and must not attempt to propose it. `run_simest` and `bootstrap_exposure_response` are expensive and proposable: the agent may propose them, and they run as jobs only after human approval. Never claim results from any of these tools exist until the job has completed.
 
 ### Step 6: Compare Exposure Metrics Across Scenarios
 Tabulate only tool-computed metrics (`cmax`, `auc_tau`, `cavg`, `ctrough`, PTA fraction, stratum GMR/band overlap) by `scenario_id`. Contrast each candidate regimen against the declared comparator or target window.

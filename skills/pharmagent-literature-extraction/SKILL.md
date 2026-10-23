@@ -50,7 +50,7 @@ Refer to [Evidence Record Schema Specification](references/evidence-record-schem
 | Immutable `evidence_source` and `evidence_record` store with audit sealing | Absent on `main` | **Not Ready (Blocker)** |
 | Human review gate for promoting proposed evidence records to verified state | Absent for literature records | **Not Ready (Blocker)** |
 
-Because four of the five required controls are absent on `main`, `runtime_available` is set to `false` and `load_playbook("pharmagent.literature_extraction")` fails closed by default.
+Because four of the five required controls are absent on `main`, `runtime_available` is set to `false` and `load_playbook("pharmagent.literature_extraction")` always fails closed. No runtime API accepts a bypass argument.
 
 ---
 

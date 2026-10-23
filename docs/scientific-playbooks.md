@@ -224,9 +224,9 @@ python -m app.playbooks --check --format json
 ```
 
 Current shipped digests:
-- `pharmagent.protocol_simulation` (`1.0.0`): `cc07a01a0f66b3e6f22199b0190b251dc19502c20f809cfd10d809a0a60c6d97`
+- `pharmagent.protocol_simulation` (`1.0.0`): `fc81768a25f43b5f94441904b23da8008fb0ebbbf74da8040ccb93eaf53d91de`
 - `pharmagent.model_review` (`1.0.0`): `d13002412d421c0cfe0b1ff59e46c003157e693637b999c48230bd8f28c66f71`
-- `pharmagent.literature_extraction` (`0.1.0`, disabled spec): `45367880ff9e7f7f9961a3f0f18604e0c434c46705deace365d59f9b096149be`
+- `pharmagent.literature_extraction` (`0.1.0`, disabled spec): `236bcab23abe510e270da754d25deb49b91d65f8d5269fa76b202c30f45f639b`
 
 ---
 
