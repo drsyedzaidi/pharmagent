@@ -319,7 +319,8 @@ def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
     Every check emits HIGH severity so any violation blocks the review gate:
       1. Target window provenance missing or circular.
       2. PTA reported without Monte Carlo SE or with fewer than the plan's replicates.
-      3. Any band where PTA depends on extrapolation outside the fit's covariate range.
+      3. Any band where PTA depends on extrapolation outside the fit's covariate range,
+         or on a covariate the fit never observed (unverifiable, not silently passed).
       4. Regimen recommended on PTA alone while trough or peak metric fails its limit.
       5. Parameter uncertainty omitted when a recommendation is made.
       6. Pediatric band below the maturation function's data range (or fit lacks that range).
@@ -392,24 +393,40 @@ def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
                 "Run simulate_trial_pta with the full replicate count and report Monte Carlo SE",
             ))
 
-    # 3. Any band where PTA depends on extrapolation outside the fit's covariate range
+    # 3. Any band where PTA depends on extrapolation outside the fit's covariate range,
+    #    or on a covariate the fit never observed (then the check cannot be made at all).
     cov_ranges = source_fit.get("covariate_ranges") or {}
     for band in plan.get("bands") or []:
         bname = str(band.get("name") or "band")
         extrap_msgs: list[str] = []
-        for cov_key, label in (("wt_kg", "weight (wt_kg)"), ("age_yr", "age (age_yr)")):
+        unverifiable_msgs: list[str] = []
+        for cov_key, label in (("wt_kg", "weight (wt_kg)"), ("age_yr", "age (age_yr)"),
+                               ("crcl_ml_min", "creatinine clearance (crcl_ml_min)")):
             b_range = band.get(cov_key)
+            if not (isinstance(b_range, (list, tuple)) and len(b_range) == 2):
+                continue
+            b_lo, b_hi = float(b_range[0]), float(b_range[1])
             f_range = cov_ranges.get(cov_key)
-            if (
-                isinstance(b_range, (list, tuple)) and len(b_range) == 2
-                and isinstance(f_range, (list, tuple)) and len(f_range) == 2
-            ):
-                b_lo, b_hi = float(b_range[0]), float(b_range[1])
-                f_lo, f_hi = float(f_range[0]), float(f_range[1])
-                if b_lo < f_lo - 1e-6 or b_hi > f_hi + 1e-6:
-                    extrap_msgs.append(
-                        f"{label} band [{b_lo:g}, {b_hi:g}] extrapolates outside fit data range [{f_lo:g}, {f_hi:g}]"
-                    )
+            if not (isinstance(f_range, (list, tuple)) and len(f_range) == 2):
+                unverifiable_msgs.append(
+                    f"{label} band [{b_lo:g}, {b_hi:g}] cannot be checked: the source fit "
+                    f"carries no observed range for {cov_key}")
+                continue
+            f_lo, f_hi = float(f_range[0]), float(f_range[1])
+            if b_lo < f_lo - 1e-6 or b_hi > f_hi + 1e-6:
+                extrap_msgs.append(
+                    f"{label} band [{b_lo:g}, {b_hi:g}] extrapolates outside fit data range [{f_lo:g}, {f_hi:g}]"
+                )
+        if unverifiable_msgs:
+            out.append(_finding(
+                f"sim-covariate-range-unverifiable-{bname}",
+                HIGH,
+                "protocol_sim.plan.bands",
+                f"Band '{bname}' can be checked against the source fit's observed covariate range",
+                "; ".join(unverifiable_msgs),
+                "Load the source dataset so its observed covariate ranges are carried by the fit, "
+                "or omit that covariate from the band",
+            ))
         if extrap_msgs:
             out.append(_finding(
                 f"sim-covariate-extrapolation-{bname}",

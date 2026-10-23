@@ -108,19 +108,18 @@ def extract_approved_fit(
     # No default: a parameter without a finite RSE is listed, never invented.
     theta_rse_missing = sorted(p for p in theta if p not in theta_rse_pct)
 
-    cov_ranges: dict[str, list[float]] = {
-        "wt_kg": [45.0, 110.0],
-        "age_yr": [18.0, 75.0],
-        "crcl_ml_min": [40.0, 130.0],
-    }
-    if isinstance(dataset_covariate_ranges, dict):
-        for k, v in dataset_covariate_ranges.items():
+    # Observed ranges only: from the loaded dataset, overridden by any the fit
+    # carries. A covariate nobody observed has NO range; it is never invented.
+    cov_ranges: dict[str, list[float]] = {}
+    range_sources: dict[str, str] = {}
+    for source, ranges in (("dataset", dataset_covariate_ranges),
+                           ("fit", nlme_results.get("covariate_ranges"))):
+        if not isinstance(ranges, dict):
+            continue
+        for k, v in ranges.items():
             if isinstance(v, (list, tuple)) and len(v) == 2:
                 cov_ranges[k] = [float(v[0]), float(v[1])]
-    if isinstance(nlme_results.get("covariate_ranges"), dict):
-        for k, v in nlme_results["covariate_ranges"].items():
-            if isinstance(v, (list, tuple)) and len(v) == 2:
-                cov_ranges[k] = [float(v[0]), float(v[1])]
+                range_sources[k] = source
 
     # Maturation data range is only present when carried by the fit.
     maturation_data_range = nlme_results.get("maturation_data_range")
@@ -150,6 +149,7 @@ def extract_approved_fit(
         "ofv": float(nlme_results.get("ofv") or 0.0),
         "covariate_effects": list(nlme_results.get("covariate_effects") or []),
         "covariate_ranges": cov_ranges,
+        "covariate_range_sources": range_sources,
         "maturation_data_range": maturation_data_range,
     }
     provenance = {
@@ -183,19 +183,19 @@ def build_simulation_plan(
     """
     args = args or {}
     cov_ranges = source_fit.get("covariate_ranges") or {}
-    wt_lo, wt_hi = cov_ranges.get("wt_kg", [50.0, 95.0])
-    age_lo, age_hi = cov_ranges.get("age_yr", [20.0, 70.0])
-    crcl_lo, crcl_hi = cov_ranges.get("crcl_ml_min", [50.0, 120.0])
-
-    default_bands = [
-        {
-            "name": "standard_adult",
-            "wt_kg": [round(float(wt_lo), 1), round(float(wt_hi), 1)],
-            "age_yr": [round(float(age_lo), 1), round(float(age_hi), 1)],
-            "crcl_ml_min": [round(float(max(crcl_lo, 60.0)), 1), round(float(crcl_hi), 1)],
-            "is_pediatric": False,
-        }
-    ]
+    # The default band spans only covariates the fit actually observed. One with no
+    # observed range is left out (the cohort then holds it at the simulator default)
+    # and listed for the gate reviewer; it is never given invented bounds.
+    default_band: dict[str, Any] = {"name": "standard_adult"}
+    if "wt_kg" in cov_ranges:
+        default_band["wt_kg"] = [round(float(x), 1) for x in cov_ranges["wt_kg"]]
+    if "age_yr" in cov_ranges:
+        default_band["age_yr"] = [round(float(x), 1) for x in cov_ranges["age_yr"]]
+    if "crcl_ml_min" in cov_ranges:
+        crcl_lo, crcl_hi = cov_ranges["crcl_ml_min"]
+        default_band["crcl_ml_min"] = [round(float(max(crcl_lo, 60.0)), 1), round(float(crcl_hi), 1)]
+    default_band["is_pediatric"] = False
+    default_bands = [default_band]
     bands = list(args.get("bands") or default_bands)
 
     route = source_fit.get("route", "oral")
@@ -247,6 +247,9 @@ def build_simulation_plan(
         "seed": int(args.get("seed", 42)),
         "uncertainty_method": uncertainty_method,
         "uncertainty_methods_available": available,
+        "covariate_range_sources": dict(source_fit.get("covariate_range_sources") or {}),
+        "covariates_without_observed_range": sorted(
+            k for k in ("wt_kg", "age_yr", "crcl_ml_min") if k not in cov_ranges),
         "target_pta": float(args.get("target_pta", 0.75)),
     }
     return plan

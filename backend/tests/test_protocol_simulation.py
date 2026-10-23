@@ -20,6 +20,7 @@ import itertools
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 from docx import Document
 
@@ -745,3 +746,97 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
     full_text = "\n".join(p.text for p in doc.paragraphs)
     assert "Protocol simulation" in full_text
     assert "seed = 20261023" in full_text
+
+
+# ── Fix 2: covariate ranges are observed, never invented ─────────────────────
+
+def _nlme_without_ranges() -> dict[str, Any]:
+    nl = dict(_approved_nlme_state().nlme_results)
+    nl.pop("covariate_ranges")
+    return nl
+
+
+def test_load_approved_fit_does_not_invent_covariate_ranges(tmp_path: Path):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    st = PharmState(nlme_results=_nlme_without_ranges(),
+                    review_results=_approved_nlme_state().review_results)
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    fit = st.protocol_sim["source_fit"]
+    assert fit["covariate_ranges"] == {}
+    assert fit["covariate_range_sources"] == {}
+
+
+def test_load_approved_fit_records_where_each_covariate_range_came_from(tmp_path: Path):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    ctx.dataset_store["ds1"] = pd.DataFrame({
+        "ID": [1, 1, 2, 2], "TIME": [0, 2, 0, 2], "DV": [0, 1.0, 0, 1.2],
+        "AGE": [31.0, 31.0, 64.0, 64.0], "CRCL": [88.0, 88.0, 52.0, 52.0],
+    })
+    base = _approved_nlme_state()
+    # Dataset only: AGE and CRCL observed, no weight column -> no wt_kg range at all.
+    st = PharmState(dataset_id="ds1", nlme_results=_nlme_without_ranges(),
+                    review_results=base.review_results)
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    fit = st.protocol_sim["source_fit"]
+    assert fit["covariate_ranges"] == {"age_yr": [31.0, 64.0], "crcl_ml_min": [52.0, 88.0]}
+    assert fit["covariate_range_sources"] == {"age_yr": "dataset", "crcl_ml_min": "dataset"}
+    # Ranges carried by the fit win over the dataset and are labelled as the fit's.
+    st2 = PharmState(dataset_id="ds1", nlme_results=base.nlme_results,
+                     review_results=base.review_results)
+    st2 = apply_writes(st2, "modeler", load_approved_fit(st2, ctx, {}).writes)
+    fit2 = st2.protocol_sim["source_fit"]
+    assert fit2["covariate_ranges"]["age_yr"] == [20.0, 75.0]
+    assert fit2["covariate_range_sources"] == {"wt_kg": "fit", "age_yr": "fit", "crcl_ml_min": "fit"}
+
+
+def test_default_band_only_spans_covariates_the_fit_actually_observed(tmp_path: Path):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    st = PharmState(nlme_results=_nlme_without_ranges(),
+                    review_results=_approved_nlme_state().review_results)
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    st = apply_writes(st, "simulator", propose_simulation_plan(
+        st, ctx, {"n_subjects": 20, "replicates": 3, "seed": 7}).writes)
+    plan = st.protocol_sim["plan"]
+    band = plan["bands"][0]
+    assert band["name"] == "standard_adult"
+    assert not any(k in band for k in ("wt_kg", "age_yr", "crcl_ml_min"))
+    assert plan["covariates_without_observed_range"] == ["age_yr", "crcl_ml_min", "wt_kg"]
+    assert plan["covariate_range_sources"] == {}
+    # An honest default plan is not an extrapolation: the review raises no covariate finding.
+    st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
+    st = apply_writes(st, "simulator", simulate_special_populations(st, ctx, {}).writes)
+    st = apply_writes(st, "simulator", propagate_parameter_uncertainty(st, ctx, {"n_draws": 6}).writes)
+    rev = adversarial.review(st.model_dump(), None, None)
+    assert not any(f["id"].startswith("sim-covariate-") for f in rev["findings"]), rev["findings"]
+    assert rev["goal_met"] is True
+
+
+def test_review_check3_is_unverifiable_not_silent_when_the_fit_has_no_range_for_a_band_covariate(
+    tmp_path: Path,
+):
+    ctx = ToolContext(data_dir=str(tmp_path))
+    st = PharmState(nlme_results=_nlme_without_ranges(),
+                    review_results=_approved_nlme_state().review_results)
+    st = apply_writes(st, "modeler", load_approved_fit(st, ctx, {}).writes)
+    st = apply_writes(st, "simulator", propose_simulation_plan(st, ctx, {
+        "n_subjects": 20, "replicates": 3, "seed": 7,
+        "bands": [{"name": "heavy", "wt_kg": [90.0, 130.0], "is_pediatric": False}],
+    }).writes)
+    st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
+    rev = adversarial.review(st.model_dump(), None, None)
+    assert rev["goal_met"] is False
+    f = next(f for f in rev["findings"] if f["id"] == "sim-covariate-range-unverifiable-heavy")
+    assert f["severity"] == "HIGH"
+    assert f["target"] == "protocol_sim.plan.bands"
+    assert "wt_kg" in f["evidence"] and "no observed range" in f["evidence"]
+
+
+def test_review_check3_also_covers_creatinine_clearance(tmp_path: Path):
+    st = _complete_clean_protocol_sim_state(tmp_path)
+    dump = st.model_dump()
+    # Fit range is crcl_ml_min=[45.0, 125.0]; propose a band up to 200 mL/min.
+    dump["protocol_sim"]["plan"]["bands"][0]["crcl_ml_min"] = [60.0, 200.0]
+    rev = adversarial.review(dump, None, None)
+    f = next(f for f in rev["findings"] if f["id"].startswith("sim-covariate-extrapolation"))
+    assert f["severity"] == "HIGH"
+    assert "crcl_ml_min" in f["evidence"] and "125" in f["evidence"]
