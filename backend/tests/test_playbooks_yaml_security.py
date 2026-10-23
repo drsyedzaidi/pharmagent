@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -361,16 +362,18 @@ def test_catalog_duplicate_name_conflicting_version_and_cross_collision(tmp_path
 
 
 def test_pyyaml_declared_directly_in_requirements_txt() -> None:
-    """Blocker 2: PyYAML must be pinned as a direct runtime dependency in backend/requirements.txt."""
-    import yaml
+    """PyYAML must be pinned exactly once as a direct runtime dependency.
 
+    Checks the declaration only, not the installed version, so the test does not
+    break on environments that resolve a different PyYAML release.
+    """
     req_file = Path(__file__).resolve().parents[1] / "requirements.txt"
     req_lines = [
-        line.strip()
+        line.split("#", 1)[0].strip()
         for line in req_file.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.strip().startswith("#")
     ]
-    pyyaml_pins = [line for line in req_lines if line.lower().startswith("pyyaml==")]
-    assert pyyaml_pins == [f"PyYAML=={yaml.__version__}"], (
-        f"Expected PyYAML=={yaml.__version__} pinned in backend/requirements.txt, got {pyyaml_pins}"
+    pyyaml_lines = [line for line in req_lines if re.match(r"(?i)pyyaml\s*[=<>!~]", line)]
+    assert len(pyyaml_lines) == 1, f"Expected one PyYAML entry in requirements.txt, got {pyyaml_lines}"
+    assert re.fullmatch(r"(?i)pyyaml==\d+\.\d+\.\d+", pyyaml_lines[0]), (
+        f"PyYAML must use an exact X.Y.Z pin, got {pyyaml_lines[0]!r}"
     )
