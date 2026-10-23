@@ -1,8 +1,11 @@
 """LLM client.
 
-Two responsibilities only — everything quantitative is a tool:
+Three responsibilities only — everything quantitative is a tool:
   1. classify(message, options)  -> route to an agent
   2. select_tool(agent, ...)     -> pick the next tool (or None to stop)
+  3. plan(goal, ...)             -> propose the next tool of a goal-driven
+                                    workflow leg (a deterministic policy then
+                                    admits, gates or rejects the proposal)
 
 `RealLLM` uses Anthropic Claude (tool-use). `OpenAICompatLLM` talks to any
 OpenAI-compatible chat-completions server with function calling — a FREE,
@@ -30,6 +33,8 @@ class LLM(Protocol):
     def classify(self, message: str, options: list[str], descriptions: dict[str, str]) -> str: ...
     def select_tool(self, agent: str, message: str, tools: list[Tool],
                     state_summary: dict[str, Any]) -> dict[str, Any] | None: ...
+    def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
+             history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None: ...
 
 
 _PATH_RE = re.compile(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", re.IGNORECASE)
@@ -75,6 +80,40 @@ def _mock_er_dose(low: str, s: dict[str, Any]) -> dict[str, Any] | None:
         endpoint = "time_to_event" if any(k in low for k in _ER_TTE) else "binary"
         return {"name": "fit_exposure_response", "input": {"endpoint": endpoint}}
     return None
+
+
+PLAN_STOP = {"tool": None, "args": {}}
+
+
+def _plan_stop(reason: str, rationale: str = "") -> dict[str, Any]:
+    """A planner answer that selects no tool: the loop ends with ``stop_reason``."""
+    return {**PLAN_STOP, "rationale": rationale or reason, "stop_reason": reason}
+
+
+def _planner_system(goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
+                    history: list[dict[str, Any]]) -> str:
+    """System text shared by the hosted planners (Anthropic / OpenAI-compatible)."""
+    return (
+        "You are the planner of a governed pharmacometrics workflow. Propose ONE next tool "
+        "call that makes progress toward the goal, or answer in plain text when the goal "
+        "is met or no admissible step remains. A deterministic policy then admits the call, "
+        "parks it for human approval (every long-running fit and every scientific model "
+        "choice is gated), or rejects it; you never execute anything yourself. Never repeat "
+        "a call with identical arguments: every tool is deterministic. Give a one-sentence "
+        "rationale grounded in the diagnostics before the call.\n"
+        f"Goal: {goal}\nState: {state_summary}\nObservations this leg: {observations}\n"
+        f"Prior proposals and policy decisions: {history}")
+
+
+# State-summary keys that prove a poppk_full template step has already run,
+# used by the keyless mock to walk the template without re-running a step.
+_TEMPLATE_DONE_KEYS: dict[str, str] = {
+    "load_dataset": "dataset_id",
+    "profile_pk_dataset": "data_quality",
+    "fit_pk_model": "pk_model_results",
+    "run_nlme": "nlme_results",
+    "generate_report": "report_path",
+}
 
 
 class MockLLM:
@@ -164,6 +203,31 @@ class MockLLM:
             return None
         return None
 
+    def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
+             history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None:
+        """Walk the ``poppk_full`` template order, restricted to the tools offered.
+
+        The keyless mock cannot read diagnostics, so a goal-driven leg under it
+        degrades to today's rails: each call proposes the first template step
+        that has neither left its mark in state nor already been admitted by the
+        policy (``history``), with the template's own arguments. Once every step
+        is done it selects no tool, with a stop reason — never silently nothing.
+        """
+        from app.workflows import get_workflow  # local: keep the import graph light
+        roster = {t.name for t in tools}
+        admitted = {h.get("tool") for h in history if h.get("allow")}
+        for step in get_workflow("poppk_full")["steps"]:
+            tool = step["tool"]
+            if tool not in roster or tool in admitted:
+                continue
+            marker = _TEMPLATE_DONE_KEYS.get(tool)
+            if marker and state_summary.get(marker) is not None:
+                continue
+            return {"tool": tool, "args": dict(step.get("args", {})),
+                    "rationale": f"poppk_full template order: {step.get('label', tool)}",
+                    "stop_reason": None}
+        return _plan_stop("every poppk_full template step offered to the planner has run")
+
 
 class RealLLM:
     """Anthropic Claude client."""
@@ -208,6 +272,22 @@ class RealLLM:
             if block.type == "tool_use":
                 return {"name": block.name, "input": block.input}
         return None
+
+    def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
+             history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None:
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=settings.max_tokens,
+            system=_planner_system(goal, state_summary, observations, history),
+            tools=[t.to_anthropic() for t in tools],
+            messages=[{"role": "user", "content": "Propose the next tool call, or say why to stop."}],
+        )
+        rationale = " ".join(b.text for b in resp.content if b.type == "text").strip()
+        for block in resp.content:
+            if block.type == "tool_use":
+                return {"tool": block.name, "args": dict(block.input or {}),
+                        "rationale": rationale, "stop_reason": None}
+        return _plan_stop(rationale or "planner selected no tool", rationale)
 
 
 LOCAL_REASONING_EFFORT = "none"
@@ -331,6 +411,33 @@ class OpenAICompatLLM:
                 args = dict(raw)
             return {"name": name, "input": args if isinstance(args, dict) else {}}
         return None
+
+    def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
+             history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None:
+        msg = self._chat([
+            {"role": "system", "content": _planner_system(goal, state_summary, observations, history)},
+            {"role": "user", "content": "Propose the next tool call, or say why to stop."},
+        ], tools=[t.to_openai() for t in tools], max_tokens=settings.max_tokens)
+        rationale = (msg.get("content") or "").strip()
+        known = {t.name for t in tools}
+        for call in msg.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            name = fn.get("name")
+            if name not in known:
+                log.warning("llm_unknown_tool", extra={"tool": name, "agent": "planner"})
+                continue
+            raw = fn.get("arguments") or {}
+            if isinstance(raw, str):
+                try:
+                    args = json.loads(raw) if raw.strip() else {}
+                except json.JSONDecodeError:
+                    log.warning("llm_bad_tool_arguments", extra={"tool": name})
+                    args = {}
+            else:
+                args = dict(raw)
+            return {"tool": name, "args": args if isinstance(args, dict) else {},
+                    "rationale": rationale, "stop_reason": None}
+        return _plan_stop(rationale or "planner selected no tool", rationale)
 
 
 def get_llm() -> LLM:
