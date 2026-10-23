@@ -86,8 +86,11 @@ PLAN_STOP = {"tool": None, "args": {}}
 
 
 def _plan_stop(reason: str, rationale: str = "") -> dict[str, Any]:
-    """A planner answer that selects no tool: the loop ends with ``stop_reason``."""
-    return {**PLAN_STOP, "rationale": rationale or reason, "stop_reason": reason}
+    """A planner answer that selects no tool: the loop ends with ``stop_reason``.
+    ``rationale`` is left as the model gave it — an EMPTY rationale (no text, or
+    only unknown tool names) is how the orchestrator tells a silent stop from a
+    reasoned "goal met"."""
+    return {**PLAN_STOP, "rationale": rationale, "stop_reason": reason}
 
 
 def _planner_system(goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
@@ -226,7 +229,8 @@ class MockLLM:
             return {"tool": tool, "args": dict(step.get("args", {})),
                     "rationale": f"poppk_full template order: {step.get('label', tool)}",
                     "stop_reason": None}
-        return _plan_stop("every poppk_full template step offered to the planner has run")
+        return _plan_stop("every poppk_full template step offered to the planner has run",
+                          rationale="poppk_full template exhausted")
 
 
 class RealLLM:

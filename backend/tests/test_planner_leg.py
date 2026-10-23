@@ -20,6 +20,7 @@ from app.core.llm import MockLLM, OpenAICompatLLM
 from app.core.orchestrator import Orchestrator
 from app.core.pharmstate import PharmState
 from app.core.store import SessionStore
+from app.tools.base import Tool, ToolRegistry, ToolResult
 from app.tools.builtins import default_registry
 from app.workflows import WORKFLOWS, get_workflow
 
@@ -122,6 +123,12 @@ def test_policy_rejects_an_identical_repeat_and_stops_the_loop():
     roster = _roster("validate_cdisc")
     history = [{"step": 0, "tool": "validate_cdisc", "args": {}, "allow": True, "mode": "autonomous"}]
     d = policy.decide("validate_cdisc", {}, PharmState(), roster=roster, history=history, budget=policy.Budget())
+    assert not d.allow and d.stop and "identical" in d.reason
+    # Re-proposing a call the policy just REJECTED is the stuck-planner case: it stops
+    # too, before the roster / prerequisite refusal can be repeated 20 times.
+    rejected = [{"step": 0, "tool": "run_nlme", "args": {}, "allow": False, "mode": "rejected"}]
+    d = policy.decide("run_nlme", {}, PharmState(), roster=_roster("run_nlme"), history=rejected,
+                      budget=policy.Budget())
     assert not d.allow and d.stop and "identical" in d.reason
     # Different arguments are not a repeat — the same rule Agent.run_turn applies.
     assert policy.canonical_call("validate_cdisc", {}) != policy.canonical_call("validate_cdisc", {"strict": True})
@@ -293,20 +300,50 @@ def test_rejecting_a_planner_proposal_signs_the_decision_and_clears_it():
         orch.resume_workflow(sid, approve=True)
 
 
-def test_a_proposal_decided_through_the_chat_path_leaves_a_review_that_reject_clears():
+def test_a_proposal_decided_through_the_chat_path_still_closes_the_goal_gate_cleanly():
     """/chat/pending_tool approves or rejects the same state.pending_tool. Once it has
-    been decided there, the goal gate can only be closed by a rejection; an approval
-    with nothing pending is refused rather than executing something else."""
+    been decided there, a workflow rejection just closes the review, and a workflow
+    approval resumes planning from the state as it is — nothing is taken twice, and
+    the leg still terminates (here: the mock re-proposes run_scm, whose prerequisite
+    is unmet, and the repeat guard stops it) without running a fit."""
     orch = _orch()
     sid = orch.create_session().id
     orch.start_workflow(sid, "poppk_goal", {"path": SAMPLE})
     orch.reject_pending_tool(sid, actor="alice", reason="decided in chat")
     assert orch.get_session(sid).pending_review is not None
-    with pytest.raises(ValueError):
-        orch.resume_workflow(sid, approve=True, actor="alice")
+    out = orch.resume_workflow(sid, approve=True, actor="alice", reason="carry on")
+    assert out["status"] == "stopped" and "identical" in out["stop_reason"]
+    assert out["executed"] == [] and out["state"]["nlme_results"] is None
+    assert out["state"]["scm_results"] is None and orch.get_session(sid).pending_review is None
+    kinds = [(e.agent, e.tool, e.action) for e in orch.get_session(sid).audit.entries]
+    assert ("qc", "human_review", "approved after step 4") in kinds
+    assert kinds.count(("supervisor", "run_nlme", "approve_tool")) == 0     # nothing to take
+    # Rejection on a stale review: closes it, signs it, computes nothing.
+    orch.start_workflow(sid, "poppk_goal", {"path": SAMPLE})
+    orch.reject_pending_tool(sid, actor="alice", reason="decided in chat")
     out = orch.resume_workflow(sid, approve=False, actor="alice", reason="close the gate")
     assert out["status"] == "rejected" and orch.get_session(sid).pending_review is None
     assert out["state"]["nlme_results"] is None and out["audit_ok"]
+
+
+def test_a_chat_proposal_is_never_mistaken_for_the_planner_s(monkeypatch):
+    """A chat-proposed expensive tool (proposed_by = actor id, no workflow) parked in
+    state.pending_tool must not be taken by the goal resume, even for an actor whose
+    id happens to be "planner"."""
+    monkeypatch.setitem(WORKFLOWS, "goal_one", _goal_template("goal_one", ["load_dataset"]))
+    llm = _Scripted([{"tool": "load_dataset", "args": {}, "rationale": "r"},
+                     {"tool": None, "args": {}, "rationale": "done", "stop_reason": "goal met"}])
+    orch = _orch(llm)
+    sid = orch.create_session().id
+    sess = orch.get_session(sid)
+    from app.core.pharmstate import apply_writes
+    chat_proposal = {"tool": "run_simest", "agent": "simulator", "args": {}, "proposed_at": "t",
+                     "proposed_by": "planner", "message": "chat"}      # no "workflow" key
+    sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": chat_proposal})
+    out = orch.start_workflow(sid, "goal_one", {"path": SAMPLE})
+    assert out["status"] == "complete"
+    assert out["state"]["pending_tool"] == chat_proposal                 # untouched
+    assert orch._planner_pending(orch.get_session(sid)) is None
 
 
 def test_approval_resumes_the_goal_loop_through_take_pending_tool(monkeypatch):
@@ -403,7 +440,7 @@ def test_goal_loop_stops_on_a_tool_error_instead_of_retrying(monkeypatch):
 def test_planner_never_runs_a_tool_outside_the_allow_list(monkeypatch):
     monkeypatch.setitem(WORKFLOWS, "goal_list", _goal_template("goal_list", ["load_dataset"]))
     llm = _Scripted([{"tool": "compute_nca", "args": {}, "rationale": "r"},
-                     {"tool": None, "args": {}, "rationale": "", "stop_reason": "nothing admissible"}])
+                     {"tool": None, "args": {}, "rationale": "no admissible step", "stop_reason": "nothing admissible"}])
     orch = _orch(llm)
     sid = orch.create_session().id
     out = orch.start_workflow(sid, "goal_list", {"path": SAMPLE})
@@ -459,6 +496,125 @@ def test_openai_compat_plan_returns_tool_args_and_rationale(monkeypatch):
     assert "goal" in sent[0]["messages"][0]["content"]
     stop = llm.plan("goal", {}, [], [], tools)
     assert stop["tool"] is None and stop["stop_reason"] == "Goal met: review passed and report delivered."
+
+
+# ── the JobManager path (allow_expensive=True) with a FAKE expensive tool ────
+
+def _registry_with_fake_fit(calls: list[dict]) -> ToolRegistry:
+    """load/profile/validate from the real registry plus a cheap stand-in for a
+    long-running fit: declared expensive=True, writes nlme_results like run_nlme,
+    records every execution. No population fit is ever run."""
+    reg = ToolRegistry()
+    base = default_registry()
+    for name in ("load_dataset", "profile_pk_dataset", "validate_cdisc"):
+        reg.register(base.get(name))
+
+    def run(state, ctx, args):
+        calls.append(dict(args))
+        return ToolResult(summary="fake fit done", writes={"nlme_results": {"status": "ok"}},
+                          result={"ok": True}, action="fake_fit")
+
+    reg.register(Tool("fake_fit", "stand-in for a long-running fit", "modeler",
+                      {"type": "object", "properties": {}, "required": []}, run, expensive=True))
+    return reg
+
+
+def _fake_orch(llm, calls: list[dict]) -> Orchestrator:
+    return Orchestrator(llm=llm, registry=_registry_with_fake_fit(calls),
+                        clock=lambda c=itertools.count(): f"t{next(c)}", store=SessionStore(":memory:"))
+
+
+def test_job_path_still_gates_an_expensive_proposal_then_runs_it_exactly_once(monkeypatch):
+    monkeypatch.setitem(WORKFLOWS, "goal_fake", _goal_template("goal_fake", ["load_dataset", "fake_fit", "validate_cdisc"]))
+    calls: list[dict] = []
+    llm = _Scripted([{"tool": "load_dataset", "args": {}, "rationale": "r"},
+                     {"tool": "fake_fit", "args": {}, "rationale": "fit it"},
+                     {"tool": "validate_cdisc", "args": {}, "rationale": "r"},
+                     {"tool": None, "args": {}, "rationale": "goal met", "stop_reason": "goal met"}])
+    orch = _fake_orch(llm, calls)
+    sid = orch.create_session().id
+    # (a) allow_expensive=True on the START leg (as main.py would pass on a job) does NOT
+    #     let the planner run the fit: the policy gates it regardless of the flag.
+    out = orch.start_workflow(sid, "goal_fake", {"path": SAMPLE}, allow_expensive=True)
+    assert out["status"] == "awaiting_review" and out["proposal"]["tool"] == "fake_fit"
+    assert calls == [] and [e["tool"] for e in out["executed"]] == ["load_dataset"]
+    # (b) the job-path approval: signed, taken, run exactly once, planning continues.
+    res = orch.resume_workflow(sid, approve=True, actor="alice", reason="go", allow_expensive=True)
+    assert res["status"] == "complete" and res["stop_reason"] == "goal met"
+    assert calls == [{"confirm": True}]                 # take_pending_tool's confirm IS the yes
+    assert [e["tool"] for e in res["executed"]] == ["fake_fit", "validate_cdisc"]
+    assert res["executed"][0]["label"] == "planner (approved): fake_fit"
+    assert res["state"]["nlme_results"] == {"status": "ok"} and res["state"]["pending_tool"] is None
+    kinds = [(e.agent, e.tool, e.action) for e in orch.get_session(sid).audit.entries]
+    i_review = kinds.index(("qc", "human_review", "approved after step 0"))
+    i_approve = kinds.index(("supervisor", "fake_fit", "approve_tool"))
+    i_ran = kinds.index(("modeler", "fake_fit", "fake_fit"))
+    assert i_review < i_approve < i_ran and kinds.count(("modeler", "fake_fit", "fake_fit")) == 1
+    assert res["audit_ok"]
+
+
+class _Raising(_Scripted):
+    """Returns its scripted plans, then raises like a hosted planner losing its network."""
+
+    def plan(self, goal, state_summary, observations, history, tools):
+        if not self.plans:
+            raise RuntimeError("LLM server error HTTP 503")
+        self.calls += 1
+        return self.plans.pop(0)
+
+
+def test_a_planner_failure_after_an_approved_fit_keeps_the_fit(monkeypatch):
+    monkeypatch.setitem(WORKFLOWS, "goal_fake2", _goal_template("goal_fake2", ["load_dataset", "fake_fit"]))
+    calls: list[dict] = []
+    llm = _Raising([{"tool": "load_dataset", "args": {}, "rationale": "r"},
+                    {"tool": "fake_fit", "args": {}, "rationale": "fit it"}])
+    orch = _fake_orch(llm, calls)
+    sid = orch.create_session().id
+    assert orch.start_workflow(sid, "goal_fake2", {"path": SAMPLE}, allow_expensive=True)["status"] == "awaiting_review"
+    res = orch.resume_workflow(sid, approve=True, actor="alice", reason="go", allow_expensive=True)
+    assert res["status"] == "stopped" and res["stop_reason"].startswith("planner failed:")
+    assert calls == [{"confirm": True}]
+    assert [e["tool"] for e in res["executed"]] == ["fake_fit"]
+    # The fit's result and the approval survived in the store, and the failure is on the chain.
+    row = orch.store.get(sid)
+    assert row["state"]["nlme_results"] == {"status": "ok"} and row["state"]["current_step"] == 2
+    assert ("plan_error", "plan") in _planner_actions(orch, sid)
+    assert res["audit_ok"]
+
+
+def test_a_stuck_planner_stops_after_one_repeat_not_the_whole_budget(monkeypatch):
+    monkeypatch.setitem(WORKFLOWS, "goal_stuck", _goal_template("goal_stuck", ["load_dataset", "run_vpc"]))
+    llm = _Scripted([{"tool": "load_dataset", "args": {}, "rationale": "r"},
+                     {"tool": "run_vpc", "args": {}, "rationale": "too early"}])   # forever
+    orch = _orch(llm)
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_stuck", {"path": SAMPLE})
+    assert out["status"] == "stopped" and "identical" in out["stop_reason"]
+    assert llm.calls == 3                       # load, run_vpc (prerequisite), run_vpc (repeat → stop)
+    assert [h["allow"] for h in out["state"]["planner_history"]] == [True, False, False]
+
+
+def test_a_silent_planner_stop_is_reported_as_stopped_not_complete(monkeypatch):
+    monkeypatch.setitem(WORKFLOWS, "goal_silent", _goal_template("goal_silent", ["load_dataset"]))
+    llm = _Scripted([{"tool": None, "args": {}, "rationale": "", "stop_reason": "planner selected no tool"}])
+    orch = _orch(llm)
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_silent", {"path": SAMPLE})
+    assert out["status"] == "stopped" and out["executed"] == []
+
+
+def test_the_planner_cannot_repoint_the_analysis_dataset(monkeypatch):
+    monkeypatch.setitem(WORKFLOWS, "goal_ds", _goal_template("goal_ds", ["load_dataset", "validate_cdisc"]))
+    llm = _Scripted([{"tool": "load_dataset", "args": {"path": "/etc/passwd"}, "rationale": "r"},
+                     {"tool": "validate_cdisc", "args": {"dataset_id": "someone_elses"}, "rationale": "r"},
+                     {"tool": None, "args": {}, "rationale": "done", "stop_reason": "goal met"}])
+    orch = _orch(llm)
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_ds", {"path": SAMPLE})
+    assert out["status"] == "complete"
+    assert out["state"]["dataset_path"] == SAMPLE                    # params win over the planner
+    hist = out["state"]["planner_history"]
+    assert hist[0]["args"] == {"path": SAMPLE} and "dataset_id" not in hist[1]["args"]
 
 
 # ── the existing HTTP endpoints drive the goal leg unchanged ─────────────────

@@ -142,18 +142,21 @@ def decide(tool_name: str, args: Mapping[str, Any] | None, state: PharmState, *,
     exhausted = budget_exhausted(history, budget)
     if exhausted:
         return Decision(False, MODE_REJECTED, exhausted, stop=True)
-    if tool_name not in roster:
-        return Decision(False, MODE_REJECTED,
-                        f"{tool_name} is not in this workflow's allowed_tools")
-    unmet = unmet_prerequisite(tool_name, state)
-    if unmet:
-        return Decision(False, MODE_REJECTED, unmet)
+    # The repeat check comes BEFORE roster / prerequisite refusals: a planner that
+    # re-proposes a call just rejected for an unmet prerequisite is stuck, and must
+    # stop after one repeat instead of burning the whole step budget.
     if history and canonical_call(tool_name, args) == canonical_call(
             history[-1].get("tool", ""), history[-1].get("args")):
         return Decision(False, MODE_REJECTED,
                         f"{tool_name} was already proposed with identical arguments; "
                         "every tool is deterministic, so a repeat cannot produce anything new",
                         stop=True)
+    if tool_name not in roster:
+        return Decision(False, MODE_REJECTED,
+                        f"{tool_name} is not in this workflow's allowed_tools")
+    unmet = unmet_prerequisite(tool_name, state)
+    if unmet:
+        return Decision(False, MODE_REJECTED, unmet)
     mode = classify(tool_name, args, roster[tool_name])
     if mode == MODE_GATED and gates_taken(history) >= budget.max_gated:
         return Decision(False, MODE_REJECTED,
