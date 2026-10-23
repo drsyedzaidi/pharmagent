@@ -27,6 +27,7 @@ change, and every result says the model is interim.
 """
 from __future__ import annotations
 
+import logging
 import math
 import numbers
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ DESIGNS = ("crossover", "parallel")
 INTERIM_MODEL = ("interim: paired log differences (crossover) or pooled two-sample log means (parallel); no period "
                  "or sequence terms. The profile-specific model is pending.")
 _TWO_DP = Decimal("0.01")
+_log = logging.getLogger(__name__)
 
 
 class BEContractError(ValueError):
@@ -211,7 +213,8 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
         n_t, n_r = len(tv), len(rv)
         enough = min(n_t, n_r) >= prof.min_evaluable
     est = _estimate(tv, rv, paired=design == "crossover", alpha=prof.alpha)
-    shown = {k: est.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct")}
+    shown = {k: est.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
+                                     "ci_lower_raw", "ci_upper_raw")}
     return {**shown, **_verdict(est, prof, lo, hi, enough),
             "n_evaluable": n_t if design == "crossover" else n_t + n_r, "n_test": n_t, "n_reference": n_r,
             "min_evaluable": prof.min_evaluable}
@@ -229,6 +232,8 @@ def assess_average_be(records: list[dict], *, design: str | None, profile: str |
     except BEContractError:
         raise
     except (TypeError, ValueError, ArithmeticError, InvalidOperation, KeyError, AttributeError) as exc:
+        # keep the traceback: a genuine estimator bug must stay distinguishable from bad input
+        _log.warning("average BE input rejected after %s", type(exc).__name__, exc_info=True)
         raise BEContractError(f"invalid input: {type(exc).__name__}: {exc}") from exc
 
 
@@ -291,5 +296,6 @@ def report_ci(v: dict[str, Any]) -> str:
     """The CI the verdict used: the rounded bounds where the profile rounds, else the unrounded ones."""
     if v.get("ci_lower_rounded") is not None:
         return f"{v['ci_lower_rounded']}–{v['ci_upper_rounded']}"
-    lo, hi = v.get("ci_lower_pct"), v.get("ci_upper_pct")
-    return "n/a" if lo is None else f"{lo}–{hi}"
+    lo = v.get("ci_lower_raw", v.get("ci_lower_pct"))
+    hi = v.get("ci_upper_raw", v.get("ci_upper_pct"))
+    return "n/a" if lo is None else f"{lo!r}–{hi!r} (unrounded, as compared)"

@@ -20,8 +20,7 @@ FULL = {"design": "crossover", "profile": "fda_2026", "test": "B", "reference": 
 
 
 def _pframe(n=12, **kw):
-    df = _frame(n, **kw)
-    return df.assign(PERIOD=np.where(df.TRT == "A", 1, 2))
+    return _frame(n, **kw)                                    # two-sequence crossover with a PERIOD column
 
 
 def _recs(n=12):
@@ -171,3 +170,61 @@ def test_reports_show_profile_rounded_ci_interim_model_and_exclusions(tmp_path, 
     cmax = res["parameters"]["Cmax"]
     assert "fda_2026" in text and "interim" in text and f"{len(res['exclusions'])} excluded value" in text
     assert f"{cmax['ci_lower_rounded']}–{cmax['ci_upper_rounded']}" in text
+
+
+# ── re-review of 9e7582d ───────────────────────────────────────────────────────────────────────
+def _replicate_with_nan_period(df):
+    extra = df[(df.ID <= 3) & (df.TRT == "B")].assign(TIME=lambda d: d.TIME + 0.25, PERIOD=np.nan,
+                                                      DV=lambda d: d.DV * 5)
+    return pd.concat([df, extra])
+
+
+def test_rows_with_a_missing_period_are_refused():
+    res = _call(_replicate_with_nan_period(_pframe(13)), **FULL).result
+    assert res["status"] == "invalid_arguments" and "period" in res["message"]
+
+
+@pytest.mark.parametrize("col", ["TRT", "ID", "TIME", "DV"])
+def test_period_col_cannot_be_a_role_column(col):
+    res = _call(_pframe(), **{**FULL, "period_col": col}).result
+    assert res["status"] == "invalid_arguments" and "period_col" in res["message"]
+
+
+def test_a_single_sequence_is_not_a_randomised_crossover():
+    df = _pframe().pipe(lambda d: d.assign(PERIOD=np.where(d.TRT == "A", 1, 2)))   # everyone: A then B
+    res = _call(df, **FULL).result
+    assert res["status"] == "invalid_arguments" and "sequence" in res["message"]
+
+
+def test_two_missing_time_rows_are_ledgered_not_called_duplicates():
+    df = _pframe(13)
+    rows = df[(df.ID == 2) & (df.TRT == "B")].head(2).assign(TIME=np.nan)
+    df = pd.concat([df.drop(rows.index), rows])
+    res = _call(df, **FULL).result
+    assert res["status"] == "ok"
+    assert sum(e["reason"] == "missing_time" and e["subject"] == 2 for e in res["exclusions"]) == 2
+
+
+def test_ledger_original_values_are_strict_json():
+    import json
+
+    df = _pframe(13)
+    df.loc[df.index[3], "DV"] = np.nan
+    res = _call(df, **FULL).result
+    json.dumps(res, allow_nan=False)
+
+
+def test_a_non_unique_index_does_not_crash():
+    df = _pframe(13)
+    df.loc[df.index[3], "DV"] = np.nan
+    df.index = [0] * len(df)
+    assert _call(df, **FULL).result["status"] == "ok"
+
+
+def test_an_unrounded_profile_report_does_not_show_a_misleading_ci():
+    from app.compute.be_contract import report_ci
+
+    v = {"ci_lower_pct": 80.0, "ci_upper_pct": 110.0, "ci_lower_raw": 79.99996, "ci_upper_raw": 110.0,
+         "ci_lower_rounded": None, "ci_upper_rounded": None}
+    assert "79.99996" in report_ci(v)
+
