@@ -54,6 +54,10 @@ GATED_KEY_NOTE = ("a policy scientific-choice key, so every proposal carrying it
 REVIEWED_KEY_NOTE = ("not a policy scientific-choice key, but every variant carrying it was gated for "
                      "another reason (the tool itself or another argument), so a human saw the value; a "
                      "candidate for SCIENTIFIC_CHOICE_KEYS only if it should be gated on its own")
+REJECTED_KEY_NOTE = ("not a policy scientific-choice key, and the policy rejected at least one variant "
+                     "carrying it, so that value neither ran nor reached the human gate and no human is "
+                     "known to have seen it (see the policy rejections for why); a candidate for "
+                     "SCIENTIFIC_CHOICE_KEYS only if it should be gated on its own")
 UNGATED_KEY_NOTE = ("not a policy scientific-choice key and admitted WITHOUT a human gate in at least one "
                     "replicate: if the value changes the science, a candidate for SCIENTIFIC_CHOICE_KEYS "
                     "or a planner rule")
@@ -140,10 +144,12 @@ def decision_points(replicates: Sequence[Mapping[str, Any]]) -> list[dict[str, A
 
 
 # -- what varied --------------------------------------------------------------
-def _key_note(scientific: bool, unreviewed: bool) -> str:
+def _key_note(scientific: bool, unreviewed: bool, rejected: bool) -> str:
     if scientific:
         return GATED_KEY_NOTE
-    return UNGATED_KEY_NOTE if unreviewed else REVIEWED_KEY_NOTE
+    if unreviewed:
+        return UNGATED_KEY_NOTE
+    return REJECTED_KEY_NOTE if rejected else REVIEWED_KEY_NOTE
 
 
 def _choice_note(competing: Sequence[str]) -> str:
@@ -156,7 +162,8 @@ def _choice_note(competing: Sequence[str]) -> str:
 def candidate_rule_gaps(points: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Name what varied; never edit a rule. An argument key is classified by whether
     the policy treats it as a scientific choice and whether any variant CARRYING it
-    was admitted autonomously (it ran with no human seeing the value)."""
+    was admitted autonomously (it ran with no human seeing the value) or rejected
+    (it never reached the human gate)."""
     arg_keys: dict[tuple[str, str], dict[str, Any]] = {}
     tool_choices = []
     for p in points:
@@ -172,13 +179,15 @@ def candidate_rule_gaps(points: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 rec = arg_keys.setdefault((tool, key), {
                     "tool": tool, "key": key, "steps": [],
                     "policy_scientific_choice": key in policy.SCIENTIFIC_CHOICE_KEYS.get(tool, frozenset()),
-                    "admitted_without_gate": False})
+                    "admitted_without_gate": False, "rejected_by_policy": False})
                 if p["step"] not in rec["steps"]:
                     rec["steps"].append(p["step"])
                 rec["admitted_without_gate"] |= any(
                     v["policy_mode"] == policy.MODE_AUTONOMOUS for v in carriers)
+                rec["rejected_by_policy"] |= any(v["policy_mode"] == policy.MODE_REJECTED for v in carriers)
     for rec in arg_keys.values():
-        rec["note"] = _key_note(rec["policy_scientific_choice"], rec["admitted_without_gate"])
+        rec["note"] = _key_note(rec["policy_scientific_choice"], rec["admitted_without_gate"],
+                                rec["rejected_by_policy"])
     return {"owner_decision": OWNER_DECISION,
             "arg_keys": [arg_keys[k] for k in sorted(arg_keys)],
             "tool_choices": tool_choices}
