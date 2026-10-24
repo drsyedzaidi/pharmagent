@@ -303,14 +303,26 @@ def _scm_refute(scm: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ── public API ──────────────────────────────────────────────────────────────────
+#: severities an externally supplied finding may carry. CRITICAL/HIGH decide ``goal_met``; a finding
+#: that arrives from outside this module (the mikebrain rule catalog) must never be able to.
+NON_BLOCKING_EXTRA = (MEDIUM, LOW)
+
+
 def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
-           roles: dict[str, str] | None, goal: str = DEFAULT_GOAL) -> dict[str, Any]:
+           roles: dict[str, str] | None, goal: str = DEFAULT_GOAL,
+           extra_findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Run all refutation checks over the current analysis state.
 
     `state_dump` is PharmState.model_dump(); `df` + `roles` are the raw dataset and
     its column-role map (optional — recomputation checks degrade gracefully without
-    them, the state-internal checks still run).
+    them, the state-internal checks still run). `extra_findings` are additional,
+    already-formed findings from an owner-approved rule catalog; they must be MEDIUM
+    or LOW (anything that could change `goal_met` is refused, not downgraded).
     """
+    for extra in extra_findings or []:
+        if extra.get("severity") not in NON_BLOCKING_EXTRA:
+            raise ValueError(f"extra finding {extra.get('id')!r} has severity {extra.get('severity')!r}; "
+                             f"only {NON_BLOCKING_EXTRA} may be supplied from outside the engine")
     findings: list[dict[str, Any]] = []
     params = state_dump.get("nca_parameters") or []
     if params:
@@ -335,6 +347,7 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
     memo_checked = memo_present(state_dump)
     if memo_checked:   # briefing memo: every printed number must trace to current state
         findings += memo_findings(state_dump, _finding)
+    findings += [dict(f) for f in extra_findings or []]
 
     findings.sort(key=lambda f: _RANK.get(f["severity"], 9))
     counts = {sev: sum(1 for f in findings if f["severity"] == sev)

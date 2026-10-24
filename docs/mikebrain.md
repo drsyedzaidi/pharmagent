@@ -1,9 +1,11 @@
 # mikebrain — literature-grounded advisory critic
 
-**Status:** M0 (corpus index) and M1 (grounded critic tool) — advisory only.
-Nothing mikebrain says can block, pass or alter a gate. The deterministic
-refutations in `backend/app/compute/adversarial.py` and the human-review gates
-remain the hard floor.
+**Status:** M0 (corpus index), M1 (grounded critic tool) and M2 (owner-approved
+rule catalog). The critic is advisory only. Nothing mikebrain says can block,
+pass or alter a gate, and a rule-derived finding is capped at MEDIUM so it
+cannot either. The deterministic refutations in
+`backend/app/compute/adversarial.py` and the human-review gates remain the hard
+floor.
 
 ## What it is
 
@@ -25,9 +27,10 @@ mikebrain **refutes or corroborates**. Its verdicts are `supported`,
 - **Not a general chat.** It answers only from retrieved chunks. With no
   corpus, or no matching chunk, it says so (`status: no_corpus`, `grounding:
   abstained`).
-- **Not a rule engine yet.** Until an owner-approved rule catalog exists (M2),
-  every result is advisory and carries no authority, the same posture as the
-  plausibility catalog's `pending_owner_review` status.
+- **Not a rule author.** The critic's verdicts are advisory and carry no
+  authority. A verdict can never become a rule: rules are written by the owner
+  through a separate command, enter as `pending_owner_review`, and only the
+  owner's reviewed edit makes one `approved` (see "The rule catalog (M2)").
 
 ## Default LLM
 
@@ -161,6 +164,106 @@ re-embed (a dimension mismatch is detected and falls back to BM25 with an
 `embedding_error` until then). The in-process index is cached and re-read
 whenever `corpus_version` changes.
 
+## The rule catalog (M2)
+
+M1 can say "the literature disagrees". M2 lets the owner turn a passage they
+have read into a **deterministic check**, so the same finding appears on every
+review without an LLM in the loop.
+
+**What a rule is.** A closed, typed predicate over analysis diagnostics, plus a
+claim, a rationale, a suggested action, a severity, and pointers to the passages
+that support it. Example (the owner's own words; the numbers come from the
+owner's reading):
+
+```json
+{"id": "mb.nlme.high_shrinkage_ebe_screening", "version": "1.0.0",
+ "when": [{"path": "nlme_results.shrinkage_pct", "quantifier": "any", "op": "gt", "value": 30}],
+ "severity": "MEDIUM", "target": "NLME covariate screening on EBEs",
+ "claim": "...", "rationale": "...", "suggested_action": "...",
+ "evidence": [{"doc_sha": "...", "document": "<title>", "year": 2009, "source_type": "paper",
+               "section": "...", "start": 1364, "end": 2065, "text_sha256": "..."}],
+ "proposed_by": "...", "proposed_on": "2026-10-24",
+ "approval": {"status": "pending_owner_review"}}
+```
+
+**The vocabulary is closed.** `when` has one to four conditions, all of which
+must hold. Each names one of a short allow-list of diagnostic paths
+(`nlme_results.converged`, `.condition_number`, `.shrinkage_pct`,
+`.theta_rse_pct`, `.omega_cv_pct`, `pk_model_results.mode`), one of six
+operators (`gt ge lt le eq ne`) and a value. Per-parameter maps need an `any` or
+`all` quantifier. There is no expression string, no `eval`, and no field a model
+could use to smuggle logic in. The results block must report `status: ok`,
+the same gate the built-in refutations use. A missing, `None`, boolean or
+non-numeric value never satisfies a condition, so absent data never produces a
+finding.
+
+**Approval is the owner's act, not a tool's.**
+
+| Property | How it is enforced |
+|---|---|
+| A rule enters as `pending_owner_review` with no approver | `python -m app.knowledge rules add` is the only writer, and it refuses to write anything else |
+| A pending rule has no effect | only `approved` rules are evaluated; with none approved a review result (and its summary) equals that of an empty catalog (tested) |
+| Approval names who and when | schema: `approval.by` and `approval.date` required when approved, forbidden when pending |
+| An automated identity cannot approve | schema rejects `claude`, `llm`, `bot`, `agent`, `mikebrain`, `loop` and similar tokens as approver. This is a speed bump; the control is that approval is a reviewed pull request |
+| No LLM path to the catalog | `knowledge_tools.py` cannot reach the writer (tested); predicates come from `--when` flags, never from model text |
+| A rule can never block | schema allows only `MEDIUM`/`LOW`, and `adversarial.review` refuses any extra finding that is not, so `goal_met` cannot change |
+
+"Approved" here means the owner reviewed the rule and its evidence in the pull
+request that records the approval. It is **not** a cryptographic e-signature:
+the e-signature and audit code is guarded and untouched. What binds a result to
+the exact approved file is the catalog identity every finding carries:
+`catalog_version` and `catalog_sha256` (SHA-256 of the parsed file as canonical
+JSON, the same recipe as the conventions catalog, so reformatting does not
+change it and any content change does).
+
+**Evidence is bound by hash and holds no passage text.** `rules add --chunk`
+takes chunk ids from `search` and records the document hash, bibliographic
+title and year, the character span, and the SHA-256 of that span. Nothing from
+the passage is copied, so the catalog is safe to commit. `rules verify`
+re-derives each span from the stored text and reports `present`,
+`text_changed`, `span_out_of_range`, `missing_text`, `missing_document` or
+`corpus_empty`, and exits 1 on any problem. Review results deliberately do
+**not** depend on the corpus being present: evaluation is a pure function of
+the analysis state and the catalog, so it reproduces on CI and on a machine
+without the owner's library.
+
+**What a fired rule looks like.** An ordinary finding (`id` = the rule id,
+`severity`, `target`, `claim`, `evidence` text with the observed values,
+`suggested_action`) plus `origin: "mikebrain_rule"`, `rule_id`, `rule_version`,
+`catalog_version`, `catalog_sha256`, `approved_by`, `approved_on` and
+`literature` (title, year, document and span hashes). Findings are counted in
+`counts` like any MEDIUM or LOW finding and never in a way that changes
+`goal_met`. Once at least one rule is approved the result also carries a
+`rule_catalog` block (`n_approved`, `n_pending_ignored`, `n_fired`, `fired`). If
+the catalog file fails to load, the review still runs: rules are skipped and the
+block says `status: "invalid"` with the error, rather than failing the review or
+passing silently.
+
+**Owner workflow.**
+
+```bash
+python -m app.knowledge search "eta shrinkage EBE covariate screening"        # find the chunk ids
+python -m app.knowledge rules add --id mb.nlme.high_shrinkage_ebe_screening \
+    --title "High eta-shrinkage makes EBE screening uninformative" --severity MEDIUM \
+    --when "nlme_results.shrinkage_pct any gt 30" \
+    --target "NLME covariate screening on EBEs" --claim "..." --rationale "..." --action "..." \
+    --chunk 7cefffafb03f:2 --limit "30 % is a convention, not a law"
+python -m app.knowledge rules list
+python -m app.knowledge rules verify
+```
+
+Then read the cited passage, edit `approval` in
+`backend/app/knowledge/rules/catalog.json` to
+`{"status": "approved", "by": "<you>", "date": "YYYY-MM-DD"}`, and open the
+change for review. The server reads the catalog once per process, so restart it
+afterwards (never with `--reload`). The catalog ships **empty**: it contains no
+rule, so nothing changes until the owner approves one.
+
+**Deliberately not done in M2.** Raising a rule above MEDIUM (an owner decision;
+see open question 3 in `docs/agentic_planner_design.md`), a cryptographic
+signature on approval, rules over raw data or over paths outside the allow-list,
+and any use of rules by the planner (M3).
+
 ## Copyright
 
 The repository ships **no documents and no copyrighted text**; the three test
@@ -173,17 +276,17 @@ kept as evidence of grounding, not as content.
 
 ## Roadmap
 
-- **M0 — corpus index** (this PR): manifest, chunking, BM25 + optional vectors, CLI.
-- **M1 — grounded critic tool** (this PR): `consult_mikebrain`, quote-grounding
+- **M0 — corpus index** (#28): manifest, chunking, BM25 + optional vectors, CLI.
+- **M1 — grounded critic tool** (#28): `consult_mikebrain`, quote-grounding
   validator, `knowledge_results`, advisory hook in `adversarial_review`.
-- **M2 — owner-approved rule catalog.** Rules ("EBE covariate screening is
-  uninformative above 30 % shrinkage") stored with their supporting chunk hashes
-  and an owner signature; a rule is `pending_owner_review` until approved, and
-  only approved rules may be promoted from advisory to a deterministic finding
-  in `adversarial.py` — never the LLM's free-text verdict.
+- **M2 — owner-approved rule catalog** (stacked PR): typed rule schema with a closed
+  predicate vocabulary, `pending_owner_review` by default, evidence bound by hash,
+  deterministic evaluation inside `adversarial_review` capped at MEDIUM. The
+  catalog ships empty.
 - **M3 — planner gate.** mikebrain becomes the Phase B critic of
   `docs/agentic_planner_design.md`: each planner proposal is consulted and the
   advisory shown at the human gate. Whether a `contradicted` verdict may block on
-  its own is an owner decision deferred until M2 rules exist.
+  its own is still an owner decision; M2 rules are the only route by which
+  literature can become a deterministic finding.
 
 Out of scope so far: per-role LLM routing, planner integration, UI.
