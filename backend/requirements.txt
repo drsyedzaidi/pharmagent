@@ -11,3 +11,5 @@ scipy==1.17.1
 python-docx==1.2.0
 python-multipart==0.0.32
 anthropic==0.109.1
+# PMxbench adapter (app/benchmarks) reads/writes YAML; already installed via uvicorn[standard].
+PyYAML==6.0.3
