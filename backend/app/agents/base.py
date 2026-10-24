@@ -159,6 +159,9 @@ class Agent:
 
         return {
             "dataset_id": state.dataset_id,
+            "dataset_loaded": state.dataset_id is not None,
+            "dataset_profiled": state.data_quality is not None,
+            "spaghetti_plotted": state.spaghetti_data is not None,
             "has_metadata": state.dataset_metadata is not None,
             "n_subjects": meta.get("n_subjects"),
             "columns": meta.get("columns"),
