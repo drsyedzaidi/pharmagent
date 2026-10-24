@@ -12,6 +12,7 @@ from typing import Any
 
 from app.compute import adversarial
 from app.core.pharmstate import PharmState
+from app.knowledge.rules.evaluate import apply_default_catalog
 from app.tools.base import Tool, ToolContext, ToolResult
 
 log = logging.getLogger("pharmagent")
@@ -43,7 +44,13 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
     if state.dataset_id and state.dataset_id in ctx.dataset_store:
         df = ctx.dataset_store[state.dataset_id]
 
-    result = adversarial.review(state.model_dump(), df, _roles(state), goal=goal)
+    state_dump = state.model_dump()
+    # Owner-approved mikebrain rules: deterministic, MEDIUM/LOW only (cannot change goal_met), and
+    # invisible (rule_info is None) until the owner approves at least one rule in the catalog.
+    rule_findings, rule_info = apply_default_catalog(state_dump)
+    result = adversarial.review(state_dump, df, _roles(state), goal=goal, extra_findings=rule_findings or None)
+    if rule_info is not None:
+        result = {**result, "rule_catalog": rule_info}
     advisory_note = ""
     if _wants_mikebrain(args):
         # Advisory only: literature advisories are severity-free, live under their own
@@ -69,6 +76,10 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
     )
     if result.get("unverifiable"):
         summary += f" NOT independently verified: {result['unverifiable_reason']}."
+    if rule_info is not None:
+        summary += (f" mikebrain rules: {rule_info['n_fired']} fired (catalog {rule_info['catalog_version']})."
+                    if rule_info.get("status") == "ok" else
+                    f" mikebrain rules SKIPPED ({rule_info.get('status')}): {rule_info.get('error', '')[:120]}")
     summary += advisory_note
     return ToolResult(
         summary=summary,
