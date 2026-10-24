@@ -44,7 +44,7 @@ APPROVED = {"status": "approved", "by": "Dr. Owner Example", "date": "2026-10-24
 # ── builders ────────────────────────────────────────────────────────────────────
 
 def _evidence(**over) -> dict:
-    base = dict(doc_sha=SHA_A, document="Synthetic note", year=2026, source_type="paper", section="1 Intro",
+    base = dict(doc_sha=SHA_A, document="Synthetic note", year=2026, source_type="paper",
                 start=0, end=100, text_sha256=SHA_B)
     return {**base, **over}
 
@@ -159,11 +159,15 @@ def test_catalog_rejects_duplicate_ids_and_extra_keys():
 
 # ── catalog file ────────────────────────────────────────────────────────────────
 
-def test_shipped_catalog_is_valid_and_inert_until_a_rule_is_approved():
-    rec = load_rule_catalog()
+def test_shipped_catalog_is_valid_and_the_suite_never_reads_it_by_accident():
+    rec = load_rule_catalog(cio.SHIPPED_CATALOG)                 # the real file, whatever the owner has put in it
     assert len(rec.catalog_sha256) == 64
-    if not any(r.approval.status == "approved" for r in rec.catalog.rules):
-        assert evaluate(_state(), rec).info is None            # nothing approved -> reviews are untouched
+    assert cio.DEFAULT_CATALOG != cio.SHIPPED_CATALOG            # conftest isolates every test from it
+    assert cached_catalog_is_empty()
+
+
+def cached_catalog_is_empty() -> bool:
+    return cio.cached_rule_catalog().catalog.rules == ()
 
 
 def test_duplicate_json_keys_are_rejected(tmp_path: Path):
@@ -171,6 +175,13 @@ def test_duplicate_json_keys_are_rejected(tmp_path: Path):
     p.write_text('{"catalog_version": "0.1.0", "rules": [], "rules": []}')
     with pytest.raises(ValueError, match="duplicate JSON key"):
         load_rule_catalog(p)
+
+
+def test_local_digest_recipe_equals_the_conventions_recipe():
+    """The rules package defines its own digest (it may not import the conventions package); the two must agree."""
+    from app.conventions.catalog_io import canonical_json_sha256 as conventions_digest
+    sample = {"b": [1, 2, {"z": "é"}], "a": None, "catalog_version": "0.1.0"}
+    assert cio.canonical_json_sha256(sample) == conventions_digest(sample)
 
 
 def test_digest_ignores_formatting_but_not_content(tmp_path: Path):
@@ -345,6 +356,8 @@ def test_pending_only_catalog_is_byte_identical_to_no_catalog(catalog_file):
     (_, pending), _ = _review(_clean_state())
     assert pending.result == none.result and pending.summary == none.summary
     assert "rule_catalog" not in pending.result
+    # and both equal the pre-M2 path: the engine called directly, with no catalog in sight
+    assert pending.result == adversarial.review(_clean_state().model_dump(), None, {})
 
 
 def test_approved_rule_adds_a_finding_but_never_changes_the_verdict(catalog_file):
@@ -382,7 +395,115 @@ def test_broken_catalog_is_recorded_and_the_review_is_otherwise_unchanged(catalo
     (_, got), audit = _review(_clean_state())
     assert got.result["rule_catalog"]["status"] == "invalid"
     assert {k: v for k, v in got.result.items() if k != "rule_catalog"} == base.result
-    assert "INVALID" in got.summary and audit.verify()
+    assert "SKIPPED (invalid)" in got.summary and audit.verify()
+
+
+# ── review follow-ups: hostile input, immutability, approver and text guards ─────
+
+def test_huge_integers_are_rejected_not_an_overflow():
+    big = 10 ** 400
+    with pytest.raises(ValidationError, match="finite number"):
+        Condition.model_validate(dict(path="nlme_results.condition_number", op="gt", value=big))
+    with pytest.raises(ValidationError, match="finite number"):
+        Condition.model_validate(dict(path="nlme_results.shrinkage_pct", quantifier="any", op="gt", value=-big))
+
+
+def test_evaluation_survives_hostile_state_values():
+    rule = _rule(approval=APPROVED, when=[dict(path="nlme_results.condition_number", op="gt", value=1)])
+    assert evaluate(_state(condition_number=10 ** 400), _record(rule)).findings == ()        # not finite as a float
+    mixed = _rule(approval=APPROVED, when=[dict(path="nlme_results.shrinkage_pct", quantifier="any", op="gt", value=1)])
+    # keys 1 and "1" collapse to the same text; the sort must not compare None with a float
+    assert evaluate(_state(shrinkage_pct={1: None, "1": 5.0}), _record(mixed)).findings
+
+
+def test_large_values_are_printed_without_losing_the_difference():
+    rule = _rule(approval=APPROVED, when=[dict(path="nlme_results.condition_number", op="gt", value=1234566)])
+    (finding,) = evaluate(_state(condition_number=1234567.0), _record(rule)).findings
+    assert "1234567" in finding["evidence"] and "1234566" in finding["evidence"]
+
+
+def test_catalog_failures_never_escape_and_never_leak_a_path(tmp_path: Path, monkeypatch):
+    for text in ('{"catalog_version": "0.1.0", "rules": [' + _huge_rule_json() + ']}',
+                 "[" * 20000 + "]" * 20000,                                   # RecursionError territory
+                 '{"catalog_version": "0.1.0", "rules": [{"id": "nope"}]}'):
+        bad = tmp_path / "catalog.json"
+        bad.write_text(text)
+        monkeypatch.setattr(cio, "DEFAULT_CATALOG", bad)
+        cio.cached_rule_catalog.cache_clear()
+        findings, info = apply_default_catalog(_state())
+        assert findings == [] and info["status"] == "invalid"
+        assert str(tmp_path) not in info["error"] and len(info["error"]) < 200       # generic message only
+
+
+def _huge_rule_json() -> str:
+    r = _rule()
+    r["when"] = [dict(path="nlme_results.condition_number", op="gt", value=0)]
+    return json.dumps(r).replace('"value": 0', '"value": ' + "9" * 400)
+
+
+def test_an_unexpected_evaluation_error_skips_rules_and_says_so(monkeypatch):
+    import app.knowledge.rules.evaluate as ev
+
+    def boom(*a, **k):
+        raise RuntimeError("/Users/someone/secret/path exploded")
+    monkeypatch.setattr(ev, "evaluate", boom)
+    findings, info = ev.apply_default_catalog(_state())
+    assert findings == [] and info["status"] == "error" and "secret" not in json.dumps(info)
+
+
+def test_a_loaded_catalog_cannot_be_mutated_in_place():
+    rec = _record(_rule(approval=APPROVED))
+    rule = rec.catalog.rules[0]
+    assert isinstance(rec.catalog.rules, tuple) and isinstance(rule.when, tuple) and isinstance(rule.evidence, tuple)
+    for target, op in ((rec.catalog.rules, "clear"), (rule.when, "append"), (rule.evidence, "append"),
+                       (rule.known_limits, "append")):
+        assert not hasattr(target, op)
+    with pytest.raises(ValidationError):
+        rule.when[0].value = 0                                                # type: ignore[misc]
+
+
+@pytest.mark.parametrize("who", ["ClaudeBot".replace("Bot", " Bot"), "\uff23laude", "Cl\u200baude", "ChatGPT",
+                                 "dependabot", "Gemini"])
+def test_approver_check_folds_width_and_invisible_characters(who):
+    with pytest.raises(ValidationError, match="automated identity"):
+        Rule.model_validate(_rule(approval={**APPROVED, "by": who}))
+
+
+@pytest.mark.parametrize("by", ["  ", "1234", "-"])
+def test_approver_must_name_a_person(by):
+    with pytest.raises(ValidationError, match="name a person"):
+        Rule.model_validate(_rule(approval={**APPROVED, "by": by}))
+
+
+def test_a_rule_cannot_be_approved_before_it_was_proposed():
+    with pytest.raises(ValidationError, match="before it was proposed"):
+        Rule.model_validate(_rule(proposed_on="2026-10-24", approval={**APPROVED, "date": "2026-10-23"}))
+
+
+@pytest.mark.parametrize("field, limit", [("title", 200), ("claim", 400), ("rationale", 800),
+                                          ("suggested_action", 400), ("target", 200)])
+def test_free_text_is_size_capped(field, limit):
+    Rule.model_validate(_rule(**{field: "x" * limit}))
+    with pytest.raises(ValidationError):
+        Rule.model_validate(_rule(**{field: "x" * (limit + 1)}))
+    with pytest.raises(ValidationError):
+        Rule.model_validate(_rule(known_limits=["y" * 301]))
+
+
+def test_evidence_stores_no_section_heading():
+    with pytest.raises(ValidationError):
+        Rule.model_validate(_rule(evidence=[{**_evidence(), "section": "2 Why it matters"}]))
+
+
+def test_desktop_bundle_ships_every_app_catalog():
+    """The packaged app reads catalog.json beside the code; PyInstaller only bundles what the spec lists."""
+    backend = Path(__file__).parent.parent
+    spec = (backend.parent / "desktop" / "PharmAgent.spec").read_text()
+    found = sorted((backend / "app").rglob("catalog.json"))
+    assert backend / "app" / "knowledge" / "rules" / "catalog.json" in found
+    for path in found:
+        needle = " / ".join(f'"{part}"' for part in path.relative_to(backend).parts)
+        assert needle in spec, f"{path.relative_to(backend)} is not bundled by desktop/PharmAgent.spec"
 
 
 # ── evidence binding ────────────────────────────────────────────────────────────
@@ -486,6 +607,43 @@ def test_cli_add_writes_a_pending_rule_with_hash_evidence_and_no_passage_text(co
     assert evaluate(_state(), load_rule_catalog(empty_cat)).info is None   # pending: still inert
 
 
+def test_cli_refuses_text_copied_from_the_cited_passage(corpus, empty_cat, capsys):
+    cid = _chunk_id(corpus, "Covariate screening on shrunken EBEs")
+    passage = " ".join(load_index(corpus).chunk(cid).text.split())
+    snapshot = empty_cat.read_text()
+    args = _add_args(empty_cat, corpus, cid)
+    args[args.index("--rationale") + 1] = "Per the note: " + passage[40:140]            # 100 chars, verbatim
+    assert cli.main(args) == 2
+    assert "own words" in capsys.readouterr().err and empty_cat.read_text() == snapshot
+    args[args.index("--rationale") + 1] = passage[40:70]                              # 30 chars: below the threshold
+    assert cli.main(args) == 0
+
+
+def test_cli_stores_no_section_heading_and_reports_huge_numbers_as_errors(corpus, empty_cat, capsys):
+    cid = _chunk_id(corpus, "Covariate screening on shrunken EBEs")
+    bad = _add_args(empty_cat, corpus, cid)
+    bad[bad.index("--when") + 1] = "nlme_results.condition_number gt " + "9" * 400
+    assert cli.main(bad) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and "Traceback" not in err
+    assert cli.main(_add_args(empty_cat, corpus, cid)) == 0
+    assert "Why it matters" not in empty_cat.read_text() and '"section"' not in empty_cat.read_text()
+
+
+def test_concurrent_edit_during_add_is_detected_and_leaves_no_litter(empty_cat, monkeypatch):
+    real_mkstemp = cio.tempfile.mkstemp
+
+    def mkstemp_then_someone_else_writes(*a, **k):
+        fd, name = real_mkstemp(*a, **k)
+        empty_cat.write_text(json.dumps({"catalog_version": "0.1.0", "rules": []}, indent=4))   # another writer
+        return fd, name
+    monkeypatch.setattr(cio.tempfile, "mkstemp", mkstemp_then_someone_else_writes)
+    with pytest.raises(ValueError, match="changed while the rule was being added"):
+        cio.append_pending_rule(Rule.model_validate(_rule()), empty_cat)
+    assert load_rule_catalog(empty_cat).catalog.rules == ()
+    assert [p.name for p in empty_cat.parent.iterdir() if p.name.endswith(".tmp")] == []
+
+
 def test_cli_failures_leave_the_catalog_untouched(corpus, empty_cat, capsys):
     cid = _chunk_id(corpus, "Covariate screening on shrunken EBEs")
     snapshot = empty_cat.read_text()
@@ -506,7 +664,7 @@ def test_the_only_writer_refuses_to_approve(empty_cat):
     snapshot = empty_cat.read_text()
     with pytest.raises(ValueError, match="pending_owner_review"):
         cio.append_pending_rule(Rule.model_validate(_rule(approval=APPROVED)), empty_cat)
-    assert empty_cat.read_text() == snapshot and load_rule_catalog(empty_cat).catalog.rules == []
+    assert empty_cat.read_text() == snapshot and load_rule_catalog(empty_cat).catalog.rules == ()
 
 
 def test_cli_list_and_verify(corpus, empty_cat, capsys):
@@ -548,9 +706,13 @@ def test_end_to_end_propose_then_owner_approves_then_it_fires(corpus, empty_cat,
 
 
 def test_rule_authoring_has_no_llm_path():
-    """The critic tool and its advisory hook only ever write knowledge_results / advisories: nothing in
-    knowledge_tools can reach the catalog writer, so an LLM verdict cannot mint or approve a rule."""
+    """The catalog writer is reachable from exactly two modules — the CLI that implements `rules add` and
+    its definition — so no tool, agent, LLM provider or API route can mint a rule."""
+    app_dir = Path(__file__).parent.parent / "app"
+    users = {str(p.relative_to(app_dir)) for p in app_dir.rglob("*.py")
+             if "append_pending_rule" in p.read_text(encoding="utf-8")}
+    assert users == {"knowledge/rules/catalog_io.py", "knowledge/rules_cli.py"}
     import app.tools.knowledge_tools as kt
     src = Path(kt.__file__).read_text()
-    for forbidden in ("append_pending_rule", "catalog_io", "rules_cli", "knowledge.rules"):
+    for forbidden in ("catalog_io", "rules_cli", "knowledge.rules"):
         assert forbidden not in src, forbidden

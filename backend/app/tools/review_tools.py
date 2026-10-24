@@ -79,7 +79,7 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
     if rule_info is not None:
         summary += (f" mikebrain rules: {rule_info['n_fired']} fired (catalog {rule_info['catalog_version']})."
                     if rule_info.get("status") == "ok" else
-                    f" mikebrain rule catalog INVALID, rules skipped: {rule_info.get('error', '')[:120]}")
+                    f" mikebrain rules SKIPPED ({rule_info.get('status')}): {rule_info.get('error', '')[:120]}")
     summary += advisory_note
     return ToolResult(
         summary=summary,

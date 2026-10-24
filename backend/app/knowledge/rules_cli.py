@@ -73,7 +73,10 @@ def _cmd_add(args: argparse.Namespace, root: Path) -> int:
     rule = Rule(
         id=args.id, version=RULE_VERSION, title=args.title, when=[parse_when(w) for w in args.when],
         severity=args.severity, target=args.target, claim=args.claim, rationale=args.rationale,
-        suggested_action=args.suggested_action, evidence=evidence_for_chunks(root, args.chunk),
+        suggested_action=args.suggested_action,
+        evidence=evidence_for_chunks(root, args.chunk, own_words={
+            "title": args.title, "target": args.target, "claim": args.claim, "rationale": args.rationale,
+            "action": args.suggested_action, **{f"limit[{i}]": t for i, t in enumerate(args.known_limits)}}),
         known_limits=args.known_limits, proposed_by=args.proposed_by,
         proposed_on=datetime.now(UTC).date().isoformat(), approval={"status": "pending_owner_review"})
     record = cio.append_pending_rule(rule, args.catalog)
@@ -111,6 +114,6 @@ def run(args: argparse.Namespace, root: Path) -> int:
         if args.rules_cmd == "list":
             return _cmd_list(args)
         return _cmd_verify(args, root)
-    except (ValueError, ValidationError, EvidenceError, ManifestError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except (ValueError, ValidationError, EvidenceError, ManifestError, OSError, OverflowError, RecursionError) as exc:
+        print(f"error: {str(exc)[:600]}", file=sys.stderr)
         return 2

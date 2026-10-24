@@ -12,12 +12,14 @@ again by ``adversarial.review``) and therefore can never change ``goal_met``.
 """
 from __future__ import annotations
 
-import math
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from app.knowledge.rules.catalog_io import RuleCatalogRecord, cached_rule_catalog
-from app.knowledge.rules.schema import ALLOWED_PATHS, ROOT_GATES, Condition, Rule
+from app.knowledge.rules.schema import ALLOWED_PATHS, ROOT_GATES, Condition, Rule, finite_float
+
+log = logging.getLogger("pharmagent")
 
 ORIGIN = "mikebrain_rule"
 _OPS = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
@@ -31,13 +33,6 @@ _COMPARE = {
 class RuleReport:
     findings: tuple[dict[str, Any], ...]
     info: dict[str, Any] | None      # None while no rule is approved: the review result is then untouched
-
-
-def _num(x: Any) -> float | None:
-    """A finite real number, else None (bool is not a number here)."""
-    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
-        return None
-    return float(x)
 
 
 def _lookup(state: dict[str, Any], path: str) -> Any:
@@ -55,21 +50,21 @@ def _observe(cond: Condition, state: dict[str, Any]) -> str | None:
     got = _lookup(state, cond.path)
     cmp = _COMPARE[cond.op]
     if kind == "num":
-        n = _num(got)
-        return f"{cond.path} = {n:g} ({sym} {float(value):g})" if n is not None and cmp(n, float(value)) else None
+        n = finite_float(got)
+        return f"{cond.path} = {n:.12g} ({sym} {float(value):.12g})" if n is not None and cmp(n, float(value)) else None
     if kind == "bool":
         return f"{cond.path} = {got}" if isinstance(got, bool) and cmp(got, value) else None
     if kind == "str":
         return f"{cond.path} = {got}" if isinstance(got, str) and cmp(got, value) else None
     if not isinstance(got, dict) or not got:     # map_num
         return None
-    items = sorted((str(k), _num(v)) for k, v in got.items())
+    items = sorted(((str(k), finite_float(v)) for k, v in got.items()), key=lambda kv: kv[0])
     hits = [(k, n) for k, n in items if n is not None and cmp(n, float(value))]
     ok = bool(hits) if cond.quantifier == "any" else len(hits) == len(items)
     if not ok:
         return None
-    shown = ", ".join(f"{k}={n:g}" for k, n in hits)
-    return f"{cond.path} [{cond.quantifier}]: {shown} ({sym} {float(value):g})"
+    shown = ", ".join(f"{k}={n:.12g}" for k, n in hits)
+    return f"{cond.path} [{cond.quantifier}]: {shown} ({sym} {float(value):.12g})"
 
 
 def _gates_open(rule: Rule, state: dict[str, Any]) -> bool:
@@ -112,11 +107,23 @@ def evaluate(state_dump: dict[str, Any], record: RuleCatalogRecord) -> RuleRepor
 
 
 def apply_default_catalog(state_dump: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """Findings + info block from the process-wide catalog. A catalog that fails to load never takes the
-    review down and never passes silently: rules are skipped and the failure is recorded in the info block."""
+    """Findings + info block from the process-wide catalog.
+
+    Nothing about the catalog may take a review down, and nothing may pass silently: whatever goes wrong
+    (a missing or unparseable file, a schema violation, an unexpected error while evaluating), rules are
+    skipped and the info block says so. The client-facing ``error`` is generic; the detail, which can
+    contain a filesystem path, goes to the server log only.
+    """
     try:
         record = cached_rule_catalog()
-    except (ValueError, OSError) as exc:
-        return [], {"status": "invalid", "error": str(exc)[:300]}
-    report = evaluate(state_dump, record)
+    except Exception as exc:  # noqa: BLE001 - includes OverflowError/RecursionError from hostile files
+        log.warning("mikebrain_rule_catalog_invalid", extra={"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+        return [], {"status": "invalid", "error": f"rule catalog could not be loaded ({type(exc).__name__}); "
+                                                  "run `python -m app.knowledge rules list` for details"}
+    try:
+        report = evaluate(state_dump, record)
+    except Exception as exc:  # noqa: BLE001 - rules are supplementary; the deterministic review must still run
+        log.warning("mikebrain_rule_evaluation_failed", extra={"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+        return [], {"status": "error", "error": f"rule evaluation failed ({type(exc).__name__}); rules skipped",
+                    "catalog_version": record.catalog.catalog_version, "catalog_sha256": record.catalog_sha256}
     return list(report.findings), report.info

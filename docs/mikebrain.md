@@ -193,9 +193,10 @@ must hold. Each names one of a short allow-list of diagnostic paths
 operators (`gt ge lt le eq ne`) and a value. Per-parameter maps need an `any` or
 `all` quantifier. There is no expression string, no `eval`, and no field a model
 could use to smuggle logic in. The results block must report `status: ok`,
-the same gate the built-in refutations use. A missing, `None`, boolean or
-non-numeric value never satisfies a condition, so absent data never produces a
-finding.
+the same gate the built-in refutations use. A missing or `None` value, or a
+value of the wrong type (a boolean where a number is expected, a string, an
+integer too large to be a float), never satisfies a condition, so absent or
+malformed data never produces a finding.
 
 **Approval is the owner's act, not a tool's.**
 
@@ -204,7 +205,7 @@ finding.
 | A rule enters as `pending_owner_review` with no approver | `python -m app.knowledge rules add` is the only writer, and it refuses to write anything else |
 | A pending rule has no effect | only `approved` rules are evaluated; with none approved a review result (and its summary) equals that of an empty catalog (tested) |
 | Approval names who and when | schema: `approval.by` and `approval.date` required when approved, forbidden when pending |
-| An automated identity cannot approve | schema rejects `claude`, `llm`, `bot`, `agent`, `mikebrain`, `loop` and similar tokens as approver. This is a speed bump; the control is that approval is a reviewed pull request |
+| An automated identity cannot approve | schema rejects `claude`, `llm`, `bot`, `agent`, `mikebrain`, `loop`, `chatgpt` and similar words as approver (after Unicode width folding and dropping zero-width characters), requires the approver to contain a letter, and refuses an approval dated before the proposal. This is a speed bump, easy to evade on purpose; the control is that approval is a reviewed pull request |
 | No LLM path to the catalog | `knowledge_tools.py` cannot reach the writer (tested); predicates come from `--when` flags, never from model text |
 | A rule can never block | schema allows only `MEDIUM`/`LOW`, and `adversarial.review` refuses any extra finding that is not, so `goal_met` cannot change |
 
@@ -213,19 +214,24 @@ request that records the approval. It is **not** a cryptographic e-signature:
 the e-signature and audit code is guarded and untouched. What binds a result to
 the exact approved file is the catalog identity every finding carries:
 `catalog_version` and `catalog_sha256` (SHA-256 of the parsed file as canonical
-JSON, the same recipe as the conventions catalog, so reformatting does not
+JSON, the recipe the conventions catalog documents, so reformatting does not
 change it and any content change does).
 
 **Evidence is bound by hash and holds no passage text.** `rules add --chunk`
 takes chunk ids from `search` and records the document hash, bibliographic
-title and year, the character span, and the SHA-256 of that span. Nothing from
-the passage is copied, so the catalog is safe to commit. `rules verify`
-re-derives each span from the stored text and reports `present`,
-`text_changed`, `span_out_of_range`, `missing_text`, `missing_document` or
-`corpus_empty`, and exits 1 on any problem. Review results deliberately do
-**not** depend on the corpus being present: evaluation is a pure function of
-the analysis state and the catalog, so it reproduces on CI and on a machine
-without the owner's library.
+title and year, the character span, and the SHA-256 of that span. It stores
+neither the passage nor the section heading, so the catalog is safe to commit.
+The owner's own free text (title, claim, rationale, action, limits) is size
+capped, and `rules add` refuses any of it that repeats 60 or more consecutive
+characters of a cited passage, so a pasted quotation cannot reach the
+repository by accident. These are guards against accidents, not detection of a
+determined copy.
+`rules verify` re-derives each span from the stored text and reports
+`present`, `text_changed`, `span_out_of_range`, `missing_text`,
+`missing_document` or `corpus_empty`, and exits 1 on any problem. Review results
+deliberately do **not** depend on the corpus being present: evaluation is a pure
+function of the analysis state and the catalog, so it reproduces on CI and on a
+machine without the owner's library.
 
 **What a fired rule looks like.** An ordinary finding (`id` = the rule id,
 `severity`, `target`, `claim`, `evidence` text with the observed values,
@@ -236,8 +242,9 @@ without the owner's library.
 `goal_met`. Once at least one rule is approved the result also carries a
 `rule_catalog` block (`n_approved`, `n_pending_ignored`, `n_fired`, `fired`). If
 the catalog file fails to load, the review still runs: rules are skipped and the
-block says `status: "invalid"` with the error, rather than failing the review or
-passing silently.
+block says `status: "invalid"` (or `"error"` if evaluation itself failed),
+rather than failing the review or passing silently. The error shown to clients is
+generic; the detail, which can contain a filesystem path, goes to the server log.
 
 **Owner workflow.**
 
@@ -257,10 +264,15 @@ Then read the cited passage, edit `approval` in
 `{"status": "approved", "by": "<you>", "date": "YYYY-MM-DD"}`, and open the
 change for review. The server reads the catalog once per process, so restart it
 afterwards (never with `--reload`). The catalog ships **empty**: it contains no
-rule, so nothing changes until the owner approves one.
+rule, so nothing changes until the owner approves one. The desktop build bundles
+the file through `desktop/PharmAgent.spec`, and a test fails if any `catalog.json`
+under `backend/app` is missing from that spec. The test suite always runs against an
+empty catalog (`tests/conftest.py`), so approving a real rule never changes an
+unrelated test.
 
 **Deliberately not done in M2.** Raising a rule above MEDIUM (an owner decision;
-see open question 3 in `docs/agentic_planner_design.md`), a cryptographic
+see open question 3 in the planner design, `docs/agentic_planner_design.md` on the
+unmerged branch `docs/agentic-planner-design`), a cryptographic
 signature on approval, rules over raw data or over paths outside the allow-list,
 and any use of rules by the planner (M3).
 

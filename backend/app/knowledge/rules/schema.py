@@ -1,8 +1,10 @@
 """Typed schema for the mikebrain rule catalog.
 
-Mirrors the conventions catalog (``app.conventions.schema``): strict, frozen models,
-an ``Approval`` that is ``pending_owner_review`` until the owner records who approved
-it and when, and a canonical-JSON digest of the whole file for provenance.
+Follows the conventions catalog's shape (strict, frozen models, an ``Approval`` that is
+``pending_owner_review`` until the owner records who approved it and when, a canonical-JSON
+digest of the whole file) without importing it: the conventions package may be imported only
+by startup, the NCA tool and run provenance (a conventions test pins that), so the small pieces
+needed here are defined locally.
 
 A rule's predicate is a closed vocabulary, not an expression: a fixed allow-list of
 diagnostic paths, six comparison operators, and an ``any`` / ``all`` quantifier for
@@ -13,12 +15,11 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from datetime import date as _date
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from app.conventions.schema import Approval
 
 _ID = r"^mb\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$"
 _SEMVER = r"^\d+\.\d+\.\d+$"
@@ -46,7 +47,7 @@ ROOT_GATES: dict[str, tuple[str, str]] = {
 ORDERED_OPS: tuple[str, ...] = ("gt", "ge", "lt", "le")
 OPS: tuple[str, ...] = (*ORDERED_OPS, "eq", "ne")
 #: a rule-derived finding may never be CRITICAL or HIGH: raising this is an owner
-#: decision (docs/agentic_planner_design.md, open question 3), not a catalog edit.
+#: decision (open question 3 in the planner design doc), not a catalog edit.
 RULE_SEVERITIES: tuple[str, ...] = ("MEDIUM", "LOW")
 MAX_CONDITIONS = 4
 MAX_EVIDENCE = 8
@@ -54,11 +55,47 @@ MAX_EVIDENCE = 8
 #: approval is the owner's act, reviewed in the pull request that records it.
 AUTOMATED_APPROVER_TOKENS: frozenset[str] = frozenset(
     {"claude", "anthropic", "gpt", "llm", "bot", "agent", "mikebrain", "pharmagent", "automation", "loop",
-     "assistant", "copilot"})
+     "assistant", "copilot", "chatgpt", "dependabot", "gemini"})
+
+
+#: size caps on the owner's free text. They stop an accidentally pasted passage from becoming a catalog entry;
+#: `rules add` additionally refuses text that repeats a long run of the cited passage verbatim.
+MAX_TITLE, MAX_CLAIM, MAX_RATIONALE, MAX_ACTION, MAX_LIMIT = 200, 400, 800, 400, 300
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def finite_float(x: Any) -> float | None:
+    """``x`` as a finite float, else None. A bool is not a number, and an int too large for a float
+    (``10**400``) is not finite here rather than an OverflowError."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    try:
+        f = float(x)
+    except OverflowError:
+        return None
+    return f if math.isfinite(f) else None
+
+
+class Approval(_Strict):
+    """``approved`` means the owner reviewed the rule and its evidence in the change that records it. It is
+    not a cryptographic signature."""
+    status: Literal["pending_owner_review", "approved"]
+    by: str | None = None
+    date: str | None = None
+
+    @model_validator(mode="after")
+    def _who_and_when_only_when_approved(self) -> Approval:
+        if self.status == "pending_owner_review":
+            if self.by is not None or self.date is not None:
+                raise ValueError("a pending_owner_review rule cannot name an approver or a date")
+            return self
+        if not (self.by and self.date):
+            raise ValueError("an approved rule needs `by` and `date`")
+        _check_iso_date(self.date)
+        return self
 
 
 def _check_iso_date(value: str) -> str:
@@ -86,8 +123,7 @@ class Condition(_Strict):
             raise ValueError(f"{self.path}: a quantifier (any|all) is required for per-parameter maps, "
                              "and only for them")
         if kind in ("num", "map_num"):
-            v = self.value
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            if finite_float(self.value) is None:
                 raise ValueError(f"{self.path}: value must be a finite number")
             if kind == "map_num" and self.op not in ORDERED_OPS:
                 raise ValueError(f"{self.path}: per-parameter maps support only {ORDERED_OPS}")
@@ -101,12 +137,12 @@ class Condition(_Strict):
 
 class EvidenceRef(_Strict):
     """A pointer into the owner's private corpus: document hash plus the exact character span and the
-    SHA-256 of that span's text. No passage text is stored, so the catalog carries no copyrighted material."""
+    SHA-256 of that span's text. Only the bibliographic title and year are stored from the source; no passage
+    text and no section heading, so the catalog carries no copyrighted material."""
     doc_sha: str = Field(pattern=_SHA256)
     document: str = Field(min_length=1, max_length=300)      # bibliographic title
     year: int | None = Field(default=None, ge=1800, le=2200)
     source_type: Literal["book", "paper", "guideline"]
-    section: str = Field(default="", max_length=160)
     start: int = Field(ge=0)
     end: int = Field(gt=0)
     text_sha256: str = Field(pattern=_SHA256)
@@ -118,18 +154,27 @@ class EvidenceRef(_Strict):
         return self
 
 
+def _approver_tokens(by: str) -> set[str]:
+    """Lowercase alphabetic words of ``by`` after NFKC folding and dropping invisible format characters, so
+    full-width letters and zero-width joiners do not hide a token."""
+    folded = unicodedata.normalize("NFKC", by)
+    visible = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    return set(re.findall(r"[a-z]+", visible.lower()))
+
+
 class Rule(_Strict):
+    # Tuples, not lists: the process-wide cached catalog cannot be mutated in place.
     id: str = Field(pattern=_ID)
     version: str = Field(pattern=_SEMVER)
-    title: str = Field(min_length=1)
-    when: list[Condition] = Field(min_length=1, max_length=MAX_CONDITIONS)
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    when: tuple[Condition, ...] = Field(min_length=1, max_length=MAX_CONDITIONS)
     severity: Literal["MEDIUM", "LOW"]
-    target: str = Field(min_length=1)
-    claim: str = Field(min_length=1)
-    rationale: str = Field(min_length=1)
-    suggested_action: str = Field(min_length=1)
-    evidence: list[EvidenceRef] = Field(min_length=1, max_length=MAX_EVIDENCE)
-    known_limits: list[str] = Field(default_factory=list)
+    target: str = Field(min_length=1, max_length=MAX_TITLE)
+    claim: str = Field(min_length=1, max_length=MAX_CLAIM)
+    rationale: str = Field(min_length=1, max_length=MAX_RATIONALE)
+    suggested_action: str = Field(min_length=1, max_length=MAX_ACTION)
+    evidence: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=MAX_EVIDENCE)
+    known_limits: tuple[Annotated[str, Field(min_length=1, max_length=MAX_LIMIT)], ...] = ()
     proposed_by: str = Field(min_length=1)
     proposed_on: str
     approval: Approval
@@ -139,17 +184,20 @@ class Rule(_Strict):
         _check_iso_date(self.proposed_on)
         by = self.approval.by
         if by is not None:
-            tokens = set(re.findall(r"[a-z]+", by.lower()))
-            hit = sorted(tokens & AUTOMATED_APPROVER_TOKENS)
+            if not any(c.isalpha() for c in by):
+                raise ValueError("approval.by must name a person")
+            hit = sorted(_approver_tokens(by) & AUTOMATED_APPROVER_TOKENS)
             if hit:
                 raise ValueError(f"approval.by {by!r} names an automated identity ({hit}); "
                                  "only the owner approves a rule")
+        if self.approval.date is not None and self.approval.date < self.proposed_on:   # ISO dates sort as text
+            raise ValueError("a rule cannot be approved before it was proposed")
         return self
 
 
 class RuleCatalog(_Strict):
     catalog_version: str = Field(pattern=_SEMVER)
-    rules: list[Rule] = Field(default_factory=list)
+    rules: tuple[Rule, ...] = ()
 
     @model_validator(mode="after")
     def _unique_ids(self) -> RuleCatalog:
