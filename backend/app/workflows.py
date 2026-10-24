@@ -3,6 +3,15 @@
 When a template runs, the Supervisor routes by the task plan rather than
 classifying intent. Gates pause execution for human review at scientific
 decision points.
+
+Two template kinds:
+* step templates (the default) — a fixed, ordered ``steps`` list the
+  orchestrator executes verbatim, pausing at ``gate`` steps;
+* ``"kind": "goal"`` templates — a ``goal`` plus an ``allowed_tools`` allow-list.
+  An LLM planner proposes each next tool from the diagnostics in state and a
+  deterministic policy (app.core.policy) admits it, parks it for human
+  approval, or rejects it. Long-running fits and scientific model choices are
+  always gated; the budget bounds the loop.
 """
 from __future__ import annotations
 
@@ -72,6 +81,30 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
             {"agent": "reviewer", "tool": "adversarial_review",
              "label": "Adversarial review", "gate": True},
         ],
+    },
+    "poppk_goal": {
+        "name": "poppk_goal",
+        "kind": "goal",
+        "description": (
+            "Goal-driven population PK: a planner proposes each next step from the "
+            "diagnostics in state and a deterministic policy admits, gates or rejects "
+            "it. Same tool set as poppk_full. Autonomous: load, profile, validate, "
+            "spaghetti, structural comparison (no model pinned), residual diagnostics, "
+            "covariate forest, VPC, adversarial review. Gated (human approve/reject "
+            "via state.pending_tool): run_nlme, run_scm, any fit that pins a method, "
+            "model, error or covariate model, and the report. Under the keyless mock "
+            "provider the planner walks the poppk_full order."),
+        "goal": (
+            "Build a defensible population PK model for the loaded dataset: confirm the "
+            "structural model, fit it as a mixed-effects model, test covariates, check "
+            "residual diagnostics and the VPC, have the result adversarially reviewed, and "
+            "deliver the report. Stop when the goal is met or no admissible step remains."),
+        "allowed_tools": [
+            "load_dataset", "profile_pk_dataset", "validate_cdisc", "generate_spaghetti_plot",
+            "fit_pk_model", "run_nlme", "run_scm", "run_diagnostics", "run_covariate_forest",
+            "run_vpc", "adversarial_review", "generate_report",
+        ],
+        "budget": {"max_steps": 20, "max_gated": 6},
     },
 }
 

@@ -15,9 +15,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from app.agents.base import Agent
 from app.agents.definitions import AGENTS
 from app.agents.supervisor import Supervisor
 from app.config import settings
+from app.core import policy
 from app.core.audit import AuditChain
 from app.core.audit_seal import (
     NO_SEAL,
@@ -42,6 +44,9 @@ from app.workflows import get_workflow
 
 log = logging.getLogger("pharmagent")
 _AUDIT_SECURITY_FROM_SETTINGS = object()
+# The planner reads the same compact, privacy-safe diagnostics view the chat agents
+# do (Agent._state_summary); it owns no tools and never executes anything itself.
+_PLANNER_VIEW = Agent(name="planner", system_prompt="")
 
 
 def _iso_clock() -> str:
@@ -741,7 +746,8 @@ class Orchestrator:
             self._ensure_writable(sess)
             wf = get_workflow(name)
             sess.state = apply_writes(sess.state, "supervisor",
-                                      {"workflow_name": name, "current_step": 0})
+                                      {"workflow_name": name, "current_step": 0,
+                                       "planner_history": None})
             sess.params = params or {}
             return self._advance(sess, wf, params or {}, actor=actor or "",
                                  allow_expensive=allow_expensive)
@@ -757,6 +763,10 @@ class Orchestrator:
             wf = get_workflow(sess.state.workflow_name)
             params = sess.params
             review = dict(sess.pending_review)
+            if wf.get("kind") == "goal" and approve:
+                blocked = self._goal_resume_blocker(sess, allow_expensive=allow_expensive)
+                if blocked is not None:
+                    return blocked
             # Signed audit entry for the human review decision (Part 11 e-signature):
             # the approval/rejection itself is recorded, with actor + reason.
             sess.audit.append(
@@ -766,6 +776,9 @@ class Orchestrator:
                 inputs={"approve": approve, "review": review},
                 outputs={"workflow": sess.state.workflow_name},
                 timestamp=self.clock(), actor=actor or "anonymous", reason=reason)
+            if wf.get("kind") == "goal":
+                return self._resume_goal(sess, wf, params, approve=approve, actor=actor or "",
+                                         reason=reason, allow_expensive=allow_expensive)
             if not approve:
                 sess.pending_review = None
                 self._persist(sess)
@@ -782,7 +795,23 @@ class Orchestrator:
         template whose expensive steps sit after a gate does not need a job to
         reach that gate. Callers use this to hand the leg to the JobManager
         instead of running it on the request thread.
+
+        A goal template has no step list. Its policy gates every long-running
+        fit, so a goal leg never EXECUTES one before a human approves it: the
+        start leg (from_step 0) always runs inline. A resume leg begins by
+        executing the approved proposal, which may be that fit, so it is handed
+        to the queue whenever the template's allow-list can reach one.
         """
+        if wf.get("kind") == "goal":
+            if from_step == 0:
+                return False
+            for name in wf.get("allowed_tools", ()):
+                try:
+                    if self.registry.get(name).expensive:
+                        return True
+                except KeyError:
+                    pass
+            return False
         for step in wf["steps"][from_step:]:
             try:
                 if self.registry.get(step["tool"]).expensive:
@@ -795,6 +824,9 @@ class Orchestrator:
 
     def _advance(self, sess: Session, wf: dict[str, Any], params: dict[str, Any],
                  actor: str = "", allow_expensive: bool = False) -> dict[str, Any]:
+        if wf.get("kind") == "goal":
+            return self._advance_goal(sess, wf, params, actor=actor,
+                                      allow_expensive=allow_expensive)
         steps = wf["steps"]
         executed: list[dict[str, Any]] = []
         i = sess.state.current_step
@@ -839,3 +871,238 @@ class Orchestrator:
         return {"status": "complete", "executed": executed,
                 "state": sess.state.model_dump(), "audit_ok": sess.audit.verify(),
                 "audit": sess.audit.to_list()}
+
+    # -- goal-driven leg: planner -> policy -> registry ---------------------
+    def _goal_payload(self, sess: Session, status: str, executed: list[dict[str, Any]],
+                      **extra: Any) -> dict[str, Any]:
+        self._persist(sess)
+        return {"status": status, "executed": executed, **extra,
+                "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
+
+    def _record_plan(self, sess: Session, record: dict[str, Any]) -> None:
+        history = list(sess.state.planner_history or [])
+        sess.state = apply_writes(sess.state, "supervisor",
+                                  {"planner_history": [*history, record]})
+
+    def _advance_goal(self, sess: Session, wf: dict[str, Any], params: dict[str, Any], *,
+                      actor: str = "", allow_expensive: bool = False,
+                      approved: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run one leg of a ``"kind": "goal"`` template.
+
+        Each iteration: the LLM PROPOSES a tool (``llm.plan``), the deterministic
+        policy admits / gates / rejects it, and an admitted autonomous step runs
+        through ``registry.execute`` with the same audit wrapping and the same
+        ``executed[]`` record a step template produces. A gated proposal is parked
+        in ``state.pending_tool`` (``proposed_by="planner"``) and the leg returns
+        ``awaiting_review``; ``approved`` is the call ``take_pending_tool`` handed
+        back when the human said yes, and it runs first on the resumed leg.
+        ``allow_expensive`` keeps its meaning: only the JobManager path sets it,
+        so a long fit the policy gated and a human approved still cannot run on a
+        request thread. Every proposal and decision is an audit entry
+        (agent="planner"); the readable history lives in ``state.planner_history``.
+        """
+        goal = wf["goal"]
+        roster = {name: self.registry.get(name) for name in wf["allowed_tools"]}
+        budget = policy.budget_from(wf)
+        executed: list[dict[str, Any]] = []
+        observations: list[dict[str, Any]] = []
+        if approved is None and sess.state.planner_history is None:
+            # start_workflow cleared the history: this is a fresh run of the goal.
+            sess.state = apply_writes(sess.state, "supervisor", {"planner_history": []})
+            sess.audit.append(
+                agent="planner", tool="plan", action="goal_start",
+                inputs={"workflow": wf["name"], "goal": goal, "allowed_tools": sorted(roster)},
+                outputs={"max_steps": budget.max_steps, "max_gated": budget.max_gated},
+                timestamp=self.clock(), actor=actor)
+        if approved is not None:
+            halted = self._run_goal_step(
+                sess, approved["tool"], approved["args"], actor=actor,
+                allow_expensive=allow_expensive, executed=executed, observations=observations,
+                label=f"planner (approved): {approved['tool']}")
+            if halted is not None:
+                return halted
+        while True:
+            history = list(sess.state.planner_history or [])
+            exhausted = policy.budget_exhausted(history, budget)
+            if exhausted:
+                sess.audit.append(agent="planner", tool="plan", action="stop",
+                                  inputs={"workflow": wf["name"]}, outputs={"stop_reason": exhausted},
+                                  timestamp=self.clock(), actor=actor)
+                return self._goal_payload(sess, "stopped", executed, stop_reason=exhausted)
+            summary = _PLANNER_VIEW._state_summary(sess.state, observations)
+            try:
+                plan = self.llm.plan(goal, summary, observations, history,
+                                     list(roster.values())) or {}
+            except Exception as exc:
+                # A hosted planner failed (network, 5xx, timeout). Everything executed so
+                # far is already persisted; record the failure and end the leg cleanly.
+                sess.audit.append(agent="planner", tool="plan", action="plan_error",
+                                  inputs={"workflow": wf["name"]}, outputs={"error": str(exc)},
+                                  timestamp=self.clock(), actor=actor)
+                return self._goal_payload(sess, "stopped", executed,
+                                          stop_reason=f"planner failed: {exc}")
+            tool_name = plan.get("tool")
+            raw_args = plan.get("args")
+            args = dict(raw_args) if isinstance(raw_args, dict) else {}
+            # The goal runs on the session's dataset: the planner may not point the
+            # analysis at another file or another loaded dataset without a gate.
+            args.pop("dataset_id", None)
+            if tool_name == "load_dataset" and params.get("path"):
+                args["path"] = params["path"]
+            rationale = str(plan.get("rationale") or "")
+            step = len(history)
+            sess.audit.append(
+                agent="planner", tool=tool_name or "plan", action="plan",
+                inputs={"workflow": wf["name"], "step": step, "args": args},
+                outputs={"tool": tool_name, "rationale": rationale,
+                         "stop_reason": plan.get("stop_reason")},
+                timestamp=self.clock(), actor=actor)
+            if not tool_name:
+                # A reasoned stop ("goal met", template exhausted) completes the goal; a
+                # silent one (no text, only unknown tool names) is reported as stopped.
+                reason = str(plan.get("stop_reason") or "planner selected no tool")
+                status = "complete" if rationale else "stopped"
+                return self._goal_payload(sess, status, executed, stop_reason=reason,
+                                          audit=sess.audit.to_list())
+            decision = policy.decide(tool_name, args, sess.state, roster=roster,
+                                     history=history, budget=budget)
+            sess.audit.append(
+                agent="planner", tool=tool_name, action=f"policy_{decision.mode}",
+                inputs=args,
+                outputs={"allow": decision.allow, "mode": decision.mode,
+                         "reason": decision.reason, "stop": decision.stop},
+                timestamp=self.clock(), actor=actor)
+            self._record_plan(sess, {"step": step, "tool": tool_name, "args": args,
+                                     "rationale": rationale, "allow": decision.allow,
+                                     "mode": decision.mode, "reason": decision.reason})
+            if not decision.allow:
+                observations.append({"agent": "planner", "tool": tool_name,
+                                     "status": "rejected", "summary": decision.reason})
+                if decision.stop:
+                    return self._goal_payload(sess, "stopped", executed,
+                                              stop_reason=decision.reason)
+                continue
+            if decision.mode == policy.MODE_GATED:
+                return self._propose_goal_step(sess, wf, tool_name, args, rationale,
+                                               decision.reason, executed=executed, actor=actor)
+            halted = self._run_goal_step(
+                sess, tool_name, args, actor=actor, allow_expensive=allow_expensive,
+                executed=executed, observations=observations, label=f"planner: {tool_name}")
+            if halted is not None:
+                return halted
+
+    def _run_goal_step(self, sess: Session, tool_name: str, args: dict[str, Any], *,
+                       actor: str, allow_expensive: bool, executed: list[dict[str, Any]],
+                       observations: list[dict[str, Any]], label: str) -> dict[str, Any] | None:
+        """Execute one admitted (or human-approved) step through the registry.
+        None on success; otherwise the payload that ends the leg."""
+        tool = self.registry.get(tool_name)
+        i = sess.state.current_step
+        try:
+            sess.state, res = self.registry.execute(
+                tool_name, state=sess.state, ctx=sess.ctx, args=args, audit=sess.audit,
+                timestamp=self.clock(), actor=actor, allow_expensive=allow_expensive)
+        except ExpensiveToolError as exc:
+            # Same contract as a step leg: nothing advanced; re-issue as a job.
+            return self._goal_payload(
+                sess, "awaiting_job", executed, next_step=i, next_tool=tool_name,
+                message=f"{exc} Re-issue this workflow leg as a background job.")
+        except Exception as exc:
+            # A deterministic tool refused (e.g. prerequisites it checks itself). The
+            # leg stops rather than letting an automated loop retry around an error.
+            sess.audit.append(agent="planner", tool=tool_name, action="tool_error",
+                              inputs=args, outputs={"error": str(exc)},
+                              timestamp=self.clock(), actor=actor)
+            return self._goal_payload(sess, "stopped", executed,
+                                      stop_reason=f"{tool_name} failed: {exc}")
+        self._log_command(sess, tool.agent, tool_name, args)
+        executed.append({"step": i, "label": label, "tool": tool_name,
+                         "agent": tool.agent, "summary": res.summary})
+        observations.append({"agent": tool.agent, "tool": tool_name,
+                             "status": "ok", "summary": res.summary})
+        sess.state = apply_writes(sess.state, "supervisor", {"current_step": i + 1})
+        # Persist per step: a fit that took tens of minutes must survive a planner
+        # call failing on the very next iteration (the proposal is already consumed).
+        self._persist(sess)
+        return None
+
+    def _propose_goal_step(self, sess: Session, wf: dict[str, Any], tool_name: str,
+                           args: dict[str, Any], rationale: str, gate_reason: str, *,
+                           executed: list[dict[str, Any]], actor: str) -> dict[str, Any]:
+        """Park a gated proposal exactly where a chat-proposed expensive tool goes
+        (``state.pending_tool``), plus a pending review so the existing resume
+        endpoint carries the human's signed decision. Nothing is computed."""
+        tool = self.registry.get(tool_name)
+        ts = self.clock()
+        previous = sess.state.pending_tool
+        if previous:
+            sess.audit.append(
+                agent="planner", tool=previous["tool"], action="supersede_tool",
+                inputs=previous.get("args") or {},
+                outputs={"status": "superseded", "by": tool_name}, timestamp=ts, actor=actor)
+        pending = {"tool": tool_name, "agent": tool.agent, "args": args, "proposed_at": ts,
+                   "proposed_by": "planner", "message": wf["goal"], "rationale": rationale,
+                   "workflow": wf["name"], "gate_reason": gate_reason}
+        sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": pending})
+        sess.audit.append(
+            agent="planner", tool=tool_name, action="propose_tool", inputs=args,
+            outputs={"status": "pending_approval", "agent": tool.agent,
+                     "rationale": rationale, "gate_reason": gate_reason},
+            timestamp=ts, actor=actor)
+        sess.pending_review = {"after_step": sess.state.current_step - 1,
+                               "label": f"Planner proposes {tool_name}",
+                               "proposal": {"tool": tool_name, "agent": tool.agent, "args": args}}
+        return self._goal_payload(sess, "awaiting_review", executed,
+                                  review=sess.pending_review, proposal=pending)
+
+    @staticmethod
+    def _planner_pending(sess: Session) -> dict[str, Any] | None:
+        """The pending proposal iff the planner of THIS goal workflow made it. A chat
+        proposal (``proposed_by`` = the actor id, no ``workflow``) is never one, so
+        the goal resume cannot be made to run a call the policy never classified."""
+        pending = sess.state.pending_tool
+        if (pending and pending.get("proposed_by") == "planner"
+                and pending.get("workflow") == sess.state.workflow_name):
+            return pending
+        return None
+
+    def _goal_resume_blocker(self, sess: Session, *,
+                             allow_expensive: bool) -> dict[str, Any] | None:
+        """Checked BEFORE an approval is signed: an approved long-running fit goes to
+        the job queue without consuming the proposal or the review, so the same
+        resume is re-issued as a job (the ExpensiveToolError contract, applied
+        before anything is spent)."""
+        pending = self._planner_pending(sess)
+        if pending is None:
+            return None
+        if not allow_expensive and self.registry.get(pending["tool"]).expensive:
+            return {"status": "awaiting_job", "executed": [],
+                    "next_step": sess.state.current_step, "next_tool": pending["tool"],
+                    "message": (f"'{pending['tool']}' is a long-running fit — it runs only as a "
+                                "bounded background job. Re-issue this approval as a background job."),
+                    "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
+        return None
+
+    def _resume_goal(self, sess: Session, wf: dict[str, Any], params: dict[str, Any], *,
+                     approve: bool, actor: str, reason: str,
+                     allow_expensive: bool) -> dict[str, Any]:
+        """The human decided on a planner proposal (the signed human_review entry is
+        already in the chain). Rejection clears it through reject_pending_tool and
+        ends the workflow; approval goes through take_pending_tool — whose
+        ``confirm=True`` IS the approval — then the goal loop resumes with that call.
+        A proposal already decided through /chat/pending_tool leaves nothing to take:
+        a rejection then just closes the review, an approval resumes planning from
+        the state as it now is (the policy gates any further fit again)."""
+        sess.pending_review = None
+        pending = self._planner_pending(sess)
+        if not approve:
+            if pending is not None:
+                self.reject_pending_tool(sess.id, actor=actor, reason=reason)
+            else:
+                self._persist(sess)
+            return {"status": "rejected", "at_step": sess.state.current_step,
+                    "state": sess.state.model_dump(), "audit_ok": sess.audit.verify()}
+        call = (self.take_pending_tool(sess.id, actor=actor, reason=reason)
+                if pending is not None else None)
+        return self._advance_goal(sess, wf, params, actor=actor,
+                                  allow_expensive=allow_expensive, approved=call)

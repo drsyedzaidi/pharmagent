@@ -53,6 +53,11 @@ class PharmState(BaseModel):
     # ...). Written only by the supervisor; cleared by the human's approve /
     # reject decision. Nothing is computed while it sits here.
     pending_tool: dict[str, Any] | None = None
+    # Goal-driven workflow leg: every planner proposal with its policy decision
+    # ({step, tool, args, rationale, allow, mode, reason}), reset when a goal
+    # template starts. Supervisor-written; the audit chain holds the hashed
+    # record, this holds the readable one the planner and its budget need.
+    planner_history: list[dict[str, Any]] | None = None
 
     # --- data (Data Manager) ----------------------------------------------
     dataset_id: str | None = None
@@ -147,7 +152,7 @@ class PharmState(BaseModel):
 # state mutation; an agent attempting to write outside its set raises.
 AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "supervisor": {"last_agent", "workflow_name", "current_step", "session_id",
-                   "pending_tool"},
+                   "pending_tool", "planner_history"},
     "data_manager": {"dataset_id", "dataset_path", "dataset_metadata", "data_quality",
                      "widgets", "spaghetti_data", "flexplot_data"},
     "nca": {"nca_parameters", "nca_summary", "widgets", "nca_plot_data"},
