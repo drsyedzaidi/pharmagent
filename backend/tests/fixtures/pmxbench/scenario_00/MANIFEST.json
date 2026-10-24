@@ -1,0 +1,30 @@
+{
+  "source": {
+    "repo": "https://github.com/AIML-SIG/Agentic-workflows",
+    "commit": "e7de2630c5906d74e31681baa53bbd32ddb2cf33",
+    "path": "tools/pmxbench/scenario_00",
+    "licence": "MIT (tools/pmxbench/LICENSE, copied here as LICENSE)",
+    "fetched": "2026-10-23"
+  },
+  "files": {
+    "data.csv": {
+      "git_blob_sha": "b2f9b2371eec482d392761421cbbec2bfa780572",
+      "sha256": "8d938dd64f7882214c136b622ab62a3438a7ce254c453d2f2c9a1b772bc0fbf8",
+      "bytes": 71328
+    },
+    "sap.md": {
+      "git_blob_sha": "ca3edd5b4b7eb32cfc058ec4f57b6dccc5cf6f8c",
+      "sha256": "7ffa12a77b1fd04b3b713cc6b01297501889cd44d3caeede2dada141fbf213d3",
+      "bytes": 6585
+    },
+    "submission.template.yaml": {
+      "git_blob_sha": "bd7a1b677893f49f53f71b62529e6afaab7d26d8",
+      "sha256": "34ac9db991bf6e7d8043a05297a158c427fb4d5142c627bf0733c42fb3911cc7",
+      "bytes": 2186
+    },
+    "LICENSE": {
+      "git_blob_sha": "317204ea26db5a97bbf1d70852a3ba70987b30a6",
+      "upstream_path": "tools/pmxbench/LICENSE"
+    }
+  }
+}
