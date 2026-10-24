@@ -930,6 +930,7 @@ class Orchestrator:
                                   timestamp=self.clock(), actor=actor)
                 return self._goal_payload(sess, "stopped", executed, stop_reason=exhausted)
             summary = _PLANNER_VIEW._state_summary(sess.state, observations)
+            summary["dataset_configured"] = bool(sess.state.dataset_id or params.get("path"))
             try:
                 plan = self.llm.plan(goal, summary, observations, history,
                                      list(roster.values())) or {}

@@ -161,3 +161,117 @@ def test_goal_leg_never_parks_an_invented_model_and_the_planner_can_correct_itse
     last_seen = llm.seen_history[-1]
     assert any("oral_1cmt" in h["reason"] and not h["allow"] for h in last_seen)
     assert out["state"]["pk_model_results"] is None                    # nothing was fitted
+
+
+# ── planner prompt, state summary, and plain-text tool call guard ─────────────
+
+def test_planner_system_lists_valid_model_keys_prerequisites_and_dataset_configured() -> None:
+    from app.core.llm import _planner_system
+
+    text = _planner_system("build PopPK", {"dataset_id": None, "dataset_configured": True}, [], [])
+    for key in ("oral_1cmt", "oral_2cmt", "iv_1cmt"):
+        assert key in text
+    assert "run_nlme requires pk_model_results" in text
+    assert "dataset_configured" in text
+
+
+def test_goal_leg_passes_dataset_configured_in_state_summary(monkeypatch) -> None:
+    from pathlib import Path
+
+    from app.core.llm import MockLLM
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+    from app.workflows import WORKFLOWS
+
+    sample = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
+    monkeypatch.setitem(WORKFLOWS, "goal_cfg", {
+        "name": "goal_cfg", "kind": "goal", "goal": "check dataset_configured",
+        "allowed_tools": ["load_dataset"]})
+
+    seen: list[dict] = []
+
+    class Planner:
+        def plan(self, goal, state_summary, observations, history, tools):
+            seen.append(dict(state_summary))
+            return {"tool": None, "args": {}, "rationale": "done", "stop_reason": "done"}
+
+    orch = Orchestrator(llm=MockLLM(), clock=lambda c=iter(range(100)): f"t{next(c)}",
+                        store=SessionStore(":memory:"))
+    orch.llm = Planner()
+    sid = orch.create_session().id
+    orch.start_workflow(sid, "goal_cfg", {"path": sample})
+    assert seen[0]["dataset_id"] is None and seen[0]["dataset_configured"] is True
+
+    sid_empty = orch.create_session().id
+    orch.start_workflow(sid_empty, "goal_cfg", {})
+    assert seen[1]["dataset_id"] is None and seen[1]["dataset_configured"] is False
+
+
+@pytest.mark.parametrize("text", [
+    "To identify the best structural model, I will compare 1- and 2-cmt models. "
+    "```python\nfit_pk_model(compare=True, models=['oral_1cmt', 'oral_2cmt'])\n```",
+    "Next step: call:fit_pk_model{compare: true, models: ['oral_1cmt', 'oral_2cmt']}",
+    "I will now call fit_pk_model(dataset_id='ds_1', compare=True) to select by AIC.",
+])
+def test_plain_text_tool_call_is_treated_as_a_stop_not_goal_met(monkeypatch, text: str) -> None:
+    """gemma4:31b wrote tool calls in plain text in 3 of 5 replicates; the leg must
+    end as 'stopped' (not 'complete' / goal met) with a clear stop_reason."""
+    from app.core import llm as llm_mod
+    from app.core.llm import OpenAICompatLLM
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+    from app.workflows import WORKFLOWS
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+    monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **kw: _Resp())
+    monkeypatch.setitem(WORKFLOWS, "goal_text_call", {
+        "name": "goal_text_call", "kind": "goal", "goal": "compare models",
+        "allowed_tools": ["load_dataset", "fit_pk_model"]})
+
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="gemma4:31b", api_key=None)
+    orch = Orchestrator(llm=llm, clock=lambda c=iter(range(100)): f"t{next(c)}",
+                        store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_text_call", {})
+
+    assert out["status"] == "stopped"               # NOT "complete" ("goal met")
+    assert "fit_pk_model" in out["stop_reason"] and "plain text" in out["stop_reason"]
+
+
+def test_prose_mentioning_a_tool_name_without_call_syntax_still_completes(monkeypatch) -> None:
+    """A genuine completion message that mentions a tool name in prose (no parentheses
+    or call:{...}) is still a reasoned 'complete'."""
+    from app.core import llm as llm_mod
+    from app.core.llm import OpenAICompatLLM
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+    from app.workflows import WORKFLOWS
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {
+                "role": "assistant",
+                "content": "Goal met: fit_pk_model and generate_report have both completed."}}]}
+
+    monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **kw: _Resp())
+    monkeypatch.setitem(WORKFLOWS, "goal_prose", {
+        "name": "goal_prose", "kind": "goal", "goal": "finish",
+        "allowed_tools": ["fit_pk_model", "generate_report"]})
+
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="gemma4:31b", api_key=None)
+    orch = Orchestrator(llm=llm, clock=lambda c=iter(range(100)): f"t{next(c)}",
+                        store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_prose", {})
+
+    assert out["status"] == "complete"
+
