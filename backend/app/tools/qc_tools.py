@@ -1,9 +1,9 @@
-"""QC Agent tools: independent diagnostic review of NCA and PopPK/NLME analyses.
+"""QC Agent tools: independent diagnostic review of NCA and PopPK/NLME estimation.
 
 A subset of the full 15-point NCA checklist (Phase 1) plus a dedicated
-Population PK (NLME) acceptance checklist:
-  * 8 upstream criteria modeled on ``AI-assisted-MIDD``
-    (``poppk-estimation/scripts/poppk_checks.R::acceptance_checks``):
+Population PK (NLME) numerical estimation & convergence QC checklist:
+  * 8 upstream estimation-health criteria modeled on ``AI-assisted-MIDD``
+    (``poppk-estimation/scripts/poppk_checks.R``):
     ``ofv_finite``, ``covariance_step``, ``structural_se_present``,
     ``theta_not_on_bound``, ``structural_rse``, ``eta_shrinkage``,
     ``bsv_range``, and ``residual_error_positive``.
@@ -11,11 +11,22 @@ Population PK (NLME) acceptance checklist:
     ``app.compute.nlme._COND_RED_FLAG``; tagged with
     ``source="pharmagent_extension"``).
 
-Each check yields a status (PASS / WARN / FAIL); the overall verdict is a
-traffic light: PASS, CONDITIONAL PASS, or FAIL. Flagged NCA terminal slopes
-(``lambda_z``) are recorded in ``state.nca_flagged_subjects`` with an explicit
-analyst accept/revise gate in ``state.lambda_z_review`` (matching the upstream
-``AI-assisted-MIDD`` ``pk-nca`` workflow).
+Scope & Regulatory Caveat:
+  ``run_poppk_qc`` evaluates numerical estimation and parameter-uncertainty
+  health only. It is a necessary prerequisite but does NOT establish model or
+  regulatory acceptance, which additionally requires goodness-of-fit (GOF),
+  residual diagnostics (IWRES/CWRES/NPDE), visual predictive checks (VPC/pcVPC),
+  predictive qualification for the intended context of use, and human
+  pharmacometrician review.
+
+Provenance & Gate Enforcement:
+  * ``run_poppk_qc`` binds its verdict to the canonical SHA-256 digest of
+    ``state.nlme_results`` (``state.poppk_qc_nlme_digest``) so a subsequent
+    NLME fit immediately invalidates a prior QC verdict.
+  * Flagged NCA terminal slopes (``lambda_z``) are recorded in
+    ``state.nca_flagged_subjects`` with a non-bypassable analyst accept/revise
+    gate in ``state.lambda_z_review`` bound to the digest of
+    ``state.nca_parameters``.
 """
 from __future__ import annotations
 
@@ -23,6 +34,7 @@ import math
 from typing import Any
 
 from app.compute.pk_models import REGISTRY
+from app.core.audit import hash_payload
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -34,7 +46,7 @@ MIN_LAMBDAZ_SPAN_RATIO = 2.0
 MAX_PCT_EXTRAP = 20.0
 MAX_MISSING_PCT = 20.0
 
-# PopPK (NLME) acceptance thresholds.
+# PopPK (NLME) estimation-health thresholds.
 # Upstream AI-assisted-MIDD poppk_checks.R defaults:
 MAX_POPPK_RSE_PCT = 50.0
 MAX_POPPK_SHRINKAGE_PCT = 30.0
@@ -46,6 +58,14 @@ MAX_POPPK_CONDITION_NUMBER = 1000.0
 _THETA_REL_MIN = 1e-7
 _THETA_REL_MAX = 1e7
 
+POPPK_QC_SCOPE = "estimation_health_only"
+POPPK_QC_QUALIFICATION_NOTE = (
+    "Evaluates numerical estimation and covariance health only; does not establish "
+    "model or regulatory acceptance (which requires GOF, CWRES/NPDE residual "
+    "diagnostics, VPC/pcVPC predictive checks, context-of-use assessment, and "
+    "human pharmacometrician review)."
+)
+
 _COV_FAIL_PHRASES = (
     "covariance step failed",
     "non-finite information matrix",
@@ -56,6 +76,30 @@ _COV_FAIL_PHRASES = (
     "standard errors unavailable",
     "standard errors unreliable",
 )
+
+
+def nlme_fit_digest(nl: dict[str, Any] | None) -> str | None:
+    """Return canonical SHA-256 digest of ``nlme_results`` for QC provenance binding."""
+    if not isinstance(nl, dict) or nl.get("status") != "ok":
+        return None
+    return hash_payload(nl)
+
+
+def nca_parameters_digest(params: list[dict[str, Any]] | None) -> str | None:
+    """Return canonical SHA-256 digest of ``nca_parameters`` for lambda_z gate binding."""
+    if not isinstance(params, list) or not params:
+        return None
+    return hash_payload(params)
+
+
+def is_poppk_qc_current(state: PharmState) -> bool:
+    """True iff ``state.poppk_qc_verdict`` exists and matches ``state.nlme_results``."""
+    digest = nlme_fit_digest(state.nlme_results)
+    return bool(
+        digest is not None
+        and state.poppk_qc_verdict is not None
+        and state.poppk_qc_nlme_digest == digest
+    )
 
 
 def _check(
@@ -101,6 +145,20 @@ def _validate_threshold(
     return fval
 
 
+def _validate_int_threshold(
+    name: str,
+    value: Any,
+    *,
+    min_val: int = 2,
+) -> int:
+    """Validate that an integer QC threshold is an exact integer >= ``min_val``."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer >= {min_val}; got {value!r}")
+    if value < min_val:
+        raise ValueError(f"{name} must be >= {min_val}; got {value}")
+    return int(value)
+
+
 def _collect_flagged_lambda_z_subjects(
     params: list[dict[str, Any]],
     *,
@@ -138,6 +196,8 @@ def _collect_flagged_lambda_z_subjects(
 
 def _build_lambda_z_review(
     flagged_subjects: list[dict[str, Any]],
+    *,
+    nca_digest: str | None = None,
     decision: str | None = None,
     notes: str = "",
     reviewed_subjects: list[Any] | None = None,
@@ -149,6 +209,7 @@ def _build_lambda_z_review(
             "gate_open": False,
             "decision": None,
             "flagged_subjects": [],
+            "nca_digest": nca_digest,
             "notes": "",
         }
     if decision is not None:
@@ -169,6 +230,7 @@ def _build_lambda_z_review(
                 "decision": "accept",
                 "flagged_subjects": flagged_subjects,
                 "reviewed_subjects": target_ids,
+                "nca_digest": nca_digest,
                 "notes": notes or "Analyst accepted flagged lambda_z fits as caveats.",
             }
         return {
@@ -177,6 +239,7 @@ def _build_lambda_z_review(
             "decision": "revise",
             "flagged_subjects": flagged_subjects,
             "reviewed_subjects": target_ids,
+            "nca_digest": nca_digest,
             "notes": notes or "Analyst requested revision of terminal regression windows.",
         }
     flagged_ids = [f["id"] for f in flagged_subjects]
@@ -185,6 +248,7 @@ def _build_lambda_z_review(
         "gate_open": True,
         "decision": None,
         "flagged_subjects": flagged_subjects,
+        "nca_digest": nca_digest,
         "prompt": (
             f"Subjects with flagged lambda_z fits ({flagged_ids}): ask the analyst "
             "whether to accept the fits or revise them via "
@@ -224,13 +288,10 @@ def run_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRes
         min_val=0.0,
         max_val=100.0,
     )
-    min_points = int(
-        _validate_threshold(
-            "min_points",
-            args.get("min_points", MIN_LAMBDAZ_POINTS),
-            strictly_positive=True,
-            min_val=2.0,
-        )
+    min_points = _validate_int_threshold(
+        "min_points",
+        args.get("min_points", MIN_LAMBDAZ_POINTS),
+        min_val=2,
     )
 
     # 1. sample size
@@ -261,11 +322,11 @@ def run_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRes
     # 4. lambda_z fit quality
     poor = [
         p["subject"] for p in params
-        if p.get("lambda_z_r2_adj") is not None
-        and (not _is_finite_num(p.get("lambda_z_r2_adj")) or float(p["lambda_z_r2_adj"]) < min_r2_adj)
+        if not _is_finite_num(p.get("lambda_z_r2_adj"))
+        or float(p["lambda_z_r2_adj"]) < min_r2_adj
     ]
     checks.append(_check("Lambda_z adj R^2 >= 0.80", "PASS" if not poor else "WARN",
-                         f"{len(poor)} subject(s) below threshold"))
+                         f"{len(poor)} subject(s) below threshold or missing"))
     if poor:
         issues.append({"severity": "LOW", "issue": f"poor terminal fit: {poor}"})
 
@@ -323,9 +384,11 @@ def run_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRes
         issues.append({"severity": "MEDIUM", "issue": f"high %extrap: {hi}"})
 
     # 7. parameter plausibility
-    implausible = [p["subject"] for p in params
-                   if (p.get("CL_F") is not None and p["CL_F"] <= 0)
-                   or (p.get("Vz_F") is not None and p["Vz_F"] <= 0)]
+    implausible = [
+        p["subject"] for p in params
+        if (p.get("CL_F") is not None and (not _is_finite_num(p["CL_F"]) or float(p["CL_F"]) <= 0))
+        or (p.get("Vz_F") is not None and (not _is_finite_num(p["Vz_F"]) or float(p["Vz_F"]) <= 0))
+    ]
     checks.append(_check("Parameter plausibility", "PASS" if not implausible else "FAIL",
                          f"{len(implausible)} subject(s) with non-physiological CL/V"))
     if implausible:
@@ -347,6 +410,7 @@ def run_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRes
     )
     lambda_z_review = _build_lambda_z_review(
         flagged_subjects,
+        nca_digest=nca_parameters_digest(params),
         decision=args.get("lambda_z_decision"),
         notes=str(args.get("notes") or ""),
     )
@@ -412,15 +476,12 @@ def review_lambda_z_fits(
     if decision is None:
         raise ValueError("review_lambda_z_fits requires decision='accept' or decision='revise'")
 
-    flagged = (
-        list(state.nca_flagged_subjects)
-        if state.nca_flagged_subjects is not None
-        else _collect_flagged_lambda_z_subjects(params)
-    )
+    flagged = _collect_flagged_lambda_z_subjects(params)
     notes = str(args.get("notes") or "")
     subject_ids = args.get("subject_ids")
     review = _build_lambda_z_review(
         flagged,
+        nca_digest=nca_parameters_digest(params),
         decision=str(decision),
         notes=notes,
         reviewed_subjects=subject_ids if isinstance(subject_ids, list) else None,
@@ -443,12 +504,12 @@ def review_lambda_z_fits(
     )
 
 
-def _parse_theta_bounds(
+def _parse_fit_theta_bounds(
     raw_bounds: Any,
 ) -> dict[str, tuple[float | None, float | None]]:
-    """Normalize optional declared estimation bounds ``{param: (lower, upper)}``."""
+    """Normalize fit-recorded estimation bounds ``{param: (lower, upper)}``."""
     if not isinstance(raw_bounds, dict):
-        return {}
+        raise ValueError(f"fit theta_bounds must be a dict; got {type(raw_bounds).__name__}")
     parsed: dict[str, tuple[float | None, float | None]] = {}
     for param, b in raw_bounds.items():
         lo_raw: Any = None
@@ -541,21 +602,27 @@ def evaluate_poppk_qc(
     min_bsv_cv_pct: float = MIN_POPPK_BSV_CV_PCT,
     max_bsv_cv_pct: float = MAX_POPPK_BSV_CV_PCT,
     max_condition_number: float = MAX_POPPK_CONDITION_NUMBER,
-    theta_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate a PopPK/NLME fit against hard-fail and soft-warn acceptance criteria.
+    """Evaluate a PopPK/NLME fit against numerical estimation-health QC criteria.
+
+    Scope:
+      Checks numerical estimation and covariance health only
+      (``scope="estimation_health_only"``). Does NOT establish regulatory or
+      scientific model acceptance, which requires GOF, CWRES/NPDE residual
+      diagnostics, VPC/pcVPC predictive checks, context-of-use evaluation, and
+      human pharmacometrician review.
 
     Provenance:
       * 8 checks modeled on ``AI-assisted-MIDD``
-        (``poppk-estimation/scripts/poppk_checks.R::acceptance_checks``), tagged
+        (``poppk-estimation/scripts/poppk_checks.R``), tagged
         ``source="ai_assisted_midd"``:
         - Blocking (FAIL): ``ofv_finite``, ``covariance_step``,
           ``structural_se_present``, ``theta_not_on_bound``,
           ``residual_error_positive``.
-        - Caveat (WARN): ``structural_rse`` (> 50%), ``eta_shrinkage`` (> 30%),
-          ``bsv_range`` (outside 1-100%).
+        - Caveat (WARN): ``structural_rse`` (> 50%), ``eta_shrinkage`` (> 30% or
+          missing/NaN), ``bsv_range`` (outside 1-100% or missing/NaN).
       * 1 PharmAgent extension, tagged ``source="pharmagent_extension"``:
-        - Caveat (WARN): ``condition_number`` (> 1000, from
+        - Caveat (WARN): ``condition_number`` (> 1000 or missing/NaN, from
           ``app.compute.nlme._COND_RED_FLAG``).
     """
     max_rse_pct = _validate_threshold("max_rse_pct", max_rse_pct, strictly_positive=True)
@@ -570,10 +637,6 @@ def evaluate_poppk_qc(
         )
     max_condition_number = _validate_threshold(
         "max_condition_number", max_condition_number, strictly_positive=True, min_val=1.0
-    )
-
-    declared_bounds = _parse_theta_bounds(
-        theta_bounds if theta_bounds is not None else nl.get("theta_bounds")
     )
 
     checks: list[dict[str, Any]] = []
@@ -619,16 +682,33 @@ def evaluate_poppk_qc(
         issues.append({"severity": "HIGH", "issue": f"structural_se_present failed: {se_detail}"})
 
     # 4. theta_not_on_bound
-    # Checks proximity to declared estimation bounds (tol = 1e-4 * max(1, |est|))
-    # when theta_bounds are supplied, AND checks default-box degeneration
-    # (degenerate_params / [1e-7x, 1e7x] relative to model defaults).
+    # Bounds must come from the actual fit configuration (nl["theta_bounds"] or
+    # the fitted model's estimation box in REGISTRY[model_key].defaults) and
+    # cover the entire fitted parameter set (all keys in theta).
     model_key = str(nl.get("model_key") or "")
     defaults = dict(REGISTRY[model_key].defaults) if model_key in REGISTRY else {}
-    on_declared_bound: list[str] = []
+    raw_fit_bounds = nl.get("theta_bounds")
+    fit_bounds: dict[str, tuple[float | None, float | None]] = {}
+    bound_cfg_err = ""
+    has_explicit_fit_bounds = raw_fit_bounds is not None
+    if has_explicit_fit_bounds:
+        try:
+            fit_bounds = _parse_fit_theta_bounds(raw_fit_bounds)
+        except ValueError as exc:
+            bound_cfg_err = str(exc)
+    else:
+        for k in theta:
+            ref = float(defaults.get(k, 0.0) or 0.0)
+            if ref > 0.0:
+                fit_bounds[k] = (ref * _THETA_REL_MIN, ref * _THETA_REL_MAX)
+
+    missing_bound_cfg = [
+        k for k in theta
+        if k not in fit_bounds
+        or (fit_bounds[k][0] is None and fit_bounds[k][1] is None)
+    ]
+    on_bound: list[str] = []
     degenerate_thetas: list[str] = list(nl.get("degenerate_params") or [])
-    has_finite_declared = any(
-        lo is not None or hi is not None for lo, hi in declared_bounds.values()
-    )
 
     for k, val in theta.items():
         if not _is_finite_num(val):
@@ -636,14 +716,14 @@ def evaluate_poppk_qc(
                 degenerate_thetas.append(k)
             continue
         fval = float(val)
-        if k in declared_bounds:
-            lo, hi = declared_bounds[k]
+        if k in fit_bounds:
+            lo, hi = fit_bounds[k]
             tol = 1e-4 * max(1.0, abs(fval))
             at_lo = lo is not None and (fval <= lo or abs(fval - lo) < tol)
             at_hi = hi is not None and (fval >= hi or abs(fval - hi) < tol)
-            if (at_lo or at_hi) and k not in on_declared_bound:
-                on_declared_bound.append(k)
-        if fval <= 0.0 and k not in degenerate_thetas and k not in on_declared_bound:
+            if (at_lo or at_hi) and k not in on_bound:
+                on_bound.append(k)
+        if fval <= 0.0 and k not in degenerate_thetas and k not in on_bound:
             degenerate_thetas.append(k)
             continue
         ref = float(defaults.get(k, 0.0) or 0.0)
@@ -654,100 +734,143 @@ def evaluate_poppk_qc(
         ):
             degenerate_thetas.append(k)
 
-    bound_ok = bool(theta) and not on_declared_bound and not degenerate_thetas
-    if on_declared_bound and degenerate_thetas:
+    bound_ok = (
+        bool(theta)
+        and not bound_cfg_err
+        and not missing_bound_cfg
+        and not on_bound
+        and not degenerate_thetas
+    )
+    if bound_cfg_err:
+        bound_detail = f"invalid fit theta_bounds: {bound_cfg_err}"
+    elif missing_bound_cfg:
         bound_detail = (
-            f"on declared bound: {', '.join(on_declared_bound)}; "
+            "incomplete theta_bounds in fit configuration "
+            f"(missing finite bounds for: {', '.join(missing_bound_cfg)})"
+        )
+    elif on_bound and degenerate_thetas:
+        bound_detail = (
+            f"on bound: {', '.join(on_bound)}; "
             f"degenerate vs default box: {', '.join(degenerate_thetas)}"
         )
-    elif on_declared_bound:
-        bound_detail = f"on declared bound: {', '.join(on_declared_bound)}"
+    elif on_bound:
+        bound_detail = f"on bound: {', '.join(on_bound)}"
     elif degenerate_thetas:
         bound_detail = (
             f"degenerate relative to model defaults: {', '.join(degenerate_thetas)}"
         )
     elif not theta:
         bound_detail = "no structural parameters found"
-    elif has_finite_declared:
-        bound_detail = "no THETA on declared bound"
+    elif has_explicit_fit_bounds:
+        bound_detail = "no THETA on declared fit bound (all fitted parameters covered)"
     else:
         bound_detail = (
-            "unconstrained (no declared estimation bounds; no default-box degeneration)"
+            "no THETA on model estimation box [1e-7x, 1e7x] (all fitted parameters covered)"
         )
     checks.append(_check("theta_not_on_bound", "PASS" if bound_ok else "FAIL", bound_detail,
                          source="ai_assisted_midd"))
     if not bound_ok:
         issues.append({"severity": "HIGH", "issue": f"theta_not_on_bound failed: {bound_detail}"})
 
-    # 5. structural_rse (WARN if any structural %RSE > max_rse_pct)
+    # 5. structural_rse (WARN if any structural %RSE > max_rse_pct or missing)
     high_rse = [
         f"{k} ({float(theta_rse[k]):.1f}%)"
         for k in theta
         if _is_finite_num(theta_rse.get(k)) and float(theta_rse[k]) > max_rse_pct
     ]
-    rse_ok = not high_rse
-    rse_detail = (
-        f"%RSE > {max_rse_pct:g}: {', '.join(high_rse)}"
-        if high_rse
-        else f"all structural %RSE <= {max_rse_pct:g}"
-    )
+    rse_ok = bool(theta) and not se_missing and not high_rse
+    if high_rse:
+        rse_detail = f"%RSE > {max_rse_pct:g}: {', '.join(high_rse)}"
+    elif se_missing:
+        rse_detail = f"%RSE unavailable for: {', '.join(se_missing)}"
+    else:
+        rse_detail = f"all structural %RSE <= {max_rse_pct:g}"
     checks.append(_check("structural_rse", "PASS" if rse_ok else "WARN", rse_detail,
                          source="ai_assisted_midd"))
     if not rse_ok:
         issues.append({"severity": "MEDIUM", "issue": rse_detail})
 
-    # 6. eta_shrinkage (WARN if any ETA shrinkage > max_shrinkage_pct)
-    if shrinkage:
+    # 6. eta_shrinkage (WARN if missing/NaN or any ETA shrinkage > max_shrinkage_pct)
+    expected_iiv = list(
+        dict.fromkeys(
+            list(nl.get("iiv_params") or [])
+            + list(omega_cv.keys())
+            + list(shrinkage.keys())
+        )
+    )
+    if not expected_iiv or not shrinkage:
+        shr_ok = False
+        shr_detail = "ETA shrinkage diagnostics missing or empty"
+    else:
+        bad_shr = [k for k in expected_iiv if not _is_finite_num(shrinkage.get(k))]
         high_shr = [
-            f"{k} ({float(v):.1f}%)"
-            for k, v in shrinkage.items()
-            if _is_finite_num(v) and float(v) > max_shrinkage_pct
+            f"{k} ({float(shrinkage[k]):.1f}%)"
+            for k in expected_iiv
+            if _is_finite_num(shrinkage.get(k)) and float(shrinkage[k]) > max_shrinkage_pct
         ]
-        shr_ok = not high_shr
+        shr_ok = not bad_shr and not high_shr
+        parts_shr: list[str] = []
+        if high_shr:
+            parts_shr.append(f"SD shrinkage > {max_shrinkage_pct:g}%: {', '.join(high_shr)}")
+        if bad_shr:
+            parts_shr.append(f"SD shrinkage missing/NaN: {', '.join(bad_shr)}")
         shr_detail = (
-            f"SD shrinkage > {max_shrinkage_pct:g}%: {', '.join(high_shr)}"
-            if high_shr
+            "; ".join(parts_shr)
+            if parts_shr
             else f"all ETA SD shrinkage <= {max_shrinkage_pct:g}%"
         )
-        checks.append(_check("eta_shrinkage", "PASS" if shr_ok else "WARN", shr_detail,
-                             source="ai_assisted_midd"))
-        if not shr_ok:
-            issues.append({"severity": "MEDIUM", "issue": shr_detail})
+    checks.append(_check("eta_shrinkage", "PASS" if shr_ok else "WARN", shr_detail,
+                         source="ai_assisted_midd"))
+    if not shr_ok:
+        issues.append({"severity": "MEDIUM", "issue": shr_detail})
 
-    # 7. bsv_range (WARN if any omega CV% outside [min_bsv_cv_pct, max_bsv_cv_pct])
-    if omega_cv:
+    # 7. bsv_range (WARN if missing/NaN or any omega CV% outside [min_bsv_cv_pct, max_bsv_cv_pct])
+    if not expected_iiv or not omega_cv:
+        bsv_ok = False
+        bsv_detail = "BSV (omega CV%) diagnostics missing or empty"
+    else:
+        bad_bsv = [k for k in expected_iiv if not _is_finite_num(omega_cv.get(k))]
         odd_bsv = [
-            f"{k} ({float(v):.1f}%)"
-            for k, v in omega_cv.items()
-            if _is_finite_num(v) and (float(v) < min_bsv_cv_pct or float(v) > max_bsv_cv_pct)
+            f"{k} ({float(omega_cv[k]):.1f}%)"
+            for k in expected_iiv
+            if _is_finite_num(omega_cv.get(k))
+            and (float(omega_cv[k]) < min_bsv_cv_pct or float(omega_cv[k]) > max_bsv_cv_pct)
         ]
-        bsv_ok = not odd_bsv
+        bsv_ok = not bad_bsv and not odd_bsv
+        parts_bsv: list[str] = []
+        if odd_bsv:
+            parts_bsv.append(
+                f"BSV CV% outside {min_bsv_cv_pct:g}-{max_bsv_cv_pct:g}%: {', '.join(odd_bsv)}"
+            )
+        if bad_bsv:
+            parts_bsv.append(f"BSV CV% missing/NaN: {', '.join(bad_bsv)}")
         bsv_detail = (
-            f"BSV CV% outside {min_bsv_cv_pct:g}-{max_bsv_cv_pct:g}%: {', '.join(odd_bsv)}"
-            if odd_bsv
+            "; ".join(parts_bsv)
+            if parts_bsv
             else f"all BSV CV% within {min_bsv_cv_pct:g}-{max_bsv_cv_pct:g}%"
         )
-        checks.append(_check("bsv_range", "PASS" if bsv_ok else "WARN", bsv_detail,
-                             source="ai_assisted_midd"))
-        if not bsv_ok:
-            issues.append({"severity": "LOW", "issue": bsv_detail})
+    checks.append(_check("bsv_range", "PASS" if bsv_ok else "WARN", bsv_detail,
+                         source="ai_assisted_midd"))
+    if not bsv_ok:
+        issues.append({"severity": "LOW", "issue": bsv_detail})
 
-    # 8. condition_number (WARN if condition_number > max_condition_number)
+    # 8. condition_number (WARN if missing/NaN/<=0 or > max_condition_number)
     # PharmAgent extension (from app.compute.nlme._COND_RED_FLAG = 1e3), not an
     # upstream AI-assisted-MIDD poppk_checks.R criterion.
     cond = nl.get("condition_number")
-    if _is_finite_num(cond):
+    if not _is_finite_num(cond) or float(cond) <= 0.0:
+        cond_ok = False
+        cond_detail = f"condition number missing or non-finite ({cond!r}; PharmAgent extension)"
+        issues.append({
+            "severity": "MEDIUM",
+            "issue": f"condition number missing or non-finite: {cond!r} (PharmAgent extension)",
+        })
+    else:
         cond_ok = float(cond) <= max_condition_number
         cond_detail = (
             f"condition number = {float(cond):.1f} "
             f"(<= {max_condition_number:g}; PharmAgent extension)"
         )
-        checks.append(_check(
-            "condition_number",
-            "PASS" if cond_ok else "WARN",
-            cond_detail,
-            source="pharmagent_extension",
-        ))
         if not cond_ok:
             issues.append({
                 "severity": "MEDIUM",
@@ -756,6 +879,12 @@ def evaluate_poppk_qc(
                     f"(> {max_condition_number:g}; PharmAgent extension)"
                 ),
             })
+    checks.append(_check(
+        "condition_number",
+        "PASS" if cond_ok else "WARN",
+        cond_detail,
+        source="pharmagent_extension",
+    ))
 
     # 9. residual_error_positive (FAIL if active sigma components are missing or <= 0)
     if error_model == "proportional":
@@ -788,11 +917,17 @@ def evaluate_poppk_qc(
     else:
         verdict = "PASS"
 
-    return {"verdict": verdict, "checks": checks, "issues": issues}
+    return {
+        "verdict": verdict,
+        "scope": POPPK_QC_SCOPE,
+        "qualification_note": POPPK_QC_QUALIFICATION_NOTE,
+        "checks": checks,
+        "issues": issues,
+    }
 
 
 def run_poppk_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    """Run PopPK (NLME) acceptance checks on ``state.nlme_results``."""
+    """Run PopPK (NLME) numerical estimation-health checks on ``state.nlme_results``."""
     nl = state.nlme_results
     if not nl or nl.get("status") != "ok":
         raise ValueError("run_poppk_qc requires a completed NLME fit (run_nlme) in state.nlme_results")
@@ -804,26 +939,36 @@ def run_poppk_qc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
         min_bsv_cv_pct=args.get("min_bsv_cv_pct", MIN_POPPK_BSV_CV_PCT),
         max_bsv_cv_pct=args.get("max_bsv_cv_pct", MAX_POPPK_BSV_CV_PCT),
         max_condition_number=args.get("max_condition_number", MAX_POPPK_CONDITION_NUMBER),
-        theta_bounds=args.get("theta_bounds"),
     )
     verdict = out["verdict"]
     checks = out["checks"]
     issues = out["issues"]
+    digest = nlme_fit_digest(nl)
     statuses = [c["status"] for c in checks]
 
     return ToolResult(
         summary=(
-            f"PopPK QC verdict: {verdict} "
+            f"PopPK estimation QC verdict: {verdict} "
             f"({statuses.count('PASS')} pass, {statuses.count('WARN')} warn, "
-            f"{statuses.count('FAIL')} fail)."
+            f"{statuses.count('FAIL')} fail; estimation health only — GOF, residual "
+            "diagnostics, VPC, and human review still required for model qualification)."
         ),
         action=f"run_poppk_qc({nl.get('model_key', 'nlme')})",
         writes={
             "poppk_qc_verdict": verdict,
             "poppk_qc_issues": issues,
             "poppk_qc_checklist": checks,
+            "poppk_qc_nlme_digest": digest,
         },
-        result={"verdict": verdict, "checks": checks, "issues": issues},
+        result={
+            "verdict": verdict,
+            "scope": POPPK_QC_SCOPE,
+            "qualification_note": POPPK_QC_QUALIFICATION_NOTE,
+            "nlme_digest": digest,
+            "model_key": nl.get("model_key"),
+            "checks": checks,
+            "issues": issues,
+        },
     )
 
 
@@ -863,11 +1008,12 @@ TOOLS = [
          },
          review_lambda_z_fits),
     Tool("run_poppk_qc",
-         "Independent PopPK (NLME) acceptance check against the 8 AI-assisted-MIDD "
-         "criteria (finite OFV, covariance step, structural SEs, bounds/degeneration, "
-         "%RSE <= 50%, ETA shrinkage <= 30%, BSV 1-100%, positive sigma) plus "
-         "PharmAgent's condition number <= 1000 extension; "
-         "returns PASS / CONDITIONAL PASS / FAIL.",
+         "Independent PopPK (NLME) numerical estimation-health check against the 8 "
+         "AI-assisted-MIDD estimation criteria (finite OFV, covariance step, structural "
+         "SEs, fit bounds/degeneration, %RSE <= 50%, ETA shrinkage <= 30%, BSV 1-100%, "
+         "positive sigma) plus PharmAgent's condition number <= 1000 extension. "
+         "Evaluates estimation health only (does not replace GOF, residual diagnostics, "
+         "VPC, or human model review); returns PASS / CONDITIONAL PASS / FAIL.",
          "qc",
          {
              "type": "object",
@@ -877,7 +1023,6 @@ TOOLS = [
                  "min_bsv_cv_pct": {"type": "number"},
                  "max_bsv_cv_pct": {"type": "number"},
                  "max_condition_number": {"type": "number"},
-                 "theta_bounds": {"type": "object"},
              },
              "required": [],
          },

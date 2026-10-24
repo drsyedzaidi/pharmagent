@@ -4,21 +4,19 @@ Modeled on ``AI-assisted-MIDD``'s ``.posit/assistant/skills/manage-skills/script
 adapted for PharmAgent's tool registry (``default_registry``) and shared state
 contract (``PharmState.model_fields``).
 
-Checks per skill folder (``<skills_dir>/<slug>/SKILL.md``):
-  1. ``frontmatter_present``: starts with ``---`` YAML frontmatter block and parses as a dict.
-  2. ``name_matches_folder``: frontmatter ``name`` equals ``<slug>``.
-  3. ``name_format``: lowercase alphanumeric and hyphens (1–64 chars), no ``anthropic``/``claude``.
-  4. ``description_present``: non-empty string description, <= 1024 chars, no raw ``<`` or ``>`` XML tags.
-  5. ``skill_under_500_lines``: ``SKILL.md`` has <= 500 lines (warn if exceeded).
-  6. ``allowed_tools_registered``: every tool in optional ``allowed_tools`` exists in ``default_registry()``.
-  7. ``produced_artifacts_valid``: every field in optional ``produced_artifacts`` exists in ``PharmState.model_fields``.
-  8. ``own_paths_exist``: relative markdown links ``[...](path)`` resolve inside the skill folder without escaping it.
-  9. ``references_linked``: every ``references/*.md`` file is linked from ``SKILL.md`` (warn if orphaned).
-  10. ``skills_one_folder_deep`` & ``names_unique`` across the entire ``skills_dir``.
+Security & Containment:
+  * Symlinks are strictly forbidden for ``skills_dir``, skill subdirectories,
+    ``SKILL.md``, and any referenced files/directories.
+  * Containment and ``lstat`` regular-file + byte-size bounds are verified
+    BEFORE reading any file (using ``os.O_NOFOLLOW`` where supported), preventing
+    arbitrary file reads or FIFO/large-file denial-of-service from a
+    repository-controlled ``SKILL.md``.
 """
 from __future__ import annotations
 
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +32,8 @@ _XML_TAG_RE = re.compile(r"[<>]")
 _MD_LINK_RE = re.compile(r"\]\((?!https?:|#|mailto:|file://)([^)#]+)\)")
 _SKILL_DIR_URI_RE = re.compile(r"file:///\{skill_dir\}/([^)# `'\"]+)")
 _OTHER_FILE_URI_RE = re.compile(r"file://(?!/\{skill_dir\}/|\{skill_dir\}/)([^)# `'\"]+)")
+
+_MAX_SKILL_BYTES = 256 * 1024  # 256 KiB hard ceiling before reading SKILL.md
 
 DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[3] / "skills"
 
@@ -75,8 +75,65 @@ def _parse_frontmatter(lines: list[str]) -> tuple[dict[str, Any] | None, int | N
     return parsed, end_idx, ""
 
 
+def _read_contained_skill_md(
+    base_root: Path,
+    skill_dir: Path,
+    skill_md: Path,
+) -> tuple[str | None, str]:
+    """Validate containment, symlink-freedom, regular-file type, and size BEFORE reading."""
+    try:
+        dir_st = os.lstat(skill_dir)
+    except OSError as exc:
+        return None, f"cannot stat skill directory: {exc}"
+    if stat.S_ISLNK(dir_st.st_mode):
+        return None, "skill directory must not be a symlink"
+    if not stat.S_ISDIR(dir_st.st_mode):
+        return None, "skill path is not a regular directory"
+
+    resolved_dir = skill_dir.resolve()
+    if base_root not in resolved_dir.parents:
+        return None, "skill directory escapes skills_dir"
+
+    try:
+        md_st = os.lstat(skill_md)
+    except OSError as exc:
+        return None, f"cannot stat SKILL.md: {exc}"
+    if stat.S_ISLNK(md_st.st_mode):
+        return None, "SKILL.md must not be a symlink"
+    if not stat.S_ISREG(md_st.st_mode):
+        return None, "SKILL.md must be a regular file"
+    if md_st.st_size > _MAX_SKILL_BYTES:
+        return None, f"SKILL.md exceeds {_MAX_SKILL_BYTES} byte limit ({md_st.st_size} bytes)"
+
+    resolved_md = skill_md.resolve()
+    if resolved_dir not in resolved_md.parents:
+        return None, "SKILL.md escapes skill directory"
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(skill_md, flags)
+    except OSError as exc:
+        return None, f"cannot safely open SKILL.md: {exc}"
+    try:
+        f_st = os.fstat(fd)
+        if not stat.S_ISREG(f_st.st_mode):
+            return None, "SKILL.md is not a regular file"
+        if f_st.st_size > _MAX_SKILL_BYTES:
+            return None, f"SKILL.md exceeds {_MAX_SKILL_BYTES} byte limit"
+        raw = os.read(fd, _MAX_SKILL_BYTES + 1)
+    finally:
+        os.close(fd)
+
+    if len(raw) > _MAX_SKILL_BYTES:
+        return None, f"SKILL.md exceeds {_MAX_SKILL_BYTES} byte limit"
+    try:
+        return raw.decode("utf-8"), ""
+    except UnicodeDecodeError as exc:
+        return None, f"SKILL.md is not valid UTF-8: {exc}"
+
+
 def _resolve_within_skill(skill_dir: Path, rel_path: str) -> tuple[bool, str]:
-    """Verify ``rel_path`` stays within ``skill_dir`` and exists on disk."""
+    """Verify ``rel_path`` stays within ``skill_dir``, contains no symlinks, and exists."""
     clean = rel_path.strip()
     if not clean:
         return True, ""
@@ -94,15 +151,34 @@ def _resolve_within_skill(skill_dir: Path, rel_path: str) -> tuple[bool, str]:
     clean = clean.split()[0]
     if Path(clean).is_absolute():
         return False, f"{clean} (escapes skill directory)"
+
     root = skill_dir.resolve()
+    candidate = skill_dir / clean
+    # Check every intermediate component from skill_dir to candidate for symlinks
+    cur = skill_dir
+    for part in Path(clean).parts:
+        cur = cur / part
+        try:
+            st = os.lstat(cur)
+        except OSError:
+            break
+        if stat.S_ISLNK(st.st_mode):
+            return False, f"{clean} (symlink not permitted)"
+
     try:
-        target = (skill_dir / clean).resolve()
+        target = candidate.resolve()
     except OSError:
         return False, f"{clean} (invalid path)"
     if root != target and root not in target.parents:
         return False, f"{clean} (escapes skill directory)"
-    if not target.exists():
+    try:
+        st_final = os.lstat(candidate)
+    except OSError:
         return False, clean
+    if stat.S_ISLNK(st_final.st_mode):
+        return False, f"{clean} (symlink not permitted)"
+    if not (stat.S_ISREG(st_final.st_mode) or stat.S_ISDIR(st_final.st_mode)):
+        return False, f"{clean} (not a regular file or directory)"
     return True, ""
 
 
@@ -124,18 +200,12 @@ def check_skills(
     base_dir = Path(skills_dir) if skills_dir is not None else DEFAULT_SKILLS_DIR
     if not base_dir.exists() or not base_dir.is_dir():
         raise FileNotFoundError(f"skills directory does not exist: {base_dir}")
+    if base_dir.is_symlink():
+        raise ValueError(f"skills directory must not be a symlink: {base_dir}")
+    base_root = base_dir.resolve()
 
     known_tools = registered_tools if registered_tools is not None else set(default_registry().names())
     known_fields = valid_state_fields if valid_state_fields is not None else set(PharmState.model_fields.keys())
-
-    skill_files = sorted(base_dir.glob("*/SKILL.md"))
-    all_skill_files = sorted(base_dir.rglob("SKILL.md"))
-    shallow_set = {p.resolve() for p in skill_files}
-    deep_skills = [
-        str(p.relative_to(base_dir))
-        for p in all_skill_files
-        if p.resolve() not in shallow_set
-    ]
 
     findings: list[SkillFinding] = []
     names_seen: list[str] = []
@@ -150,10 +220,48 @@ def check_skills(
             )
         )
 
-    for skill_md in skill_files:
-        skill_dir = skill_md.parent
+    # Discover top-level entries and nested SKILL.md files without following symlinks
+    skill_candidates: list[tuple[Path, Path]] = []
+    for entry in sorted(base_dir.iterdir()):
+        try:
+            st = os.lstat(entry)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            add(entry.name, "skill_containment", False, "skill directory must not be a symlink")
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            md_candidate = entry / "SKILL.md"
+            try:
+                os.lstat(md_candidate)
+                skill_candidates.append((entry, md_candidate))
+            except OSError:
+                pass
+
+    shallow_dirs = {d.resolve() for d, _ in skill_candidates if not d.is_symlink()}
+    deep_skills: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(base_dir, followlinks=False):
+        dp = Path(dirpath)
+        # Prune any symlinked directories so os.walk never traverses them
+        safe_dirs: list[str] = []
+        for d in sorted(dirnames):
+            sub = dp / d
+            try:
+                if stat.S_ISLNK(os.lstat(sub).st_mode):
+                    continue
+            except OSError:
+                continue
+            safe_dirs.append(d)
+        dirnames[:] = safe_dirs
+        if "SKILL.md" in filenames and dp != base_dir and dp.resolve() not in shallow_dirs:
+            deep_skills.append(str((dp / "SKILL.md").relative_to(base_dir)))
+
+    for skill_dir, skill_md in skill_candidates:
         slug = skill_dir.name
-        text = skill_md.read_text(encoding="utf-8")
+        text, contain_err = _read_contained_skill_md(base_root, skill_dir, skill_md)
+        add(slug, "skill_containment", text is not None, contain_err)
+        if text is None:
+            continue
         lines = text.splitlines()
 
         # 1. Frontmatter
@@ -255,6 +363,38 @@ def check_skills(
             ok_path, err_msg = _resolve_within_skill(skill_dir, rel)
             if not ok_path:
                 missing_or_escaped.append(err_msg)
+
+        # 4. Reference files linked from SKILL.md (one level deep, no symlinks)
+        refs_dir = skill_dir / "references"
+        try:
+            refs_st = os.lstat(refs_dir)
+        except OSError:
+            refs_st = None
+        if refs_st is not None:
+            if stat.S_ISLNK(refs_st.st_mode):
+                missing_or_escaped.append("references (symlink not permitted)")
+            elif stat.S_ISDIR(refs_st.st_mode):
+                orphan_refs: list[str] = []
+                for r in sorted(refs_dir.iterdir()):
+                    if r.suffix != ".md":
+                        continue
+                    try:
+                        r_st = os.lstat(r)
+                    except OSError:
+                        continue
+                    if stat.S_ISLNK(r_st.st_mode):
+                        missing_or_escaped.append(f"references/{r.name} (symlink not permitted)")
+                        continue
+                    if r.name not in body:
+                        orphan_refs.append(r.name)
+                add(
+                    slug,
+                    "references_linked",
+                    not orphan_refs,
+                    ", ".join(orphan_refs),
+                    level="warn",
+                )
+
         add(
             slug,
             "own_paths_exist",
@@ -262,25 +402,12 @@ def check_skills(
             ", ".join(missing_or_escaped),
         )
 
-        # 4. Reference files linked from SKILL.md (one level deep)
-        refs_dir = skill_dir / "references"
-        if refs_dir.exists() and refs_dir.is_dir():
-            ref_files = sorted(refs_dir.glob("*.md"))
-            orphan_refs = [r.name for r in ref_files if r.name not in body]
-            add(
-                slug,
-                "references_linked",
-                not orphan_refs,
-                ", ".join(orphan_refs),
-                level="warn",
-            )
-
     # 5. Cross-skill checks
     add(
         "(all)",
         "skills_one_folder_deep",
         not deep_skills,
-        f"not discovered: {', '.join(deep_skills)}",
+        f"not discovered: {', '.join(sorted(deep_skills))}",
     )
     seen: set[str] = set()
     dups: list[str] = []

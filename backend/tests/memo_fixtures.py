@@ -17,7 +17,7 @@ from typing import Any
 
 from app.compute.indirect import bucher_indirect
 from app.compute.memo import AuditTrace
-from app.core.audit import AuditChain
+from app.core.audit import AuditChain, hash_payload
 from app.core.pharmstate import PharmState, StudyInfo
 
 IDX = {"load": 1, "profile": 2, "nca": 3, "qc": 4, "pk": 5, "nlme": 6, "scm": 7,
@@ -155,6 +155,8 @@ def full_state() -> PharmState:
         qc_verdict="CONDITIONAL PASS",
         qc_issues=[{"severity": "MEDIUM", "issue": "high %extrap: [1]"}],
         qc_checklist=QC_CHECKLIST,
+        poppk_qc_verdict="PASS",
+        poppk_qc_nlme_digest=hash_payload(NLME),
         pk_model_results=PK_COMPARE, nlme_results=NLME, scm_results=SCM,
         forest_results=FOREST, vpc_results=VPC, diagnostics_results=DIAG,
         indirect_results={"comparisons": indirect_comparisons()},

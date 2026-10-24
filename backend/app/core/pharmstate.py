@@ -78,6 +78,7 @@ class PharmState(BaseModel):
     poppk_qc_verdict: str | None = None  # PASS | CONDITIONAL PASS | FAIL
     poppk_qc_issues: list[dict[str, Any]] | None = None
     poppk_qc_checklist: list[dict[str, Any]] | None = None
+    poppk_qc_nlme_digest: str | None = None  # canonical SHA-256 digest of evaluated nlme_results
 
     # --- bioequivalence (BE Agent) ----------------------------------------
     be_results: dict[str, Any] | None = None
@@ -171,7 +172,8 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                 "forest_results", "prior_check_results", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist",
            "nca_flagged_subjects", "lambda_z_review",
-           "poppk_qc_verdict", "poppk_qc_issues", "poppk_qc_checklist"},
+           "poppk_qc_verdict", "poppk_qc_issues", "poppk_qc_checklist",
+           "poppk_qc_nlme_digest"},
     "reviewer": {"review_results", "knowledge_results"},
     "report": {"report_path", "report_sections", "memo_path", "memo_results"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",

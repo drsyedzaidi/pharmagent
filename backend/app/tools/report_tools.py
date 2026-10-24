@@ -195,7 +195,17 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
         if nl.get("cov_note"):
             doc.add_paragraph(str(nl.get("cov_note")))
         if state.poppk_qc_verdict:
-            doc.add_paragraph(f"PopPK QC verdict: {state.poppk_qc_verdict}.")
+            digest_tag = (
+                f" [fit digest: {state.poppk_qc_nlme_digest[:12]}]"
+                if state.poppk_qc_nlme_digest
+                else ""
+            )
+            doc.add_paragraph(
+                f"PopPK estimation QC verdict: {state.poppk_qc_verdict}{digest_tag} "
+                "(numerical estimation & covariance health only; model qualification "
+                "additionally requires GOF, CWRES/NPDE residual diagnostics, VPC/pcVPC, "
+                "and human pharmacometrician review)."
+            )
             for c in (state.poppk_qc_checklist or []):
                 p = doc.add_paragraph(style="List Bullet")
                 p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
@@ -294,18 +304,62 @@ def _reproducibility_section(doc: Document, state: PharmState) -> None:
 
 def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     from app.core.provenance import run_provenance_report_lines
+    from app.tools.qc_tools import (
+        _collect_flagged_lambda_z_subjects,
+        nca_parameters_digest,
+        nlme_fit_digest,
+    )
     run_provenance_report_lines(state)                  # refuse a quarantined (mismatched) session before any work
+
+    # 1. Enforce NCA QC verdict and non-bypassable lambda_z analyst gate
+    if state.qc_verdict == "FAIL":
+        raise ValueError("Cannot generate report: NCA QC verdict is FAIL.")
+    params_for_gate = state.nca_parameters or []
     lz_rev = state.lambda_z_review or {}
+    flagged = (
+        _collect_flagged_lambda_z_subjects(params_for_gate)
+        if params_for_gate
+        else list(state.nca_flagged_subjects or [])
+    )
     if lz_rev.get("status") == "revision_requested":
         raise ValueError(
             "Cannot finalize report while lambda_z_review status is 'revision_requested'; "
             "revise the terminal regression window (or call review_lambda_z_fits(decision='accept')) first."
         )
-    if args.get("require_lambda_z_review") and lz_rev.get("status") == "awaiting_analyst_decision":
+    if lz_rev.get("status") == "awaiting_analyst_decision" or (
+        flagged and lz_rev.get("status") != "accepted"
+    ):
         raise ValueError(
             "Cannot finalize report while flagged lambda_z fits are awaiting analyst decision; "
             "call review_lambda_z_fits(decision='accept'|'revise') first."
         )
+    if (
+        flagged
+        and params_for_gate
+        and lz_rev.get("nca_digest") != nca_parameters_digest(params_for_gate)
+    ):
+        raise ValueError(
+            "Cannot finalize report: NCA parameters changed after lambda_z review; "
+            "re-run run_qc and review_lambda_z_fits."
+        )
+
+    # 2. Enforce PopPK estimation QC presence, provenance digest, and non-FAIL status
+    nl = state.nlme_results
+    if nl and nl.get("status") == "ok":
+        if not state.poppk_qc_verdict:
+            raise ValueError(
+                "Cannot generate report: PopPK estimation QC (run_poppk_qc) has not been "
+                "run for the current NLME fit."
+            )
+        current_digest = nlme_fit_digest(nl)
+        if state.poppk_qc_nlme_digest != current_digest:
+            raise ValueError(
+                "Cannot generate report: PopPK estimation QC verdict is stale "
+                "(computed for a different NLME fit); re-run run_poppk_qc."
+            )
+        if state.poppk_qc_verdict == "FAIL":
+            raise ValueError("Cannot generate report: PopPK estimation QC verdict is FAIL.")
+
     title = args.get("title", "Pharmacokinetic Analysis Report")
     doc = Document()
     doc.add_heading(title, level=0)

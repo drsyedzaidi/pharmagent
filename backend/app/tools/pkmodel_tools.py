@@ -1069,7 +1069,11 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
     build it from the currently-stored fit (e.g. fit adults, then fit pediatrics
     with the adult fit as the prior). ``prior_var`` sets the prior informativeness.
     """
-    from app.compute.nlme import population_fit  # lazy: heavy + optional dependency
+    from app.compute.nlme import (  # lazy: heavy + optional dependency
+        _THETA_REL_MAX,
+        _THETA_REL_MIN,
+        population_fit,
+    )
 
     fitted_key, _f, _p, _t = _last_fit(state)
     model_key = args.get("model_key") or fitted_key
@@ -1110,7 +1114,13 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
                          error_model=args.get("error_model", "proportional"),
                          covariate_model=args.get("covariate_model"),
                          theta_prior=theta_prior)
-    payload = {"status": "ok", **res,
+    defaults = dict(get_model(model_key).defaults)
+    theta_bounds = {
+        k: [float(defaults[k]) * _THETA_REL_MIN, float(defaults[k]) * _THETA_REL_MAX]
+        for k in (res.get("theta") or {})
+        if float(defaults.get(k, 0.0) or 0.0) > 0.0
+    }
+    payload = {"status": "ok", **res, "theta_bounds": theta_bounds,
                **({"n_blq_dropped": n_m1} if n_m1 is not None else {})}
     map_note = " (MAP with informative prior)" if res.get("map") else ""
     return ToolResult(
