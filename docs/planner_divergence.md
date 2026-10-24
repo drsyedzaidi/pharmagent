@@ -90,6 +90,7 @@ Options:
 | `--base-url` | local server (default `http://127.0.0.1:11434/v1`); must be a loopback address |
 | `--temperature T` | local only; default is the app's own setting, 0 |
 | `--seed S` | local only, needs `--temperature` > 0; replicate *i* samples with seed *S + i* |
+| `--timeout S` | local only: seconds per planner call (default 120, the client's own). gemma4:31b needed more: with other jobs loading the CPU, its first call ran past 120 s in 2 of 3 replicates. Use 600 to 900 for a 31B model |
 | `--allow-hosted` | `configured` only: required when the configuration resolves to a hosted API (OpenAI, Anthropic), which then receives the planner's state summaries |
 | `--out DIR` | where `planner_divergence.json` and `planner_divergence.md` are written |
 

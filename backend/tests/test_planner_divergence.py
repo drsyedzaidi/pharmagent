@@ -586,6 +586,8 @@ def test_inputs_are_validated_before_any_llm_is_built(tmp_path):
     ["--provider", "local", "--base-url", "http://127.0.0.1@evil.example/v1"],
     ["--provider", "local", "--temperature", "5"],
     ["--provider", "local", "--seed", "3"],
+    ["--provider", "local", "--timeout", "0"],
+    ["--provider", "mock", "--timeout", "600"],
     ["--provider", "mock", "--replicates", "1"],
 ])
 def test_cli_rejects_bad_arguments_without_running(argv, tmp_path, capsys):
@@ -618,6 +620,30 @@ def test_local_spec_gives_each_replicate_its_own_seed_and_the_temperature():
         ("qwen3:8b", 0.7, 0), ("qwen3:8b", 0.7, 1), ("qwen3:8b", 0.7, 2)]
     assert spec.sampling(2) == {"temperature": 0.7, "seed": 2}
     assert LlmSpec("mock", "mock").sampling(0) is None
+
+
+def test_a_local_timeout_applies_to_that_client_only(monkeypatch):
+    timeouts: list[float] = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "stop"}}]}
+
+    def post(url, json=None, headers=None, timeout=None):  # noqa: A002 - mirrors requests.post
+        timeouts.append(timeout)
+        return _Resp()
+
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    spec = pd.spec_from_args(pd._parse(["--dataset", SAMPLE, "--out", "x", "--provider", "local",
+                                        "--timeout", "600"]))
+    assert spec.public()["timeout_s"] == 600
+    tools = [default_registry().get("load_dataset")]
+    spec.build(0).plan("g", {}, [], [], tools)
+    LlmSpec("local", "m").build(0).plan("g", {}, [], [], tools)
+    assert timeouts == [600, llm_mod.OpenAICompatLLM.TIMEOUT_S] and llm_mod.OpenAICompatLLM.TIMEOUT_S == 120
 
 
 def test_openai_compat_sends_sampling_overrides_only_when_set(monkeypatch):

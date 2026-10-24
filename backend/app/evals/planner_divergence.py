@@ -49,6 +49,7 @@ from app.workflows import get_workflow
 WORKFLOW = "poppk_goal"
 DEFAULT_REPLICATES = 5
 MAX_REPLICATES = 50         # local models are slow: bound an accidental huge run
+MAX_TIMEOUT_S = 3600.0      # per planner call; a 31B model under CPU load can need minutes
 PROVIDERS = ("mock", "local", "configured")
 HOSTED_PROVIDERS = frozenset({"openai", "anthropic"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -90,6 +91,7 @@ class LlmSpec:
     base_url: str | None = None
     temperature: float | None = None
     seed: int | None = None
+    timeout_s: float | None = None      # per planner call; None keeps the client's own
 
     def sampling(self, index: int) -> dict[str, Any] | None:
         if self.provider != "local":
@@ -99,17 +101,20 @@ class LlmSpec:
 
     def public(self) -> dict[str, Any]:
         return {"provider": self.provider, "model": self.model, "base_url": self.base_url,
-                "temperature": self.temperature, "seed_base": self.seed}
+                "temperature": self.temperature, "seed_base": self.seed, "timeout_s": self.timeout_s}
 
     def build(self, index: int) -> LLM:
         if self.provider == "mock":
             return MockLLM()
         if self.provider == "local":
             s = self.sampling(index) or {}
-            return OpenAICompatLLM(base_url=self.base_url or settings.DEFAULT_OLLAMA_URL,
-                                   model=self.model, api_key=None,
-                                   reasoning_effort=LOCAL_REASONING_EFFORT,
-                                   temperature=s.get("temperature"), seed=s.get("seed"))
+            llm = OpenAICompatLLM(base_url=self.base_url or settings.DEFAULT_OLLAMA_URL,
+                                  model=self.model, api_key=None,
+                                  reasoning_effort=LOCAL_REASONING_EFFORT,
+                                  temperature=s.get("temperature"), seed=s.get("seed"))
+            if self.timeout_s is not None:
+                llm.TIMEOUT_S = self.timeout_s      # this instance only; the class default is untouched
+            return llm
         if self.provider == "configured":
             return build_llm(choice_from_settings())
         raise ValueError(f"unknown provider {self.provider!r}; one of {', '.join(PROVIDERS)}")
@@ -339,6 +344,8 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
     ap.add_argument("--base-url", help=f"local server (default {settings.DEFAULT_OLLAMA_URL})")
     ap.add_argument("--temperature", type=float, help="local only (default: the app's own, 0)")
     ap.add_argument("--seed", type=int, help="local, with --temperature > 0: replicate i uses seed + i")
+    ap.add_argument("--timeout", type=float,
+                    help="local only: seconds per planner call (default: the client's own, 120)")
     ap.add_argument("--allow-hosted", action="store_true",
                     help="configured only: confirm sending state summaries to a hosted API")
     ap.add_argument("--out", required=True, help="output directory for the JSON + markdown report")
@@ -360,9 +367,13 @@ def spec_from_args(ns: argparse.Namespace) -> LlmSpec:
             raise ValueError(f"--temperature must be within 0..2, got {ns.temperature}")
         if ns.seed is not None and not ns.temperature:
             raise ValueError("--seed only changes anything with --temperature > 0")
-        return LlmSpec("local", ns.model or DEFAULT_MODELS["local"], url, ns.temperature, ns.seed)
-    if any(v is not None for v in (ns.model, ns.base_url, ns.temperature, ns.seed)):
-        raise ValueError("--model, --base-url, --temperature and --seed apply to --provider local only")
+        if ns.timeout is not None and not 0 < ns.timeout <= MAX_TIMEOUT_S:
+            raise ValueError(f"--timeout must be within 0..{MAX_TIMEOUT_S:g} s, got {ns.timeout}")
+        return LlmSpec("local", ns.model or DEFAULT_MODELS["local"], url, ns.temperature, ns.seed,
+                       ns.timeout)
+    if any(v is not None for v in (ns.model, ns.base_url, ns.temperature, ns.seed, ns.timeout)):
+        raise ValueError("--model, --base-url, --temperature, --seed and --timeout apply to "
+                         "--provider local only")
     if ns.provider == "mock":
         return LlmSpec("mock", "mock")
     choice = choice_from_settings()
