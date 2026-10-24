@@ -187,6 +187,7 @@ class Agent:
             "last_calculation": (state.clinpharm_results or {}).get("tool"),
             "pending_tool": (state.pending_tool or {}).get("tool"),
             "qc_verdict": state.qc_verdict,
+            "poppk_qc_verdict": state.poppk_qc_verdict,
             "review_diagnostics": rev_diag,
             "report_path": state.report_path,
             "memo_path": state.memo_path,

@@ -65,11 +65,12 @@ def nca_ss_subject(subject: Any, tad, conc, dose: float, tau: float) -> dict[str
             "accumulation_ratio": round(rac, 4) if rac is not None else None,
             "lambda_z_r2_adj": lz["lambda_z_r2_adj"],
             "lambda_z_n_points": lz["lambda_z_n_points"],
+            "lambda_z_span_ratio": lz["lambda_z_span_ratio"],
         })
     else:
         out.update({k: None for k in (
             "lambda_z", "t_half", "Vz_F", "accumulation_ratio",
-            "lambda_z_r2_adj", "lambda_z_n_points")})
+            "lambda_z_r2_adj", "lambda_z_n_points", "lambda_z_span_ratio")})
     return out
 
 

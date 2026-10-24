@@ -73,6 +73,9 @@ class PharmState(BaseModel):
     qc_verdict: str | None = None        # PASS | CONDITIONAL PASS | FAIL
     qc_issues: list[dict[str, Any]] | None = None
     qc_checklist: list[dict[str, Any]] | None = None
+    poppk_qc_verdict: str | None = None  # PASS | CONDITIONAL PASS | FAIL
+    poppk_qc_issues: list[dict[str, Any]] | None = None
+    poppk_qc_checklist: list[dict[str, Any]] | None = None
 
     # --- bioequivalence (BE Agent) ----------------------------------------
     be_results: dict[str, Any] | None = None
@@ -164,7 +167,8 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "modeler": {"pk_model_results", "nlme_results", "scm_results", "forecast_results",
                 "vpc_results", "diagnostics_results", "engine_comparison_results",
                 "forest_results", "prior_check_results", "widgets"},
-    "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
+    "qc": {"qc_verdict", "qc_issues", "qc_checklist",
+           "poppk_qc_verdict", "poppk_qc_issues", "poppk_qc_checklist"},
     "reviewer": {"review_results", "knowledge_results"},
     "report": {"report_path", "report_sections", "memo_path", "memo_results"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",

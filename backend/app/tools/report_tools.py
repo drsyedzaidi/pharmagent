@@ -53,6 +53,7 @@ _SUBJECT_COLS: list[tuple[str, str, int]] = [
     ("Vz/F", "Vz_F", 1),
     ("λz adjR²", "lambda_z_r2_adj", 3),
     ("λz n", "lambda_z_n_points", 0),
+    ("Span ratio", "lambda_z_span_ratio", 2),
     ("%extrap", "pct_AUC_extrap", 1),
 ]
 
@@ -193,6 +194,12 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
                 for e in ce))
         if nl.get("cov_note"):
             doc.add_paragraph(str(nl.get("cov_note")))
+        if state.poppk_qc_verdict:
+            doc.add_paragraph(f"PopPK QC verdict: {state.poppk_qc_verdict}.")
+            for c in (state.poppk_qc_checklist or []):
+                p = doc.add_paragraph(style="List Bullet")
+                p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
+                p.add_run(str(c["detail"]))
 
     sc = state.scm_results
     if sc and sc.get("status") == "ok":
@@ -351,6 +358,7 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         "dataset": meta.get("dataset_id"),
         "methods": "NCA (linear-up/log-down, best-fit lambda_z)",
         "qc_verdict": state.qc_verdict,
+        **({"poppk_qc_verdict": state.poppk_qc_verdict} if state.poppk_qc_verdict else {}),
     }
     return ToolResult(
         summary=f"Generated DOCX report at {path}.",

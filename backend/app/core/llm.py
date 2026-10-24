@@ -275,6 +275,11 @@ class MockLLM:
             rev = s.get("review_diagnostics") or {}
             return None if rev.get("status") else {"name": "adversarial_review", "input": {}}
         if agent == "qc":
+            low = (message or "").lower()
+            if any(k in low for k in ("poppk", "nlme", "mixed-effects", "mixed effects")) or (
+                s.get("nlme_results") == "present" and not s.get("nca_parameters")
+            ):
+                return None if s.get("poppk_qc_verdict") else {"name": "run_poppk_qc", "input": {}}
             return None if s.get("qc_verdict") else {"name": "run_qc", "input": {}}
         if agent == "report":
             low = (message or "").lower()

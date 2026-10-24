@@ -289,6 +289,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
             "t_half": param.get("t_half"),
             "r2_adj": param.get("lambda_z_r2_adj"),
             "n_pts": param.get("lambda_z_n_points"),
+            "span_ratio": param.get("lambda_z_span_ratio"),
             "Tmax": param.get("Tmax"),
         })
 
