@@ -96,8 +96,18 @@ ER_YIELD = re.compile(
     rf"|\bsir\b|\bparameter{_DASH}+uncertainty\b|\bprofil\w*{_DASH}+(?:the{_DASH}+)?likelihood\b"
     rf"|\bpop{_DASH}?pk\b|\bnlme\b|\bfoce\w*|\bsaem\b|\bpopulation{_DASH}+pk\b")
 
+_DATASET_PATH_RE = re.compile(r"[\w./~@:+\\-]+\.(csv|xpt|sas7bdat)\b", re.IGNORECASE)
+
+
+def _strip_dataset_paths(text: str) -> str:
+    """Replace dataset file path tokens with their extension (e.g. '.csv') so
+    directory or file stem substrings (such as a worktree named 'poppk-er-evidence-review')
+    never trigger unintended domain-agent keywords or anchors."""
+    return _DATASET_PATH_RE.sub(r".\1", text)
+
+
 def score(message: str) -> dict[str, int]:
-    low = (message or "").lower()
+    low = _strip_dataset_paths((message or "").lower())
     return {agent: sum(low.count(k) for k in kws) for agent, kws in KEYWORDS.items()}
 
 
@@ -110,7 +120,7 @@ def _simulator_only_bootstrap(low: str) -> bool:
 
 def anchored(message: str) -> str | None:
     """The agent an anchor decides outright, or None."""
-    low = (message or "").lower()
+    low = _strip_dataset_paths((message or "").lower())
     agent = next((a for a, pattern in ANCHORS if pattern.search(low)), None)
     if agent is not None:
         return agent
@@ -156,9 +166,10 @@ class Supervisor:
         first_agent, first_method = self.route(message)
         plan: list[tuple[str, str]] = [(first_agent, first_method)]
         low = (message or "").lower()
+        stripped_low = _strip_dataset_paths(low)
         # Only expand into a multi-agent pipeline when the message contains
         # explicit multi-step connectors or multiple pipeline stages.
-        has_connector = bool(re.search(r"\b(?:and then|then|after that|followed by|next)\b", low))
+        has_connector = bool(re.search(r"\b(?:and then|then|after that|followed by|next)\b", stripped_low))
         scores = score(message)
         # Canonical pharmacometrics pipeline order
         pipeline_order = (
@@ -173,7 +184,7 @@ class Supervisor:
         # or a file path + downstream analysis agent are present, order by the
         # canonical pipeline while keeping first_agent recorded.
         has_file_and_analysis = (
-            bool(re.search(r"[\w./~-]+\.(?:csv|xpt|sas7bdat)", low))
+            bool(_DATASET_PATH_RE.search(low))
             and any(a != "data_manager" for a in matched)
         )
         if (has_connector or has_file_and_analysis) and len(matched) > 1:
