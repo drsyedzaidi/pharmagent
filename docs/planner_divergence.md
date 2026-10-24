@@ -200,9 +200,14 @@ failed run never reads as convergence.
 
 - *Argument keys that varied*, each classified by how the policy treats it:
   - **a policy scientific-choice key** (for example `fit_pk_model.model_key`
-    or `run_nlme.error_model`). It is already gated, so a human sees the
-    value. Either this is a judgment branch the gate exists for, or the owner
-    may want to write down a default.
+    or `run_nlme.error_model`), and every variant carrying it was gated. It
+    is already gated, so a human sees the value. Either this is a judgment
+    branch the gate exists for, or the owner may want to write down a default.
+  - **a policy scientific-choice key, but the policy rejected a variant
+    carrying it** (for example a `model_key` outside the PK model library).
+    That value never reached the human gate, so no human is known to have
+    seen it; a human saw the key's value only where a variant carrying it was
+    gated. Check the policy rejections for why.
   - **not a scientific-choice key, but every variant carrying it was gated**
     for another reason (the tool is always gated, or another argument
     triggered the gate). A human saw the value. It needs a rule only if it
