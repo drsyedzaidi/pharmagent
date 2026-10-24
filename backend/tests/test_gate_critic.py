@@ -110,8 +110,15 @@ def _core(pending: dict) -> dict:
 
 # ── off by default ──────────────────────────────────────────────────────────────
 
-def test_the_feature_is_off_by_default():
-    assert settings.mikebrain_gate_critic is False and gate_critic.enabled() is False
+def test_the_feature_is_off_by_default_and_the_documented_env_var_turns_it_on(monkeypatch):
+    from app.config import Settings
+    monkeypatch.delenv("PHARMAGENT_MIKEBRAIN_GATE_CRITIC", raising=False)
+    assert Settings(_env_file=None).mikebrain_gate_critic is False                # the true default
+    for raw, expected in (("true", True), ("TRUE", True), ("1", True), ("false", False), ("0", False)):
+        monkeypatch.setenv("PHARMAGENT_MIKEBRAIN_GATE_CRITIC", raw)
+        assert Settings(_env_file=None).mikebrain_gate_critic is expected, raw
+    assert "PHARMAGENT_MIKEBRAIN_GATE_CRITIC" in (Path(__file__).parent.parent / ".env.example").read_text()
+    assert gate_critic.enabled() is False                                          # suite-wide pin (conftest)
 
 
 def test_off_leaves_no_trace_even_with_a_corpus(env, monkeypatch):
@@ -231,9 +238,9 @@ def test_reject_after_an_objection_is_signed_exactly_as_without_it(env, monkeypa
     orch, sid, _ = _gate()
     out = orch.resume_workflow(sid, approve=False, actor="alice", reason="wrong structural model")
     assert out["status"] == base_out["status"] == "rejected" and out["state"]["pending_tool"] is None
-    tail = lambda o, s: [(e.agent, e.tool, e.action, e.actor, e.reason)       # noqa: E731
+    tail = lambda o, s: [(e.agent, e.tool, e.action, e.actor, e.reason, e.inputs_hash, e.outputs_hash)   # noqa: E731
                          for e in o.get_session(s).audit.entries[-2:]]
-    assert tail(orch, sid) == tail(base_orch, base_sid)
+    assert tail(orch, sid) == tail(base_orch, base_sid)                      # signed entries equal, hash for hash
     assert out["audit_ok"]
 
 
@@ -261,6 +268,10 @@ def test_the_critic_never_reaches_the_tool_the_human_approves(env, monkeypatch):
     approve = next(e for e in orch.get_session(sid).audit.entries if e.action == "approve_tool")
     assert approve.actor == "alice" and approve.reason == "approved despite the objection"
     assert orch.get_session(sid).audit.verify()
+    base_orch, base_sid, _ = _gate()                                             # same approval, no critic
+    base_orch.take_pending_tool(base_sid, actor="alice", reason="approved despite the objection")
+    base_approve = next(e for e in base_orch.get_session(base_sid).audit.entries if e.action == "approve_tool")
+    assert (approve.inputs_hash, approve.outputs_hash) == (base_approve.inputs_hash, base_approve.outputs_hash)
 
 
 def test_chat_proposals_are_never_critiqued(env, monkeypatch):
@@ -275,12 +286,24 @@ def test_chat_proposals_are_never_critiqued(env, monkeypatch):
 
 
 def test_only_the_planner_gate_calls_the_critic():
+    """AST scan (an aliased import cannot hide a call): every call of `critique_proposal` in app/ is the single one
+    inside Orchestrator._propose_goal_step."""
+    import ast
     app_dir = Path(__file__).parent.parent / "app"
-    users = {str(p.relative_to(app_dir)) for p in app_dir.rglob("*.py")
-             if "critique_proposal(" in p.read_text(encoding="utf-8")}
-    assert users == {"core/orchestrator.py", "knowledge/gate_critic.py"}
-    orch_src = (app_dir / "core" / "orchestrator.py").read_text(encoding="utf-8")
-    assert orch_src.count("gate_critic.critique_proposal(") == 1
+    callers = []
+    for path in app_dir.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                    if name == "critique_proposal":
+                        callers.append((str(path.relative_to(app_dir)), fn.name))
+    assert set(callers) == {("core/orchestrator.py", "_propose_goal_step")}
+    assert len([c for c in callers if c[0] == "core/orchestrator.py"]) >= 1
 
 
 # ── failure containment ─────────────────────────────────────────────────────────
@@ -328,11 +351,14 @@ def test_an_unexpected_exception_cannot_stop_a_proposal_or_leak_into_it(env, mon
 
 def test_the_question_names_the_choice_and_hides_subject_identifiers():
     q = gate_critic.gate_question(
-        "run_scm", {"covariates": ["WT", "CRCL"], "forward_alpha": 0.05},
-        "Shrinkage on V is 45 percent; subject 1771 and nca-clf-sign-1771 look odd", "run_scm changes the covariate model",
-        "Converged population PK model for subject cohort A")
+        "run_scm", {"covariates": ["WT", "CRCL"], "forward_alpha": 0.05, "note": "subject 12 excluded"},
+        "Shrinkage on V is 45 percent; subject 1771 looks odd; also nca-clf-sign-1771 is flagged", "run_scm changes the covariate model",
+        "Converged population PK model for patient 3")
     assert "run_scm" in q and '"forward_alpha": 0.05' in q and "covariate model" in q and "45 percent" in q
-    assert "1771" not in q and "a subject" in q and "a per-subject finding" in q
+    for leaked in ("1771", "subject 12", "patient 3", "12 excluded"):
+        assert leaked not in q, leaked
+    assert "a subject" in q and "nca-clf-sign" in q                      # the kind of finding survives, the subject does not
+    assert "test that claim" in q                                         # the rationale is a claim to test, not background
 
 
 def test_the_question_is_size_capped_and_tolerates_odd_arguments():
@@ -356,10 +382,130 @@ def test_the_critic_sees_aggregates_only_never_rows(env, monkeypatch):
     assert summary["context"] == {"proposed_tool": "run_nlme", "gated_by": "planner policy"}
 
 
-def test_redact_subjects_keeps_numbers_but_not_identities():
-    assert kt.redact_subjects("Subject S-07 had CL 12.5; see recompute-cmax-S07") == \
-        "a subject had CL 12.5; see a per-subject finding"
-    assert kt.redact("Subject S-07 had CL 12.5") == "a subject had CL N"             # the M1 behaviour is unchanged
+@pytest.mark.parametrize("raw, expected", [
+    ("Subject S-07 had CL 12.5", "a subject had CL 12.5"),
+    ("subject ID 12 is odd", "a subject is odd"),
+    ("Subject: 12", "a subject"), ("subject #12", "a subject"), ("subject (12)", "a subject"),
+    ("ID 1771 and ID=1772", "a subject and a subject"), ("patient 3 dropped", "a subject dropped"),
+    ("subjects 1, 2 and 3 were removed", "a subject were removed"),
+    ("see nca-clf-sign-S07 and recompute-aucband-12", "see nca-clf-sign and recompute-aucband"),
+])
+def test_redact_subjects_removes_subject_references_but_keeps_aggregates(raw, expected):
+    assert kt.redact_subjects(raw) == expected
+
+
+@pytest.mark.parametrize("ordinary", [
+    "NCA-derived initial estimates seed the NLME fit", "recompute-from-raw-data check", "non-NCA-style summary",
+    "subject to the stopping rule", "the model id is 2cmt oral", "nlme-converge and nlme-shrink-V stay as they are",
+    "nca-monotonic-100-200"])
+def test_redact_subjects_leaves_ordinary_words_and_non_subject_ids_alone(ordinary):
+    assert kt.redact_subjects(ordinary) == ordinary
+
+
+def test_m1_redact_is_unchanged_by_m3():
+    assert kt.redact("Subject S-07 had CL 12.5") == "a subject had CL N"
+    assert kt.redact("NCA-derived 3 estimates") == "NCA-derived N estimates"
+
+
+def test_per_subject_finding_ids_in_the_review_summary_are_reduced_to_their_kind():
+    state = PharmState(session_id="s", review_results={
+        "status": "FINDINGS BLOCK GOAL", "goal_met": False, "counts": {"CRITICAL": 2, "HIGH": 1, "MEDIUM": 0, "LOW": 0},
+        "findings": [{"id": "recompute-cmax-1771", "severity": "CRITICAL", "resolved": False},
+                     {"id": "nca-clf-sign-S07", "severity": "CRITICAL", "resolved": False},
+                     {"id": "nlme-converge", "severity": "HIGH", "resolved": False}]})
+    ids = kt.compact_state_summary(state)["review_diagnostics"]["blocking_ids"]
+    assert ids == ["nca-clf-sign", "nlme-converge", "recompute-cmax"]
+    assert "1771" not in json.dumps(kt.compact_state_summary(state)) and "S07" not in json.dumps(kt.compact_state_summary(state))
+
+
+def test_the_critic_never_sees_subject_ids_even_when_a_review_already_holds_them(env, monkeypatch):
+    """The reviewer's HIGH finding: blocking_ids carried recompute-cmax-1771 into the prompt, the retrieval query
+    and the persisted knowledge_results. Exercised end to end, with the finding present BEFORE the gate."""
+    from app.core.pharmstate import apply_writes
+    _add_corpus(env)
+    spy = _Critic("no_evidence")
+    _enable(monkeypatch, spy)
+    orch = _orch()
+    sid = orch.create_session().id
+    sess = orch.get_session(sid)
+    sess.state = apply_writes(sess.state, "reviewer", {"review_results": {
+        "status": "FINDINGS BLOCK GOAL", "goal_met": False, "counts": {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+        "findings": [{"id": "recompute-cmax-1771", "severity": "CRITICAL", "resolved": False}]}})
+    out = orch.start_workflow(sid, "poppk_goal", {"path": SAMPLE})
+    assert out["state"]["pending_tool"]["critic"]["stance"] == "no_evidence"
+    assert spy.prompts and all("1771" not in p for p in spy.prompts)
+    assert "recompute-cmax" in spy.prompts[0]                              # the kind is still there for retrieval
+    record = out["state"]["knowledge_results"][-1]
+    assert "1771" not in json.dumps(record) and "1771" not in json.dumps(out["state"]["pending_tool"])
+
+
+# ── bounded block, wording, isolation from a stale proposal ─────────────────────
+
+def test_the_gate_block_is_a_bounded_pointer_not_a_copy_of_the_answer():
+    cites = [{"chunk_id": f"c{i}", "quote": "q" * 700} for i in range(5)]
+    block = gate_critic.critic_block({"status": "ok", "verdict": "contradicted", "citations": cites, "grounding": "ok",
+                                      "rationale": "r" * 2000, "chunk_hashes": ["h"], "corpus_version": "v"})
+    assert len(block["citations"]) == gate_critic.MAX_BLOCK_CITATIONS and block["citations_total"] == 5
+    assert all(len(c["quote"]) == gate_critic.MAX_BLOCK_QUOTE_CHARS and c["truncated"] for c in block["citations"])
+    assert len(block["rationale"]) == gate_critic.MAX_RATIONALE_CHARS
+    short = gate_critic.critic_block({"status": "ok", "verdict": "supported", "grounding": "ok",
+                                      "citations": [{"chunk_id": "c", "quote": "a verbatim quote of normal length"}]})
+    assert short["citations"][0] == {"chunk_id": "c", "quote": "a verbatim quote of normal length", "truncated": False}
+
+
+def test_stance_wording_does_not_claim_more_than_grounding_proves():
+    for stance in ("objection", "corroboration"):
+        assert "read it before relying on it" in gate_critic.STANCES[stance]
+        assert "literature contradicts" not in gate_critic.STANCES[stance]
+    assert "you decide" in gate_critic.ADVISORY_NOTE and "not that it applies" in gate_critic.ADVISORY_NOTE
+
+
+def test_a_superseded_proposal_stays_out_of_the_consultation_and_is_still_superseded(env, monkeypatch):
+    from app.core.pharmstate import apply_writes
+    _add_corpus(env)
+    spy = _Critic("no_evidence")
+    _enable(monkeypatch, spy)
+    orch = _orch()
+    sid = orch.create_session().id
+    sess = orch.get_session(sid)
+    old = {"tool": "run_bootstrap", "agent": "simulator", "args": {}, "proposed_at": "t0", "proposed_by": "alice",
+           "message": "chat"}
+    sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": old})
+    out = orch.start_workflow(sid, "poppk_goal", {"path": SAMPLE})
+    assert out["state"]["pending_tool"]["tool"] == "run_nlme"
+    assert spy.prompts and all("run_bootstrap" not in p for p in spy.prompts)
+    assert ("planner", "run_bootstrap", "supersede_tool") in _audit(orch, sid)
+    assert out["audit_ok"]
+
+
+def test_a_quarantined_session_gets_no_consultation_and_no_audit_entry(env, monkeypatch):
+    from app.core.audit import AuditChain
+    from app.tools.base import ToolContext
+    from app.tools.builtins import default_registry
+    _add_corpus(env)
+    _enable(monkeypatch, _Critic())
+    audit = AuditChain()
+    state = PharmState(session_id="s", run_provenance_status="mismatch")
+    out_state, critic = gate_critic.critique_proposal(
+        default_registry(), state, ToolContext(data_dir=str(env)), audit, tool_name="run_nlme", args={},
+        rationale="r", gate_reason="g", goal="goal", clock=lambda: "t")
+    assert critic["stance"] == "unavailable" and critic["status"] == "error"
+    assert out_state is state and audit.entries == []
+
+
+def test_the_block_survives_a_store_round_trip_and_the_chain_still_verifies(env, monkeypatch, tmp_path):
+    _add_corpus(env)
+    _enable(monkeypatch, _Critic("contradicted"))
+    db = str(tmp_path / "sessions.db")
+    clock = lambda c=itertools.count(): f"t{next(c)}"                            # noqa: E731
+    first = Orchestrator(llm=MockLLM(), clock=clock, store=SessionStore(db))
+    sid = first.create_session().id
+    out = first.start_workflow(sid, "poppk_goal", {"path": SAMPLE})
+    second = Orchestrator(llm=MockLLM(), clock=clock, store=SessionStore(db))
+    sess = second.get_session(sid)
+    assert sess.state.pending_tool == out["state"]["pending_tool"]
+    assert sess.state.pending_tool["critic"]["stance"] == "objection"
+    assert len(sess.state.knowledge_results) == 1 and sess.audit.verify()
 
 
 def test_state_unchanged_when_off_even_if_called_directly():

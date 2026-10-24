@@ -24,7 +24,7 @@ from typing import Any
 
 from app.config import settings
 from app.core.audit import AuditChain
-from app.core.pharmstate import PharmState
+from app.core.pharmstate import PharmState, apply_writes
 from app.knowledge.manifest import ManifestError, load_manifest
 from app.tools.base import ToolContext, ToolRegistry
 from app.tools.knowledge_tools import knowledge_root, redact_subjects
@@ -36,16 +36,20 @@ TOOL = "consult_mikebrain"
 MAX_ARGS_CHARS = 400
 MAX_TEXT_CHARS = 400
 MAX_RATIONALE_CHARS = 600
+#: the gate block is a pointer for a human, not a copy of the answer (the full record stays in knowledge_results)
+MAX_BLOCK_CITATIONS = 3
+MAX_BLOCK_QUOTE_CHARS = 300
 #: what the human is told about the block, verbatim, every time
-ADVISORY_NOTE = ("Advisory only: literature evidence from the owner's private corpus. It does not change the "
-                 "policy decision, the gate, or the options of the human who decides.")
+ADVISORY_NOTE = ("Advisory only: a model's reading of passages from the owner's private corpus. A quote shows what a "
+                 "passage says, not that it applies to this analysis; you decide. It does not change the policy "
+                 "decision, the gate, or your options.")
 #: stance -> meaning for the reader at the gate
 STANCES: dict[str, str] = {
-    "objection": "the literature contradicts this choice (verbatim citations attached)",
-    "corroboration": "the literature supports this choice (verbatim citations attached)",
-    "no_evidence": "the corpus was consulted and says nothing decisive either way",
+    "objection": "a retrieved passage was cited as contradicting this choice; read it before relying on it",
+    "corroboration": "a retrieved passage was cited as supporting this choice; read it before relying on it",
+    "no_evidence": "the corpus was consulted and no passage was cited either way",
     "not_consulted": "mikebrain was not consulted (no corpus)",
-    "unavailable": "mikebrain could not answer (see status); nothing was decided by its absence",
+    "unavailable": "mikebrain could not answer (see status); its absence says nothing about the choice",
 }
 
 
@@ -54,18 +58,20 @@ def enabled() -> bool:
 
 
 def gate_question(tool_name: str, args: dict[str, Any], rationale: str, gate_reason: str, goal: str) -> str:
-    """The literature question for one gated proposal. Planner text is stripped of subject identifiers; the
-    arguments are configuration (model key, method, alpha), never data, and are size-capped."""
+    """The literature question for one gated proposal. Planner text and arguments are stripped of subject
+    references (best effort, see ``redact_subjects``) and size-capped. The planner's rationale is presented as
+    a claim to test against the excerpts, not as background to accept: the proposer must not frame its critic."""
     try:
         shown = json.dumps(args, sort_keys=True, default=str)
     except (TypeError, ValueError):
         shown = "{}"
     return (
         f"A planner working toward the goal \"{redact_subjects(goal)[:MAX_TEXT_CHARS]}\" proposes to run "
-        f"{tool_name} with arguments {shown[:MAX_ARGS_CHARS]}. The policy gated it because: "
-        f"{redact_subjects(gate_reason)[:MAX_TEXT_CHARS]}. The planner's stated reason: "
-        f"\"{redact_subjects(rationale)[:MAX_TEXT_CHARS]}\". Does the pharmacometrics literature support, "
-        f"contradict, or not address this choice for the current analysis?")
+        f"{tool_name} with arguments {redact_subjects(shown)[:MAX_ARGS_CHARS]}. The policy gated it because: "
+        f"{redact_subjects(gate_reason)[:MAX_TEXT_CHARS]}. The planner justifies it with the claim "
+        f"\"{redact_subjects(rationale)[:MAX_TEXT_CHARS]}\"; test that claim and the choice itself against the "
+        f"excerpts rather than accepting either. Does the pharmacometrics literature support, contradict, or not "
+        f"address this choice for the current analysis?")
 
 
 def stance_of(record: dict[str, Any]) -> str:
@@ -87,11 +93,17 @@ def _block(stance: str, **fields: Any) -> dict[str, Any]:
 
 
 def critic_block(record: dict[str, Any]) -> dict[str, Any]:
-    """The compact view of a ``consult_mikebrain`` record that rides on the pending proposal."""
+    """The compact view of a ``consult_mikebrain`` record that rides on the pending proposal: at most
+    ``MAX_BLOCK_CITATIONS`` quotes of ``MAX_BLOCK_QUOTE_CHARS`` characters (a verbatim prefix when cut,
+    flagged ``truncated``). The complete, validated record is in ``state.knowledge_results``."""
+    cites = list(record.get("citations") or [])
+    shown = [{"chunk_id": c.get("chunk_id"), "quote": str(c.get("quote") or "")[:MAX_BLOCK_QUOTE_CHARS],
+              "truncated": len(str(c.get("quote") or "")) > MAX_BLOCK_QUOTE_CHARS}
+             for c in cites[:MAX_BLOCK_CITATIONS]]
     return _block(
         stance_of(record), status=record.get("status"), verdict=record.get("verdict"),
         grounding=record.get("grounding"), rationale=str(record.get("rationale") or "")[:MAX_RATIONALE_CHARS],
-        citations=list(record.get("citations") or []), corpus_version=record.get("corpus_version"),
+        citations=shown, citations_total=len(cites), corpus_version=record.get("corpus_version"),
         chunk_hashes=list(record.get("chunk_hashes") or []), provider=record.get("provider"),
         model=record.get("model"), elapsed_s=record.get("elapsed_s"))
 
@@ -112,10 +124,16 @@ def critique_proposal(registry: ToolRegistry, state: PharmState, ctx: ToolContex
         root = knowledge_root(ctx)
         if load_manifest(root).is_empty:
             return state, _block("not_consulted", status="no_corpus")
+        # A superseded earlier proposal may still be parked: keep its tool name out of the consultation's
+        # state summary and restore it afterwards, through the supervisor's own write path.
+        stale = state.pending_tool
+        clean = apply_writes(state, "supervisor", {"pending_tool": None}) if stale else state
         new_state, res = registry.execute(
-            TOOL, state=state, ctx=ctx, audit=audit, timestamp=clock(), actor=actor,
+            TOOL, state=clean, ctx=ctx, audit=audit, timestamp=clock(), actor=actor,
             args={"question": gate_question(tool_name, args, rationale, gate_reason, goal),
                   "context": {"proposed_tool": tool_name, "gated_by": "planner policy"}})
+        if stale:
+            new_state = apply_writes(new_state, "supervisor", {"pending_tool": stale})
         return new_state, critic_block(res.result)
     except ManifestError as exc:
         log.warning("mikebrain_gate_critic_corpus_error", extra={"error": str(exc)[:300]})

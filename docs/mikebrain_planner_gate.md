@@ -31,11 +31,18 @@ planner proposes  ->  policy.decide  ->  "gated"           (unchanged, already f
 ```
 
 The question put to the literature names the proposed tool, its arguments
-(configuration such as model key, method or alpha, size-capped), the policy's
-reason for gating, the planner's stated rationale and the goal. Subject
-identifiers and per-subject finding ids are removed from the planner's text.
+(configuration such as model key, method or alpha), the policy's reason for
+gating, the planner's stated rationale and the goal. The rationale is presented
+as **a claim to test against the excerpts**, not as background, so the proposer
+does not get to frame its own critic. Arguments and planner text are size-capped
+and have subject references removed (best effort: "subject 12", "ID=1771",
+"patients 1, 2", and per-subject finding ids such as `nca-clf-sign-1771` reduced
+to their kind; an identifier with no digit in it is not recognised).
 The consultation also sees the same aggregate-only state summary as the M1
-critic, never rows.
+critic, never rows. That summary's blocking-finding ids are reduced to their
+kind (`recompute-cmax-1771` -> `recompute-cmax`), which also tightens the M1
+critic, where the same ids used to reach the prompt, the retrieval query and
+`knowledge_results.state_summary`.
 
 ## Enabling it
 
@@ -51,9 +58,13 @@ switch on and no corpus, no LLM call is made and the block says
 **Why it is off by default.** The consultation is a synchronous LLM call inside
 the request that parks the proposal, under the session lock, like the planner
 call itself. Measured on a local `gemma4:31b` it takes 75 to 120 seconds, and
-the first call after idle longer. A goal run parks at most `max_gated` (6)
-proposals. A smaller local model answers in seconds. Whether to turn it on by
-default is an owner decision.
+the first call after idle longer; the hard limit is the critic call's 300 s
+timeout plus embedding time. A goal run parks at most `max_gated` (6)
+proposals. A smaller local model answers in seconds. While it runs, other
+requests for the same session wait (reading a session takes the same lock), and
+a client that times out and calls `start_workflow` again restarts the planner
+from step 0, a window the planner call already had and this widens. Whether to
+turn it on by default is an owner decision.
 
 ## The `critic` block
 
@@ -62,18 +73,25 @@ response and in `state`) only when the switch is on:
 
 | Field | Meaning |
 |---|---|
-| `stance` | `objection` (literature contradicts the choice), `corroboration` (supports it), `no_evidence` (consulted, nothing decisive), `not_consulted` (no corpus), `unavailable` (could not answer) |
+| `stance` | `objection` (a retrieved passage was cited as contradicting the choice), `corroboration` (cited as supporting it), `no_evidence` (consulted, nothing cited), `not_consulted` (no corpus), `unavailable` (could not answer) |
 | `meaning` | one plain sentence for the reader at the gate |
-| `note` | "Advisory only: ..." verbatim, every time |
+| `note` | "Advisory only: ..." verbatim, every time, including that a quote shows what a passage says, not that it applies |
 | `status`, `verdict`, `grounding` | the underlying `consult_mikebrain` record |
-| `rationale`, `citations` | the model's reason and its **verbatim** quotes, each validated against the retrieved chunk by the M1 rule |
+| `rationale`, `citations`, `citations_total` | the model's reason and at most 3 **verbatim** quotes of at most 300 characters (a verbatim prefix when cut, flagged `truncated`), each validated against the retrieved chunk by the M1 rule |
 | `corpus_version`, `chunk_hashes`, `provider`, `model`, `elapsed_s` | what the answer was based on and who gave it |
 
 `objection` and `corroboration` require at least one validated verbatim
 citation: a verdict the validator downgraded to `no_evidence` is never shown as
-an objection. This satisfies the design's Phase B exit criterion, "every gated
-proposal carries at least one audited objection or an explicit 'no objection'",
-as an explicit stance on every gated proposal while the switch is on.
+an objection. What grounding proves is that the quote is in a retrieved passage,
+not that the passage entails the verdict or applies to this analysis; the stance
+wording says so and a person has to read the quote.
+
+Against the design's Phase B exit criterion ("every gated proposal carries at
+least one audited objection or an explicit 'no objection'"): a consulted
+proposal carries an explicit, audited stance. A proposal that was `not_consulted`
+or `unavailable` carries a stance too, but it is neither an objection nor a "no
+objection", and has no consultation entry. The criterion is met only for
+consulted proposals.
 
 ## Audit
 
@@ -85,10 +103,19 @@ With the switch on, a gated proposal produces these entries, in this order:
 3. `planner` / `propose_tool` (unchanged fields, plus `critic` in its outputs,
    so the advisory the human saw is bound to the proposal)
 
-Human decisions keep today's entries, byte for byte: the signed
-`human_review`, then `approve_tool` or `reject_tool`. With the switch off the
-chain is identical to a build without M3: no extra entry and no extra clock
-reading (tested entry for entry).
+Human decisions keep today's entries: the signed `human_review`, then
+`approve_tool` or `reject_tool`, with identical inputs and outputs hashes with
+and without the critic (tested). With the switch off the chain is identical to a
+build without M3: no extra entry and no extra clock reading (tested entry for
+entry).
+
+**What the signed decision does not do.** It does not reference the advisory the
+human saw. `pending_review.proposal` and the `human_review` entry are unchanged,
+so the link runs one way: the `propose_tool` entry carries the block, and the
+audit chain stores hashes only, so the block itself can be checked only while
+the proposal is pending or the record is still among the last 20
+`knowledge_results`. Making the signed decision cite the advisory would mean
+editing the gate and e-signature path, which is the owner's call, not this PR's.
 
 ## What an objection cannot do
 
@@ -131,6 +158,17 @@ Retrieval stays on the owner's machine. The excerpts and the question go to the
 **configured** LLM, which is local Ollama by default and a hosted API only if
 the owner switched to one (same statement as `docs/mikebrain.md`, "Where corpus
 text travels"). The critic uses the app's configured LLM, not a separate model.
+
+Quotes from the owner's private corpus now land in `pending_tool.critic`, the
+workflow response's `proposal` and `state`, in addition to
+`state.knowledge_results` (M1, up to 12 quotes of 600 characters per record, the
+last 20 records). The gate block is capped at 3 quotes of 300 characters per
+proposal and at most 6 proposals per run. The corpus is deployment-wide, not
+per user: with the switch on, **anyone who can start a workflow on this server
+receives quotes from it.** Enable it only where that is acceptable. On a failed
+LLM call the underlying record in `knowledge_results` also keeps the exception
+text (M1 behaviour, first 300 characters, which can name the model server URL);
+the gate block carries no error text.
 
 ## Not done in M3
 
