@@ -75,12 +75,15 @@ def append_pending_rule(rule: Rule, path: Path | str | None = None) -> RuleCatal
     Refuses anything but a ``pending_owner_review`` rule with no approver: the only writer of
     the catalog cannot approve. Approval is the owner editing the entry in a reviewed change.
     The patch version is bumped, the whole file is re-validated before it is written, and the
-    write is atomic.
+    write is atomic: a private temporary file created exclusively in the same directory, synced,
+    then renamed over the catalog. A symlinked catalog path is refused, never followed.
     """
     if rule.approval.status != "pending_owner_review" or rule.approval.by or rule.approval.date:
         raise ValueError("rules enter the catalog as pending_owner_review with no approver; "
                          "the owner approves in review")
     target = Path(path if path is not None else DEFAULT_CATALOG)
+    if target.is_symlink():
+        raise ValueError("the rule catalog path is a symlink; refusing to write through it or replace it")
     before = target.read_bytes()
     raw = json.loads(before.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     current = RuleCatalog.model_validate(raw)

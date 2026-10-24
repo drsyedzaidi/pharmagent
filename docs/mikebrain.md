@@ -203,7 +203,7 @@ malformed data never produces a finding.
 | Property | How it is enforced |
 |---|---|
 | A rule enters as `pending_owner_review` with no approver | `python -m app.knowledge rules add` is the only writer, and it refuses to write anything else |
-| A pending rule has no effect | only `approved` rules are evaluated; with none approved a review result (and its summary) equals that of an empty catalog (tested) |
+| A pending rule never changes a finding or the verdict | only `approved` rules are evaluated. A pending rule alters no finding's content, `goal_met`, `counts` or `status`, and with none approved the review result and summary equal those of an empty catalog (tested). Catalog identity covers the whole file, pending rules included, so adding a pending rule to a catalog that has approved rules does change the `catalog_version` and `catalog_sha256` stamped on findings and the `n_pending_ignored` count (tested) |
 | Approval names who and when | schema: `approval.by` and `approval.date` required when approved, forbidden when pending |
 | An automated identity cannot approve | schema rejects `claude`, `llm`, `bot`, `agent`, `mikebrain`, `loop`, `chatgpt` and similar words as approver (after Unicode width folding and dropping zero-width characters), requires the approver to contain a letter, and refuses an approval dated before the proposal. This is a speed bump, easy to evade on purpose; the control is that approval is a reviewed pull request |
 | No LLM path to the catalog | `knowledge_tools.py` cannot reach the writer (tested); predicates come from `--when` flags, never from model text |
@@ -227,7 +227,8 @@ characters of a cited passage, so a pasted quotation cannot reach the
 repository by accident. These are guards against accidents, not detection of a
 determined copy.
 `rules verify` re-derives each span from the stored text and reports
-`present`, `text_changed`, `span_out_of_range`, `missing_text`,
+`present`, `text_changed`, `metadata_changed` (the stored title, year or source type
+no longer matches the manifest), `span_out_of_range`, `missing_text`,
 `missing_document` or `corpus_empty`, and exits 1 on any problem. Review results
 deliberately do **not** depend on the corpus being present: evaluation is a pure
 function of the analysis state and the catalog, so it reproduces on CI and on a
@@ -237,7 +238,9 @@ machine without the owner's library.
 `severity`, `target`, `claim`, `evidence` text with the observed values,
 `suggested_action`) plus `origin: "mikebrain_rule"`, `rule_id`, `rule_version`,
 `catalog_version`, `catalog_sha256`, `approved_by`, `approved_on` and
-`literature` (title, year, document and span hashes). Findings are counted in
+`literature` (per evidence pointer: title, year, source type, the document hash, the
+start and end of the cited span, and the span's text hash, so the passage can be
+located and re-verified from the finding alone). Findings are counted in
 `counts` like any MEDIUM or LOW finding and never in a way that changes
 `goal_met`. Once at least one rule is approved the result also carries a
 `rule_catalog` block (`n_approved`, `n_pending_ignored`, `n_fired`, `fired`). If

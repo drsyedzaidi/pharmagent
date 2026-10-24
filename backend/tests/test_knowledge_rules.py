@@ -206,7 +206,10 @@ def test_approved_rule_fires_with_a_complete_deterministic_finding():
     assert f["catalog_version"] == "0.1.0" and f["catalog_sha256"] == "c" * 64
     assert f["approved_by"] == "Dr. Owner Example" and f["approved_on"] == "2026-10-24"
     assert "V=45" in f["evidence"] and "CL=10" not in f["evidence"]            # only the parameters that matched
-    assert f["literature"] == [{"document": "Synthetic note", "year": 2026, "doc_sha": SHA_A, "text_sha256": SHA_B}]
+    # the complete evidence pointer: attribution plus the exact span, so the passage can be located from the
+    # finding alone (document hash + start/end) and re-verified (text hash)
+    assert f["literature"] == [{"document": "Synthetic note", "year": 2026, "source_type": "paper",
+                                "doc_sha": SHA_A, "start": 0, "end": 100, "text_sha256": SHA_B}]
     assert {"id", "severity", "target", "claim", "evidence", "suggested_action", "resolved"} <= set(f)
 
 
@@ -217,6 +220,22 @@ def test_pending_rule_has_no_effect_and_is_counted():
                                      _rule(id="mb.nlme.other", approval=APPROVED, when=[
                                          dict(path="nlme_results.condition_number", op="gt", value=1000)])))
     assert rep.findings == () and rep.info["n_approved"] == 1 and rep.info["n_pending_ignored"] == 1
+
+
+def test_adding_a_pending_rule_changes_catalog_identity_but_never_a_findings_content():
+    approved = _rule(approval=APPROVED)
+    before = evaluate(_state(), RuleCatalogRecord(_catalog(approved), "a" * 64))
+    after = evaluate(_state(), RuleCatalogRecord(
+        _catalog(approved, _rule(id="mb.nlme.other_pending", approval=PENDING)), "b" * 64))
+    identity = ("catalog_version", "catalog_sha256")
+
+    def content(findings):
+        return [{k: v for k, v in f.items() if k not in identity} for f in findings]
+    assert content(after.findings) == content(before.findings) and len(before.findings) == 1
+    # ...but the identity of the file the finding was read from is the whole file, pending rules included
+    assert before.findings[0]["catalog_sha256"] == "a" * 64 and after.findings[0]["catalog_sha256"] == "b" * 64
+    assert after.info["n_pending_ignored"] == before.info["n_pending_ignored"] + 1
+    assert after.info["catalog_sha256"] != before.info["catalog_sha256"]
 
 
 @pytest.mark.parametrize("quantifier, shrink, fires", [
@@ -358,6 +377,16 @@ def test_pending_only_catalog_is_byte_identical_to_no_catalog(catalog_file):
     assert "rule_catalog" not in pending.result
     # and both equal the pre-M2 path: the engine called directly, with no catalog in sight
     assert pending.result == adversarial.review(_clean_state().model_dump(), None, {})
+
+
+def test_adding_a_pending_rule_to_an_approved_catalog_leaves_findings_and_verdict_alone(catalog_file):
+    catalog_file(_rule(approval=APPROVED))
+    (_, before), _ = _review(_clean_state())
+    catalog_file(_rule(approval=APPROVED), _rule(id="mb.nlme.other_pending", approval=PENDING))
+    (_, after), _ = _review(_clean_state())
+    for key in ("goal_met", "counts", "status", "n_findings"):
+        assert after.result[key] == before.result[key], key
+    assert [f["id"] for f in after.result["findings"]] == [f["id"] for f in before.result["findings"]]
 
 
 def test_approved_rule_adds_a_finding_but_never_changes_the_verdict(catalog_file):
@@ -560,6 +589,18 @@ def test_verify_detects_every_way_the_binding_can_break(corpus: Path):
     assert verify_ref(corpus, ref) == "corpus_empty"
 
 
+def test_verify_detects_a_changed_title_year_or_source_type(corpus: Path):
+    cid = _chunk_id(corpus, "Covariate screening on shrunken EBEs")
+    (ref,) = evidence_for_chunks(corpus, [cid])
+    assert verify_ref(corpus, ref) == "present"
+    for field, other in (("document", "A different book"), ("year", 1999), ("source_type", "guideline")):
+        assert verify_ref(corpus, ref.model_copy(update={field: other})) == "metadata_changed", field
+    assert verify_ref(corpus, ref.model_copy(update={"year": None})) == "metadata_changed"
+    # a hash mismatch is the more serious fact and wins over a metadata mismatch
+    both = ref.model_copy(update={"document": "A different book", "text_sha256": "e" * 64})
+    assert verify_ref(corpus, both) == "text_changed"
+
+
 # ── CLI + the whole flow ────────────────────────────────────────────────────────
 
 def _add_args(cat: Path, root: Path, cid: str, **over) -> list[str]:
@@ -642,6 +683,29 @@ def test_concurrent_edit_during_add_is_detected_and_leaves_no_litter(empty_cat, 
         cio.append_pending_rule(Rule.model_validate(_rule()), empty_cat)
     assert load_rule_catalog(empty_cat).catalog.rules == ()
     assert [p.name for p in empty_cat.parent.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_add_refuses_a_symlinked_catalog_and_leaves_both_paths_alone(tmp_path: Path):
+    real = tmp_path / "real_catalog.json"
+    real.write_text(json.dumps({"catalog_version": "0.1.0", "rules": []}))
+    link = tmp_path / "catalog.json"
+    link.symlink_to(real)
+    before = real.read_bytes()
+    with pytest.raises(ValueError, match="symlink"):
+        cio.append_pending_rule(Rule.model_validate(_rule()), link)
+    assert link.is_symlink() and real.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_add_never_writes_through_a_symlink_planted_at_the_old_temp_name(empty_cat):
+    """The first version wrote ``catalog.json.tmp`` (a predictable name) and then replaced the catalog, so a
+    symlink planted there made ``rules add`` overwrite whatever it pointed at."""
+    victim = empty_cat.parent / "victim.txt"
+    victim.write_text("precious")
+    (empty_cat.parent / "catalog.json.tmp").symlink_to(victim)
+    cio.append_pending_rule(Rule.model_validate(_rule()), empty_cat)
+    assert victim.read_text() == "precious"
+    assert not empty_cat.is_symlink() and len(load_rule_catalog(empty_cat).catalog.rules) == 1
 
 
 def test_cli_failures_leave_the_catalog_untouched(corpus, empty_cat, capsys):

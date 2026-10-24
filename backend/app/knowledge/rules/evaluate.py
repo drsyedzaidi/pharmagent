@@ -80,7 +80,8 @@ def _finding(rule: Rule, observed: list[str], record: RuleCatalogRecord) -> dict
         "origin": ORIGIN, "rule_id": rule.id, "rule_version": rule.version,
         "catalog_version": record.catalog.catalog_version, "catalog_sha256": record.catalog_sha256,
         "approved_by": rule.approval.by, "approved_on": rule.approval.date,
-        "literature": [{"document": e.document, "year": e.year, "doc_sha": e.doc_sha,
+        "literature": [{"document": e.document, "year": e.year, "source_type": e.source_type,
+                        "doc_sha": e.doc_sha, "start": e.start, "end": e.end,
                         "text_sha256": e.text_sha256} for e in rule.evidence],
     }
 

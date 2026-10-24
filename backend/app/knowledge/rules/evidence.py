@@ -3,7 +3,9 @@
 ``evidence_for_chunks`` turns chunk ids (from ``python -m app.knowledge search``) into
 ``EvidenceRef`` pointers: document hash, character span, and the SHA-256 of the span's text.
 Nothing from the passage is copied (not even its section heading). ``verify_ref`` re-derives the span from the stored
-document text and compares hashes, so a replaced or edited document is detected.
+document text and compares hashes, so a replaced or edited document is detected. It also re-checks the stored
+attribution (title, year, source type) against the manifest, so a rule cannot keep citing a document whose
+bibliographic record has since been corrected or swapped.
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from app.knowledge.rules.schema import EvidenceRef
 
 PRESENT = "present"
 STATUSES: tuple[str, ...] = (PRESENT, "corpus_empty", "missing_document", "missing_text", "span_out_of_range",
-                             "text_changed")
+                             "text_changed", "metadata_changed")
 
 
 COPIED_RUN_CHARS = 60      # a verbatim run this long from the cited passage is a quotation, not the owner's words
@@ -77,7 +79,8 @@ def verify_ref(root: Path, ref: EvidenceRef) -> str:
     manifest = load_manifest(root)
     if manifest.is_empty:
         return "corpus_empty"
-    if manifest.get(ref.doc_sha) is None:
+    record = manifest.get(ref.doc_sha)
+    if record is None:
         return "missing_document"
     try:
         text = load_text(root, ref.doc_sha)
@@ -85,4 +88,7 @@ def verify_ref(root: Path, ref: EvidenceRef) -> str:
         return "missing_text"
     if ref.end > len(text):
         return "span_out_of_range"
-    return PRESENT if sha256_text(text[ref.start:ref.end]) == ref.text_sha256 else "text_changed"
+    if sha256_text(text[ref.start:ref.end]) != ref.text_sha256:
+        return "text_changed"                  # the more serious fact wins over a metadata mismatch
+    stored = (record.title[:300], record.year, record.source_type)     # same truncation as evidence_for_chunks
+    return PRESENT if (ref.document, ref.year, ref.source_type) == stored else "metadata_changed"
