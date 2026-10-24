@@ -35,6 +35,13 @@ def _state(**over) -> PharmState:
     return PharmState(**{**base, **over})
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_llm(monkeypatch):
+    """Never let ambient PHARMAGENT_* config (a base URL, an Anthropic key) turn these
+    tests into network calls: the tool's LLM is the keyless mock unless a test injects one."""
+    monkeypatch.setattr(kt, "get_llm", MockLLM)
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "knowledge"
@@ -220,6 +227,28 @@ def test_llm_failure_is_recorded_not_raised(data_dir: Path, monkeypatch):
     assert rec["chunk_hashes"] and st2.knowledge_results == [rec] and audit.verify()
 
 
+def test_llm_identity_comes_from_the_client_not_settings():
+    from app.core.llm import OpenAICompatLLM
+    assert kt._llm_identity(MockLLM()) == ("mock", "mock")
+    local = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="gemma4:31b", api_key=None)
+    hosted = OpenAICompatLLM(base_url="https://api.openai.com/v1", model="gpt-4o-mini", api_key="k")
+    assert kt._llm_identity(local) == ("local", "gemma4:31b")
+    assert kt._llm_identity(hosted) == ("openai", "gpt-4o-mini")
+    assert kt._llm_identity(_StubLLM("x")) == ("_StubLLM", "stub-model")
+
+
+def test_advisory_question_redacts_subject_ids_and_values():
+    f = {"id": "nca-clf-sign-1771", "severity": "CRITICAL", "target": "subject 1771 CL/F",
+         "claim": "CL/F = -3.3 is non-physiological (<= 0)",
+         "evidence": "max observed concentration is 1234.5 (87% off) for subject 1771",
+         "suggested_action": "x", "resolved": False}
+    q = kt._advisory_question(f)
+    assert "1771" not in q and "3.3" not in q and "1234" not in q and "87" not in q
+    assert "CL/F" in q and "non-physiological" in q and "a subject" in q
+    assert kt.redact("Subject S-07 and subjects 12: AUC 3.2e+03") == "a subject and a subject: AUC N"
+    assert kt.redact(None) == "" and len(kt.redact("x" * 5000)) == kt.MAX_REDACTED_CHARS
+
+
 def test_state_summary_never_contains_raw_rows():
     state = _state(nca_parameters=[{"subject": 1, "Cmax": 4.5, "AUC_last": 30.0, "lambda_z": 0.1,
                                     "pct_AUC_extrap": 3.0}],
@@ -267,6 +296,12 @@ def test_review_with_mikebrain_leaves_counts_findings_and_goal_unchanged(data_di
     assert "advisory only, not counted" in adv.summary and audit.verify()
 
 
+def test_review_flag_is_honoured_but_not_advertised_to_the_chat_llm():
+    t = default_registry().get("adversarial_review")
+    assert set(t.input_schema["properties"]) == {"goal"}
+    assert "mikebrain" not in t.description and "mikebrain" not in json.dumps(t.to_openai())
+
+
 def test_review_flag_is_strict_opt_in(data_dir: Path):
     reg = default_registry()
     for flag in ("false", "yes", 1, None, False):
@@ -312,8 +347,17 @@ def test_review_advisories_use_one_llm_and_grounding(data_dir: Path, monkeypatch
                            {"consult_mikebrain": True})
     adv = res.result["advisories"]
     assert len(stub.calls) == len(adv) == kt.MAX_ADVISORY_QUERIES
-    # the quoted chunk is only retrieved for the shrinkage finding; elsewhere it is a foreign id → downgraded
+    # the stub always cites the shrinkage chunk: valid exactly when that chunk was retrieved for the
+    # finding's question, a foreign id (→ downgraded) otherwise — decided by the evidence set, not luck
+    from app.knowledge.index import load_index
+    quoted_hash = load_index(data_dir / "knowledge").chunk(cid).chunk_hash
     by_id = {a["finding_id"]: a for a in adv}
     assert by_id["nlme-shrink-V"]["verdict"] == "supported" and by_id["nlme-shrink-V"]["grounding"] == "ok"
-    assert all(a["grounding"] in ("ok", "failed") for a in adv)
+    for a in adv:
+        if quoted_hash in a["chunk_hashes"]:
+            assert a["verdict"] == "supported" and a["grounding"] == "ok" and a["citations"]
+        else:
+            assert a["verdict"] == "no_evidence" and a["grounding"] == "failed" and a["citations"] == []
+            assert a["dropped_citations"][0]["reason"] == "chunk_id not among retrieved chunks"
+    assert all("1" not in a["question"] and "subject" not in a["question"].lower() for a in adv)
     assert res.result["counts"]["HIGH"] == 2 and res.result["goal_met"] is False

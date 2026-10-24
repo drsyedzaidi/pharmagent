@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ MANIFEST_FILE = "manifest.json"
 TEXT_DIR = "text"
 SCHEMA_VERSION = 1
 SOURCE_TYPES: tuple[str, ...] = ("book", "paper", "guideline")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def is_sha256(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
 
 
 class ManifestError(ValueError):
@@ -58,8 +64,8 @@ class DocumentRecord:
     def validate(self) -> None:
         if self.source_type not in SOURCE_TYPES:
             raise ManifestError(f"source_type must be one of {', '.join(SOURCE_TYPES)}; got {self.source_type!r}")
-        if not self.sha256 or len(self.sha256) != 64:
-            raise ManifestError("sha256 must be a 64-hex digest")
+        if not is_sha256(self.sha256):
+            raise ManifestError("sha256 must be a 64-character lowercase hex digest")
         if not self.title.strip():
             raise ManifestError("title is required")
         if self.year is not None and not (1800 <= int(self.year) <= 2200):
@@ -106,11 +112,15 @@ class Manifest:
 
 def _record_from_dict(raw: dict[str, Any]) -> DocumentRecord:
     year = raw.get("year")
+    try:
+        year_int = int(year) if year not in (None, "") else None
+    except (TypeError, ValueError) as exc:
+        raise ManifestError(f"malformed year {year!r} in manifest") from exc
     rec = DocumentRecord(
         path=str(raw.get("path") or ""),
         sha256=str(raw.get("sha256") or ""),
         title=str(raw.get("title") or ""),
-        year=int(year) if year not in (None, "") else None,
+        year=year_int,
         source_type=str(raw.get("source_type") or ""),
         added_by=str(raw.get("added_by") or ""),
         added_at=str(raw.get("added_at") or ""),
@@ -124,6 +134,8 @@ def manifest_path(root: Path) -> Path:
 
 
 def text_path(root: Path, sha256: str) -> Path:
+    if not is_sha256(sha256):      # never let a tampered digest become a path component
+        raise ManifestError("sha256 must be a 64-character lowercase hex digest")
     return Path(root) / TEXT_DIR / f"{sha256}.txt"
 
 
@@ -139,7 +151,9 @@ def load_manifest(root: Path) -> Manifest:
         raise ManifestError(f"cannot read {p}: {exc}") from exc
     if not isinstance(raw, dict) or not isinstance(raw.get("documents"), list):
         raise ManifestError(f"malformed manifest at {p}")
-    docs = tuple(_record_from_dict(d) for d in raw["documents"] if isinstance(d, dict))
+    if not all(isinstance(d, dict) for d in raw["documents"]):
+        raise ManifestError(f"malformed document entry in {p}")   # fail closed, never silently drop
+    docs = tuple(_record_from_dict(d) for d in raw["documents"])
     seen: set[str] = set()
     for d in docs:
         if d.sha256 in seen:

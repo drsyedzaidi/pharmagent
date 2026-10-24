@@ -96,6 +96,9 @@ def _windows(n_words: int) -> list[tuple[int, int]]:
     if n_words <= CHUNK_WORDS:
         return [(0, n_words)]
     step = CHUNK_WORDS - CHUNK_OVERLAP_WORDS
+    # The last window always holds more than CHUNK_OVERLAP_WORDS words: the loop only
+    # continues while the previous window ended short of the text, i.e. while more than
+    # (CHUNK_WORDS - step) = CHUNK_OVERLAP_WORDS words remain past the next start.
     out: list[tuple[int, int]] = []
     i = 0
     while True:
@@ -104,10 +107,6 @@ def _windows(n_words: int) -> list[tuple[int, int]]:
         if j >= n_words:
             break
         i += step
-    # a final window shorter than the overlap is already covered by the previous one
-    if len(out) >= 2 and out[-1][1] - out[-1][0] <= CHUNK_OVERLAP_WORDS:
-        out.pop()
-        out[-1] = (out[-1][0], n_words)
     return out
 
 
@@ -117,8 +116,9 @@ def chunk_document(doc_sha: str, text: str) -> list[Chunk]:
         words = list(_WORD_RE.finditer(text, s, e))
         for i, j in _windows(len(words)):
             c_start, c_end = words[i].start(), words[j - 1].end()
-            if c_end - c_start > MAX_CHUNK_CHARS:
-                c_end = c_start + MAX_CHUNK_CHARS
+            if c_end - c_start > MAX_CHUNK_CHARS:      # cut on a word boundary, never mid-word
+                c_end = max((w.end() for w in words[i:j] if w.end() - c_start <= MAX_CHUNK_CHARS),
+                            default=words[i].end())
             body = text[c_start:c_end]
             if not body.strip():
                 continue

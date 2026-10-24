@@ -19,7 +19,7 @@ from pathlib import Path
 
 from app.knowledge import manifest as mf
 from app.knowledge.extract import ExtractionError, extract_text
-from app.knowledge.index import DEFAULT_K, CorpusIndex, NoEmbedder, default_embedder
+from app.knowledge.index import DEFAULT_K, Embedder, NoEmbedder, default_embedder, load_index
 
 KNOWLEDGE_SUBDIR = "knowledge"
 
@@ -29,7 +29,22 @@ def default_root() -> Path:
     return Path(settings.data_dir) / KNOWLEDGE_SUBDIR
 
 
-def cmd_add(root: Path, path: Path, title: str | None, year: int | None, source_type: str, added_by: str) -> int:
+def _warm_embeddings(root: Path, embedder: Embedder) -> str:
+    """Embed the corpus now (when the embedder answers) so the first consult does not
+    pay for it inside a request. Returns a one-word status for the CLI output."""
+    if not embedder.available():
+        return "unavailable"
+    try:
+        load_index(root).ensure_embeddings(embedder)
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal for `add`
+        print(f"warning: embeddings not cached ({str(exc)[:160]}); search will fall back to BM25",
+              file=sys.stderr)
+        return "failed"
+    return embedder.name
+
+
+def cmd_add(root: Path, path: Path, title: str | None, year: int | None, source_type: str, added_by: str,
+            embedder: Embedder | None = None) -> int:
     if not path.is_file():
         print(f"not a file: {path}", file=sys.stderr)
         return 2
@@ -47,10 +62,11 @@ def cmd_add(root: Path, path: Path, title: str | None, year: int | None, source_
     except mf.ManifestError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    n_chunks = len(CorpusIndex.load(root).chunks)
+    n_chunks = len(load_index(root).chunks)
+    embedded = _warm_embeddings(root, embedder if embedder is not None else default_embedder())
     print(json.dumps({"added": rec.sha256, "title": rec.title, "chars": len(text),
                       "documents": len(manifest.documents), "corpus_chunks": n_chunks,
-                      "corpus_version": manifest.corpus_version}, indent=1))
+                      "embeddings": embedded, "corpus_version": manifest.corpus_version}, indent=1))
     return 0
 
 
@@ -66,8 +82,7 @@ def cmd_list(root: Path) -> int:
 
 
 def cmd_search(root: Path, query: str, k: int, no_embed: bool) -> int:
-    index = CorpusIndex.load(root)
-    res = index.search(query, k=k, embedder=NoEmbedder() if no_embed else default_embedder())
+    res = load_index(root).search(query, k=k, embedder=NoEmbedder() if no_embed else default_embedder())
     out = res.to_dict()
     for h in out["hits"]:
         h["text"] = h["text"][:300] + ("…" if len(h["text"]) > 300 else "")
@@ -97,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--year", type=int)
     a.add_argument("--type", dest="source_type", choices=mf.SOURCE_TYPES, default="paper")
     a.add_argument("--by", dest="added_by", default=getpass.getuser())
+    a.add_argument("--no-embed", action="store_true", help="do not warm the embedding cache now")
     sub.add_parser("list", help="list documents and the corpus version")
     s = sub.add_parser("search", help="hybrid search (BM25 + Ollama embeddings when reachable)")
     s.add_argument("query")
@@ -107,11 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    root = args.root or default_root()
+def _dispatch(args: argparse.Namespace, root: Path) -> int:
     if args.cmd == "add":
-        return cmd_add(root, args.path, args.title, args.year, args.source_type, args.added_by)
+        return cmd_add(root, args.path, args.title, args.year, args.source_type, args.added_by,
+                       embedder=NoEmbedder() if args.no_embed else None)
     if args.cmd == "list":
         return cmd_list(root)
     if args.cmd == "search":
@@ -119,3 +134,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "remove":
         return cmd_remove(root, args.sha)
     return 2   # pragma: no cover - argparse rejects unknown commands first
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    root = args.root or default_root()
+    try:
+        return _dispatch(args, root)
+    except mf.ManifestError as exc:      # a tampered/malformed corpus is an error message, not a traceback
+        print(f"error: {exc}", file=sys.stderr)
+        return 2

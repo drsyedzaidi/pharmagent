@@ -24,7 +24,12 @@ def _roles(state: PharmState) -> dict[str, str]:
 
 
 def _wants_mikebrain(args: dict[str, Any]) -> bool:
-    """Strict opt-in: only a boolean True (or the string "true") enables the advisory consult."""
+    """Strict opt-in: only a boolean True (or the string "true") enables the advisory consult.
+
+    The flag is honoured when a caller passes it (run_tool / the API) but deliberately
+    NOT advertised in the LLM-facing schema below: it is synchronous and up to three
+    local-LLM calls long, so a chat agent must not be able to switch it on by itself.
+    Offering it to the planner/critic is an M3 decision (docs/mikebrain.md)."""
     flag = args.get("consult_mikebrain", False)
     if isinstance(flag, str):
         return flag.strip().lower() == "true"
@@ -79,14 +84,10 @@ TOOLS = [
         "Adversarially review the current analysis: independently recompute key "
         "quantities from the raw data, challenge every reported value, and emit "
         "severity-ranked findings against a checkable goal (default: zero unresolved "
-        "CRITICAL or HIGH). Args: goal (optional string); consult_mikebrain (optional "
-        "boolean, default false) adds severity-free literature advisories from the "
-        "owner's corpus that never affect counts or the goal.",
+        "CRITICAL or HIGH). Args: goal (optional string).",
         "reviewer",
         {"type": "object",
-         "properties": {"goal": {"type": "string"},
-                        "consult_mikebrain": {"type": "boolean"}},
-         "required": []},
+         "properties": {"goal": {"type": "string"}}, "required": []},
         adversarial_review,
     ),
 ]

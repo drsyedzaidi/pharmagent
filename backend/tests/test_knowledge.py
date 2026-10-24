@@ -108,6 +108,32 @@ def test_missing_manifest_is_an_empty_corpus(tmp_path: Path):
     assert mf.load_manifest(tmp_path / "nowhere").is_empty
 
 
+def test_sha256_must_be_lowercase_hex_and_never_a_path(tmp_path: Path):
+    traversal = ("../" * 21 + "x")[:64]
+    assert len(traversal) == 64 and not mf.is_sha256(traversal)
+    assert not mf.is_sha256("A" * 64) and mf.is_sha256("a" * 64)
+    with pytest.raises(mf.ManifestError):
+        _record(NOTES[0], sha256=traversal).validate()
+    with pytest.raises(mf.ManifestError):           # a tampered digest cannot become a path component
+        mf.text_path(tmp_path, traversal)
+    with pytest.raises(mf.ManifestError):
+        mf.load_text(tmp_path, "A" * 64)
+
+
+def test_manifest_fails_closed_on_bad_year_and_non_object_entries(tmp_path: Path):
+    root = tmp_path / "k"
+    _build(root, NOTES[:1])
+    good = json.loads(mf.manifest_path(root).read_text())
+    bad_year = {**good, "documents": [{**good["documents"][0], "year": "abc"}]}
+    mf.manifest_path(root).write_text(json.dumps(bad_year))
+    with pytest.raises(mf.ManifestError):
+        mf.load_manifest(root)
+    mixed = {**good, "documents": [good["documents"][0], "not-an-object"]}
+    mf.manifest_path(root).write_text(json.dumps(mixed))
+    with pytest.raises(mf.ManifestError):           # never silently dropped (that would change corpus_version)
+        mf.load_manifest(root)
+
+
 # ── extraction ──────────────────────────────────────────────────────────────────
 
 def test_extract_text_reads_txt_and_rejects_unsupported_or_empty(tmp_path: Path):
@@ -118,6 +144,21 @@ def test_extract_text_reads_txt_and_rejects_unsupported_or_empty(tmp_path: Path)
     short.write_text("too short to index")
     with pytest.raises(ExtractionError):
         extract_text(short)
+
+
+def test_extract_pdf_branch_refuses_blank_and_corrupt_pdfs(tmp_path: Path):
+    pypdf = pytest.importorskip("pypdf")
+    blank = tmp_path / "blank.pdf"
+    w = pypdf.PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    with blank.open("wb") as fh:
+        w.write(fh)
+    with pytest.raises(ExtractionError, match="yielded only"):   # image-only / empty → refused, not indexed
+        extract_text(blank)
+    corrupt = tmp_path / "corrupt.pdf"
+    corrupt.write_bytes(b"%PDF-1.4 garbage" + bytes(range(256)) * 4)
+    with pytest.raises(ExtractionError):
+        extract_text(corrupt)
 
 
 # ── chunking ────────────────────────────────────────────────────────────────────
@@ -235,6 +276,43 @@ def test_embedding_failure_falls_back_to_bm25_and_says_so(corpus: Path):
     assert res.hits and res.hits[0].title == "shrinkage_note"
 
 
+def test_stale_or_corrupt_vector_cache_is_detected(corpus: Path):
+    index = CorpusIndex.load(corpus)
+    emb = _FakeEmbedder()
+    index.search("shrinkage", k=2, embedder=emb)                       # populates the cache (5-dim vectors)
+    cache_files = sorted((corpus / "embeddings").glob("*.json"))
+    # a same-name model update that changed dimensions: cached vectors no longer match the query vector
+    for p in cache_files:
+        raw = json.loads(p.read_text())
+        p.write_text(json.dumps({"model": raw["model"], "vectors": {h: v[:3] for h, v in raw["vectors"].items()}}))
+    fresh = CorpusIndex.load(corpus)
+    res = fresh.search("shrinkage", k=2, embedder=emb)
+    assert res.embedding == EMBEDDING_UNAVAILABLE and "dimension mismatch" in (res.embedding_error or "")
+    assert res.hits and res.hits[0].title == "shrinkage_note"          # BM25 still answers
+    # a corrupt cache file is treated as missing and re-embedded, not crashed on
+    cache_files[0].write_text("[1, 2, 3]")
+    cache_files[1].write_text(json.dumps({"model": emb.name, "vectors": {"h": ["x", "y"]}}))
+    before = len(emb.calls)
+    again = CorpusIndex.load(corpus)
+    import shutil
+    shutil.rmtree(corpus / "embeddings")                                # start clean so dims agree again
+    res = again.search("allometric", k=2, embedder=emb)
+    assert res.embedding == emb.name and len(emb.calls) > before
+
+
+def test_load_index_is_cached_until_the_corpus_changes(tmp_path: Path):
+    from app.knowledge.index import load_index
+    root = tmp_path / "k"
+    _build(root, NOTES[:2])
+    first = load_index(root)
+    assert load_index(root) is first
+    n_before = len(first.chunks)
+    mf.add_document(root, _record(NOTES[2]), extract_text(NOTES[2]))
+    second = load_index(root)
+    assert second is not first and len(second.chunks) > n_before
+    assert second.corpus_version == mf.load_manifest(root).corpus_version
+
+
 def test_ollama_embedder_unavailable_when_server_unreachable(monkeypatch):
     import requests
 
@@ -289,6 +367,14 @@ def test_validator_accepts_verbatim_rejects_paraphrase_foreign_id_short_long_dup
     assert len(dropped) == 6
 
 
+def test_quote_must_be_verbatim_in_the_cited_chunk_not_merely_somewhere():
+    aic = "A difference in AIC of less than two points"
+    valid, dropped = validate_citations([{"chunk_id": "aaaaaaaaaaaa:2", "quote": aic},
+                                         {"chunk_id": "bbbbbbbbbbbb:0", "quote": aic}], CHUNKS)
+    assert valid == [{"chunk_id": "bbbbbbbbbbbb:0", "quote": aic}]
+    assert dropped[0]["chunk_id"] == "aaaaaaaaaaaa:2" and "verbatim" in dropped[0]["reason"]
+
+
 def test_ground_supported_with_verbatim_citation_is_ok():
     g = ground(_reply(citations=[{"chunk_id": "aaaaaaaaaaaa:2", "quote": VERBATIM}]), CHUNKS)
     assert g.verdict == "supported" and g.grounding == GROUNDING_OK and len(g.citations) == 1
@@ -332,12 +418,20 @@ def test_parse_critic_json_accepts_fenced_and_embedded_objects():
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────
 
-def test_cli_add_list_search_remove(tmp_path: Path, capsys):
+def test_cli_add_list_search_remove(tmp_path: Path, capsys, monkeypatch):
+    emb = _FakeEmbedder()
+    monkeypatch.setattr(cli, "default_embedder", lambda: emb)           # offline: never probe Ollama
     root = tmp_path / "k"
     assert cli.main(["--root", str(root), "add", str(NOTES[-1]), "--title", "Shrinkage", "--year", "2026",
                      "--type", "guideline", "--by", "owner"]) == 0
     added = json.loads(capsys.readouterr().out)
     assert added["documents"] == 1 and added["corpus_chunks"] >= 3
+    assert added["embeddings"] == emb.name and emb.calls                # cache warmed at add time
+    assert list((root / "embeddings").glob("*.json"))
+    assert cli.main(["--root", str(root), "add", str(NOTES[0]), "--no-embed"]) == 0
+    assert json.loads(capsys.readouterr().out)["embeddings"] == EMBEDDING_UNAVAILABLE
+    assert cli.main(["--root", str(root), "remove", mf.file_sha256(NOTES[0])[:10]]) == 0
+    capsys.readouterr()
     assert cli.main(["--root", str(root), "list"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["documents"][0]["title"] == "Shrinkage" and listed["documents"][0]["source_type"] == "guideline"
@@ -348,6 +442,9 @@ def test_cli_add_list_search_remove(tmp_path: Path, capsys):
     assert cli.main(["--root", str(root), "remove", added["added"][:8]]) == 0
     assert json.loads(capsys.readouterr().out)["documents"] == 0
     assert cli.main(["--root", str(root), "add", str(tmp_path / "missing.pdf")]) == 2
+    mf.manifest_path(root).write_text("{broken", encoding="utf-8")
+    assert cli.main(["--root", str(root), "list"]) == 2                 # error message, not a traceback
+    assert "error:" in capsys.readouterr().err
 
 
 # ── opt-in: real embeddings ─────────────────────────────────────────────────────

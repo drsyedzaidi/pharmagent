@@ -17,16 +17,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 from app.agents.base import Agent
-from app.config import settings
-from app.core.llm import LLM, get_llm
+from app.core.llm import LLM, MockLLM, OpenAICompatLLM, RealLLM, get_llm, is_loopback
 from app.core.pharmstate import PharmState
 from app.knowledge.grounding import GROUNDING_FAILED, NO_EVIDENCE, ground
-from app.knowledge.index import DEFAULT_K, MAX_K, CorpusIndex, Embedder, SearchResult, default_embedder
+from app.knowledge.index import DEFAULT_K, MAX_K, Embedder, SearchResult, default_embedder, load_index
 from app.knowledge.manifest import ManifestError, load_manifest
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -105,7 +105,14 @@ def _render_excerpts(res: SearchResult) -> str:
 
 
 def _llm_identity(llm: LLM) -> tuple[str, str]:
-    return settings.llm_provider_effective, str(getattr(llm, "model", "mock"))
+    """(provider, model) from the client object itself — never from ambient settings."""
+    if isinstance(llm, MockLLM):
+        return "mock", "mock"
+    if isinstance(llm, RealLLM):
+        return "anthropic", llm.model
+    if isinstance(llm, OpenAICompatLLM):
+        return ("local" if is_loopback(llm.base_url) else "openai"), llm.model
+    return type(llm).__name__, str(getattr(llm, "model", "unknown"))
 
 
 def consult(question: str, state: PharmState, root: Path, *, context: dict[str, Any] | None = None,
@@ -140,7 +147,7 @@ def consult(question: str, state: PharmState, root: Path, *, context: dict[str, 
         return done(status="no_corpus", corpus_version=manifest.corpus_version,
                     rationale="no documents in the mikebrain corpus")
     try:
-        index = CorpusIndex.load(root)
+        index = load_index(root)
     except ManifestError as exc:
         return done(status="corpus_error", corpus_version=manifest.corpus_version, error=str(exc)[:300])
 
@@ -187,10 +194,23 @@ def consult_mikebrain(state: PharmState, ctx: ToolContext, args: dict[str, Any])
 
 
 # ── adversarial_review integration (advisory only) ──────────────────────────────
+_SUBJECT_RE = re.compile(r"\bsubjects?\s+[\w.-]+", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?", re.IGNORECASE)
+MAX_REDACTED_CHARS = 400
+
+
+def redact(text: Any) -> str:
+    """Finding text with subject identifiers and numeric values removed: a literature
+    question needs the *kind* of refutation, never an individual's value."""
+    t = _SUBJECT_RE.sub("a subject", str(text or ""))
+    t = _NUMBER_RE.sub("N", t)
+    return " ".join(t.split())[:MAX_REDACTED_CHARS]
+
+
 def _advisory_question(f: dict[str, Any]) -> str:
-    return (f"Does the literature support this refutation of a {f.get('target', 'result')}? "
-            f"The analysis claims: {f.get('claim', '')}. The independent evidence against it: "
-            f"{f.get('evidence', '')}.")
+    return (f"Does the literature support this refutation of a {redact(f.get('target') or 'result')}? "
+            f"The analysis claims: {redact(f.get('claim'))}. The independent evidence against it: "
+            f"{redact(f.get('evidence'))}.")
 
 
 def review_advisories(review: dict[str, Any], state: PharmState, ctx: ToolContext, *,

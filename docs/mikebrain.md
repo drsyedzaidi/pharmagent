@@ -52,6 +52,14 @@ Embeddings for the vector side of retrieval come from Ollama's
 tests, a laptop without it) retrieval runs **BM25-only** and every result says
 so: `embedding: "unavailable"`.
 
+**Where corpus text travels.** Retrieval and embeddings never leave the
+machine. The critic call sends the retrieved excerpts (about six chunks of
+≈500 tokens) to whichever LLM is configured: local Ollama by default, but if
+the owner switches the app to Claude or ChatGPT in the UI, those excerpts go to
+that hosted API. Choosing a provider is therefore also a choice about where
+excerpts of the owner's library may be sent. Each record states `provider` and
+`model`, derived from the client object, so the audit shows which it was.
+
 ## Data flow
 
 ```
@@ -74,8 +82,15 @@ consult_mikebrain(question, context?)           [reviewer tool, not expensive]
 `adversarial_review(consult_mikebrain=true)` runs the same pipeline once per
 unresolved finding (first three, severity order) and stores the answers under
 `review_results["advisories"]` with `kind: "literature_advisory"` and **no
-severity**. `advisory_status` is `ok`, `no_corpus` or `no_findings`. The flag
-defaults to false; the review loop and the `/review` endpoint never set it.
+severity**. `advisory_status` is `ok`, `no_corpus`, `no_findings` or
+`error: …` (an advisory crash never fails the review). The question put to the
+literature is built from the finding with subject identifiers and numeric
+values redacted ("CL/F = N is non-physiological"), so no individual value
+leaves the state summary's aggregate posture. The flag defaults to false; the
+review loop and the `/review` endpoint never set it, and it is honoured only
+when a caller passes it explicitly — it is **not** listed in the tool schema the
+chat LLM sees, because three synchronous local-LLM calls must not be something
+an agent switches on by itself.
 
 ## The quote-grounding rule
 
@@ -138,14 +153,23 @@ rather than indexed as empty (OCR / MinerU are deliberately not dependencies).
 Adding or removing any document changes `corpus_version`, so earlier results
 remain attributable to the corpus they were answered from.
 
+`add` also warms the embedding cache when Ollama answers (`--no-embed` to
+skip), so the first consult does not embed a whole book inside a request. The
+cache under `<root>/embeddings/` is keyed by embedder name and chunk hash; after
+updating the embedding model under the same name, delete that directory to
+re-embed (a dimension mismatch is detected and falls back to BM25 with an
+`embedding_error` until then). The in-process index is cached and re-read
+whenever `corpus_version` changes.
+
 ## Copyright
 
 The repository ships **no documents and no copyrighted text**; the three test
 fixtures are short synthetic notes written for the suite. The corpus is the
-owner's private library for private retrieval on the owner's machine. Reports
-and state never reproduce passages: results store chunk hashes and offsets, and
-citations are short verbatim excerpts (≤ 600 characters) kept as evidence of
-grounding, not as content.
+owner's private library; retrieval happens on the owner's machine and excerpts
+reach a hosted LLM only if the owner configures one (see "Where corpus text
+travels"). Reports and state never reproduce passages: results store chunk
+hashes and offsets, and citations are short verbatim excerpts (≤ 600 characters)
+kept as evidence of grounding, not as content.
 
 ## Roadmap
 

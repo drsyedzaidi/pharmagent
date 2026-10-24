@@ -204,6 +204,7 @@ class CorpusIndex:
         self._by_id = {c.chunk_id: c for c in chunks}
         self._titles = {d.sha256: d.title for d in manifest.documents}
         self._bm25: BM25 | None = None
+        self._vectors: dict[str, dict[str, list[float]]] = {}   # embedder name -> chunk_hash -> vector
 
     @classmethod
     def load(cls, root: Path) -> CorpusIndex:
@@ -230,23 +231,33 @@ class CorpusIndex:
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", embedder.name)
         return self.root / EMBED_DIR / f"{doc_sha}.{safe}.json"
 
-    def ensure_embeddings(self, embedder: Embedder) -> dict[str, list[float]]:
-        """chunk_hash → vector for every chunk, embedding what the cache lacks."""
+    @staticmethod
+    def _read_vector_cache(path: Path, model: str) -> dict[str, list[float]]:
+        """Cached vectors for ``model``; anything malformed is treated as missing (re-embedded)."""
         import json
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(raw, dict) or raw.get("model") != model or not isinstance(raw.get("vectors"), dict):
+            return {}
+        return {k: v for k, v in raw["vectors"].items()
+                if isinstance(v, list) and v and all(isinstance(x, (int, float)) for x in v)}
+
+    def ensure_embeddings(self, embedder: Embedder) -> dict[str, list[float]]:
+        """chunk_hash → vector for every chunk, embedding what the on-disk cache lacks.
+        Held on the instance afterwards, so repeated searches do not re-read the cache."""
+        import json
+        held = self._vectors.get(embedder.name)
+        if held is not None and all(c.chunk_hash in held for c in self.chunks):
+            return held
         vectors: dict[str, list[float]] = {}
         by_doc: dict[str, list[Chunk]] = {}
         for c in self.chunks:
             by_doc.setdefault(c.doc_sha, []).append(c)
         for doc_sha, chunks in by_doc.items():
             path = self._cache_path(doc_sha, embedder)
-            cached: dict[str, list[float]] = {}
-            if path.is_file():
-                try:
-                    raw = json.loads(path.read_text(encoding="utf-8"))
-                    cached = {k: v for k, v in (raw.get("vectors") or {}).items()
-                              if isinstance(v, list)} if raw.get("model") == embedder.name else {}
-                except (OSError, ValueError):
-                    cached = {}
+            cached = self._read_vector_cache(path, embedder.name) if path.is_file() else {}
             missing = [c for c in chunks if c.chunk_hash not in cached]
             if missing:
                 new = embedder.embed([c.text for c in missing])
@@ -254,6 +265,7 @@ class CorpusIndex:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps({"model": embedder.name, "vectors": cached}), encoding="utf-8")
             vectors.update({c.chunk_hash: cached[c.chunk_hash] for c in chunks})
+        self._vectors = {**self._vectors, embedder.name: vectors}
         return vectors
 
     # -- search ---------------------------------------------------------------
@@ -275,6 +287,9 @@ class CorpusIndex:
             try:
                 vectors = self.ensure_embeddings(embedder)
                 qv = embedder.embed([query])[0]
+                if any(len(vectors[c.chunk_hash]) != len(qv) for c in self.chunks):
+                    raise RuntimeError(f"embedding dimension mismatch for {embedder.name}; delete "
+                                       f"{self.root / EMBED_DIR} to re-embed")
                 sims = [(_cosine(qv, vectors[c.chunk_hash]), c.chunk_id) for c in self.chunks]
                 ordered = sorted(sims, key=lambda t: (-t[0], t[1]))[:pool]
                 vector_rank = {cid: r for r, (_, cid) in enumerate(ordered)}
@@ -295,3 +310,21 @@ class CorpusIndex:
             bm25_rank=bm25_rank.get(cid), vector_rank=vector_rank.get(cid),
         ) for cid in order)
         return SearchResult(query, hits, embedding, self.corpus_version, n, embedding_error)
+
+
+# ── process-wide index cache ────────────────────────────────────────────────────
+_INDEX_CACHE: dict[str, CorpusIndex] = {}
+
+
+def load_index(root: Path) -> CorpusIndex:
+    """``CorpusIndex.load`` behind a cache keyed by root and verified against the
+    manifest's current ``corpus_version`` on every call, so a consult never re-chunks
+    an unchanged corpus and a changed corpus is always re-read."""
+    key = str(Path(root).resolve())
+    version = load_manifest(root).corpus_version
+    hit = _INDEX_CACHE.get(key)
+    if hit is not None and hit.corpus_version == version:
+        return hit
+    index = CorpusIndex.load(root)
+    _INDEX_CACHE[key] = index
+    return index
