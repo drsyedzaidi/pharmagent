@@ -260,6 +260,36 @@ def test_a_key_carried_only_by_gated_variants_is_reviewed_even_if_a_sibling_ran(
     assert gaps["model_key"]["note"] == dr.GATED_KEY_NOTE
 
 
+def test_a_key_carried_only_by_a_rejected_variant_is_not_called_human_reviewed():
+    """"1cmt" is not a PK-library key, so the policy rejects the call before any gate:
+    no human saw `foo`, and the report must not say one did."""
+    scripts = [lambda: _Script([LOAD, FIT_COMPARE]),
+               lambda: _Script([LOAD, {"tool": "fit_pk_model",
+                                       "args": {"compare": True, "model_key": "1cmt", "foo": 1},
+                                       "rationale": "pin it"}])]
+    report = _run(scripts)
+    step1 = next(p for p in report["decision_points"] if p["step"] == 1)
+    modes = {v["args"].get("model_key"): v["policy_mode"] for v in step1["variants"]}
+    assert modes == {None: policy.MODE_AUTONOMOUS, "1cmt": policy.MODE_REJECTED}
+    gaps = {g["key"]: g for g in report["candidate_rule_gaps"]["arg_keys"]}
+    assert gaps["foo"]["admitted_without_gate"] is False and gaps["foo"]["rejected_by_policy"] is True
+    assert gaps["foo"]["note"] == dr.REJECTED_KEY_NOTE != dr.REVIEWED_KEY_NOTE
+
+
+@pytest.mark.parametrize(("modes", "note"), [
+    (["gated", "gated"], "REVIEWED_KEY_NOTE"),
+    (["gated", "rejected"], "REJECTED_KEY_NOTE"),       # one carrier never reached the gate
+    (["rejected", "autonomous"], "UNGATED_KEY_NOTE"),   # one carrier ran unseen: the stronger claim
+])
+def test_a_non_scientific_key_is_reviewed_only_when_no_carrier_was_rejected(modes, note):
+    variants = [{"tool": "validate_cdisc", "args": {"strict": i}, "policy_mode": m}
+                for i, m in enumerate(modes)]
+    point = {"step": 1, "label": dr.DIVERGED_ARGS, "replicates": [0, 1], "prefix": [],
+             "variants": variants, "varied_arg_keys": {"validate_cdisc": ["strict"]}}
+    (gap,) = dr.candidate_rule_gaps([point])["arg_keys"]
+    assert gap["note"] == getattr(dr, note)
+
+
 def test_different_tools_at_the_same_point_are_diverged_tool_and_branches_compare_within():
     scripts = [lambda: _Script([LOAD, {"tool": "validate_cdisc", "args": {}, "rationale": "v"}]),
                lambda: _Script([LOAD, {"tool": "generate_spaghetti_plot", "args": {}, "rationale": "s"}])]

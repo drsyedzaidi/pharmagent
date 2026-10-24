@@ -207,6 +207,10 @@ failed run never reads as convergence.
     for another reason (the tool is always gated, or another argument
     triggered the gate). A human saw the value. It needs a rule only if it
     should be gated on its own.
+  - **not a scientific-choice key, and the policy rejected a variant carrying
+    it** (and none ran without a gate). A rejected proposal never reaches the
+    human gate, so no human is known to have seen that value. Check the policy
+    rejections for why.
   - **not a scientific-choice key and admitted without a gate** in at least
     one replicate that carried it. The value ran with no human seeing it. If
     it changes the science, this is the strongest candidate for
