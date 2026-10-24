@@ -15,7 +15,7 @@ from app.benchmarks import pmxbench as pmx
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.data_tools import NONMEM_NA_VALUES
-from app.tools.pkmodel_tools import _build_subjects, _covariate_candidates
+from app.tools.pkmodel_tools import _build_subjects, _build_subjects_counted, _covariate_candidates
 
 FIX = Path(__file__).parent / "fixtures" / "pmxbench" / "scenario_00"
 MANIFEST = json.loads((FIX / "MANIFEST.json").read_text(encoding="utf-8"))
@@ -141,16 +141,16 @@ def test_pharmagent_subject_builder_reads_the_prepared_frame(prepared):
     assert {c["covariate"] for c in cands} == {"ALB", "CRCL"}
 
 
-def test_non_m3_consumers_score_censored_records_at_the_lloq(prepared):
-    """Pins the documented trade-off (docs/pmxbench.md, G5): without with_blq the
-    builder keeps DV > 0 rows, so the 36 post-dose censored records enter the two-stage
-    fit, SCM and the VPC overlay as observations at the LLOQ."""
+def test_non_m3_consumers_exclude_censored_records_m1(prepared):
+    """docs/pmxbench.md, G5 (resolved): without with_blq the builder applies M1, so the
+    36 post-dose censored records are excluded and counted, never scored at the LLOQ."""
     out, report = prepared
-    subjects, _, _ = _build_subjects(out, detect_roles(list(out.columns)))
+    subjects, _, _, n_dropped = _build_subjects_counted(out, detect_roles(list(out.columns)))
     obs = [c for s in subjects for c in s["obs_c"]]
-    assert len(obs) == 1440
-    assert sum(1 for c in obs if c == pmx.SCENARIO_00_LLOQ) == 36 == report["n_censored_postdose"]
-    assert any("score the post-dose censored records" in n for n in report["notes"])
+    assert len(obs) == 1440 - 36
+    assert pmx.SCENARIO_00_LLOQ not in obs
+    assert n_dropped == 36 == report["n_censored_postdose"]
+    assert any("exclude them (M1)" in n for n in report["notes"])
 
 
 def test_raw_file_would_break_m3_and_pollute_the_covariate_pool(raw):
@@ -317,7 +317,14 @@ def test_scm_selected_covariates_use_the_scm_final_model_and_standard_names():
     a = sub["answers"]
     assert a["cov_effects"] == {"CL": {"ALB": 0.8}, "V": {"WT": 0.8}}
     assert a["disposition_params"]["CL"] == 0.21                    # SCM final, not base NLME
-    assert "does not apply M3" in _steps(sub)
+    assert "run_scm applies M3" in _steps(sub)
+
+
+def test_an_scm_final_fit_without_censored_records_is_flagged_as_not_m3():
+    scm = _scm([("CL", "ALB")])
+    scm = {**scm, "final": {**scm["final"], "n_blq": 0}}     # e.g. an SCM run from before M3
+    steps = _steps(pmx.build_submission(_state(nlme_results=_nl(), scm_results=scm)))
+    assert "not fitted with M3" in steps and "run_scm applies M3" not in steps
 
 
 @pytest.mark.parametrize("nl", [_nl(model_key="iv_3cmt", theta={"CL": 1, "VC": 1, "Q2": 1, "VP2": 1,

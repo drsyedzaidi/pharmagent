@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.compute.dosing import parse_blq_flag
 from app.config import settings
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles, extract_schema
@@ -79,9 +80,18 @@ def profile_pk_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
 
+    cens_col = next((c for c, r in roles.items() if r == "CENS"), None)
+
     dv = pd.to_numeric(df[dv_col], errors="coerce") if dv_col else pd.Series(dtype=float)
     n_obs = int(dv.notna().sum()) if dv_col else 0
-    blq_pct = round(100.0 * float((dv <= 0).sum()) / max(n_obs, 1), 2) if dv_col else None
+    # A CENS flag is authoritative: under the NONMEM convention censored rows
+    # carry the LLOQ in DV, so DV <= 0 would report 0 % BLQ.
+    blq_basis = ("CENS" if cens_col and cens_col in df.columns else "DV<=0") if dv_col else None
+    if blq_basis == "CENS":
+        is_blq = df[cens_col].map(parse_blq_flag).astype(bool) & dv.notna()
+    else:
+        is_blq = dv <= 0
+    blq_pct = round(100.0 * float(is_blq.sum()) / max(n_obs, 1), 2) if dv_col else None
     missing_pct = round(100.0 * float(df.isna().sum().sum()) / (df.shape[0] * df.shape[1]), 2)
 
     sparse = []
@@ -92,6 +102,7 @@ def profile_pk_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     quality = {
         "n_observations": n_obs,
         "blq_pct": blq_pct,
+        "blq_basis": blq_basis,
         "total_missing_pct": missing_pct,
         "sparse_subjects": sparse,
         "n_sparse_subjects": len(sparse),

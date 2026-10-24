@@ -203,9 +203,10 @@ def _prepare_report(df: pd.DataFrame, col: dict[str, pd.Series], lloq: float,
         "notes": [
             "Predose records (TIME <= 0) stay in the file; PharmAgent's subject builder keeps only "
             "observations at TIME > 0, so the M3 likelihood sees the post-dose censored records only.",
-            "Only M3 consumers (run_nlme, run_diagnostics, the run_vpc BLQ check) read CENS. The others "
-            "(two-stage fit_pk_model, run_scm, the run_vpc overlay) score the post-dose censored records as "
-            "observations at the LLOQ, because DV carries it (docs/pmxbench.md, G5).",
+            "M3 consumers (run_nlme, run_scm, run_diagnostics, the run_vpc BLQ check) keep the post-dose "
+            "censored records as censored. The others (two-stage fit_pk_model, the run_vpc overlay, "
+            "run_prior_check, the forest/exposure helpers) exclude them (M1) and report n_blq_dropped; "
+            "none scores them at the LLOQ that DV carries (docs/pmxbench.md, G5).",
             "No record is excluded or flagged as an outlier here: PharmAgent has no record-level "
             "outlier screen (docs/pmxbench.md).",
         ],
@@ -243,9 +244,11 @@ def prepare_dataset(df: pd.DataFrame, *, lloq: float = SCENARIO_00_LLOQ,
 
 # ─────────────────────────────── submission ─────────────────────────────────
 
-_NON_M3_NOTE = ("The final model is the SCM final fit. run_scm, like the two-stage fit_pk_model and the "
-                "run_vpc overlay, does not apply M3: censored records, whose DV carries the LLOQ, enter "
-                "its likelihood as observations at the LLOQ.")
+_SCM_M3_NOTE = ("The final model is the SCM final fit; run_scm applies M3, like run_nlme, so censored "
+                "records enter its likelihood as censored.")
+_SCM_NOT_M3_NOTE = ("The final model is the SCM final fit, which reports no censored records (n_blq 0), so "
+                    "it was not fitted with M3 (e.g. an SCM run from before M3 support): censored records, "
+                    "whose DV carries the LLOQ, may have entered its likelihood as observations at the LLOQ.")
 _SOFTWARE_KEYS = ("python", "numpy", "scipy", "pandas")
 _LEFT_NULL = "structural and parameter items left null."
 
@@ -276,7 +279,8 @@ def _final_model(state: PharmState) -> tuple[dict | None, str | None, list[str]]
         return None, None, ["SCM and the stored NLME fit describe different models (structure or residual "
                             "error); rerun SCM on the final model. " + _LEFT_NULL.capitalize()]
     if scm and scm.get("selected"):
-        final, source, notes = scm_final, "run_scm final model", [_NON_M3_NOTE]
+        m3_note = _SCM_M3_NOTE if (scm_final or {}).get("n_blq") else _SCM_NOT_M3_NOTE
+        final, source, notes = scm_final, "run_scm final model", [m3_note]
     else:
         final, source, notes = nl, "run_nlme", []
     if not final:
