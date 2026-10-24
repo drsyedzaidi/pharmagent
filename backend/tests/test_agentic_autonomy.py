@@ -95,7 +95,7 @@ def test_rich_state_summary_exposes_diagnostics_never_raw_rows():
         "status": "FINDINGS BLOCK GOAL",
         "goal_met": False,
         "counts": {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 0, "LOW": 0},
-        "blocking_ids": ["nca-extrap-2"],
+        "blocking_ids": ["nca-extrap"],   # the kind only: "-2" is a subject id and must not reach the LLM
     }
     assert summary["turn_observations"] == [
         {"agent": "data_manager", "tool": "load_dataset", "status": "ok"}

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.audit import AuditChain
+from app.core.finding_ids import finding_kind
 from app.core.pharmstate import PharmState
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 
@@ -151,10 +152,12 @@ class Agent:
                 "status": rev.get("status"),
                 "goal_met": rev.get("goal_met"),
                 "counts": rev.get("counts"),
-                "blocking_ids": [
-                    f.get("id") for f in (rev.get("findings") or [])
+                # Per-subject finding ids end in the subject id (recompute-cmax-1771) and this
+                # summary reaches the chat and planner LLMs: keep the kind, drop the subject.
+                "blocking_ids": sorted({
+                    finding_kind(str(f.get("id"))) for f in (rev.get("findings") or [])
                     if not f.get("resolved") and f.get("severity") in ("CRITICAL", "HIGH")
-                ],
+                }),
             }
 
         return {
