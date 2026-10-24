@@ -7,8 +7,9 @@ diagnostics in state; this module decides what happens to the proposal:
 * ``gated``      — admitted as a PROPOSAL only; it is parked in
                    ``state.pending_tool`` for a human approve / reject exactly
                    like a chat-proposed expensive tool. Nothing is computed.
-* rejected       — not admitted (out of the template's allow-list, scientific
-                   prerequisites not in state, an identical repeat, or budget).
+* rejected       — not admitted (out of the template's allow-list, a model name
+                   outside the PK model library, scientific prerequisites not in
+                   state, an identical repeat, or budget).
 
 Every rule here is data the owner can read in one screen: the prerequisite
 DAG, the autonomous allow-list, the argument keys that turn a cheap tool into
@@ -23,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.compute.pk_models import REGISTRY
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool
 
@@ -67,6 +69,21 @@ SCIENTIFIC_CHOICE_KEYS: dict[str, frozenset[str]] = {
 }
 
 
+# Argument keys that name a model of the PK model library (the keys of
+# ``app.compute.pk_models.REGISTRY``, e.g. ``oral_1cmt``). A name outside it is
+# rejected before the gate: ``fit_pk_model`` silently drops unknown names from
+# ``models``, so approving such a proposal would run a different comparison than
+# the one the reviewer was shown. ``fit_compartmental`` is not listed: its own
+# ``models`` argument is a different namespace ("1cmt" / "2cmt").
+MODEL_KEY_ARGS: dict[str, tuple[str, ...]] = {
+    "fit_pk_model": ("model_key", "models"),
+    "run_nlme": ("model_key",),
+    "run_scm": ("model_key",),
+    "run_dose_sweep": ("model_key",),
+    "simulate_pk_profile": ("model_key",),
+}
+
+
 @dataclass(frozen=True)
 class Budget:
     max_steps: int = DEFAULT_MAX_STEPS
@@ -104,6 +121,32 @@ def unmet_prerequisite(tool: str, state: PharmState) -> str | None:
         if status != "ok":
             return f"{tool} requires {field_name}.status == 'ok' (found {status!r})"
     return None
+
+
+def invalid_model_keys(tool: str, args: Mapping[str, Any] | None) -> str | None:
+    """A refusal reason when ``args`` names a model outside the PK model library, or None.
+
+    An absent or empty value is not checked: the tools treat it as "use the fitted
+    model". Every offending name is reported with the valid keys, so the planner
+    can correct the proposal from its own history.
+    """
+    bad: list[str] = []
+    for key in MODEL_KEY_ARGS.get(tool, ()):
+        value = (args or {}).get(key)
+        if not value:
+            continue
+        if isinstance(value, str):
+            names: Sequence[Any] = [value]
+        elif isinstance(value, (list, tuple)):
+            names = value
+        else:
+            bad.append(f"{key}={value!r}")
+            continue
+        bad.extend(repr(n) for n in names if not isinstance(n, str) or n not in REGISTRY)
+    if not bad:
+        return None
+    return (f"{tool} names a model outside the PK model library: {', '.join(bad)}; "
+            f"valid keys: {', '.join(sorted(REGISTRY))}")
 
 
 def classify(tool_name: str, args: Mapping[str, Any] | None, tool: Tool | None) -> str:
@@ -154,6 +197,9 @@ def decide(tool_name: str, args: Mapping[str, Any] | None, state: PharmState, *,
     if tool_name not in roster:
         return Decision(False, MODE_REJECTED,
                         f"{tool_name} is not in this workflow's allowed_tools")
+    invalid = invalid_model_keys(tool_name, args)
+    if invalid:
+        return Decision(False, MODE_REJECTED, invalid)
     unmet = unmet_prerequisite(tool_name, state)
     if unmet:
         return Decision(False, MODE_REJECTED, unmet)

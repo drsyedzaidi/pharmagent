@@ -84,6 +84,9 @@ def _mock_er_dose(low: str, s: dict[str, Any]) -> dict[str, Any] | None:
 
 
 PLAN_STOP = {"tool": None, "args": {}}
+_INLINE_CALL_RE = re.compile(
+    r"(?:^|\W)(?:call:(?P<call>[A-Za-z_]\w*)\s*\{|(?P<fn>[A-Za-z_]\w*)\s*\()"
+)
 
 
 def _plan_stop(reason: str, rationale: str = "") -> dict[str, Any]:
@@ -94,17 +97,54 @@ def _plan_stop(reason: str, rationale: str = "") -> dict[str, Any]:
     return {**PLAN_STOP, "rationale": rationale, "stop_reason": reason}
 
 
+def _plain_text_tool_call(text: str, known: set[str]) -> str | None:
+    """First known tool name written as a call in plain text (``tool(...)`` or
+    ``call:tool{...}``), or None.
+
+    Found by the replicate-divergence harness: ``gemma4:31b`` wrote ``fit_pk_model(...)``
+    in a fenced Python block or ``call:fit_pk_model{...}`` instead of emitting a
+    structured tool call in 3 of 5 replicates. Without this check, a plain-text
+    reply with a rationale is mistaken for a reasoned "goal met" (``complete``).
+    Bare mentions in prose (e.g. "after load_dataset has run") have no ``(`` or
+    ``call:...{`` and are not matched.
+    """
+    for m in _INLINE_CALL_RE.finditer(text or ""):
+        name = m.group("call") or m.group("fn")
+        if name in known:
+            return name
+    return None
+
+
+def _plan_no_tool(rationale: str, known: set[str]) -> dict[str, Any]:
+    called = _plain_text_tool_call(rationale, known)
+    if called is not None:
+        return _plan_stop(
+            f"planner wrote a tool call ({called}) in plain text instead of a structured tool call",
+            rationale="")
+    return _plan_stop(rationale or "planner selected no tool", rationale)
+
+
 def _planner_system(goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
                     history: list[dict[str, Any]]) -> str:
     """System text shared by the hosted planners (Anthropic / OpenAI-compatible)."""
+    from app.compute.pk_models import REGISTRY
+    from app.core.policy import PREREQUISITES
+    valid_models = ", ".join(sorted(REGISTRY))
+    prereqs = ", ".join(f"{t} requires {' & '.join(req)}" for t, req in PREREQUISITES.items())
     return (
         "You are the planner of a governed pharmacometrics workflow. Propose ONE next tool "
         "call that makes progress toward the goal, or answer in plain text when the goal "
-        "is met or no admissible step remains. A deterministic policy then admits the call, "
-        "parks it for human approval (every long-running fit and every scientific model "
-        "choice is gated), or rejects it; you never execute anything yourself. Never repeat "
-        "a call with identical arguments: every tool is deterministic. Give a one-sentence "
-        "rationale grounded in the diagnostics before the call.\n"
+        "is met or no admissible step remains. Always use a structured tool call (never "
+        "write code blocks or tool calls in plain text). A deterministic policy then admits "
+        "the call, parks it for human approval (every long-running fit and every scientific "
+        "model choice is gated), or rejects it; you never execute anything yourself. Never "
+        "repeat a call with identical arguments: every tool is deterministic. Give a "
+        "one-sentence rationale grounded in the diagnostics before the call.\n"
+        "When State shows dataset_id is None and dataset_configured is True, a dataset path "
+        "is already configured for this workflow — call load_dataset (the orchestrator "
+        "injects the configured path automatically).\n"
+        f"Valid PK model library keys (for model_key / models): {valid_models}\n"
+        f"Policy prerequisites: {prereqs}\n"
         f"Goal: {goal}\nState: {state_summary}\nObservations this leg: {observations}\n"
         f"Prior proposals and policy decisions: {history}")
 
@@ -294,11 +334,12 @@ class RealLLM:
             messages=[{"role": "user", "content": "Propose the next tool call, or say why to stop."}],
         )
         rationale = " ".join(b.text for b in resp.content if b.type == "text").strip()
+        known = {t.name for t in tools}
         for block in resp.content:
-            if block.type == "tool_use":
+            if block.type == "tool_use" and block.name in known:
                 return {"tool": block.name, "args": dict(block.input or {}),
                         "rationale": rationale, "stop_reason": None}
-        return _plan_stop(rationale or "planner selected no tool", rationale)
+        return _plan_no_tool(rationale, known)
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         """Plain text answer (no tools) — used by the mikebrain critic."""
@@ -468,7 +509,7 @@ class OpenAICompatLLM:
                 args = dict(raw)
             return {"tool": name, "args": args if isinstance(args, dict) else {},
                     "rationale": rationale, "stop_reason": None}
-        return _plan_stop(rationale or "planner selected no tool", rationale)
+        return _plan_no_tool(rationale, known)
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         """Plain text answer (no tools) — used by the mikebrain critic. Thinking stays
