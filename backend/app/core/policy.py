@@ -83,6 +83,13 @@ MODEL_KEY_ARGS: dict[str, tuple[str, ...]] = {
     "simulate_pk_profile": ("model_key",),
 }
 
+# Arguments of MODEL_KEY_ARGS that carry a LIST of model names; every other one carries a
+# single name (a string). The shape matters because the tools read them that way: a bare
+# string in ``models`` is iterated character by character (fit_pk_model then compares 0
+# models and still reports success), and a list ``model_key`` is looked up in the
+# registry and raises TypeError (unhashable) after the human has approved it.
+MODEL_LIST_ARGS: frozenset[str] = frozenset({"models"})
+
 
 @dataclass(frozen=True)
 class Budget:
@@ -124,29 +131,37 @@ def unmet_prerequisite(tool: str, state: PharmState) -> str | None:
 
 
 def invalid_model_keys(tool: str, args: Mapping[str, Any] | None) -> str | None:
-    """A refusal reason when ``args`` names a model outside the PK model library, or None.
+    """A refusal reason when ``args`` names a model outside the PK model library or gives a
+    model argument the wrong shape (see ``MODEL_LIST_ARGS``), or None.
 
     An absent or empty value is not checked: the tools treat it as "use the fitted
-    model". Every offending name is reported with the valid keys, so the planner
-    can correct the proposal from its own history.
+    model". Every offending name is reported with the valid keys, and every misshapen
+    argument with the shape it needs, so the planner can correct the proposal from its
+    own history.
     """
     bad: list[str] = []
+    wrong_shape: list[str] = []
     for key in MODEL_KEY_ARGS.get(tool, ()):
         value = (args or {}).get(key)
         if not value:
             continue
-        if isinstance(value, str):
-            names: Sequence[Any] = [value]
-        elif isinstance(value, (list, tuple)):
-            names = value
+        if key in MODEL_LIST_ARGS:
+            names: Sequence[Any] | None = value if isinstance(value, (list, tuple)) else None
+            needs = "a list of model keys"
         else:
-            bad.append(f"{key}={value!r}")
+            names = [value] if isinstance(value, str) else None
+            needs = "one model key, as a string"
+        if names is None:
+            wrong_shape.append(f"{key}={value!r} (must be {needs})")
             continue
         bad.extend(repr(n) for n in names if not isinstance(n, str) or n not in REGISTRY)
-    if not bad:
-        return None
-    return (f"{tool} names a model outside the PK model library: {', '.join(bad)}; "
-            f"valid keys: {', '.join(sorted(REGISTRY))}")
+    reasons: list[str] = []
+    if wrong_shape:
+        reasons.append(f"{tool} model arguments have the wrong shape: {', '.join(wrong_shape)}")
+    if bad:
+        reasons.append(f"{tool} names a model outside the PK model library: {', '.join(bad)}; "
+                       f"valid keys: {', '.join(sorted(REGISTRY))}")
+    return "; ".join(reasons) or None
 
 
 def classify(tool_name: str, args: Mapping[str, Any] | None, tool: Tool | None) -> str:
