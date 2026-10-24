@@ -20,6 +20,14 @@ def _roles(state: PharmState) -> dict[str, str]:
     return {}
 
 
+def _wants_mikebrain(args: dict[str, Any]) -> bool:
+    """Strict opt-in: only a boolean True (or the string "true") enables the advisory consult."""
+    flag = args.get("consult_mikebrain", False)
+    if isinstance(flag, str):
+        return flag.strip().lower() == "true"
+    return flag is True
+
+
 def adversarial_review(state: PharmState, ctx: ToolContext,
                        args: dict[str, Any]) -> ToolResult:
     goal = (args.get("goal") or adversarial.DEFAULT_GOAL).strip() or adversarial.DEFAULT_GOAL
@@ -28,6 +36,14 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
         df = ctx.dataset_store[state.dataset_id]
 
     result = adversarial.review(state.model_dump(), df, _roles(state), goal=goal)
+    advisory_note = ""
+    if _wants_mikebrain(args):
+        # Advisory only: literature advisories are severity-free, live under their own
+        # key, are excluded from counts and can never change goal_met or status.
+        from app.tools.knowledge_tools import review_advisories
+        result = {**result, **review_advisories(result, state, ctx)}
+        advisory_note = (f" mikebrain: {len(result['advisories'])} literature advisory(ies) "
+                         f"[{result['advisory_status']}] — advisory only, not counted.")
 
     c = result["counts"]
     # Use the engine's own verdict: it distinguishes UNVERIFIABLE (results present
@@ -41,6 +57,7 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
     )
     if result.get("unverifiable"):
         summary += f" NOT independently verified: {result['unverifiable_reason']}."
+    summary += advisory_note
     return ToolResult(
         summary=summary,
         action=f"adversarial_review(goal={goal!r}) -> goal_met={result['goal_met']}",
@@ -55,10 +72,14 @@ TOOLS = [
         "Adversarially review the current analysis: independently recompute key "
         "quantities from the raw data, challenge every reported value, and emit "
         "severity-ranked findings against a checkable goal (default: zero unresolved "
-        "CRITICAL or HIGH). Args: goal (optional string).",
+        "CRITICAL or HIGH). Args: goal (optional string); consult_mikebrain (optional "
+        "boolean, default false) adds severity-free literature advisories from the "
+        "owner's corpus that never affect counts or the goal.",
         "reviewer",
         {"type": "object",
-         "properties": {"goal": {"type": "string"}}, "required": []},
+         "properties": {"goal": {"type": "string"},
+                        "consult_mikebrain": {"type": "boolean"}},
+         "required": []},
         adversarial_review,
     ),
 ]
