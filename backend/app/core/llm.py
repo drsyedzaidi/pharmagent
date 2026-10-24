@@ -85,7 +85,7 @@ def _mock_er_dose(low: str, s: dict[str, Any]) -> dict[str, Any] | None:
 
 PLAN_STOP = {"tool": None, "args": {}}
 _INLINE_CALL_RE = re.compile(
-    r"(?:^|\W)(?:call:(?P<call>[A-Za-z_]\w*)\s*\{|(?P<fn>[A-Za-z_]\w*)\s*\()"
+    r'(?:^|\W)(?:call:(?P<call>[A-Za-z_]\w*)\s*\{|(?P<fn>[A-Za-z_]\w*)\s*\(|"(?:tool|name)"\s*:\s*"(?P<json>[A-Za-z_]\w*)")'
 )
 
 
@@ -99,38 +99,111 @@ def _plan_stop(reason: str, rationale: str = "") -> dict[str, Any]:
 
 def _plain_text_tool_call(text: str, known: set[str]) -> str | None:
     """First known tool name written as a call in plain text (``tool(...)`` or
-    ``call:tool{...}``), or None.
+    ``call:tool{...}`` or ``"tool": "tool"`` in JSON), or None.
 
     Found by the replicate-divergence harness: ``gemma4:31b`` wrote ``fit_pk_model(...)``
-    in a fenced Python block or ``call:fit_pk_model{...}`` instead of emitting a
-    structured tool call in 3 of 5 replicates. Without this check, a plain-text
+    in a fenced Python block, ``call:fit_pk_model{...}``, or a fenced JSON object
+    instead of emitting a structured tool call. Without this check, a plain-text
     reply with a rationale is mistaken for a reasoned "goal met" (``complete``).
     Bare mentions in prose (e.g. "after load_dataset has run") have no ``(`` or
     ``call:...{`` and are not matched.
     """
     for m in _INLINE_CALL_RE.finditer(text or ""):
-        name = m.group("call") or m.group("fn")
+        name = m.group("call") or m.group("fn") or m.group("json")
         if name in known:
             return name
     return None
 
 
-def _plan_no_tool(rationale: str, known: set[str]) -> dict[str, Any]:
+def _plan_no_tool(
+    rationale: str,
+    known: set[str],
+    *,
+    state_summary: dict[str, Any] | None = None,
+    history: list[dict[str, Any]] | None = None,
+    tools: list[Tool] | None = None,
+) -> dict[str, Any]:
+    from app.core import policy
     called = _plain_text_tool_call(rationale, known)
     if called is not None:
-        return _plan_stop(
-            f"planner wrote a tool call ({called}) in plain text instead of a structured tool call",
-            rationale="")
+        return {
+            **_plan_stop(
+                f"planner wrote a tool call ({called}) in plain text instead of a structured tool call",
+                rationale="",
+            ),
+            "malformed_tool": called,
+        }
+    if state_summary is not None and not policy.goal_complete(state_summary, history or (), tools):
+        return {
+            **_plan_stop(
+                f"planner stopped before goal completion contract was satisfied: "
+                f"{rationale or 'planner selected no tool'}",
+                rationale="",
+            ),
+            "premature_stop": True,
+        }
     return _plan_stop(rationale or "planner selected no tool", rationale)
 
 
+def _format_admissible(admissible: list[dict[str, Any]]) -> str:
+    if not admissible:
+        return "- stop"
+    lines: list[str] = []
+    for a in admissible:
+        args = a.get("args") or {}
+        if args:
+            kv = " and ".join(f"{k}={json.dumps(v) if isinstance(v, list) else v}"
+                              for k, v in args.items())
+            lines.append(
+                f"- {a['tool']} with {kv} (invoke via native tool_calls, never write JSON in text)"
+            )
+        else:
+            lines.append(f"- {a['tool']} (invoke via native tool_calls, never write JSON in text)")
+    return "\n".join(lines)
+
+
+def _planner_repair_prompt(reason: str, admissible: list[dict[str, Any]]) -> str:
+    from app.compute.pk_models import REGISTRY
+    valid_models = ", ".join(sorted(REGISTRY))
+    next_tools = ", ".join(dict.fromkeys(a["tool"] for a in admissible)) or "stop"
+    return (
+        f"Your previous response was rejected ({reason}):\n"
+        "- use a structured tool call;\n"
+        f"- valid model keys are {valid_models};\n"
+        f"- the next admissible tools are {next_tools} or stop.\n\n"
+        "Return exactly one structured call."
+    )
+
+
+def _active_tools(
+    state_summary: dict[str, Any],
+    history: list[dict[str, Any]],
+    tools: list[Tool],
+) -> tuple[list[Tool], list[dict[str, Any]]]:
+    from app.core import policy
+    admissible = policy.admissible_actions(state_summary, history, tools)
+    names = {a["tool"] for a in admissible}
+    filtered = [t for t in tools if t.name in names]
+    return (filtered if filtered else list(tools)), admissible
+
+
 def _planner_system(goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
-                    history: list[dict[str, Any]]) -> str:
+                    history: list[dict[str, Any]], tools: list[Tool] | None = None) -> str:
     """System text shared by the hosted planners (Anthropic / OpenAI-compatible)."""
     from app.compute.pk_models import REGISTRY
+    from app.core import policy
     from app.core.policy import PREREQUISITES
     valid_models = ", ".join(sorted(REGISTRY))
     prereqs = ", ".join(f"{t} requires {' & '.join(req)}" for t, req in PREREQUISITES.items())
+    admissible = policy.admissible_actions(state_summary, history, tools)
+    visible_state = policy.planner_visible_state(state_summary, history)
+    visible_obs = policy.planner_visible_observations(observations)
+    visible_hist = policy.planner_visible_history(history)
+    repair_note = ""
+    if history and not history[-1].get("allow"):
+        repair_note = "\n" + _planner_repair_prompt(
+            str(history[-1].get("reason") or "invalid proposal"), admissible
+        )
     return (
         "You are the planner of a governed pharmacometrics workflow. Propose ONE next tool "
         "call that makes progress toward the goal, or answer in plain text when the goal "
@@ -140,13 +213,20 @@ def _planner_system(goal: str, state_summary: dict[str, Any], observations: list
         "model choice is gated), or rejects it; you never execute anything yourself. Never "
         "repeat a call with identical arguments: every tool is deterministic. Give a "
         "one-sentence rationale grounded in the diagnostics before the call.\n"
-        "When State shows dataset_id is None and dataset_configured is True, a dataset path "
+        "When State shows dataset_loaded is False and dataset_configured is True, a dataset path "
         "is already configured for this workflow — call load_dataset (the orchestrator "
         "injects the configured path automatically).\n"
+        "Canonical trace:\n"
+        "dataset_configured -> load_dataset -> profile_pk_dataset -> "
+        "generate_spaghetti_plot -> "
+        'fit_pk_model (compare=True, models=["oral_1cmt", "oral_2cmt"])\n'
         f"Valid PK model library keys (for model_key / models): {valid_models}\n"
         f"Policy prerequisites: {prereqs}\n"
-        f"Goal: {goal}\nState: {state_summary}\nObservations this leg: {observations}\n"
-        f"Prior proposals and policy decisions: {history}")
+        f"Current admissible actions:\n{_format_admissible(admissible)}\n"
+        f"Goal: {goal}\nState: {visible_state}\nObservations this leg: {visible_obs}\n"
+        f"Prior proposals and policy decisions: {visible_hist}"
+        + repair_note
+    )
 
 
 # State-summary keys that prove a poppk_full template step has already run,
@@ -326,12 +406,15 @@ class RealLLM:
 
     def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
              history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None:
+        active_tools, admissible = _active_tools(state_summary, history, tools)
+        sys_text = _planner_system(goal, state_summary, observations, history, tools)
+        user_text = "Propose the next tool call, or say why to stop."
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=settings.max_tokens,
-            system=_planner_system(goal, state_summary, observations, history),
-            tools=[t.to_anthropic() for t in tools],
-            messages=[{"role": "user", "content": "Propose the next tool call, or say why to stop."}],
+            system=sys_text,
+            tools=[t.to_anthropic() for t in active_tools],
+            messages=[{"role": "user", "content": user_text}],
         )
         rationale = " ".join(b.text for b in resp.content if b.type == "text").strip()
         known = {t.name for t in tools}
@@ -339,7 +422,36 @@ class RealLLM:
             if block.type == "tool_use" and block.name in known:
                 return {"tool": block.name, "args": dict(block.input or {}),
                         "rationale": rationale, "stop_reason": None}
-        return _plan_no_tool(rationale, known)
+        no_tool = _plan_no_tool(
+            rationale, known, state_summary=state_summary, history=history, tools=tools
+        )
+        if (no_tool.get("malformed_tool") or no_tool.get("premature_stop")) and not (
+            history and not history[-1].get("allow")
+        ):
+            reason = str(no_tool.get("stop_reason") or "response rejected")
+            repair_prompt = _planner_repair_prompt(reason, admissible)
+            resp2 = self._client.messages.create(
+                model=self.model,
+                max_tokens=settings.max_tokens,
+                system=sys_text,
+                tools=[t.to_anthropic() for t in active_tools],
+                messages=[
+                    {"role": "user", "content": f"{user_text}\n\n{repair_prompt}"},
+                ],
+            )
+            rationale2 = " ".join(b.text for b in resp2.content if b.type == "text").strip()
+            for block in resp2.content:
+                if block.type == "tool_use" and block.name in known:
+                    return {
+                        "tool": block.name,
+                        "args": dict(block.input or {}),
+                        "rationale": rationale2,
+                        "stop_reason": None,
+                        "repaired": True,
+                        "repair_reason": reason,
+                    }
+            return {**no_tool, "repair_attempted": True, "repair_reason": reason}
+        return no_tool
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         """Plain text answer (no tools) — used by the mikebrain critic."""
@@ -355,6 +467,54 @@ LOCAL_REASONING_EFFORT = "none"
 def is_loopback(url: str) -> bool:
     """True for a server on this machine (Ollama, LM Studio), false for hosted APIs."""
     return "127.0.0.1" in url or "localhost" in url or "[::1]" in url
+
+
+def _parse_openai_plan_message(
+    msg: dict[str, Any],
+    *,
+    known: set[str],
+    state_summary: dict[str, Any],
+    history: list[dict[str, Any]],
+    tools: list[Tool],
+) -> tuple[dict[str, Any], str | None]:
+    from app.core import policy
+    rationale = (msg.get("content") or "").strip()
+    invalid_candidate: dict[str, Any] | None = None
+    reject_reason: str | None = None
+    for call in msg.get("tool_calls") or []:
+        fn = call.get("function") or {}
+        name = fn.get("name")
+        if name not in known:
+            log.warning("llm_unknown_tool", extra={"tool": name, "agent": "planner"})
+            reject_reason = f"{name!r} is not in this workflow's allowed_tools"
+            continue
+        raw = fn.get("arguments") or {}
+        if isinstance(raw, str):
+            try:
+                args = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                log.warning("llm_bad_tool_arguments", extra={"tool": name})
+                args = {}
+        else:
+            args = dict(raw)
+        clean_args = args if isinstance(args, dict) else {}
+        proposal = {"tool": name, "args": clean_args, "rationale": rationale, "stop_reason": None}
+        invalid = policy.invalid_model_keys(name, clean_args)
+        if invalid:
+            invalid_candidate = proposal
+            reject_reason = invalid
+            continue
+        return proposal, None
+    if invalid_candidate is not None:
+        return invalid_candidate, reject_reason
+    no_tool = _plan_no_tool(
+        rationale, known, state_summary=state_summary, history=history, tools=tools
+    )
+    if no_tool.get("malformed_tool") or no_tool.get("premature_stop"):
+        return no_tool, str(no_tool.get("stop_reason") or "response rejected")
+    if reject_reason is not None:
+        return no_tool, reject_reason
+    return no_tool, None
 
 
 class OpenAICompatLLM:
@@ -393,6 +553,9 @@ class OpenAICompatLLM:
         # 2026-09-30). Never set for hosted OpenAI: it rejects the field for
         # non-reasoning models.
         self.reasoning_effort = reasoning_effort
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
 
     # -- transport ----------------------------------------------------------
     def _chat(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None,
@@ -415,6 +578,14 @@ class OpenAICompatLLM:
         if resp.status_code >= 400:
             raise RuntimeError(self._http_error(resp.status_code))
         data = resp.json()
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            p_tok = int(usage.get("prompt_tokens") or 0)
+            c_tok = int(usage.get("completion_tokens") or 0)
+            t_tok = int(usage.get("total_tokens") or (p_tok + c_tok))
+            self.prompt_tokens += p_tok
+            self.completion_tokens += c_tok
+            self.total_tokens += t_tok
         choices = data.get("choices") or []
         if not choices:
             raise RuntimeError(f"LLM server {self.base_url} returned no choices: {data}")
@@ -486,30 +657,33 @@ class OpenAICompatLLM:
 
     def plan(self, goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
              history: list[dict[str, Any]], tools: list[Tool]) -> dict[str, Any] | None:
+        active_tools, admissible = _active_tools(state_summary, history, tools)
+        sys_text = _planner_system(goal, state_summary, observations, history, tools)
+        user_text = "Propose the next tool call, or say why to stop."
+        tool_defs = [t.to_openai() for t in active_tools]
         msg = self._chat([
-            {"role": "system", "content": _planner_system(goal, state_summary, observations, history)},
-            {"role": "user", "content": "Propose the next tool call, or say why to stop."},
-        ], tools=[t.to_openai() for t in tools], max_tokens=settings.max_tokens)
-        rationale = (msg.get("content") or "").strip()
+            {"role": "system", "content": sys_text},
+            {"role": "user", "content": user_text},
+        ], tools=tool_defs, max_tokens=settings.max_tokens)
         known = {t.name for t in tools}
-        for call in msg.get("tool_calls") or []:
-            fn = call.get("function") or {}
-            name = fn.get("name")
-            if name not in known:
-                log.warning("llm_unknown_tool", extra={"tool": name, "agent": "planner"})
-                continue
-            raw = fn.get("arguments") or {}
-            if isinstance(raw, str):
-                try:
-                    args = json.loads(raw) if raw.strip() else {}
-                except json.JSONDecodeError:
-                    log.warning("llm_bad_tool_arguments", extra={"tool": name})
-                    args = {}
-            else:
-                args = dict(raw)
-            return {"tool": name, "args": args if isinstance(args, dict) else {},
-                    "rationale": rationale, "stop_reason": None}
-        return _plan_no_tool(rationale, known)
+        parsed, reject_reason = _parse_openai_plan_message(
+            msg, known=known, state_summary=state_summary, history=history, tools=tools
+        )
+        if reject_reason is not None and not (history and not history[-1].get("allow")):
+            repair_prompt = _planner_repair_prompt(reject_reason, admissible)
+            msg2 = self._chat([
+                {"role": "system", "content": sys_text},
+                {"role": "user", "content": f"{user_text}\n\n{repair_prompt}"},
+            ], tools=tool_defs, max_tokens=settings.max_tokens)
+            parsed2, reject_reason2 = _parse_openai_plan_message(
+                msg2, known=known, state_summary=state_summary, history=history, tools=tools
+            )
+            if reject_reason2 is None and parsed2.get("tool"):
+                return {**parsed2, "repaired": True, "repair_reason": reject_reason}
+            if parsed2.get("tool"):
+                return {**parsed2, "repair_attempted": True, "repair_reason": reject_reason}
+            return {**parsed, "repair_attempted": True, "repair_reason": reject_reason}
+        return parsed
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         """Plain text answer (no tools) — used by the mikebrain critic. Thinking stays

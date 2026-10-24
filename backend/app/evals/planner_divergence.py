@@ -208,7 +208,9 @@ def _decisions(history: Sequence[Mapping[str, Any]], stop: str) -> list[dict[str
             outcome = "ran"
         out.append({"step": h.get("step"), "tool": h.get("tool"), "args": dict(h.get("args") or {}),
                     "rationale": str(h.get("rationale") or ""), "mode": h.get("mode"),
-                    "reason": str(h.get("reason") or ""), "outcome": outcome})
+                    "reason": str(h.get("reason") or ""), "outcome": outcome,
+                    "repaired": bool(h.get("repaired", False)),
+                    "repair_reason": str(h.get("repair_reason") or "")})
     return out
 
 
@@ -249,10 +251,15 @@ def _replicate_record(index: int, out: Mapping[str, Any], sess: Session, *,
                           "rationale": _end_text(stop, detail, recorder), "mode": None,
                           "reason": detail, "outcome": "ended"})
     executed = _executed_tools(registry, sess)
+    repairs = sum(1 for h in history if h.get("repaired"))
     return {
         "replicate": index, "provider": spec.provider, "model": spec.model,
         "sampling": spec.sampling(index),
         "elapsed_s": round(elapsed, 3), "planner_s": round(recorder.planner_s, 3),
+        "tokens": int(getattr(recorder._llm, "total_tokens", 0) or 0),
+        "prompt_tokens": int(getattr(recorder._llm, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(recorder._llm, "completion_tokens", 0) or 0),
+        "repairs": repairs,
         "status": status, "stop_reason": stop, "stop_detail": detail,
         "autonomous_tools": executed, "gated_proposal": gated,
         "rejected": [{"step": d["step"], "tool": d["tool"], "args": d["args"],

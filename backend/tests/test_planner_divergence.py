@@ -212,7 +212,7 @@ def test_cli_mock_self_test_fails_when_replicates_differ(tmp_path, monkeypatch):
 # ── divergence detection ─────────────────────────────────────────────────────
 
 def test_a_planner_alternating_model_key_is_diverged_args_naming_model_key():
-    keys = ["1cmt", "2cmt"]
+    keys = ["oral_1cmt", "oral_2cmt"]
     scripts = [lambda k=k: _Script([LOAD, {"tool": "fit_pk_model", "args": {"model_key": k},
                                            "rationale": f"choose {k}"}]) for k in keys]
     report = _run(scripts, replicates=4)
@@ -222,7 +222,7 @@ def test_a_planner_alternating_model_key_is_diverged_args_naming_model_key():
     assert p1["prefix"] == [{"tool": "load_dataset", "args": {"path": pd.DATASET_TOKEN}}]
     assert p1["varied_arg_keys"] == {"fit_pk_model": ["model_key"]}
     assert sorted((v["args"]["model_key"], v["count"], v["replicates"]) for v in p1["variants"]) == [
-        ("1cmt", 2, [0, 2]), ("2cmt", 2, [1, 3])]
+        ("oral_1cmt", 2, [0, 2]), ("oral_2cmt", 2, [1, 3])]
     assert {v["policy_mode"] for v in p1["variants"]} == {"gated"}
     assert report["verdict"] == dr.DIVERGED and report["first_divergence_step"] == 1
     (gap,) = report["candidate_rule_gaps"]["arg_keys"]
@@ -232,7 +232,7 @@ def test_a_planner_alternating_model_key_is_diverged_args_naming_model_key():
     for r in report["replicates"]:      # every replicate stopped at that gate; only load ran
         assert r["autonomous_tools"] == ["load_dataset"] and r["stop_reason"] == "gated_proposal"
     md = dr.render_markdown(report)
-    assert "DIVERGED-ARGS" in md and "fit\\_pk\\_model.model\\_key" in md and '"choose 2cmt"' in md
+    assert "DIVERGED-ARGS" in md and "fit\\_pk\\_model.model\\_key" in md and '"choose oral\\_2cmt"' in md
 
 
 def test_an_ungated_argument_that_varies_is_flagged_as_admitted_without_a_gate():
@@ -251,7 +251,7 @@ def test_a_key_carried_only_by_gated_variants_is_reviewed_even_if_a_sibling_ran(
     variant carries `foo` but is gated (model_key). `foo` was always seen by a human."""
     scripts = [lambda: _Script([LOAD, FIT_COMPARE]),
                lambda: _Script([LOAD, {"tool": "fit_pk_model",
-                                       "args": {"compare": True, "model_key": "1cmt", "foo": 1},
+                                       "args": {"compare": True, "model_key": "oral_1cmt", "foo": 1},
                                        "rationale": "pin it"}])]
     gaps = {g["key"]: g for g in _run(scripts)["candidate_rule_gaps"]["arg_keys"]}
     assert set(gaps) == {"foo", "model_key"}
