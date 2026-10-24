@@ -266,6 +266,263 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
                           f"RMSE = {_fmt(g.get('rmse_log_ipred'), 3)}, n = {g.get('n')}. "
                           f"A 5/50/95 VPC band was generated at the {vp.get('vpc_dose')} dose level.")
 
+    if state.protocol_sim:
+        n += 1
+        _protocol_sim_section(doc, state, n)
+
+
+def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5) -> dict[str, Any]:
+    """Render the 'Protocol simulation' section strictly from ``state.protocol_sim``
+    and ``state.review_results`` without inventing or transforming any numbers."""
+    ps = state.protocol_sim or {}
+    source_fit = ps.get("source_fit") or {}
+    plan = ps.get("plan") or {}
+    pta = ps.get("pta") or {}
+    sp = ps.get("special_populations") or {}
+    unc = ps.get("uncertainty") or {}
+    prov = ps.get("provenance") or {}
+    rev = state.review_results or {}
+
+    skipped_steps: list[str] = []
+    md_lines: list[str] = [f"## {section_num}. Protocol simulation"]
+
+    doc.add_heading(f"{section_num}. Protocol simulation", level=1)
+
+    # 1. Approved simulation plan
+    doc.add_heading(f"{section_num}.1 Approved simulation plan", level=2)
+    md_lines.append(f"### {section_num}.1 Approved simulation plan")
+    if plan:
+        tw = plan.get("target_window") or {}
+        tw_prov = tw.get("provenance") or {}
+        plan_summary = (
+            f"Virtual cohort: n_subjects = {plan.get('n_subjects')}, "
+            f"replicates = {plan.get('replicates')}, seed = {plan.get('seed')}, "
+            f"uncertainty_method = {plan.get('uncertainty_method')}. "
+            f"Target window on {tw.get('metric', 'auc')}: "
+            f"[{_fmt(tw.get('low'), 3)}, {_fmt(tw.get('high'), 3)}] "
+            f"(cmax_max = {_fmt(tw.get('cmax_max'), 3)}, "
+            f"ctrough_min = {_fmt(tw.get('ctrough_min'), 3)}; "
+            f"source: {tw_prov.get('source', 'n/a')} — {tw_prov.get('citation', 'n/a')})."
+        )
+        doc.add_paragraph(plan_summary)
+        md_lines.append(plan_summary)
+
+        band_rows = [
+            [
+                b.get("name"),
+                f"{b.get('wt_kg', ['-', '-'])[0]}–{b.get('wt_kg', ['-', '-'])[1]}",
+                f"{b.get('age_yr', ['-', '-'])[0]}–{b.get('age_yr', ['-', '-'])[1]}",
+                f"{b.get('crcl_ml_min', ['-', '-'])[0]}–{b.get('crcl_ml_min', ['-', '-'])[1]}",
+            ]
+            for b in (plan.get("bands") or [])
+        ]
+        if band_rows:
+            _kv_table(doc, ["Band", "Weight (kg)", "Age (yr)", "CrCl (mL/min)"], band_rows)
+            md_lines.append("| Band | Weight (kg) | Age (yr) | CrCl (mL/min) |")
+            md_lines.append("| --- | --- | --- | --- |")
+            for br in band_rows:
+                md_lines.append(f"| {br[0]} | {br[1]} | {br[2]} | {br[3]} |")
+
+        reg_rows = [
+            [
+                r.get("label"),
+                _fmt(r.get("dose_mg"), 1),
+                _fmt(r.get("tau_h"), 1),
+                r.get("route", "oral"),
+                r.get("n_doses", 5),
+            ]
+            for r in (plan.get("regimens") or [])
+        ]
+        if reg_rows:
+            _kv_table(doc, ["Regimen", "Dose (mg)", "Interval (h)", "Route", "Doses"], reg_rows)
+            md_lines.append("| Regimen | Dose (mg) | Interval (h) | Route | Doses |")
+            md_lines.append("| --- | --- | --- | --- | --- |")
+            for rr in reg_rows:
+                md_lines.append(f"| {rr[0]} | {rr[1]} | {rr[2]} | {rr[3]} | {rr[4]} |")
+    else:
+        skipped_steps.append("propose_simulation_plan")
+        msg = "Skipped step: propose_simulation_plan (no simulation plan recorded)."
+        doc.add_paragraph(msg)
+        md_lines.append(msg)
+
+    # Check optional dose_sweep and special_populations steps
+    if not (ps.get("dose_sweep") or (state.dose_sweep_results or {}).get("status") == "ok"):
+        skipped_steps.append("run_dose_sweep")
+        msg = "Skipped step: run_dose_sweep."
+        doc.add_paragraph(msg)
+        md_lines.append(msg)
+
+    if sp and sp.get("status") == "ok":
+        sp_msg = (
+            f"Special-population simulation completed for plan bands: "
+            f"{sp.get('bands_simulated')} (seed = {sp.get('seed')})."
+        )
+        doc.add_paragraph(sp_msg)
+        md_lines.append(sp_msg)
+    else:
+        skipped_steps.append("simulate_special_populations")
+        msg = "Skipped step: simulate_special_populations."
+        doc.add_paragraph(msg)
+        md_lines.append(msg)
+
+    # 2. PTA per band per regimen with MC SE and parameter-uncertainty interval
+    doc.add_heading(f"{section_num}.2 PTA by band and regimen", level=2)
+    md_lines.append(f"### {section_num}.2 PTA by band and regimen")
+    pta_rows = pta.get("rows") or []
+    if pta_rows:
+        if not (unc and unc.get("status") == "ok"):
+            skipped_steps.append("propagate_parameter_uncertainty")
+            unc_msg = "Skipped step: propagate_parameter_uncertainty (parameter-uncertainty intervals not computed)."
+            if unc and unc.get("status") == "unverifiable":
+                unc_msg = f"Parameter-uncertainty intervals not computed: {unc.get('reason')}."
+            doc.add_paragraph(unc_msg)
+            md_lines.append(unc_msg)
+        elif unc.get("approximation"):
+            unc_msg = (
+                "Parameter-uncertainty intervals are an asymptotic log-normal approximation "
+                "from the fit's theta RSE%, not a bootstrap, SIR or profile result "
+                f"(requested: {unc.get('requested_method')})."
+            )
+            doc.add_paragraph(unc_msg)
+            md_lines.append(unc_msg)
+        tbl_rows = []
+        pta_cols = [
+            "Band", "Regimen", "Dose (mg)", "PTA", "MC SE",
+            "95% Param CI", "AUC Median", "Cmax Median", "Ctrough Median",
+        ]
+        md_lines.append("| " + " | ".join(pta_cols) + " |")
+        md_lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        for r in pta_rows:
+            ci_str = (
+                f"{_fmt(r.get('pta_ci_lo'), 4)}–{_fmt(r.get('pta_ci_hi'), 4)}"
+                if r.get("pta_ci_lo") is not None and r.get("pta_ci_hi") is not None
+                else "-"
+            )
+            auc_med = _fmt((r.get("auc") or {}).get("median"), 3)
+            cmax_med = _fmt((r.get("cmax") or {}).get("median"), 3)
+            ctr_med = _fmt((r.get("ctrough") or {}).get("median"), 4)
+            row_cells = [
+                r.get("band"),
+                r.get("regimen"),
+                _fmt(r.get("dose_mg"), 1),
+                _fmt(r.get("pta"), 4),
+                _fmt(r.get("mc_se"), 4),
+                ci_str,
+                auc_med,
+                cmax_med,
+                ctr_med,
+            ]
+            tbl_rows.append(row_cells)
+            md_lines.append(" | ".join(["", *[str(c) for c in row_cells], ""]).strip())
+        _kv_table(
+            doc,
+            pta_cols,
+            tbl_rows,
+        )
+    else:
+        skipped_steps.append("simulate_trial_pta")
+        msg = "Skipped step: simulate_trial_pta (no PTA rows available)."
+        doc.add_paragraph(msg)
+        md_lines.append(msg)
+
+    # 3. Recommended regimen per band
+    doc.add_heading(f"{section_num}.3 Recommended regimen per band", level=2)
+    md_lines.append(f"### {section_num}.3 Recommended regimen per band")
+    recs = ps.get("recommendations") or pta.get("recommendations") or []
+    if recs:
+        rec_rows = []
+        md_lines.append("| Band | Recommended Regimen | PTA | MC SE | 95% Param CI | Driving Metric |")
+        md_lines.append("| --- | --- | --- | --- | --- | --- |")
+        for rec in recs:
+            ci_str = (
+                f"{_fmt(rec.get('pta_ci_lo'), 4)}–{_fmt(rec.get('pta_ci_hi'), 4)}"
+                if rec.get("pta_ci_lo") is not None and rec.get("pta_ci_hi") is not None
+                else "-"
+            )
+            r_cells = [
+                rec.get("band"),
+                rec.get("recommended_regimen") or "none",
+                _fmt(rec.get("pta"), 4),
+                _fmt(rec.get("mc_se"), 4),
+                ci_str,
+                rec.get("driving_metric", "-"),
+            ]
+            rec_rows.append(r_cells)
+            md_lines.append(" | ".join(["", *[str(c) for c in r_cells], ""]).strip())
+        _kv_table(
+            doc,
+            ["Band", "Recommended Regimen", "PTA", "MC SE", "95% Param CI", "Driving Metric"],
+            rec_rows,
+        )
+    else:
+        doc.add_paragraph("No regimen recommendations recorded.")
+        md_lines.append("No regimen recommendations recorded.")
+
+    # 4. Adversarial review findings (HIGH / CRITICAL) and disposition
+    doc.add_heading(f"{section_num}.4 Adversarial review findings and disposition", level=2)
+    md_lines.append(f"### {section_num}.4 Adversarial review findings and disposition")
+    high_crit = [
+        f for f in (rev.get("findings") or [])
+        if f.get("severity") in ("HIGH", "CRITICAL")
+    ]
+    if high_crit:
+        f_rows = []
+        md_lines.append("| ID | Severity | Target | Evidence | Disposition |")
+        md_lines.append("| --- | --- | --- | --- | --- |")
+        for f in high_crit:
+            disp = "Resolved" if f.get("resolved") else str(f.get("disposition") or "Unresolved (blocks gate)")
+            f_cells = [
+                f.get("id"),
+                f.get("severity"),
+                f.get("target"),
+                f.get("evidence"),
+                disp,
+            ]
+            f_rows.append(f_cells)
+            md_lines.append(" | ".join(["", *[str(c) for c in f_cells], ""]).strip())
+        _kv_table(doc, ["ID", "Severity", "Target", "Evidence", "Disposition"], f_rows)
+    else:
+        clean_msg = f"Zero HIGH or CRITICAL findings (goal_met = {rev.get('goal_met', True)})."
+        doc.add_paragraph(clean_msg)
+        md_lines.append(clean_msg)
+
+    # 5. Provenance block
+    doc.add_heading(f"{section_num}.5 Simulation provenance", level=2)
+    md_lines.append(f"### {section_num}.5 Simulation provenance")
+    unc_method = unc.get("method") or "n/a"
+    unc_requested = unc.get("requested_method") or plan.get("uncertainty_method") or "n/a"
+    unc_approx = bool(unc.get("approximation")) if unc else None
+    prov_rows = [
+        ["source_fit_id", prov.get("source_fit_id") or source_fit.get("fit_id") or "n/a"],
+        ["review_hash", prov.get("review_hash") or "n/a"],
+        ["plan_hash", prov.get("plan_hash") or "n/a"],
+        ["seed", prov.get("seed") if prov.get("seed") is not None else plan.get("seed", "n/a")],
+        ["uncertainty_method", unc_method],
+        ["uncertainty_requested", unc_requested],
+        ["uncertainty_approximation",
+         "n/a" if unc_approx is None else ("yes" if unc_approx else "no")],
+    ]
+    _kv_table(doc, ["Field", "Value"], prov_rows)
+    md_lines.append("| Field | Value |")
+    md_lines.append("| --- | --- |")
+    for pr in prov_rows:
+        md_lines.append(f"| {pr[0]} | {pr[1]} |")
+
+    return {
+        "source_fit_id": prov.get("source_fit_id") or source_fit.get("fit_id"),
+        "review_hash": prov.get("review_hash"),
+        "plan_hash": prov.get("plan_hash"),
+        "seed": prov.get("seed") if prov.get("seed") is not None else plan.get("seed"),
+        "uncertainty_method": unc_method,
+        "uncertainty_requested": unc_requested,
+        "uncertainty_approximation": unc_approx,
+        "n_pta_rows": len(pta_rows),
+        "recommendations": recs,
+        "high_critical_findings": high_crit,
+        "skipped_steps": skipped_steps,
+        "rendered_markdown": "\n".join(md_lines),
+    }
+
 
 def _reproducibility_section(doc: Document, state: PharmState) -> None:
     """Software/platform provenance, dataset integrity hash, and seed — so the
@@ -347,11 +604,13 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
     path = str(out_dir / f"report_{meta.get('dataset_id', 'analysis')}.docx")
     doc.save(path)
 
-    sections = {
+    sections: dict[str, Any] = {
         "dataset": meta.get("dataset_id"),
         "methods": "NCA (linear-up/log-down, best-fit lambda_z)",
         "qc_verdict": state.qc_verdict,
     }
+    if state.protocol_sim:
+        sections["protocol_simulation"] = _protocol_sim_section(Document(), state, 5)
     return ToolResult(
         summary=f"Generated DOCX report at {path}.",
         action=f"generate_report -> {path}",

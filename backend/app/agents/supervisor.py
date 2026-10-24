@@ -96,6 +96,14 @@ ER_YIELD = re.compile(
     rf"|\bsir\b|\bparameter{_DASH}+uncertainty\b|\bprofil\w*{_DASH}+(?:the{_DASH}+)?likelihood\b"
     rf"|\bpop{_DASH}?pk\b|\bnlme\b|\bfoce\w*|\bsaem\b|\bpopulation{_DASH}+pk\b")
 
+#: Protocol simulation / PTA / regimen comparison / dose selection phrases that route
+#: to the simulator when no report or exposure-response anchor claimed the request.
+SIM_ANCHOR = re.compile(
+    rf"\bpta\b|\bprotocol{_DASH}+simulat\w*|\bregimen{_DASH}+compar\w*"
+    rf"|\bcompare{_DASH}+regimens?\b|\bdose{_DASH}+selection\b"
+)
+
+
 def score(message: str) -> dict[str, int]:
     low = (message or "").lower()
     return {agent: sum(low.count(k) for k in kws) for agent, kws in KEYWORDS.items()}
@@ -114,15 +122,22 @@ def anchored(message: str) -> str | None:
     agent = next((a for a, pattern in ANCHORS if pattern.search(low)), None)
     if agent is not None:
         return agent
-    if not ER_ANCHOR.search(low) or ER_YIELD.search(low):
-        return None
-    # The exposure-response phrase's own words ('proportional' in 'proportional hazards')
-    # must not count as another agent claiming the request.
-    rest = ER_ANCHOR.sub(" ", low)
-    blocking = {a for a, v in score(rest).items() if v and a not in NOUN_AGENTS}
-    if blocking == {"simulator"} and _simulator_only_bootstrap(rest):
-        blocking = set()
-    return "er_dose" if not blocking else None
+    if ER_ANCHOR.search(low) and not ER_YIELD.search(low):
+        # The exposure-response phrase's own words ('proportional' in 'proportional hazards')
+        # must not count as another agent claiming the request.
+        rest = ER_ANCHOR.sub(" ", low)
+        blocking = {a for a, v in score(rest).items() if v and a not in NOUN_AGENTS}
+        if blocking == {"simulator"} and _simulator_only_bootstrap(rest):
+            blocking = set()
+        if not blocking:
+            return "er_dose"
+    low_no_paths = re.sub(r"\S*[\\/]\S+|\S+\.\w{1,8}\b", " ", low)
+    if SIM_ANCHOR.search(low_no_paths):
+        rest_sim = SIM_ANCHOR.sub(" ", low_no_paths)
+        blocking_sim = {a for a, v in score(rest_sim).items() if v and a not in {"nca", "simulator"}}
+        if not blocking_sim:
+            return "simulator"
+    return None
 
 
 class Supervisor:

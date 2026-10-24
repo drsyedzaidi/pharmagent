@@ -244,6 +244,26 @@ class MockLLM:
                 return {"name": "run_sir", "input": {}}
             if any(k in low for k in ("likelihood profil", "profile likelihood")):
                 return {"name": "run_profile", "input": {}}
+            if any(k in low for k in (
+                "pta", "target attainment", "probability of target",
+                "dose selection", "trial simulation", "clinical trial simulation",
+                "regimen comparison", "compare regimen", "protocol simulation",
+            )):
+                nl_diag = s.get("nlme_diagnostics") or {}
+                rev_diag = s.get("review_diagnostics") or {}
+                approved_fit_ready = (
+                    s.get("nlme_results") == "present"
+                    and nl_diag.get("converged") is not False
+                    and rev_diag.get("goal_met") is True
+                )
+                if not approved_fit_ready:
+                    return None
+                ps_info = s.get("protocol_sim") or {}
+                if not ps_info.get("has_plan"):
+                    return {"name": "propose_simulation_plan", "input": {}}
+                if not ps_info.get("has_pta"):
+                    return {"name": "simulate_trial_pta", "input": {}}
+                return None
             return None
         return None
 

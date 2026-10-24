@@ -106,17 +106,29 @@ const POPPK_FULL_STEPS = [
   { key: 'generate_report',      label: 'Generate report' },
 ] as const;
 
+const PROTOCOL_SIM_STEPS = [
+  { key: 'load_approved_fit',               label: 'Load approved PopPK fit' },
+  { key: 'propose_simulation_plan',         label: 'Propose simulation plan (human review gate)', gate: true },
+  { key: 'run_dose_sweep',                  label: 'Dose sweep across regimens' },
+  { key: 'simulate_trial_pta',              label: 'Trial simulation & PTA by band' },
+  { key: 'simulate_special_populations',    label: 'Special-population / pediatric exposures', gate: true },
+  { key: 'propagate_parameter_uncertainty', label: 'Parameter uncertainty in PTA (job)' },
+  { key: 'adversarial_review',              label: 'Adversarial review of simulation claims', gate: true },
+  { key: 'generate_report',                 label: 'Protocol simulation report section' },
+] as const;
+
 /** Sidebar presentation per workflow — keeps the step tracker in one place. */
 const WORKFLOW_UI: Record<WorkflowName, { title: string; steps: readonly { key: string; label: string; gate?: boolean }[] }> = {
-  nca_full:       { title: 'NCA Workflow',        steps: STEPS },
-  poppk_modeling: { title: 'Modeling Workflow',   steps: MODELING_STEPS },
-  poppk_full:     { title: 'Population PK Workflow', steps: POPPK_FULL_STEPS },
+  nca_full:            { title: 'NCA Workflow',                 steps: STEPS },
+  poppk_modeling:      { title: 'Modeling Workflow',            steps: MODELING_STEPS },
+  poppk_full:          { title: 'Population PK Workflow',       steps: POPPK_FULL_STEPS },
+  protocol_simulation: { title: 'Protocol Simulation Workflow', steps: PROTOCOL_SIM_STEPS },
 };
 
 /** Steps that submit a real population fit — minutes of compute, so resuming
  *  into one is polled as a background job rather than awaited inline. */
 const HEAVY_STEPS = new Set<string>([
-  'run_nlme', 'run_scm', 'run_engine_comparison', 'run_simest',
+  'run_nlme', 'run_scm', 'run_engine_comparison', 'run_simest', 'propagate_parameter_uncertainty',
 ]);
 
 /** While a workflow leg runs as a job, re-read the audit trail every this
@@ -144,21 +156,29 @@ const STEP_CARD: Record<string, { marker: Marker; key: keyof PharmState }> = {
 const GATE_DONE: Record<string, string> = {
   qc_review: 'QC complete',
   fit_pk_model: 'Structural comparison complete',
+  propose_simulation_plan: 'Simulation plan proposed',
+  simulate_special_populations: 'Special-population simulations complete',
   adversarial_review: 'Adversarial review complete',
 };
 const GATE_NEXT: Record<string, string> = {
   generate_report: 'generate the DOCX report',
   run_nlme: 'run the population fit',
+  run_dose_sweep: 'run dose sweep, PTA & special-population simulations',
+  propagate_parameter_uncertainty: 'run outer-loop parameter uncertainty job',
 };
 /** What approval runs, as a chain — named once here, not restated in the title. */
 const GATE_CHAIN: Record<string, string> = {
   generate_report: 'DOCX report',
   run_nlme: 'NLME → SCM → diagnostics → forest → VPC',
+  run_dose_sweep: 'Dose sweep → Trial PTA → Special populations',
+  propagate_parameter_uncertainty: 'Parameter uncertainty (job) → Adversarial review',
 };
 /** Reason placeholder per gated step, so each gate shows an example of its own. */
 const GATE_PLACEHOLDER: Record<string, string> = {
   qc_review: 'e.g. Subject 1 extrapolation accepted; sparse terminal sampling',
   fit_pk_model: 'e.g. 1-cmt oral accepted; lowest AIC, all converged',
+  propose_simulation_plan: 'e.g. Target window [15, 60] mg·h/L and adult band approved',
+  simulate_special_populations: 'e.g. Proceed to SIR parameter uncertainty propagation job',
   adversarial_review: 'e.g. Reviewer concerns addressed; fit accepted',
 };
 
@@ -4931,7 +4951,12 @@ export default function App() {
   const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const nSubjects = num(datasetMeta?.n_subjects);
   const docTitle = (messages.length === 0 && !file) ? 'New analysis'
-    : ({ nca_full: 'NCA analysis', poppk_modeling: 'Modeling analysis', poppk_full: 'Population PK analysis' })[activeWorkflow];
+    : ({
+      nca_full: 'NCA analysis',
+      poppk_modeling: 'Modeling analysis',
+      poppk_full: 'Population PK analysis',
+      protocol_simulation: 'Protocol simulation analysis',
+    })[activeWorkflow];
   const startedAt = session?.created_at ? hhmm(session.created_at) : '';
   const docSubtitle = [
     file?.name,
@@ -5031,6 +5056,8 @@ export default function App() {
             title: 'Fit structural models, then confirm across estimation engines (native FOCE-I + nlmixr2 + Monolix when installed), reviewed and QC-gated' },
           { key: 'poppk_full', label: 'Run full population PK',
             title: 'Full population PK: structural comparison (gated), NLME fit, SCM covariate build, residual diagnostics, covariate forest, VPC, adversarial review (gated), report' },
+          { key: 'protocol_simulation', label: 'Run protocol simulation',
+            title: 'Governed protocol simulation from an approved PopPK fit: simulation plan (gated), dose sweep, trial PTA, special populations (gated), parameter uncertainty job, adversarial review (gated), report' },
         ]}
         canRun={canRunWorkflow}
         running={loading && wfStatus === 'running' ? activeWorkflow : null}
