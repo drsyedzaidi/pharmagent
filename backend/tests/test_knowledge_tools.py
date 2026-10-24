@@ -261,6 +261,20 @@ def test_review_flag_without_corpus_or_findings(data_dir: Path):
     assert res.result["goal_met"] is True
 
 
+def test_review_survives_an_advisory_crash(data_dir: Path, monkeypatch):
+    import app.tools.knowledge_tools as mod
+
+    def boom(*a, **k):
+        raise OSError("disk full while caching embeddings")
+    monkeypatch.setattr(mod, "review_advisories", boom)
+    reg = default_registry()
+    (plain_state, plain), _ = _execute(reg, "adversarial_review", _failing_state(), data_dir, {})
+    (_, res), audit = _execute(reg, "adversarial_review", _failing_state(), data_dir, {"consult_mikebrain": True})
+    assert res.result["advisories"] == [] and res.result["advisory_status"].startswith("error: ")
+    assert res.result["counts"] == plain.result["counts"] and res.result["goal_met"] is False
+    assert audit.verify()
+
+
 def test_review_advisories_use_one_llm_and_grounding(data_dir: Path, monkeypatch):
     cid = _chunk_id_for(data_dir / "knowledge", VERBATIM)
     stub = _StubLLM(json.dumps({"verdict": "supported", "rationale": "r",

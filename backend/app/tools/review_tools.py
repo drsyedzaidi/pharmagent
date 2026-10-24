@@ -7,11 +7,14 @@ to PharmState.review_results.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.compute import adversarial
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult
+
+log = logging.getLogger("pharmagent")
 
 
 def _roles(state: PharmState) -> dict[str, str]:
@@ -41,7 +44,11 @@ def adversarial_review(state: PharmState, ctx: ToolContext,
         # Advisory only: literature advisories are severity-free, live under their own
         # key, are excluded from counts and can never change goal_met or status.
         from app.tools.knowledge_tools import review_advisories
-        result = {**result, **review_advisories(result, state, ctx)}
+        try:
+            result = {**result, **review_advisories(result, state, ctx)}
+        except Exception as exc:  # noqa: BLE001 - an advisory must never take the review down
+            log.warning("mikebrain_advisory_failed", extra={"error": str(exc)[:200]})
+            result = {**result, "advisories": [], "advisory_status": f"error: {str(exc)[:120]}"}
         advisory_note = (f" mikebrain: {len(result['advisories'])} literature advisory(ies) "
                          f"[{result['advisory_status']}] — advisory only, not counted.")
 

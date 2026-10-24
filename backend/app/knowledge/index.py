@@ -279,7 +279,7 @@ class CorpusIndex:
                 ordered = sorted(sims, key=lambda t: (-t[0], t[1]))[:pool]
                 vector_rank = {cid: r for r, (_, cid) in enumerate(ordered)}
                 embedding = embedder.name
-            except (requests.RequestException, RuntimeError, KeyError, ValueError) as exc:
+            except (requests.RequestException, RuntimeError, KeyError, ValueError, OSError) as exc:
                 embedding_error = str(exc)[:200]
                 log.warning("knowledge_embedding_failed", extra={"error": embedding_error})
 
