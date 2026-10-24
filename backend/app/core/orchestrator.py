@@ -37,6 +37,7 @@ from app.core.provenance import (
 )
 from app.core.skills import Skill, SkillStore, distill_steps
 from app.core.store import SecureWriteConflict, SessionStore
+from app.knowledge import gate_critic
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 from app.tools.builtins import default_registry
 from app.tools.data_tools import _read as _read_dataset
@@ -1034,6 +1035,11 @@ class Orchestrator:
         (``state.pending_tool``), plus a pending review so the existing resume
         endpoint carries the human's signed decision. Nothing is computed."""
         tool = self.registry.get(tool_name)
+        # mikebrain's literature advisory (M3). Advisory only and a no-op unless enabled: it runs after the
+        # policy has already decided "gated", cannot alter the proposal, and never raises.
+        sess.state, critic = gate_critic.critique_proposal(
+            self.registry, sess.state, sess.ctx, sess.audit, tool_name=tool_name, args=args,
+            rationale=rationale, gate_reason=gate_reason, goal=wf["goal"], clock=self.clock, actor=actor)
         ts = self.clock()
         previous = sess.state.pending_tool
         if previous:
@@ -1044,11 +1050,14 @@ class Orchestrator:
         pending = {"tool": tool_name, "agent": tool.agent, "args": args, "proposed_at": ts,
                    "proposed_by": "planner", "message": wf["goal"], "rationale": rationale,
                    "workflow": wf["name"], "gate_reason": gate_reason}
+        if critic is not None:
+            pending["critic"] = critic
         sess.state = apply_writes(sess.state, "supervisor", {"pending_tool": pending})
         sess.audit.append(
             agent="planner", tool=tool_name, action="propose_tool", inputs=args,
             outputs={"status": "pending_approval", "agent": tool.agent,
-                     "rationale": rationale, "gate_reason": gate_reason},
+                     "rationale": rationale, "gate_reason": gate_reason,
+                     **({"critic": critic} if critic is not None else {})},
             timestamp=ts, actor=actor)
         sess.pending_review = {"after_step": sess.state.current_step - 1,
                                "label": f"Planner proposes {tool_name}",

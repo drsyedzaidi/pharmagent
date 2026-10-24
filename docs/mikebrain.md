@@ -186,4 +186,6 @@ kept as evidence of grounding, not as content.
   advisory shown at the human gate. Whether a `contradicted` verdict may block on
   its own is an owner decision deferred until M2 rules exist.
 
-Out of scope so far: per-role LLM routing, planner integration, UI.
+M3 (the planner gate) is built and described in `docs/mikebrain_planner_gate.md`; it is off by default.
+
+Out of scope so far: per-role LLM routing, UI.

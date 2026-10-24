@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     audit_active_key_id: str | None = None
     audit_anchor_path: Path | None = None
 
+    # mikebrain at the planner's human gate (docs/mikebrain_planner_gate.md). Off by default: with a corpus
+    # present it adds one literature-critic LLM call (minutes on a local 31B model) to every gated proposal.
+    # Advisory only either way; PHARMAGENT_MIKEBRAIN_GATE_CRITIC=true switches it on.
+    mikebrain_gate_critic: bool = False
+
     # Behaviour
     app_name: str = "PharmAgent"
     org_name: str = "PmatricsAI"

@@ -199,12 +199,23 @@ _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?", re.IGNORECASE)
 MAX_REDACTED_CHARS = 400
 
 
+# per-subject finding ids end in the subject id (nca-clf-sign-1771, recompute-cmax-S07)
+_FINDING_ID_RE = re.compile(r"\b(?:nca|recompute)-[\w.-]+", re.IGNORECASE)
+
+
+def redact_subjects(text: Any) -> str:
+    """``text`` with subject identifiers removed ("subject 1771", per-subject finding ids) and whitespace
+    folded. Numbers are kept: aggregate diagnostics are what a literature question is about."""
+    t = _SUBJECT_RE.sub("a subject", str(text or ""))
+    t = _FINDING_ID_RE.sub("a per-subject finding", t)
+    return " ".join(t.split())
+
+
 def redact(text: Any) -> str:
     """Finding text with subject identifiers and numeric values removed: a literature
     question needs the *kind* of refutation, never an individual's value."""
-    t = _SUBJECT_RE.sub("a subject", str(text or ""))
-    t = _NUMBER_RE.sub("N", t)
-    return " ".join(t.split())[:MAX_REDACTED_CHARS]
+    t = _NUMBER_RE.sub("N", redact_subjects(text))
+    return t[:MAX_REDACTED_CHARS]
 
 
 def _advisory_question(f: dict[str, Any]) -> str:
