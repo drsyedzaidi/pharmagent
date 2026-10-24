@@ -275,3 +275,165 @@ def test_prose_mentioning_a_tool_name_without_call_syntax_still_completes(monkey
 
     assert out["status"] == "complete"
 
+
+# ── Improvements 2–7: schema enums, bounded repair, admissible actions, state stabilization ──
+
+@pytest.mark.parametrize("tool_name", [
+    "fit_pk_model", "simulate_pk_profile", "run_nlme", "run_scm", "run_dose_sweep"
+])
+def test_model_library_tool_schemas_expose_enum_constraints(tool_name: str) -> None:
+    """Item 2: model_key and models.items carry sorted(REGISTRY) as a JSON-schema enum."""
+    reg = default_registry()
+    schema = reg.get(tool_name).input_schema
+    props = schema["properties"]
+    expected = sorted(REGISTRY)
+    assert props["model_key"]["enum"] == expected
+    if "models" in props:
+        assert props["models"]["items"]["enum"] == expected
+
+
+def test_bounded_repair_turn_recovers_from_plain_text_tool_call(monkeypatch) -> None:
+    """Item 3: When attempt 1 is a plain-text tool call, OpenAICompatLLM issues 1 bounded
+    repair turn; if attempt 2 returns a structured tool call, the proposal is recorded with
+    repaired=True and still goes through policy.decide."""
+    from pathlib import Path
+
+    from app.core import llm as llm_mod
+    from app.core.llm import OpenAICompatLLM
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+    from app.workflows import WORKFLOWS
+
+    sample = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
+    monkeypatch.setitem(WORKFLOWS, "goal_repair", {
+        "name": "goal_repair", "kind": "goal", "goal": "load and compare models",
+        "allowed_tools": ["load_dataset", "fit_pk_model"]})
+
+    responses = [
+        # Step 0 attempt 1: plain-text tool call (rejected)
+        {"choices": [{"message": {"role": "assistant",
+                                  "content": "```python\nload_dataset()\n```"}}],
+         "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}},
+        # Step 0 attempt 2 (repair): valid structured tool call
+        {"choices": [{"message": {"role": "assistant", "content": "loading dataset",
+                                  "tool_calls": [{"function": {"name": "load_dataset",
+                                                               "arguments": "{}"}}]}}],
+         "usage": {"prompt_tokens": 130, "completion_tokens": 15, "total_tokens": 145}},
+        # Step 1 attempt 1: structured fit_pk_model with valid registry keys -> gated
+        {"choices": [{"message": {"role": "assistant", "content": "compare oral models",
+                                  "tool_calls": [{"function": {
+                                      "name": "fit_pk_model",
+                                      "arguments": '{"compare": true, "models": ["oral_1cmt", "oral_2cmt"]}'
+                                  }}]}}],
+         "usage": {"prompt_tokens": 150, "completion_tokens": 25, "total_tokens": 175}},
+    ]
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **kw: _Resp(responses.pop(0)))
+
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="gemma4:31b", api_key=None)
+    orch = Orchestrator(llm=llm, clock=lambda c=iter(range(100)): f"t{next(c)}",
+                        store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_repair", {"path": sample})
+
+    assert out["status"] == "awaiting_review"
+    hist = out["state"]["planner_history"]
+    assert len(hist) == 2
+    assert hist[0]["tool"] == "load_dataset" and hist[0]["repaired"] is True
+    assert "plain text" in hist[0]["repair_reason"]
+    assert hist[1]["tool"] == "fit_pk_model" and hist[1]["mode"] == policy.MODE_GATED
+    assert llm.total_tokens == 120 + 145 + 175
+
+
+def test_admissible_actions_progress_deterministically() -> None:
+    """Item 4: policy.admissible_actions narrows the routine sequence step by step."""
+    reg = default_registry()
+    tools = [reg.get(n) for n in ("load_dataset", "profile_pk_dataset",
+                                  "generate_spaghetti_plot", "fit_pk_model", "run_nlme")]
+
+    s0 = {"dataset_id": None, "dataset_configured": True}
+    assert policy.admissible_actions(s0, [], tools) == [{"tool": "load_dataset", "args": {}}]
+
+    s1 = {"dataset_id": "ds_1234", "dataset_configured": True, "dataset_loaded": True,
+          "dataset_profiled": False, "spaghetti_plotted": False}
+    assert policy.admissible_actions(s1, [], tools) == [{"tool": "profile_pk_dataset", "args": {}}]
+
+    s2 = {"dataset_id": "ds_1234", "dataset_configured": True, "dataset_loaded": True,
+          "dataset_profiled": True, "spaghetti_plotted": False}
+    assert policy.admissible_actions(s2, [], tools) == [{"tool": "generate_spaghetti_plot", "args": {}}]
+
+    s3 = {"dataset_id": "ds_1234", "dataset_configured": True, "dataset_loaded": True,
+          "dataset_profiled": True, "spaghetti_plotted": True, "pk_fitted": False}
+    assert policy.admissible_actions(s3, [], tools) == [
+        {"tool": "fit_pk_model", "args": {"compare": True, "models": ["oral_1cmt", "oral_2cmt"]}}
+    ]
+
+
+def test_goal_complete_rejects_premature_natural_language_completion(monkeypatch) -> None:
+    """Item 5: Natural-language 'goal met' is rejected when required workflow predicates
+    are unsatisfied, triggering a repair turn and stopping if still unfulfilled."""
+    from pathlib import Path
+
+    from app.core import llm as llm_mod
+    from app.core.llm import OpenAICompatLLM
+    from app.core.orchestrator import Orchestrator
+    from app.core.store import SessionStore
+    from app.workflows import WORKFLOWS
+
+    sample = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
+    monkeypatch.setitem(WORKFLOWS, "goal_premature", {
+        "name": "goal_premature", "kind": "goal", "goal": "full poppk leg",
+        "allowed_tools": ["load_dataset", "profile_pk_dataset", "fit_pk_model"]})
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"role": "assistant", "content": "Goal met!"}}]}
+
+    monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **kw: _Resp())
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="qwen3:8b", api_key=None)
+    orch = Orchestrator(llm=llm, clock=lambda c=iter(range(100)): f"t{next(c)}",
+                        store=SessionStore(":memory:"))
+    sid = orch.create_session().id
+    out = orch.start_workflow(sid, "goal_premature", {"path": sample})
+
+    assert out["status"] == "stopped"
+    assert "completion contract was satisfied" in out["stop_reason"]
+
+
+def test_planner_visible_state_and_observations_stabilize_dataset_id(monkeypatch) -> None:
+    """Item 6: Random ds_<hex> IDs are stripped in 'remove' mode, normalized in 'fixed'
+    mode, and preserved in 'random' mode."""
+    state = {"dataset_id": "ds_deadbeef", "dataset_configured": True}
+    obs = [{"tool": "load_dataset", "summary": "Loaded ds_deadbeef: 12 subjects, 120 obs"}]
+
+    monkeypatch.setenv("PHARMAGENT_PLANNER_DATASET_ID_MODE", "remove")
+    s_rem = policy.planner_visible_state(state)
+    o_rem = policy.planner_visible_observations(obs)
+    assert "dataset_id" not in s_rem and s_rem["dataset_loaded"] is True
+    assert "ds_deadbeef" not in o_rem[0]["summary"] and "dataset:" in o_rem[0]["summary"]
+
+    monkeypatch.setenv("PHARMAGENT_PLANNER_DATASET_ID_MODE", "fixed")
+    s_fix = policy.planner_visible_state(state)
+    o_fix = policy.planner_visible_observations(obs)
+    assert s_fix["dataset_id"] == "ds_fixed001"
+    assert "ds_fixed001" in o_fix[0]["summary"]
+
+    monkeypatch.setenv("PHARMAGENT_PLANNER_DATASET_ID_MODE", "random")
+    s_rnd = policy.planner_visible_state(state)
+    o_rnd = policy.planner_visible_observations(obs)
+    assert s_rnd["dataset_id"] == "ds_deadbeef"
+    assert "ds_deadbeef" in o_rnd[0]["summary"]
+
+
