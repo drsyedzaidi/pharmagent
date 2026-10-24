@@ -104,7 +104,9 @@ temperature 0, local and hosted models are not guaranteed to be bit-for-bit
 deterministic, so some run-to-run differences can appear without sampling.
 
 Expect roughly one planner call per step, about six steps per replicate. On
-this Mac, qwen3:8b took 60 to 130 s per replicate, about 8 min for five.
+this Mac, qwen3:8b took 60 to 145 s per replicate (~8 min for five), and
+gemma4:31b took 383 to 695 s per replicate (~45 min for five, with
+`--timeout 600`).
 Hosted providers (`configured --allow-hosted`) receive the same compact state
 summary the app's planner already sends. `--provider configured` refuses to
 run when nothing is configured (it would silently be the mock).
