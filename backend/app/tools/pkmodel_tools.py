@@ -1605,6 +1605,8 @@ def list_pk_models(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
         writes={}, result={"models": models})
 
 
+_MODEL_KEY_ENUM = sorted(REGISTRY)
+
 TOOLS = [
     Tool("fit_pk_model",
          "Fit a structural PK model from the library to the dataset (single- or "
@@ -1613,9 +1615,10 @@ TOOLS = [
          "modeler",
          {"type": "object",
           "properties": {"dataset_id": {"type": "string"},
-                         "model_key": {"type": "string"},
+                         "model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "compare": {"type": "boolean"},
-                         "models": {"type": "array", "items": {"type": "string"}}},
+                         "models": {"type": "array",
+                                    "items": {"type": "string", "enum": _MODEL_KEY_ENUM}}},
           "required": []},
          fit_pk_model),
     Tool("list_pk_models",
@@ -1629,7 +1632,7 @@ TOOLS = [
          "concentration (and effect) time-course for plotting.",
          "simulator",
          {"type": "object",
-          "properties": {"model_key": {"type": "string"},
+          "properties": {"model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "dose": {"type": "number"}, "tau": {"type": "number"},
                          "n_doses": {"type": "integer"}, "tmax": {"type": "number"},
                          "wt": {"type": "number"}, "rate": {"type": "number"},
@@ -1694,7 +1697,7 @@ TOOLS = [
           "properties": {"method": {"type": "string",
                                     "enum": ["focei", "saem", "focei_saem",
                                              "auto"]},
-                         "model_key": {"type": "string"},
+                         "model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
                          "covariate_model": {"type": "array", "items": {"type": "object"}},
@@ -1720,7 +1723,7 @@ TOOLS = [
          "selected covariate effects with coefficients/RSE%, and OFV drop.",
          "modeler",
          {"type": "object",
-          "properties": {"model_key": {"type": "string"},
+          "properties": {"model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
                          "candidates": {"type": "array", "items": {"type": "object"}},
@@ -1749,7 +1752,7 @@ TOOLS = [
          "the concentration profiles and exposure metrics (Cmax, AUC_tau, Cavg).",
          "simulator",
          {"type": "object",
-          "properties": {"model_key": {"type": "string"},
+          "properties": {"model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "doses": {"type": "array", "items": {"type": "number"}},
                          "dose": {"type": "number"}, "tau": {"type": "number"},
                          "n_doses": {"type": "integer"}, "tmax": {"type": "number"},
