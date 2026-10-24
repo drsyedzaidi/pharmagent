@@ -110,9 +110,12 @@ The `poppk_full` template loads, profiles and validates the data, draws the
 spaghetti plot, compares structural models, and then stops at its first human
 gate.
 
-**Re-run the structural comparison with IV models (needed).** The template's
-comparison step compares the *oral* candidate set (gap G1). At the gate,
-compare the IV models instead. This replaces `pk_model_results`:
+**Check the structural comparison at the gate.** On the prepared data every
+dose has `RATE > 0`, so the template's comparison step ranks the IV candidate
+set (`iv_1cmt`, `iv_2cmt`, `iv_3cmt`). `pk_model_results.candidate_set` records
+the set and why (G1). If its `route` is not `iv` (the unprepared file has no
+RATE, for example), re-run the comparison with the IV models. This replaces
+`pk_model_results`:
 
 ```bash
 curl -s -X POST $API/sessions/$SID/pkmodel -H 'content-type: application/json' \
@@ -205,7 +208,7 @@ were checked against the code on 2026-10-23 without running a fit.
 
 | Item | PharmAgent tool | Status | Evidence / caveat |
 |---|---|---|---|
-| `structural_ncmt` | `fit_pk_model` (compare, two-stage AIC) → `run_nlme` | **partial** | `iv_1cmt`, `iv_2cmt` and `iv_3cmt` exist, and `dose_events` turns RATE into a zero-order infusion. But `poppk_full`'s comparison uses `_DEFAULT_ORAL`, and `_DEFAULT_IV` is defined but unused, so IV data is ranked against oral models unless `models` is passed (G1). Selection is by two-stage AIC, and that fit scores censored records at the LLOQ (G5). There is no NLME-level ΔOFV comparison, and `nlme_results` keeps only the last fit (G2) |
+| `structural_ncmt` | `fit_pk_model` (compare, two-stage AIC) → `run_nlme` | **partial** | `iv_1cmt`, `iv_2cmt` and `iv_3cmt` exist, and `dose_events` turns RATE into a zero-order infusion. Without `models`, the comparison picks the IV set when every dose has `RATE > 0` (true on prepared data) or ROUTE marks every dose IV, and records the set and the reason in `pk_model_results.candidate_set` (G1, fixed). Selection is by two-stage AIC, and that fit scores censored records at the LLOQ (G5). There is no NLME-level ΔOFV comparison, and `nlme_results` keeps only the last fit (G2) |
 | `disposition_params` at 70 kg | `run_nlme` theta (or SCM final) | **supported** | Allometry is centred at 70 kg (`pk_simulate.scale_params`), so theta is the 70 kg typical value. Units are L/day and L. Default IIV on `iv_2cmt` resolves to CL only; pass `iiv_params` (G3) |
 | `error_model` | `run_nlme` sigma | **partial** | Proportional, additive and combined are all supported. The template default is proportional, and there is no automated error-model comparison (G2) |
 | `cov_effects` | `run_scm` | **partial** | Forward p 0.05 / backward p 0.01, estimated coefficients, a post-selection caveat and `screened_out` reporting all work. But: WT exponents are fixed at 0.75/1.0 and cannot be estimated (G4). `run_scm` defaults `iiv_params` to `["CL", "V"]`, so on `iv_2cmt` the automatic candidates target a non-existent `V`: those fits cannot change the OFV but still count in `n_candidates`, and VC is never screened (G3). SCM has no M3: censored records enter at the LLOQ (G5). There is no decoy-covariate analysis (G6) |
@@ -220,17 +223,24 @@ were checked against the code on 2026-10-23 without running a fit.
 
 ### Proposals
 
-None of these are implemented in this PR. In particular, the outlier screen
-(G7) is a proposal only.
+Items marked *(fixed)* are implemented. The rest are proposals only; in
+particular, the outlier screen (G7) is a proposal only.
 
-**G1 — Route-aware structural candidates.** When `compare` is called without
-`models`, `fit_pk_model` should pick its candidate set from the data: IV
-(`_DEFAULT_IV`) when every dose has `RATE > 0`, or a ROUTE/CMT column marks IV;
-oral otherwise. It should record which set and why in `pk_model_results`.
-Separately, `start_workflow` `params` could be allowed to override a step's
+**G1 — Route-aware structural candidates (fixed).** When `compare` is called
+without `models`, `fit_pk_model` picks its candidate set from the fitted
+subjects' dosing records:
+- Any extravascular ROUTE gives the oral set. RATE on a depot dose is
+  zero-order absorption, not IV.
+- A ROUTE marking every record IV gives the IV set (`_DEFAULT_IV`).
+- Otherwise, the IV set when every dose event has `RATE > 0`, else the oral set.
+
+`pk_model_results.candidate_set` records the set, its source (default or
+requested) and the reason. The reason holds counts only, never cell text. CMT
+is not used: CMT=1 is the dosing compartment of IV (central) and oral (depot)
+models alike. IV bolus data with no RATE and no ROUTE still gets the oral set.
+Still open: `start_workflow` `params` could be allowed to override a step's
 `args` (here `models`), validated against the tool schema, so templates stay
-fixed but the analyst can steer them. Test: an IV-infusion fixture through
-`poppk_full` ranks only IV models.
+fixed but the analyst can steer them.
 
 **G2 — NLME-level model comparison.** Structure and residual error should be
 chosen on the population likelihood, not on two-stage AIC. A job-backed,
