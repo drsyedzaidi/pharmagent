@@ -71,16 +71,16 @@ censored record would add the same constant, wrong term to the OFV.
 `test_raw_file_would_break_m3_and_pollute_the_covariate_pool` shows this on the
 unprepared file.
 
-**The trade-off.** Only the M3 consumers read `CENS`: `run_nlme`,
+**Censoring in each tool (G5, resolved).** The M3 consumers keep the 36
+post-dose censored records as censored: `run_nlme`, `run_scm`,
 `run_diagnostics` and the `run_vpc` BLQ check. Every other caller of the
-subject builder keeps rows with `DV > 0`. That includes the two-stage
-`fit_pk_model` (whose AIC ranks the structures), `run_scm` and the `run_vpc`
-overlay. Those tools score the 36 post-dose censored records as observations
-at 0.1 mg/L (LLOQ substitution).
-`test_non_m3_consumers_score_censored_records_at_the_lloq` pins this. Leaving
-`DV = 0` would make those tools drop the records instead, but would break M3 in
-the population fit itself, so the adapter chooses the LLOQ. The proper fix is
-G5.
+subject builder applies M1 and reports the count as `n_blq_dropped`. Those
+callers are the two-stage `fit_pk_model` (whose AIC ranks the structures),
+the `run_vpc` overlay, `run_prior_check` and the forest/exposure helpers. M1
+excludes the censored records; no tool scores them at the 0.1 mg/L that DV
+carries. `test_non_m3_consumers_exclude_censored_records_m1` pins this. The M1
+result is the same whichever value DV carries on censored rows, so the
+adapter's DV = LLOQ costs the non-M3 tools nothing.
 
 The report also records:
 
@@ -184,9 +184,11 @@ rule as the covariate tools. If SCM selected covariates, the final model is the
 SCM final fit; otherwise it is the stored NLME fit. When both exist, they must
 have the same model key and residual-error model. Otherwise which fit is final
 is ambiguous, and every structural and parameter item is null. An SCM final
-fit is flagged in `analysis_steps` because `run_scm` does not apply M3 (G5).
-An M3 refit of the SCM-selected model is not possible over HTTP today:
-`/nlme` takes no `covariate_model`, and `run_nlme` is not proposable from chat.
+fit is fitted with M3 like `run_nlme` (G5, resolved). `analysis_steps` says
+so, and flags an SCM final fit that reports no censored records (`n_blq` 0, for
+example a run from before M3 support) as not fitted with M3. An SCM-selected
+model can be refitted under M3 over HTTP: `/nlme` takes a `covariate_model`.
+`run_nlme` is still not proposable from chat.
 
 ## 4. Score
 
@@ -205,13 +207,13 @@ were checked against the code on 2026-10-23 without running a fit.
 
 | Item | PharmAgent tool | Status | Evidence / caveat |
 |---|---|---|---|
-| `structural_ncmt` | `fit_pk_model` (compare, two-stage AIC) → `run_nlme` | **partial** | `iv_1cmt`, `iv_2cmt` and `iv_3cmt` exist, and `dose_events` turns RATE into a zero-order infusion. But `poppk_full`'s comparison uses `_DEFAULT_ORAL`, and `_DEFAULT_IV` is defined but unused, so IV data is ranked against oral models unless `models` is passed (G1). Selection is by two-stage AIC, and that fit scores censored records at the LLOQ (G5). There is no NLME-level ΔOFV comparison, and `nlme_results` keeps only the last fit (G2) |
+| `structural_ncmt` | `fit_pk_model` (compare, two-stage AIC) → `run_nlme` | **partial** | `iv_1cmt`, `iv_2cmt` and `iv_3cmt` exist, and `dose_events` turns RATE into a zero-order infusion. But `poppk_full`'s comparison uses `_DEFAULT_ORAL`, and `_DEFAULT_IV` is defined but unused, so IV data is ranked against oral models unless `models` is passed (G1). Selection is by two-stage AIC; that fit excludes censored records (M1) and reports `n_blq_dropped` (G5, resolved). There is no NLME-level ΔOFV comparison, and `nlme_results` keeps only the last fit (G2) |
 | `disposition_params` at 70 kg | `run_nlme` theta (or SCM final) | **supported** | Allometry is centred at 70 kg (`pk_simulate.scale_params`), so theta is the 70 kg typical value. Units are L/day and L. Default IIV on `iv_2cmt` resolves to CL only; pass `iiv_params` (G3) |
 | `error_model` | `run_nlme` sigma | **partial** | Proportional, additive and combined are all supported. The template default is proportional, and there is no automated error-model comparison (G2) |
-| `cov_effects` | `run_scm` | **partial** | Forward p 0.05 / backward p 0.01, estimated coefficients, a post-selection caveat and `screened_out` reporting all work. But: WT exponents are fixed at 0.75/1.0 and cannot be estimated (G4). `run_scm` defaults `iiv_params` to `["CL", "V"]`, so on `iv_2cmt` the automatic candidates target a non-existent `V`: those fits cannot change the OFV but still count in `n_candidates`, and VC is never screened (G3). SCM has no M3: censored records enter at the LLOQ (G5). There is no decoy-covariate analysis (G6) |
+| `cov_effects` | `run_scm` | **partial** | Forward p 0.05 / backward p 0.01, estimated coefficients, a post-selection caveat and `screened_out` reporting all work. But: WT exponents are fixed at 0.75/1.0 and cannot be estimated (G4). `run_scm` defaults `iiv_params` to `["CL", "V"]`, so on `iv_2cmt` the automatic candidates target a non-existent `V`: those fits cannot change the OFV but still count in `n_candidates`, and VC is never screened (G3). SCM applies M3 (G5, resolved). There is no decoy-covariate analysis (G6) |
 | `outlier_records` | none | **missing** | No record-level screen. `profile_pk_dataset` reports sparse subjects and BLQ %; `validate_cdisc` checks the columns and monotonic time; `stats_advice` counts IQR outliers on exposures, not records (G7) |
 | 1- and 2-cmt IV infusion | `iv_1cmt`, `iv_2cmt` + RATE | **supported** | An infusion disables the matrix-exponential fast path (`dosing.dose_events`), so fits integrate ODEs and run slower |
-| M3 with CENS | `run_nlme`, `run_diagnostics`, `run_vpc` (BLQ incidence) | **supported** with the adapter | Needs the LLOQ in DV on censored rows (step 1). Gaps: the two-stage fit, SCM and the VPC overlay score censored records at the LLOQ (G5). `run_diagnostics` reports npd as `blq_unsupported` when BLQ records exist. `profile_pk_dataset`'s BLQ % counts DV ≤ 0, so it shows 0 % on prepared data (G8) |
+| M3 with CENS | `run_nlme`, `run_scm`, `run_diagnostics`, `run_vpc` (BLQ incidence) | **supported** with the adapter | Needs the LLOQ in DV on censored rows (step 1). `run_scm` also applies M3. The two-stage fit, the VPC overlay, `run_prior_check` and the forest/exposure helpers exclude censored records (M1) and report `n_blq_dropped` (G5, resolved). `profile_pk_dataset` reads BLQ % from CENS and reports `blq_basis` (G8, resolved). `run_diagnostics` reports npd as `blq_unsupported` when BLQ records exist |
 | TIME in days | all estimation tools | **supported** | Estimation is unit-agnostic and RATE is per day. Only CL and V/VC get data-derived starting values; Q and VP start at the model defaults (10, 50) whatever the time unit. `focei_saem` / `auto` exist for start-sensitive fits |
 | 70 kg reference reporting | allometric scaling | **supported** (fixed exponents) | The SAP asks for supported relationships to be estimated rather than fixed; an estimated WT exponent is missing (G4) |
 | Correlated decoy covariate | `run_scm` collinearity screen | **partial** | The screen drops a candidate correlated at \|r\| > 0.3 with an already-kept candidate on the same parameter, by name order. WT (fixed allometry) is never in the screen: scenario_00's baseline WT~ALB r = 0.40 is above the threshold but never compared. ALB is tested conditional on fixed-exponent WT, with no competing-covariate comparison (G6) |
@@ -220,8 +222,8 @@ were checked against the code on 2026-10-23 without running a fit.
 
 ### Proposals
 
-None of these are implemented in this PR. In particular, the outlier screen
-(G7) is a proposal only.
+None of these were implemented in the adapter PR (#31). G5 and G8 have since
+been resolved by PR #40. The outlier screen (G7) is a proposal only.
 
 **G1 — Route-aware structural candidates.** When `compare` is called without
 `models`, `fit_pk_model` should pick its candidate set from the data: IV
@@ -258,7 +260,10 @@ collinearity screen can see it, and `build_submission` can report the
 estimated WT exponents under `cov_effects`. Keep `fixed` as the default, so
 existing results are bitwise-unchanged.
 
-**G5 — Honour CENS in every consumer.** Only `run_nlme`, `run_diagnostics`
+**G5 — Honour CENS in every consumer. Resolved by PR #40**, as proposed
+below. Every `_build_subjects` caller is now either M3 or explicit M1 with a
+recorded `n_blq_dropped`, and CENS flags are read with `parse_blq_flag`, the
+same reader NCA uses. The original gap, for the record: only `run_nlme`, `run_diagnostics`
 and the `run_vpc` BLQ check build subjects with `with_blq=True`. Every other
 caller (`fit_pk_model`'s two-stage fits, `run_scm`, the `run_vpc` overlay, the
 forest/exposure/simulation helpers and `run_prior_check`) keeps `DV > 0` rows.
@@ -295,9 +300,10 @@ Flags are never excluded automatically. Each exclusion is a signed human
 decision, with a sensitivity fit with and without the flagged records. Only
 then would `build_submission` fill `outlier_records`.
 
-**G8 — Profile BLQ from CENS.** When a `CENS` column exists, `profile_pk_dataset`
-should report BLQ % from it rather than from `DV <= 0`, so prepared (NONMEM
-convention) datasets do not show 0 % BLQ.
+**G8 — Profile BLQ from CENS. Resolved by PR #40.** When a `CENS` column
+exists, `profile_pk_dataset` reports BLQ % from it rather than from `DV <= 0`,
+and says which rule it used in `blq_basis`, so prepared (NONMEM convention)
+datasets no longer show 0 % BLQ.
 
 **G9 — LLM/harness provenance.** Record the LLM provider and model id in
 effect when a workflow starts, and the identity of every chat-proposed tool
