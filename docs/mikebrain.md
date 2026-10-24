@@ -38,6 +38,15 @@ configured; the keyless `MockLLM` always abstains with `no_evidence`, which is
 what the test suite exercises. One new method, `LLM.complete(system, user)`,
 carries the plain-text (no tool) call.
 
+**Latency (measured 2026-10-23, Apple-silicon Mac, `gemma4:31b` via Ollama):**
+75–116 s per consult once the model is warm; the first call after idle, which
+also loads the model, exceeded two minutes. The critic call therefore has its
+own 300 s HTTP budget (`OpenAICompatLLM.COMPLETE_TIMEOUT_S`); a timeout is
+recorded as `status: "llm_error"` and never raised. `adversarial_review` with
+`consult_mikebrain=true` makes up to three such calls synchronously, so it is a
+deliberate, opt-in choice, never the default of the review loop. A smaller local
+model (`qwen2.5:7b`) answers in seconds.
+
 Embeddings for the vector side of retrieval come from Ollama's
 `nomic-embed-text` on this machine only. When Ollama is not reachable (CI,
 tests, a laptop without it) retrieval runs **BM25-only** and every result says

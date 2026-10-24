@@ -329,6 +329,10 @@ class OpenAICompatLLM:
     """
 
     TIMEOUT_S = 120.0   # local 7B models on CPU can take a while per call
+    # The mikebrain critic call carries ~6 excerpts and asks for grounded JSON; a
+    # local 31B model that has to load first exceeded 120 s (measured 2026-10-23,
+    # gemma4:31b cold start), while warm calls took 75-116 s.
+    COMPLETE_TIMEOUT_S = 300.0
 
     def __init__(self, *, base_url: str, model: str, api_key: str | None,
                  reasoning_effort: str | None = None) -> None:
@@ -346,7 +350,7 @@ class OpenAICompatLLM:
 
     # -- transport ----------------------------------------------------------
     def _chat(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None,
-              max_tokens: int = 512, quick: bool = False) -> dict[str, Any]:
+              max_tokens: int = 512, quick: bool = False, timeout: float | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {"model": self.model, "messages": messages,
                                 "max_tokens": max_tokens, "temperature": 0}
         if tools:
@@ -357,7 +361,7 @@ class OpenAICompatLLM:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         resp = requests.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
-                             timeout=self.TIMEOUT_S)
+                             timeout=timeout or self.TIMEOUT_S)
         if resp.status_code >= 400:
             raise RuntimeError(self._http_error(resp.status_code))
         data = resp.json()
@@ -462,7 +466,8 @@ class OpenAICompatLLM:
         at the model's default (see reasoning_effort): a grounded verdict benefits
         from it and the token budget here is far above classify's."""
         msg = self._chat([{"role": "system", "content": system},
-                          {"role": "user", "content": user}], max_tokens=max_tokens)
+                          {"role": "user", "content": user}], max_tokens=max_tokens,
+                         timeout=self.COMPLETE_TIMEOUT_S)
         return msg.get("content") or ""
 
 

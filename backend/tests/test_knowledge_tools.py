@@ -101,6 +101,34 @@ def test_mock_llm_complete_abstains():
     assert out["verdict"] == "no_evidence" and out["citations"] == []
 
 
+def test_openai_compat_complete_posts_plain_chat_with_long_timeout(monkeypatch):
+    """The local critic call: no tools, temperature 0, and the longer COMPLETE_TIMEOUT_S
+    (a cold 31B model exceeded the 120 s routing timeout in a real run)."""
+    from app.core import llm as llm_mod
+    from app.core.llm import OpenAICompatLLM
+    calls = []
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"role": "assistant", "content": '{"verdict": "no_evidence"}'}}]}
+
+    def post(url, json=None, headers=None, timeout=None):  # noqa: A002 - mirrors requests.post
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _Resp()
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    llm = OpenAICompatLLM(base_url="http://127.0.0.1:11434/v1", model="gemma4:31b", api_key=None,
+                          reasoning_effort="none")
+    out = llm.complete("SYS", "USER", max_tokens=77)
+    assert out == '{"verdict": "no_evidence"}'
+    c = calls[0]
+    assert c["url"].endswith("/chat/completions") and c["timeout"] == OpenAICompatLLM.COMPLETE_TIMEOUT_S > 120
+    assert c["json"]["messages"] == [{"role": "system", "content": "SYS"}, {"role": "user", "content": "USER"}]
+    assert c["json"]["max_tokens"] == 77 and c["json"]["temperature"] == 0
+    assert "tools" not in c["json"] and "reasoning_effort" not in c["json"]
+
+
 def test_consult_writes_knowledge_results_and_audit_entry(data_dir: Path):
     (st2, res), audit = _execute(default_registry(), "consult_mikebrain", _state(), data_dir,
                                  {"question": QUESTION, "context": {"model": "1cmt", "nested": {"x": 1}}})
