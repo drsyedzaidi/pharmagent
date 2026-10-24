@@ -317,10 +317,15 @@ class OpenAICompatLLM:
     TIMEOUT_S = 120.0   # local 7B models on CPU can take a while per call
 
     def __init__(self, *, base_url: str, model: str, api_key: str | None,
-                 reasoning_effort: str | None = None) -> None:
+                 reasoning_effort: str | None = None, temperature: float | None = None,
+                 seed: int | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        # Sampling overrides for evaluation harnesses (app.evals.planner_divergence)
+        # only. None keeps the app's request exactly as before: temperature 0, no seed.
+        self.temperature = temperature
+        self.seed = seed
         # Sent on ROUTING calls only. "none" switches off hidden reasoning in
         # local thinking models (qwen3 on Ollama): with classify's 32-token
         # budget they spend everything thinking and return empty content. Tool
@@ -339,6 +344,10 @@ class OpenAICompatLLM:
             body["tools"] = tools
         if quick and self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
+        if self.seed is not None:
+            body["seed"] = self.seed
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
