@@ -31,8 +31,9 @@ from app.tools.builtins import default_registry
 _NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 _FORBIDDEN_NAME_RE = re.compile(r"anthropic|claude")
 _XML_TAG_RE = re.compile(r"[<>]")
-_MD_LINK_RE = re.compile(r"\]\((?!https?:|#|mailto:)([^)#]+)\)")
-_SKILL_DIR_URI_RE = re.compile(r"file:///\{skill_dir\}/([^) `'\"]+)")
+_MD_LINK_RE = re.compile(r"\]\((?!https?:|#|mailto:|file://)([^)#]+)\)")
+_SKILL_DIR_URI_RE = re.compile(r"file:///\{skill_dir\}/([^)# `'\"]+)")
+_OTHER_FILE_URI_RE = re.compile(r"file://(?!/\{skill_dir\}/|\{skill_dir\}/)([^)# `'\"]+)")
 
 DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[3] / "skills"
 
@@ -79,6 +80,20 @@ def _resolve_within_skill(skill_dir: Path, rel_path: str) -> tuple[bool, str]:
     clean = rel_path.strip()
     if not clean:
         return True, ""
+    if clean.startswith("file:///"):
+        prefix = "file:///{skill_dir}/"
+        if clean.startswith(prefix):
+            clean = clean[len(prefix) :].strip()
+            if not clean:
+                return True, ""
+        else:
+            return False, f"{clean} (escapes skill directory)"
+    elif clean.startswith("file://"):
+        return False, f"{clean} (escapes skill directory)"
+    # Strip optional markdown link title, e.g. 'references/foo.md "Title"'
+    clean = clean.split()[0]
+    if Path(clean).is_absolute():
+        return False, f"{clean} (escapes skill directory)"
     root = skill_dir.resolve()
     try:
         target = (skill_dir / clean).resolve()
@@ -89,6 +104,14 @@ def _resolve_within_skill(skill_dir: Path, rel_path: str) -> tuple[bool, str]:
     if not target.exists():
         return False, clean
     return True, ""
+
+
+def _extract_skill_links(body: str) -> list[str]:
+    """Extract skill-local paths from ``file:///{skill_dir}/...`` and relative markdown links."""
+    skill_uri_paths = list(_SKILL_DIR_URI_RE.findall(body))
+    other_file_uris = [f"file://{m}" for m in _OTHER_FILE_URI_RE.findall(body)]
+    md_paths = list(_MD_LINK_RE.findall(body))
+    return skill_uri_paths + other_file_uris + md_paths
 
 
 def check_skills(
@@ -226,7 +249,7 @@ def check_skills(
         )
 
         body = "\n".join(lines[fm_end + 1 :])
-        linked_paths = list(_SKILL_DIR_URI_RE.findall(body)) + list(_MD_LINK_RE.findall(body))
+        linked_paths = _extract_skill_links(body)
         missing_or_escaped: list[str] = []
         for rel in dict.fromkeys(linked_paths):
             ok_path, err_msg = _resolve_within_skill(skill_dir, rel)

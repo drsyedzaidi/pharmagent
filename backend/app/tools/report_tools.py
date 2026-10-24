@@ -295,6 +295,17 @@ def _reproducibility_section(doc: Document, state: PharmState) -> None:
 def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     from app.core.provenance import run_provenance_report_lines
     run_provenance_report_lines(state)                  # refuse a quarantined (mismatched) session before any work
+    lz_rev = state.lambda_z_review or {}
+    if lz_rev.get("status") == "revision_requested":
+        raise ValueError(
+            "Cannot finalize report while lambda_z_review status is 'revision_requested'; "
+            "revise the terminal regression window (or call review_lambda_z_fits(decision='accept')) first."
+        )
+    if args.get("require_lambda_z_review") and lz_rev.get("status") == "awaiting_analyst_decision":
+        raise ValueError(
+            "Cannot finalize report while flagged lambda_z fits are awaiting analyst decision; "
+            "call review_lambda_z_fits(decision='accept'|'revise') first."
+        )
     title = args.get("title", "Pharmacokinetic Analysis Report")
     doc = Document()
     doc.add_heading(title, level=0)
@@ -345,6 +356,12 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
         p.add_run(c["detail"])
+    if lz_rev.get("status") and lz_rev.get("status") != "not_required":
+        flagged_ids = [f.get("id") for f in (state.nca_flagged_subjects or [])]
+        doc.add_paragraph(
+            f"Terminal slope (lambda_z) review gate: {lz_rev.get('status')} "
+            f"(flagged subjects: {flagged_ids}). {lz_rev.get('notes') or ''}".strip()
+        )
 
     _extra_sections(doc, state)
     _reproducibility_section(doc, state)
@@ -358,6 +375,7 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         "dataset": meta.get("dataset_id"),
         "methods": "NCA (linear-up/log-down, best-fit lambda_z)",
         "qc_verdict": state.qc_verdict,
+        **({"lambda_z_review_status": lz_rev.get("status")} if lz_rev.get("status") else {}),
         **({"poppk_qc_verdict": state.poppk_qc_verdict} if state.poppk_qc_verdict else {}),
     }
     return ToolResult(

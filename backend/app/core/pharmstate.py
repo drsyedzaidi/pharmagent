@@ -73,6 +73,8 @@ class PharmState(BaseModel):
     qc_verdict: str | None = None        # PASS | CONDITIONAL PASS | FAIL
     qc_issues: list[dict[str, Any]] | None = None
     qc_checklist: list[dict[str, Any]] | None = None
+    nca_flagged_subjects: list[dict[str, Any]] | None = None  # flagged lambda_z fits
+    lambda_z_review: dict[str, Any] | None = None             # analyst accept/revise gate
     poppk_qc_verdict: str | None = None  # PASS | CONDITIONAL PASS | FAIL
     poppk_qc_issues: list[dict[str, Any]] | None = None
     poppk_qc_checklist: list[dict[str, Any]] | None = None
@@ -168,6 +170,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                 "vpc_results", "diagnostics_results", "engine_comparison_results",
                 "forest_results", "prior_check_results", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist",
+           "nca_flagged_subjects", "lambda_z_review",
            "poppk_qc_verdict", "poppk_qc_issues", "poppk_qc_checklist"},
     "reviewer": {"review_results", "knowledge_results"},
     "report": {"report_path", "report_sections", "memo_path", "memo_results"},
