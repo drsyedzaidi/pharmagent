@@ -1,7 +1,9 @@
 """CDISC ADaM-style export: ADPP/ADPC structure, zip package, define.xml validity."""
 import io
+import time
 import xml.etree.ElementTree as ET
 import zipfile
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -52,3 +54,31 @@ def test_package_without_dataframe():
     z = zipfile.ZipFile(io.BytesIO(body))
     assert z.read("ADPC.csv").decode().strip().count("\n") == 0  # header only
     ET.fromstring(z.read("define.xml"))
+
+
+def _zip_of_one_member() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("x", b"")
+    return buf.getvalue()
+
+
+def test_package_bytes_do_not_depend_on_the_wall_clock(monkeypatch):
+    # The export's sha256 is recorded in a separately requested manifest, so two builds of
+    # the same session must be byte-identical even when a 2 s DOS-time tick falls between them.
+    df = pd.DataFrame({"ID": [1, 1, 2], "TIME": [1.0, 2.0, 1.0], "DV": [5.0, 3.0, 6.0]})
+    roles = {"ID": "ID", "TIME": "TIME", "DV": "DV"}
+    now = [1_700_000_000.0]
+    monkeypatch.setattr(zipfile, "time", SimpleNamespace(time=lambda: now[0], localtime=time.localtime))
+    first, control = build_package(_state(), df, roles), _zip_of_one_member()
+    now[0] += 2.0
+    assert _zip_of_one_member() != control                 # the fake clock does reach zipfile
+    assert build_package(_state(), df, roles) == first
+
+
+def test_package_members_keep_order_compression_and_permissions():
+    z = zipfile.ZipFile(io.BytesIO(build_package(_state(), None, {})))
+    assert z.namelist() == ["ADPP.csv", "ADPC.csv", "define.xml", "README.txt"]
+    for info in z.infolist():
+        assert info.compress_type == zipfile.ZIP_DEFLATED, info.filename
+        assert info.external_attr == 0o600 << 16, info.filename

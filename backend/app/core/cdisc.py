@@ -142,9 +142,22 @@ def build_define_xml(datasets: dict[str, list[str]], study: str) -> bytes:
     return "".join(parts).encode("utf-8")
 
 
+# Fixed member timestamp: writestr(name, ...) stamps wall-clock time (2 s DOS resolution), so two
+# builds of one session could differ and miss the sha256 recorded in the export's provenance manifest.
+_ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
+
+def _zip_member(name: str) -> zipfile.ZipInfo:
+    """The ZipInfo writestr(name, ...) would create in a ZIP_DEFLATED archive, minus the wall clock."""
+    info = zipfile.ZipInfo(name, date_time=_ZIP_DATE_TIME)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o600 << 16  # ?rw-------, as writestr sets for a named member
+    return info
+
+
 def build_package(state: PharmState, df: pd.DataFrame | None,
                   roles: dict[str, str]) -> bytes:
-    """Zip containing ADPC.csv, ADPP.csv, and define.xml."""
+    """Zip containing ADPC.csv, ADPP.csv, and define.xml. Byte-reproducible for a given input."""
     study = (state.dataset_metadata or {}).get("dataset_id", "STUDY")
     adpp_rows, adpp_cols = build_adpp(state)
     adpc_rows, adpc_cols = build_adpc(df, roles, state)
@@ -152,10 +165,10 @@ def build_package(state: PharmState, df: pd.DataFrame | None,
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("ADPP.csv", _csv_bytes(adpp_rows, adpp_cols))
-        z.writestr("ADPC.csv", _csv_bytes(adpc_rows, adpc_cols))
-        z.writestr("define.xml", define)
-        z.writestr("README.txt",
+        z.writestr(_zip_member("ADPP.csv"), _csv_bytes(adpp_rows, adpp_cols))
+        z.writestr(_zip_member("ADPC.csv"), _csv_bytes(adpc_rows, adpc_cols))
+        z.writestr(_zip_member("define.xml"), define)
+        z.writestr(_zip_member("README.txt"),
                    b"CDISC ADaM-aligned export from PharmAgent.\n"
                    b"ADPP.csv  - NCA parameters (BDS, standard PARAMCDs)\n"
                    b"ADPC.csv  - plasma concentrations (BDS)\n"
