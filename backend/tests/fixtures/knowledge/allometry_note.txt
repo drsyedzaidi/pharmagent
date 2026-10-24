@@ -1,0 +1,33 @@
+# Synthetic teaching note: allometric scaling of clearance and volume
+
+This note is a synthetic fixture written for the PharmAgent test suite. It is not
+taken from any book or paper.
+
+## 1 Fixed exponents
+
+Allometric scaling relates a pharmacokinetic parameter to body size through a
+power function of weight normalised to a reference of seventy kilograms. The
+theory-based exponents are 0.75 for clearance and 1.0 for volume of distribution.
+Many analysts fix these exponents rather than estimate them, because a sparse
+adult dataset rarely contains enough weight range to identify the exponent with
+useful precision.
+
+## 2 Estimated exponents
+
+When the weight range is wide, for example in a paediatric population, the
+exponent on clearance may be estimated. An estimated exponent far from 0.75 that
+is also imprecise is a warning sign rather than a discovery. Maturation of
+clearance in neonates and infants is better handled by an explicit maturation
+function of postmenstrual age than by letting the allometric exponent absorb it.
+
+## 3 Covariate confounding
+
+Weight is correlated with age, body surface area and organ function. Including
+weight by allometry first and then testing other covariates on the residual
+variability avoids attributing a size effect to an unrelated covariate.
+
+## 4 Reporting
+
+State whether exponents were fixed or estimated, give the reference weight, and
+report the typical value at the reference weight so results can be compared across
+studies.

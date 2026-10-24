@@ -1,0 +1,39 @@
+# Synthetic teaching note: eta-shrinkage and EBE-based diagnostics
+
+This note is a synthetic fixture written for the PharmAgent test suite. It is not
+taken from any book or paper; it paraphrases widely taught ideas in plain words so
+that retrieval and quote-grounding can be tested without copyrighted text.
+
+## 1 What shrinkage is
+
+In a nonlinear mixed-effects model each subject receives an empirical Bayes
+estimate (EBE) of its random effect, often called an eta. When the data for a
+subject are sparse or uninformative about a parameter, the EBE is pulled toward
+the population typical value. The spread of the EBEs is then smaller than the
+estimated population variance omega. Eta-shrinkage quantifies this: it is one minus
+the ratio of the standard deviation of the EBEs to the square root of the estimated
+omega, usually expressed as a percentage.
+
+## 2 Why it matters for diagnostics
+
+When eta-shrinkage exceeds 30 percent, individual parameter estimates are drawn
+toward the population mean and EBE-based diagnostics lose their power to reveal
+model misspecification. Plots of eta against a covariate can then hide a true
+relationship or suggest a false one, and individual predictions can look better
+than the model deserves. Covariate screening on shrunken EBEs is therefore
+uninformative and should not be used to accept or reject a covariate effect.
+
+## 3 What to do instead
+
+With high shrinkage, prefer diagnostics that do not depend on the EBEs: a
+visual predictive check, conditional weighted residuals, or a formal covariate
+test inside the estimation rather than a post-hoc regression on the etas. Report
+the shrinkage for every random effect alongside the estimates so a reader can judge
+which individual-level conclusions are supported by the design.
+
+## 4 Epsilon-shrinkage
+
+A related quantity, epsilon-shrinkage, is one minus the standard deviation of the
+individual weighted residuals. High epsilon-shrinkage means the model is
+over-fitting individual observations, and individual predictions will track the
+data too closely to be diagnostic.

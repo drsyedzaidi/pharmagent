@@ -36,6 +36,8 @@ def test_every_step_names_a_registered_tool_owned_by_its_agent():
     reg = default_registry()
     for wf_name, wf in WORKFLOWS.items():
         assert wf["name"] == wf_name, f"{wf_name}: name field disagrees with its key"
+        if wf.get("kind") == "goal":
+            continue        # no step list: its allow-list is checked in test_planner_leg.py
         assert wf["steps"], f"{wf_name}: no steps"
         for i, step in enumerate(wf["steps"]):
             tool = reg.get(step["tool"])  # raises KeyError if unregistered
@@ -49,6 +51,8 @@ def test_every_step_names_a_registered_tool_owned_by_its_agent():
 
 def test_every_workflow_loads_data_first_and_carries_a_human_gate():
     for wf_name, wf in WORKFLOWS.items():
+        if wf.get("kind") == "goal":
+            continue        # gates come from the policy, not a step list (test_planner_leg.py)
         steps = wf["steps"]
         assert steps[0]["tool"] == "load_dataset", f"{wf_name}: must start by loading data"
         # This is a regulated-style app: no template may run start to finish
