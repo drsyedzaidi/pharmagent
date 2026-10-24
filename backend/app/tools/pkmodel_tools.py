@@ -1177,7 +1177,9 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                           writes={"scm_results": status}, result=status)
 
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+    # with_blq=True for parity with run_nlme: the FOCE-I search and final fit use
+    # M3, so their OFVs are comparable with the base fit's.
+    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
     if len(subjects) < 3:
         status = {"status": "insufficient", "message": "Need >=3 subjects for covariate modeling."}
         return ToolResult(summary="SCM skipped: too few subjects.", action="run_scm(insufficient)",
