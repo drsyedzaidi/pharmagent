@@ -74,6 +74,10 @@ def compact_state_summary(state: PharmState, context: dict[str, Any] | None = No
     plus a bounded, scalar-only view of any caller-supplied ``context``."""
     full = _SilentAgent(name="reviewer", system_prompt="")._state_summary(state)
     out: dict[str, Any] = {k: full[k] for k in SUMMARY_KEYS if full.get(k) is not None}
+    rev = out.get("review_diagnostics")
+    if isinstance(rev, dict) and rev.get("blocking_ids"):
+        # finding ids such as recompute-cmax-1771 end in a subject id: keep the kind, drop the subject
+        out["review_diagnostics"] = {**rev, "blocking_ids": sorted({finding_kind(str(i)) for i in rev["blocking_ids"]})}
     if isinstance(context, dict) and context:
         extra = {str(k)[:60]: (v[:200] if isinstance(v, str) else v)
                  for k, v in list(context.items())[:MAX_CONTEXT_ITEMS]
@@ -205,6 +209,17 @@ def redact(text: Any) -> str:
     t = _SUBJECT_RE.sub("a subject", str(text or ""))
     t = _NUMBER_RE.sub("N", t)
     return " ".join(t.split())[:MAX_REDACTED_CHARS]
+
+
+# Per-subject finding ids end in the subject id (nca-clf-sign-1771, recompute-cmax-S07). The last segment must
+# contain a digit, so ordinary words such as "NCA-derived" or "recompute-from-raw-data" are left alone.
+_SUBJECT_FINDING_ID = r"(?:nca|recompute)-(?:[a-z]+-)*[a-z]*\d[\w.]*"
+_FINDING_ID_FULL_RE = re.compile(rf"^{_SUBJECT_FINDING_ID}$", re.IGNORECASE)
+
+
+def finding_kind(finding_id: str) -> str:
+    """``nca-clf-sign-1771`` -> ``nca-clf-sign``; any other finding id is returned unchanged."""
+    return finding_id.rsplit("-", 1)[0] if _FINDING_ID_FULL_RE.match(finding_id) else finding_id
 
 
 def _advisory_question(f: dict[str, Any]) -> str:
