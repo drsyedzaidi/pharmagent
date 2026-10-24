@@ -640,6 +640,7 @@ class NlmeRequest(BaseModel):
     error_model: str = "proportional"
     prior_from: str | None = None        # "nlme" -> MAP with the stored fit as prior
     prior_var: float | None = None       # prior variance (log scale); None -> from RSE%
+    covariate_model: list[dict] | None = None  # e.g. SCM-selected effects -> refit under M3
 
 
 @app.post("/api/sessions/{sid}/nlme")
