@@ -7,6 +7,7 @@ several and selects by AIC — with a two-stage population summary.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -34,8 +35,11 @@ _WT_NAMES = {"wt", "weight", "bw", "bwt", "bodyweight"}
 # default candidate sets for "compare"; _compare_route picks one from the data
 _DEFAULT_ORAL = ["oral_1cmt", "oral_1cmt_lag", "oral_2cmt", "oral_1cmt_transit"]
 _DEFAULT_IV = ["iv_1cmt", "iv_2cmt", "iv_3cmt"]
-# ROUTE values (lowercased) that mark a dosing record intravenous
+# ROUTE first words (lowercased) that mark a dosing record IV / extravascular
 _IV_ROUTES = {"iv", "i.v.", "intravenous", "bolus", "infusion"}
+_EV_ROUTES = {"po", "p.o.", "oral", "sc", "subcutaneous", "im", "intramuscular", "sl",
+              "sublingual", "buccal", "rectal", "transdermal", "topical", "inhaled",
+              "inhalation", "intranasal", "nasal", "ev", "extravascular"}
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -155,28 +159,40 @@ def _trim_fit(res: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _route_kind(value: Any) -> str | None:
+    """"iv" / "ev" for a recognised ROUTE cell (by its first word), else None."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    first = re.split(r"[\s_/\-]+", str(value).strip().lower())[0]
+    if first in _IV_ROUTES:
+        return "iv"
+    return "ev" if first in _EV_ROUTES else None
+
+
 def _compare_route(df: pd.DataFrame, roles: dict[str, str],
                    subjects: list[dict]) -> tuple[str, str]:
     """Dosing route for the default compare set: ("iv" | "oral", reason).
 
-    A ROUTE column populated on every dosing record decides: IV only when every
-    such record is an IV route. Otherwise IV when every dose event is a
-    zero-order infusion (RATE > 0). Anything else stays oral, the previous
-    default. An explicit extravascular ROUTE wins over RATE, since RATE on a
-    depot dose is zero-order absorption. CMT is not route evidence: CMT=1 is the
-    dosing compartment of IV (central) and oral (depot) models alike.
+    Over the fitted subjects' dosing records: any extravascular ROUTE gives
+    oral, since RATE on a depot dose is zero-order absorption; a ROUTE marking
+    every record IV gives IV. Blank or unrecognised ROUTE values are no
+    evidence, and RATE decides: IV when every dose event is a zero-order
+    infusion (RATE > 0). Anything else stays oral, the previous default. CMT is
+    not route evidence: CMT=1 is the dosing compartment of IV (central) and
+    oral (depot) models alike. The reason carries counts only, never cell text.
     """
     route_col = next((c for c, r in roles.items() if r == "ROUTE"), None)
     amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
-    if route_col and amt_col:
-        dosing = pd.to_numeric(df[amt_col], errors="coerce") > 0
-        vals = df.loc[dosing, route_col]
-        if len(vals) and vals.notna().all():
-            low = vals.astype(str).str.strip().str.lower()
-            seen = ", ".join(sorted(set(vals.astype(str).str.strip())))
-            if low.isin(_IV_ROUTES).all():
-                return "iv", f"ROUTE marks every dosing record IV ({seen})"
-            return "oral", f"ROUTE does not mark every dosing record IV ({seen})"
+    id_col = next((c for c, r in roles.items() if r == "ID"), None)
+    if route_col and amt_col and id_col:
+        fitted = df[id_col].isin({s["subject"] for s in subjects})
+        dosing = fitted & (pd.to_numeric(df[amt_col], errors="coerce") > 0)
+        kinds = [_route_kind(v) for v in df.loc[dosing, route_col]]
+        n_ev = kinds.count("ev")
+        if n_ev:
+            return "oral", f"ROUTE marks {n_ev}/{len(kinds)} dosing records extravascular"
+        if kinds and kinds.count("iv") == len(kinds):
+            return "iv", f"ROUTE marks all {len(kinds)} dosing records IV"
     doses = [d for s in subjects for d in s["doses"]]
     if doses and all(d.get("rate", 0) > 0 for d in doses):
         return "iv", f"every dose event has RATE > 0 (zero-order infusion, {len(doses)} doses)"
