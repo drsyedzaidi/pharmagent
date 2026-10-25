@@ -61,6 +61,42 @@ it. The status retains `baseline: operator_attested_legacy` and
 `trusted_since_index`; it does not claim that pre-enrollment history was
 originally authenticated.
 
+## What the seal binds (and does not)
+
+A seal (`seal_version` 2) is an HMAC over: session id, owner, `created_at`,
+generation, the complete semantic audit snapshot (entry count, head, digest),
+the previous seal's MAC, key id, baseline, and **`state_digest`** — SHA-256 of
+the canonical `sessions.state_json` content. `state_digest` excludes only the
+transient `run_provenance_status` / `run_provenance_assurance` fields, which are
+recomputed from the audit chain on every read and are never trusted from storage.
+
+Every save re-seals when the state or audit changes; the SQLite write is a
+compare-and-swap on the exact audit, seal **and state** rows that were
+verified. Loading a session, `assert_current` and `GET .../audit` verify the
+state against the seal. Editing `state_json` (e.g. `nca_parameters`,
+`be_results`) directly in the database therefore raises `AuditIntegrityError` at
+load and reports `verified: false`, `state_binding: "mismatch"`.
+
+Not bound by the seal: `history_json`, `pending_json`, `params_json`,
+`commands_json`, `dataset_id`/`dataset_path`, `updated_at`, and the dataset file
+contents (the dataset file is covered separately by its recorded SHA-256, checked
+at load). Rewriting those rows is not detected by the keyed seal.
+
+`state_binding` values in the audit status: `verified` (v2 seal, state matches),
+`absent` (legacy v1 seal, state is **not** covered), `mismatch` (v2 seal,
+state differs → `verified: false`).
+
+### Seals created before `seal_version` 2
+
+Existing sealed sessions carry v1 seals with no `state_digest`. They keep
+loading and verifying exactly as before, but report `state_binding: "absent"`:
+their state row is not tamper-evident. The next legitimate save (any tool run,
+chat turn, or review decision) writes a v2 seal (generation + 1, linked to the
+v1 seal's MAC), after which the state is bound. A v1 seal found in a session
+that has already advanced to v2 in the anchor is rejected as a rollback by the
+anchor check as before. Until a session is re-sealed this way, treat its state as
+unprotected.
+
 ## Rotation and recovery
 
 To rotate, add the new key to `AUDIT_KEYS_JSON`, retain every old key, and change

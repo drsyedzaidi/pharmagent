@@ -23,9 +23,11 @@ from app.core import policy
 from app.core.audit import AuditChain
 from app.core.audit_seal import (
     NO_SEAL,
+    SEAL_VERSION,
     AuditIntegrityError,
     AuditSecurity,
     audit_security_from_settings,
+    state_digest,
 )
 from app.core.llm import LLM, get_llm
 from app.core.pharmstate import PharmState, apply_writes
@@ -140,12 +142,14 @@ class Orchestrator:
             if self.audit_security is not None:
                 self.audit_security.assert_current(
                     row["id"], row["audit"], row["audit_seal"],
-                    owner=row["owner"], created_at=row["created_at"], recover=True
+                    owner=row["owner"], created_at=row["created_at"], recover=True,
+                    state=row["state"]
                 )
             seal_baseline = None
             if self.audit_security is not None:
                 seal_baseline = self.audit_security.inspect(
-                    row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"]
+                    row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"],
+                    state=row["state"]
                 ).get("baseline")
             ctx = ToolContext(data_dir=str(settings.data_dir))
             state = PharmState.model_validate(row["state"])
@@ -241,11 +245,14 @@ class Orchestrator:
         previous = None
         expected_audit_json = None
         expected_seal_json = None
+        expected_state_json = None
         if row is not None:
             previous = self.audit_security.assert_current(
                 sess.id, row["audit"], row["audit_seal"],
-                owner=row["owner"], created_at=row["created_at"], recover=True
+                owner=row["owner"], created_at=row["created_at"], recover=True,
+                state=row["state"]
             )
+            expected_state_json = row["_state_json_raw"]
             expected_audit_json = row["_audit_json_raw"]
             expected_seal_json = row["_audit_seal_json_raw"]
             current = row["audit"]
@@ -264,6 +271,8 @@ class Orchestrator:
             previous is not None
             and proposed_entries == row["audit"]
             and previous.key_id == self.audit_security.keyring.active_key_id
+            and previous.seal_version == SEAL_VERSION
+            and previous.state_digest == state_digest(values["state"])
         ):
             seal = previous
         else:
@@ -274,6 +283,7 @@ class Orchestrator:
                 entries=proposed_entries,
                 previous=previous,
                 baseline="fresh",
+                state=values["state"],
             )
         try:
             self.store.save_secured(
@@ -281,6 +291,7 @@ class Orchestrator:
                 audit_seal=seal.to_dict(),
                 expected_audit_json=expected_audit_json,
                 expected_audit_seal_json=expected_seal_json,
+                expected_state_json=expected_state_json,
             )
         except SecureWriteConflict as exc:
             raise AuditIntegrityError(
@@ -334,7 +345,7 @@ class Orchestrator:
             }
         return {**self.audit_security.inspect(
             sid, row["audit"], row["audit_seal"],
-            owner=row["owner"], created_at=row["created_at"]
+            owner=row["owner"], created_at=row["created_at"], state=row["state"]
         ), "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance}
 
     @staticmethod
