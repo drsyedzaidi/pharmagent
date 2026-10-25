@@ -304,4 +304,6 @@ kept as evidence of grounding, not as content.
   its own is still an owner decision; M2 rules are the only route by which
   literature can become a deterministic finding.
 
-Out of scope so far: per-role LLM routing, planner integration, UI.
+M3 (the planner gate) is built and described in `docs/mikebrain_planner_gate.md`; it is off by default.
+
+Out of scope so far: per-role LLM routing, UI.

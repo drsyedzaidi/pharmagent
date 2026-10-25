@@ -214,12 +214,28 @@ def redact(text: Any) -> str:
 # Per-subject finding ids end in the subject id (nca-clf-sign-1771, recompute-cmax-S07). The last segment must
 # contain a digit, so ordinary words such as "NCA-derived" or "recompute-from-raw-data" are left alone.
 _SUBJECT_FINDING_ID = r"(?:nca|recompute)-(?:[a-z]+-)*[a-z]*\d[\w.]*"
+_FINDING_ID_RE = re.compile(rf"\b{_SUBJECT_FINDING_ID}(?![\w-])", re.IGNORECASE)   # whole id only, never a prefix
 _FINDING_ID_FULL_RE = re.compile(rf"^{_SUBJECT_FINDING_ID}$", re.IGNORECASE)
+# "subject 12", "Subject: 12", "subject #12", "subject ID 12", "ID=1771", "patient 3", "subjects 1, 2 and 3"
+_ID_WORDS = r"(?:subjects?|patients?|participants?|volunteers?|ids?)"
+_ID_TOKEN = r"[\w.-]*\d[\w.-]*"
+_SUBJECT_REF_RE = re.compile(
+    rf"\b{_ID_WORDS}\b(?:\s+id\b)?\s*[:#=(\[]*\s*{_ID_TOKEN}(?:\s*(?:,|and|&)\s*{_ID_TOKEN})*[)\]]?",
+    re.IGNORECASE)
 
 
 def finding_kind(finding_id: str) -> str:
     """``nca-clf-sign-1771`` -> ``nca-clf-sign``; any other finding id is returned unchanged."""
     return finding_id.rsplit("-", 1)[0] if _FINDING_ID_FULL_RE.match(finding_id) else finding_id
+
+
+def redact_subjects(text: Any) -> str:
+    """``text`` with subject references removed ("subject 12", "ID=1771", "patients 1, 2") and per-subject
+    finding ids reduced to their kind, whitespace folded. Numbers are kept: aggregate diagnostics are what a
+    literature question is about. Best effort: an identifier with no digit in it is not recognised."""
+    t = _SUBJECT_REF_RE.sub("a subject", str(text or ""))
+    t = _FINDING_ID_RE.sub(lambda m: finding_kind(m.group(0)), t)
+    return " ".join(t.split())
 
 
 def _advisory_question(f: dict[str, Any]) -> str:
