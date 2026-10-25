@@ -7,6 +7,7 @@ several and selects by AIC — with a two-stage population summary.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -31,9 +32,14 @@ from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _WT_NAMES = {"wt", "weight", "bw", "bwt", "bodyweight"}
-# default candidate set for "compare" on oral data
+# default candidate sets for "compare"; _compare_route picks one from the data
 _DEFAULT_ORAL = ["oral_1cmt", "oral_1cmt_lag", "oral_2cmt", "oral_1cmt_transit"]
 _DEFAULT_IV = ["iv_1cmt", "iv_2cmt", "iv_3cmt"]
+# ROUTE first words (lowercased) that mark a dosing record IV / extravascular
+_IV_ROUTES = {"iv", "i.v.", "intravenous", "bolus", "infusion"}
+_EV_ROUTES = {"po", "p.o.", "oral", "sc", "subcutaneous", "im", "intramuscular", "sl",
+              "sublingual", "buccal", "rectal", "transdermal", "topical", "inhaled",
+              "inhalation", "intranasal", "nasal", "ev", "extravascular"}
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -201,6 +207,49 @@ def _trim_fit(res: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _route_kind(value: Any) -> str | None:
+    """"iv" / "ev" for a recognised ROUTE cell (by its first word), else None."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    first = re.split(r"[\s_/\-]+", str(value).strip().lower())[0]
+    if first in _IV_ROUTES:
+        return "iv"
+    return "ev" if first in _EV_ROUTES else None
+
+
+def _compare_route(df: pd.DataFrame, roles: dict[str, str],
+                   subjects: list[dict]) -> tuple[str, str]:
+    """Dosing route for the default compare set: ("iv" | "oral", reason).
+
+    Over the fitted subjects' dosing records: any extravascular ROUTE gives
+    oral, since RATE on a depot dose is zero-order absorption; a ROUTE marking
+    every record IV gives IV. Blank or unrecognised ROUTE values are no
+    evidence, and RATE decides: IV when every dose event is a zero-order
+    infusion (RATE > 0). Anything else stays oral, the previous default. CMT is
+    not route evidence: CMT=1 is the dosing compartment of IV (central) and
+    oral (depot) models alike. The reason carries counts only, never cell text.
+    """
+    route_col = next((c for c, r in roles.items() if r == "ROUTE"), None)
+    amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
+    id_col = next((c for c, r in roles.items() if r == "ID"), None)
+    if route_col and amt_col and id_col:
+        fitted = df[id_col].isin({s["subject"] for s in subjects})
+        dosing = fitted & (pd.to_numeric(df[amt_col], errors="coerce") > 0)
+        kinds = [_route_kind(v) for v in df.loc[dosing, route_col]]
+        n_ev = kinds.count("ev")
+        if n_ev:
+            return "oral", f"ROUTE marks {n_ev}/{len(kinds)} dosing records extravascular"
+        if kinds and kinds.count("iv") == len(kinds):
+            return "iv", f"ROUTE marks all {len(kinds)} dosing records IV"
+    doses = [d for s in subjects for d in s["doses"]]
+    if doses and all(d.get("rate", 0) > 0 for d in doses):
+        return "iv", f"every dose event has RATE > 0 (zero-order infusion, {len(doses)} doses)"
+    n_inf = sum(1 for d in doses if d.get("rate", 0) > 0)
+    if n_inf:
+        return "oral", f"only {n_inf}/{len(doses)} dose events have RATE > 0; no ROUTE column marks IV"
+    return "oral", "no dose event has RATE > 0 and no ROUTE column marks IV"
+
+
 def fit_pk_model(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     dsid, df = require_dataset(ctx, state, args)
     roles = _roles(df, state)
@@ -236,18 +285,24 @@ def fit_pk_model(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
             action=f"fit_pk_model({model_key})",
             writes={"pk_model_results": payload}, result=payload)
 
-    # compare mode — drop PK/PD candidates unless a PD endpoint is present
+    # compare mode — default set follows the dosing route (oral models ranked on
+    # IV data would all be wrong); drop PK/PD candidates unless a PD endpoint is present
+    route, reason = _compare_route(df, roles, subjects)
+    source = "requested" if candidates else "default"
     if not candidates:
-        candidates = list(args.get("models") or _DEFAULT_ORAL)
+        candidates = list(_DEFAULT_IV if route == "iv" else _DEFAULT_ORAL)
     candidates = [k for k in candidates if k in REGISTRY and (has_pd or not get_model(k).has_pd)]
     cmp = compare_models(subjects, candidates)
     payload = {"status": "ok", "mode": "compare", "multiple_dose": multi,
+               "candidate_set": {"source": source, "route": route, "reason": reason,
+                                 "models": list(candidates)},
                "ranking": cmp["ranking"], "best_model": cmp["best_model"],
                "best": _trim_fit(cmp["best"]) if cmp["best"] else None,
                "n_blq_dropped": n_blq}
     best_label = payload["best"]["label"] if payload["best"] else "none"
+    set_label = f"default {route.upper()} set: {reason}" if source == "default" else "requested"
     return ToolResult(
-        summary=(f"Compared {len(candidates)} PK models; best by AIC: {best_label}."
+        summary=(f"Compared {len(candidates)} PK models ({set_label}); best by AIC: {best_label}."
                  + _m1_note(n_blq)),
         action=f"fit_pk_model(compare:{','.join(candidates)})",
         writes={"pk_model_results": payload}, result=payload)
@@ -1610,7 +1665,9 @@ _MODEL_KEY_ENUM = sorted(REGISTRY)
 TOOLS = [
     Tool("fit_pk_model",
          "Fit a structural PK model from the library to the dataset (single- or "
-         "multiple-dose), or compare several models and select by AIC. Reports "
+         "multiple-dose), or compare several models and select by AIC. Without "
+         "`models`, compare uses the IV set when every dose is an infusion "
+         "(RATE > 0) or ROUTE marks every dose IV, else the oral set. Reports "
          "per-subject parameters and a two-stage population summary.",
          "modeler",
          {"type": "object",
