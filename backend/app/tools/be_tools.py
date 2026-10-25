@@ -15,6 +15,7 @@ from app.compute.nca import Profile, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
+from app.tools.obs_loader import load_observations
 
 _TRT_NAMES = {"trt", "treat", "treatment", "form", "formulation", "drug", "period_trt"}
 _REF_TOKENS = {"r", "ref", "reference", "rld"}
@@ -42,7 +43,7 @@ def _exposures_by_treatment(
 ) -> dict[Any, dict[Any, dict[str, float]]]:
     """Return {treatment: {subject: {Cmax, AUC_last, AUC_inf}}}."""
     out: dict[Any, dict[Any, dict[str, float]]] = {}
-    for (trt, sid), g in obs.groupby([trt_col, id_col]):
+    for (sid, trt), g in obs.groupby([id_col, trt_col]):
         g = g.dropna(subset=[time_col, dv_col]).sort_values(time_col)
         if len(g) < 3:
             continue
@@ -73,8 +74,6 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
-    amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
-    evid_col = next((c for c, r in roles.items() if r == "EVID"), None)
     trt_col = args.get("treatment_col") or _find_treatment_col(df, roles)
 
     if not (id_col and time_col and dv_col):
@@ -89,16 +88,8 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
             action="run_bioequivalence(no_treatment_column)",
             writes={"be_results": status}, result=status)
 
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
-    if evid_col:
-        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-        obs = df[ev == 0]
-    elif amt_col:
-        amt = pd.to_numeric(df[amt_col], errors="coerce").fillna(0)
-        obs = df[amt == 0]
-    else:
-        obs = df
+    loaded = load_observations(df, roles, group_cols=[id_col, trt_col])
+    obs = loaded.obs
 
     levels = list(pd.unique(obs[trt_col].dropna()))
     picked = _pick_levels(levels, args.get("reference"), args.get("test"))
