@@ -102,6 +102,7 @@ _THETA_REL_MAX = 1e7
 _THETA_CLAMP_MARGIN = 10.0
 _SIGMA_FLOOR = 1e-4          # hard floor on a residual-error sigma
 _BIG = 1e10                  # objective value returned on any failure
+_POWELL_MAXFEV = 800         # outer-fit evaluation ceiling (a converged fit needs ~250-300)
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
 _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covariance
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
@@ -1726,13 +1727,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         return ofv
 
     # ``maxfev`` bounds the total objective evaluations (each is a full
-    # population Laplace pass), keeping wall-time predictable on large cohorts.
-    # A handful of Powell sweeps suffice because the inner EBEs are warm-started.
-    n_par = (spec.n_theta + spec.n_cov + spec.n_omega_par
-             + int(spec.has_prop) + int(spec.has_add))
+    # population Laplace pass), so wall-time stays bounded by ``max_iter``.
+    # It must NOT be tighter than Powell needs: a 12*n_par cap stopped the
+    # search after a single sweep, which the old finite-OFV rule then reported
+    # as converged. A genuinely converged fit needs ~3 sweeps (~240 evals for
+    # CL/V/KA + 2 IIV + sigma), so only ``max_iter`` bounds the budget.
     res = minimize(outer_obj, x0, method="Powell",
                    options={"maxiter": max_iter,
-                            "maxfev": min(max(12 * n_par, 24), 25 * max_iter),
+                            "maxfev": min(max(25 * max_iter, 24), _POWELL_MAXFEV),
                             "xtol": 1e-3, "ftol": 1e-3})
 
     x_final = np.asarray(res.x, dtype=float)
