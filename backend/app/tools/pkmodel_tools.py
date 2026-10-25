@@ -7,6 +7,7 @@ several and selects by AIC — with a two-stage population summary.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -14,7 +15,7 @@ import pandas as pd
 
 from app.compute.diagnostics import fit_residuals, npde
 from app.compute.dose_sweep import dose_sweep
-from app.compute.dosing import dose_events
+from app.compute.dosing import dose_events, parse_blq_flag
 from app.compute.pk_fit import compare_models, fit_pk_dataset
 from app.compute.pk_models import PK_KEYS, REGISTRY, get_model, list_models
 from app.compute.pk_simulate import simulate_timecourse
@@ -31,9 +32,14 @@ from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
 _WT_NAMES = {"wt", "weight", "bw", "bwt", "bodyweight"}
-# default candidate set for "compare" on oral data
+# default candidate sets for "compare"; _compare_route picks one from the data
 _DEFAULT_ORAL = ["oral_1cmt", "oral_1cmt_lag", "oral_2cmt", "oral_1cmt_transit"]
 _DEFAULT_IV = ["iv_1cmt", "iv_2cmt", "iv_3cmt"]
+# ROUTE first words (lowercased) that mark a dosing record IV / extravascular
+_IV_ROUTES = {"iv", "i.v.", "intravenous", "bolus", "infusion"}
+_EV_ROUTES = {"po", "p.o.", "oral", "sc", "subcutaneous", "im", "intramuscular", "sl",
+              "sublingual", "buccal", "rectal", "transdermal", "topical", "inhaled",
+              "inhalation", "intranasal", "nasal", "ev", "extravascular"}
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
@@ -42,8 +48,37 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
     return detect_roles(list(df.columns))
 
 
+def _cens_mask(frame: pd.DataFrame, cens_col: str) -> pd.Series:
+    """CENS flags as booleans, read like the NCA path (``parse_blq_flag``: 1/0,
+    Y/N, YES/NO, TRUE/FALSE, blank = not censored); an unknown code raises."""
+    return frame[cens_col].map(parse_blq_flag).astype(bool)
+
+
+def _drop_censored(frame: pd.DataFrame, cens_col: str) -> tuple[pd.DataFrame, int]:
+    """M1: remove CENS=1 records; return the kept rows and how many were removed."""
+    cens = _cens_mask(frame, cens_col)
+    return frame[~cens], int(cens.sum())
+
+
 def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
                     with_blq: bool = False) -> tuple[list[dict], bool, bool]:
+    subjects, multi, has_pd, _n = _build_subjects_counted(df, roles, with_blq=with_blq)
+    return subjects, multi, has_pd
+
+
+def _build_subjects_counted(df: pd.DataFrame, roles: dict[str, str], *,
+                            with_blq: bool = False
+                            ) -> tuple[list[dict], bool, bool, int | None]:
+    """Per-subject doses/observations, plus the number of censored records
+    excluded under M1 (``None`` when M1 did not apply: no CENS column, or M3).
+
+    With a CENS column, M3 (``with_blq=True``, single endpoint) keeps censored
+    records flagged with the LLOQ; every other path applies M1 and drops them.
+    A censored record is never scored as an observation at the LLOQ in DV.
+    Counted: post-dose PK records (predose t<=0 PK records are excluded
+    whatever their censoring) and DVID=2 PD records at any time, for subjects
+    with a dose record.
+    """
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
@@ -56,6 +91,8 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
     # single-endpoint path — keeps every other caller's behaviour unchanged.
     cens_col = next((c for c, r in roles.items() if r == "CENS"), None)
     do_blq = bool(with_blq and cens_col and not dvid_col)
+    drop_cens = bool(cens_col) and not do_blq
+    n_cens_dropped = 0
     # Infusion rate and dosing compartment, when the dataset carries them: a
     # 2 h infusion fitted as a bolus, or an SC dose silently redirected to the
     # central compartment, biases every parameter downstream.
@@ -95,19 +132,30 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
         # sample is structurally unfittable and would distort the fit (inflating
         # residual error / collapsing IIV) — exclude it, matching the
         # compartmental fitter.
+        n_dropped = 0
         if dvid_col:
             pk = g[g[dvid_col] == 1].dropna(subset=[time_col, dv_col])
-            pk = pk[(pk[dv_col] > 0) & (pk[time_col] > 0)]
+            pk = pk[pk[time_col] > 0]
             pdo = g[g[dvid_col] == 2].dropna(subset=[time_col, dv_col])
+            if drop_cens:
+                pk, n_pk = _drop_censored(pk, cens_col)
+                pdo, n_pd = _drop_censored(pdo, cens_col)
+                n_dropped = n_pk + n_pd
+            pk = pk[pk[dv_col] > 0]
         elif do_blq:
             pk = g.dropna(subset=[time_col, dv_col])
-            cens = pd.to_numeric(pk[cens_col], errors="coerce").fillna(0) == 1
+            cens = _cens_mask(pk, cens_col)
             pk = pk[(pk[time_col] > 0) & ((pk[dv_col] > 0) | cens)]
             pdo = g.iloc[0:0]
         else:
             pk = g.dropna(subset=[time_col, dv_col])
-            pk = pk[(pk[dv_col] > 0) & (pk[time_col] > 0)]
+            pk = pk[pk[time_col] > 0]
+            if drop_cens:
+                pk, n_dropped = _drop_censored(pk, cens_col)
+            pk = pk[pk[dv_col] > 0]
             pdo = g.dropna(subset=[time_col, pd_col]) if pd_col else g.iloc[0:0]
+        if doses:
+            n_cens_dropped += n_dropped
         if pk.empty or not doses:
             continue
         wt = 70.0
@@ -127,7 +175,7 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
                 "obs_t": pk[time_col].to_numpy(float),
                 "obs_c": pk[dv_col].to_numpy(float), "wt": wt, "cov": cov}
         if do_blq:
-            blq = (pd.to_numeric(pk[cens_col], errors="coerce").fillna(0) == 1).to_numpy(bool)
+            blq = _cens_mask(pk, cens_col).to_numpy(bool)
             subj["obs_blq"] = blq.tolist()
             blq_dv = pk[dv_col].to_numpy(float)[blq]   # NONMEM: BLQ rows carry LLOQ in DV
             subj["lloq"] = float(np.median(blq_dv)) if blq_dv.size else None
@@ -136,7 +184,13 @@ def _build_subjects(df: pd.DataFrame, roles: dict[str, str], *,
             subj["pd_t"] = pdo[time_col].to_numpy(float)
             subj["pd_e"] = pdo[pd_dv].to_numpy(float)
         subjects.append(subj)
-    return subjects, multi, has_pd
+    return subjects, multi, has_pd, (n_cens_dropped if drop_cens else None)
+
+
+def _m1_note(n_blq_dropped: int | None) -> str:
+    """Summary suffix naming the M1 exclusion, empty when nothing was excluded."""
+    return (f" {n_blq_dropped} censored (BLQ) record(s) excluded (M1)."
+            if n_blq_dropped else "")
 
 
 def _trim_fit(res: dict[str, Any]) -> dict[str, Any]:
@@ -153,13 +207,57 @@ def _trim_fit(res: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _route_kind(value: Any) -> str | None:
+    """"iv" / "ev" for a recognised ROUTE cell (by its first word), else None."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    first = re.split(r"[\s_/\-]+", str(value).strip().lower())[0]
+    if first in _IV_ROUTES:
+        return "iv"
+    return "ev" if first in _EV_ROUTES else None
+
+
+def _compare_route(df: pd.DataFrame, roles: dict[str, str],
+                   subjects: list[dict]) -> tuple[str, str]:
+    """Dosing route for the default compare set: ("iv" | "oral", reason).
+
+    Over the fitted subjects' dosing records: any extravascular ROUTE gives
+    oral, since RATE on a depot dose is zero-order absorption; a ROUTE marking
+    every record IV gives IV. Blank or unrecognised ROUTE values are no
+    evidence, and RATE decides: IV when every dose event is a zero-order
+    infusion (RATE > 0). Anything else stays oral, the previous default. CMT is
+    not route evidence: CMT=1 is the dosing compartment of IV (central) and
+    oral (depot) models alike. The reason carries counts only, never cell text.
+    """
+    route_col = next((c for c, r in roles.items() if r == "ROUTE"), None)
+    amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
+    id_col = next((c for c, r in roles.items() if r == "ID"), None)
+    if route_col and amt_col and id_col:
+        fitted = df[id_col].isin({s["subject"] for s in subjects})
+        dosing = fitted & (pd.to_numeric(df[amt_col], errors="coerce") > 0)
+        kinds = [_route_kind(v) for v in df.loc[dosing, route_col]]
+        n_ev = kinds.count("ev")
+        if n_ev:
+            return "oral", f"ROUTE marks {n_ev}/{len(kinds)} dosing records extravascular"
+        if kinds and kinds.count("iv") == len(kinds):
+            return "iv", f"ROUTE marks all {len(kinds)} dosing records IV"
+    doses = [d for s in subjects for d in s["doses"]]
+    if doses and all(d.get("rate", 0) > 0 for d in doses):
+        return "iv", f"every dose event has RATE > 0 (zero-order infusion, {len(doses)} doses)"
+    n_inf = sum(1 for d in doses if d.get("rate", 0) > 0)
+    if n_inf:
+        return "oral", f"only {n_inf}/{len(doses)} dose events have RATE > 0; no ROUTE column marks IV"
+    return "oral", "no dose event has RATE > 0 and no ROUTE column marks IV"
+
+
 def fit_pk_model(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     dsid, df = require_dataset(ctx, state, args)
     roles = _roles(df, state)
-    subjects, multi, has_pd = _build_subjects(df, roles)
+    subjects, multi, has_pd, n_blq = _build_subjects_counted(df, roles)
     if not subjects:
-        status = {"status": "no_subjects", "message": "No fittable subjects (need dose + concentration rows)."}
-        return ToolResult(summary="PK model fit skipped: no fittable subjects.",
+        status = {"status": "no_subjects", "message": "No fittable subjects (need dose + concentration rows).",
+                  "n_blq_dropped": n_blq}
+        return ToolResult(summary="PK model fit skipped: no fittable subjects." + _m1_note(n_blq),
                           action="fit_pk_model(no_subjects)",
                           writes={"pk_model_results": status}, result=status)
 
@@ -179,25 +277,33 @@ def fit_pk_model(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
         res = fit_pk_dataset(subjects, model_key=model_key)
         is_pkpd = get_model(model_key).has_pd
         payload = {"status": "ok", "mode": "fit", "multiple_dose": multi,
-                   "is_pkpd": is_pkpd, **_trim_fit(res)}
+                   "is_pkpd": is_pkpd, **_trim_fit(res), "n_blq_dropped": n_blq}
         kind = "PK/PD (dual-endpoint)" if is_pkpd else "PK"
         return ToolResult(
             summary=(f"Fit {res['label']} [{kind}]: {res['n_converged']}/{res['n_subjects']} "
-                     f"subjects converged (mean AIC {res['mean_aic']})."),
+                     f"subjects converged (mean AIC {res['mean_aic']})." + _m1_note(n_blq)),
             action=f"fit_pk_model({model_key})",
             writes={"pk_model_results": payload}, result=payload)
 
-    # compare mode — drop PK/PD candidates unless a PD endpoint is present
+    # compare mode — default set follows the dosing route (oral models ranked on
+    # IV data would all be wrong); drop PK/PD candidates unless a PD endpoint is present
+    route, reason = _compare_route(df, roles, subjects)
+    source = "requested" if candidates else "default"
     if not candidates:
-        candidates = list(args.get("models") or _DEFAULT_ORAL)
+        candidates = list(_DEFAULT_IV if route == "iv" else _DEFAULT_ORAL)
     candidates = [k for k in candidates if k in REGISTRY and (has_pd or not get_model(k).has_pd)]
     cmp = compare_models(subjects, candidates)
     payload = {"status": "ok", "mode": "compare", "multiple_dose": multi,
+               "candidate_set": {"source": source, "route": route, "reason": reason,
+                                 "models": list(candidates)},
                "ranking": cmp["ranking"], "best_model": cmp["best_model"],
-               "best": _trim_fit(cmp["best"]) if cmp["best"] else None}
+               "best": _trim_fit(cmp["best"]) if cmp["best"] else None,
+               "n_blq_dropped": n_blq}
     best_label = payload["best"]["label"] if payload["best"] else "none"
+    set_label = f"default {route.upper()} set: {reason}" if source == "default" else "requested"
     return ToolResult(
-        summary=(f"Compared {len(candidates)} PK models; best by AIC: {best_label}."),
+        summary=(f"Compared {len(candidates)} PK models ({set_label}); best by AIC: {best_label}."
+                 + _m1_note(n_blq)),
         action=f"fit_pk_model(compare:{','.join(candidates)})",
         writes={"pk_model_results": payload}, result=payload)
 
@@ -309,7 +415,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     model = get_model(model_key)
     typical = {**model.defaults, **typical}
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+    subjects, _multi, _has_pd, n_blq = _build_subjects_counted(df, _roles(df, state))
     indiv = {f["subject"]: f["params"] for f in fits
              if f.get("converged") and f.get("params")}
 
@@ -348,7 +454,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     payload = {"status": "ok", "model_key": model_key, "label": model.label,
                "gof": ovp["gof"], "obs_vs_pred": {k: ovp[k] for k in ("observed", "ipred", "pred")},
                "vpc": band, "vpc_dose": vpc_dose, "obs_t": obs_t, "obs_c": obs_c,
-               "pcvpc": pc}
+               "pcvpc": pc, "n_blq_dropped": n_blq}
 
     # Stratified / dose-normalized VPC (Week-11 evaluation). Additive: computed
     # ONLY when the caller asks, so the default payload is unchanged. A pooled
@@ -382,7 +488,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
             sigma_prop=sigma_prop, sigma_add=sigma_add)
 
     # BLQ-incidence VPC (Week-11): needs censoring flags, so subjects are rebuilt
-    # with with_blq=True (BLQ rows carry the LLOQ in DV and are otherwise dropped)
+    # with with_blq=True (BLQ rows carry the LLOQ in DV; the overlay drops them, M1)
     # and the dataset LLOQ is recovered from them.
     if bool(args.get("blq_check")):
         roles_b = _roles(df, state)
@@ -433,11 +539,13 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     return ToolResult(
         summary=(f"VPC / GOF for {model.label}: n={g['n']} obs, "
                  f"log-scale R²(IPRED)={g['r2_log_ipred']}; "
-                 f"pcVPC over {pc.get('n_bins', 0)} time bins." + strat_note + exp_note + blq_note),
+                 f"pcVPC over {pc.get('n_bins', 0)} time bins." + strat_note + exp_note + blq_note
+                 + _m1_note(n_blq)),
         action=f"run_vpc({model_key})",
         writes={"vpc_results": payload},
         result={"status": "ok", "model_key": model_key, "gof": g, "vpc_dose": vpc_dose,
-                "stratified": strat, "exposure_pc": exp, "blq_vpc": blq})
+                "stratified": strat, "exposure_pc": exp, "blq_vpc": blq,
+                "n_blq_dropped": n_blq})
 
 
 def _covariate_rows(state: PharmState, ctx: ToolContext) -> tuple[list[dict], list[float]]:
@@ -582,10 +690,10 @@ def run_exposure_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any
     model = get_model(model_key)
     theta = {**model.defaults, **(chosen.get("theta") or {})}
     df = ctx.dataset_store.get(state.dataset_id) if state.dataset_id else None
-    subjects = []
+    subjects, n_blq = [], None
     if df is not None:
         try:
-            subjects, _m, _p = _build_subjects(df, _roles(df, state))
+            subjects, _m, _p, n_blq = _build_subjects_counted(df, _roles(df, state))
         except (ValueError, KeyError):
             subjects = []
 
@@ -636,6 +744,7 @@ def run_exposure_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any
         reference_cov=reference_cov, dose=dose, tau=float(args.get("tau", 24.0)),
         n_doses=int(args.get("n_doses", 7)), ref_wt=ref_wt,
         n_draws=int(args.get("n_draws", 500)))
+    payload = {**payload, "n_blq_dropped": n_blq}
     if payload.get("status") != "ok":
         return ToolResult(summary=f"Exposure forest: {payload.get('message', payload['status'])}.",
                           action=f"run_exposure_forest({payload['status']})",
@@ -647,7 +756,8 @@ def run_exposure_forest(state: PharmState, ctx: ToolContext, args: dict[str, Any
                  f"draws; reference AUC {payload['reference']['auc']}."),
         action=f"run_exposure_forest({model_key})",
         writes={"exposure_forest_results": payload},
-        result={"status": "ok", "model_key": model_key, "n_rows": n_out})
+        result={"status": "ok", "model_key": model_key, "n_rows": n_out,
+                "n_blq_dropped": n_blq})
 
 
 # Covariate names commonly denoting renal function (auto-detected default stratum).
@@ -775,7 +885,7 @@ def run_individual_exposures(state: PharmState, ctx: ToolContext, args: dict[str
         return ToolResult(summary="Individual exposures skipped: no dataset.",
                           action="run_individual_exposures(no_dataset)",
                           writes={"individual_exposures": status}, result=status)
-    subjects, _m, _p = _build_subjects(df, _roles(df, state))
+    subjects, _m, _p, n_blq = _build_subjects_counted(df, _roles(df, state))
     subj_in = [{"subject": str(s["subject"]), "cov": s.get("cov") or {},
                 "wt": float(s.get("wt", 70.0))} for s in subjects]
 
@@ -789,6 +899,7 @@ def run_individual_exposures(state: PharmState, ctx: ToolContext, args: dict[str
         n_doses=int(args.get("n_doses", 7)),
         covariate_effects=nl.get("covariate_effects"),
         iiv_params=list(nl.get("iiv_params") or []), group_key=group_key)
+    payload = {**payload, "n_blq_dropped": n_blq}
     if payload.get("status") != "ok":
         return ToolResult(summary=f"Individual exposures: {payload.get('message', payload['status'])}.",
                           action=f"run_individual_exposures({payload['status']})",
@@ -799,7 +910,8 @@ def run_individual_exposures(state: PharmState, ctx: ToolContext, args: dict[str
                  + (f", grouped by {group_key}" if group_key else "") + "."),
         action=f"run_individual_exposures({model_key})",
         writes={"individual_exposures": payload},
-        result={"status": "ok", "model_key": model_key, "n_subjects": len(payload["subjects"])})
+        result={"status": "ok", "model_key": model_key, "n_subjects": len(payload["subjects"]),
+                "n_blq_dropped": n_blq})
 
 
 _WT_COV_NAMES = ("WT", "WEIGHT", "BW", "BWT", "BODYWEIGHT")
@@ -974,7 +1086,10 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
                           writes={"nlme_results": status}, result=status)
 
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state), with_blq=True)
+    # M3 on a single endpoint; DVID data has no M3, so censored records there
+    # are excluded (M1) and that count is reported.
+    subjects, _multi, _has_pd, n_m1 = _build_subjects_counted(df, _roles(df, state),
+                                                              with_blq=True)
     if len(subjects) < 2:
         status = {"status": "insufficient", "message": "Need >=2 subjects for a population fit."}
         return ToolResult(summary="NLME skipped: too few subjects.", action="run_nlme(insufficient)",
@@ -995,12 +1110,14 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
                          error_model=args.get("error_model", "proportional"),
                          covariate_model=args.get("covariate_model"),
                          theta_prior=theta_prior)
-    payload = {"status": "ok", **res}
+    payload = {"status": "ok", **res,
+               **({"n_blq_dropped": n_m1} if n_m1 is not None else {})}
     map_note = " (MAP with informative prior)" if res.get("map") else ""
     return ToolResult(
         summary=(f"{res['method']} fit of {res['label']}: OFV {res['ofv']}, "
                  f"{res['n_subjects']} subjects, IIV on {res['iiv_params']} "
-                 f"({'converged' if res.get('converged') else 'did not converge'}){map_note}."),
+                 f"({'converged' if res.get('converged') else 'did not converge'}){map_note}."
+                 + _m1_note(n_m1)),
         action=f"run_nlme({method}, {model_key})",
         writes={"nlme_results": payload},
         result={"status": "ok", "method": res["method"], "theta": res["theta"],
@@ -1022,10 +1139,11 @@ def run_prior_check(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
     diag = prior_posterior_diagnostic(nl)
     model_key = nl.get("model_key")
     ppc: dict[str, Any] = {"status": "no_data"}
+    n_blq: int | None = None
     df = ctx.dataset_store.get(state.dataset_id) if state.dataset_id else None
     if df is not None:
         try:
-            subjects, _m, _p = _build_subjects(df, _roles(df, state))
+            subjects, _m, _p, n_blq = _build_subjects_counted(df, _roles(df, state))
         except (ValueError, KeyError):
             subjects = []
         def _seq(v: Any) -> list:
@@ -1045,16 +1163,17 @@ def run_prior_check(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
                 n_draws=int(args.get("n_draws", 500)),
                 wt=float(np.median(wts)) if wts else 70.0)
     payload = {"status": "ok", "model_key": model_key, "label": nl.get("label"),
-               "prior_predictive": ppc, "diagnostic": diag}
+               "prior_predictive": ppc, "diagnostic": diag, "n_blq_dropped": n_blq}
     cov = ppc.get("coverage_pct") if isinstance(ppc, dict) else None
     return ToolResult(
         summary=(f"Prior check ({nl.get('label', model_key)}): mean shrinkage "
                  f"{diag.get('mean_shrinkage')}"
-                 + (f", prior-predictive coverage {cov}%" if cov is not None else "") + "."),
+                 + (f", prior-predictive coverage {cov}%" if cov is not None else "") + "."
+                 + _m1_note(n_blq)),
         action=f"run_prior_check({model_key})",
         writes={"prior_check_results": payload},
         result={"status": "ok", "model_key": model_key,
-                "mean_shrinkage": diag.get("mean_shrinkage")})
+                "mean_shrinkage": diag.get("mean_shrinkage"), "n_blq_dropped": n_blq})
 
 
 _MAX_AUTO_CANDIDATES = 6
@@ -1177,7 +1296,10 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                           writes={"scm_results": status}, result=status)
 
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+    # with_blq=True for parity with run_nlme: the FOCE-I search and final fit use
+    # M3, so their OFVs are comparable with the base fit's (M1 on DVID data).
+    subjects, _multi, _has_pd, n_m1 = _build_subjects_counted(df, _roles(df, state),
+                                                              with_blq=True)
     if len(subjects) < 3:
         status = {"status": "insufficient", "message": "Need >=3 subjects for covariate modeling."}
         return ToolResult(summary="SCM skipped: too few subjects.", action="run_scm(insufficient)",
@@ -1215,6 +1337,8 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     # Never-tested covariates are reported explicitly: a shortened candidate list
     # otherwise reads as "tested and rejected" when it was never tested at all.
     res["screened_out"] = dropped
+    if n_m1 is not None:
+        res["n_blq_dropped"] = n_m1
     screened = ""
     if dropped:
         shown = "; ".join(f"{d['covariate']} on {d['param']} ({d['reason']})"
@@ -1222,7 +1346,8 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
         more = f" +{len(dropped) - 4} more" if len(dropped) > 4 else ""
         screened = f" Not tested: {shown}{more}."
     summary = (f"SCM on {res.get('label')}: tested {res.get('n_candidates')} candidate(s), "
-               f"selected {sel}; OFV {res.get('base_ofv')} -> {res.get('final_ofv')}.{screened}")
+               f"selected {sel}; OFV {res.get('base_ofv')} -> {res.get('final_ofv')}.{screened}"
+               + _m1_note(n_m1))
     if caveat:
         summary += f" NOTE: {caveat}"
     return ToolResult(
@@ -1456,7 +1581,7 @@ def run_covariate_forest(state: PharmState, ctx: ToolContext, args: dict[str, An
 
     model_key = chosen.get("model_key")
     df = ctx.dataset_store[state.dataset_id]
-    subjects, _multi, _has_pd = _build_subjects(df, _roles(df, state))
+    subjects, _multi, _has_pd, n_blq = _build_subjects_counted(df, _roles(df, state))
 
     pct = args.get("percentiles")
     percentiles = [float(pct[0]), float(pct[1])] if isinstance(pct, (list, tuple)) and len(pct) == 2 \
@@ -1485,14 +1610,15 @@ def run_covariate_forest(state: PharmState, ctx: ToolContext, args: dict[str, An
     payload = {"status": "ok", "model_key": model_key, "label": chosen.get("label"),
                "source": chosen_src, "percentiles": percentiles, "rows": out["rows"],
                "x_range": out["x_range"], "bounds": out["bounds"], "ci_level": out["ci_level"],
-               "notes": notes, "summary": out["summary"], "cov_stats": cov_stats}
+               "notes": notes, "summary": out["summary"], "cov_stats": cov_stats,
+               "n_blq_dropped": n_blq}
     return ToolResult(
         summary=(f"Covariate forest for {chosen.get('label')} ({chosen_src}): "
                  f"{out['summary']['n_rows']} row(s) across {out['summary']['n_effects']} effect(s)."),
         action=f"run_covariate_forest({model_key})",
         writes={"forest_results": payload},
         result={"status": "ok", "model_key": model_key, "source": chosen_src,
-                "n_rows": out["summary"]["n_rows"]})
+                "n_rows": out["summary"]["n_rows"], "n_blq_dropped": n_blq})
 
 
 def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -1541,7 +1667,9 @@ _MODEL_KEY_ENUM = sorted(REGISTRY)
 TOOLS = [
     Tool("fit_pk_model",
          "Fit a structural PK model from the library to the dataset (single- or "
-         "multiple-dose), or compare several models and select by AIC. Reports "
+         "multiple-dose), or compare several models and select by AIC. Without "
+         "`models`, compare uses the IV set when every dose is an infusion "
+         "(RATE > 0) or ROUTE marks every dose IV, else the oral set. Reports "
          "per-subject parameters and a two-stage population summary.",
          "modeler",
          {"type": "object",
