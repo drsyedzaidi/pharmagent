@@ -25,7 +25,7 @@ from app.compute.protocol_sim import (
     run_plan_special_populations,
     run_trial_pta,
 )
-from app.core.pharmstate import PharmState, ProtocolSimDict
+from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult
 
 
@@ -71,11 +71,11 @@ def load_approved_fit(state: PharmState, ctx: ToolContext, args: dict[str, Any])
     )
     elapsed = round(time.perf_counter() - t0, 6)
     provenance["wall_clock"]["load_approved_fit"] = elapsed
-    ps = ProtocolSimDict({
+    ps = {
         **(state.protocol_sim or {}),
         "source_fit": source_fit,
         "provenance": provenance,
-    })
+    }
     return ToolResult(
         summary=(
             f"Loaded approved fit {source_fit['fit_id']} ({source_fit['label']}, "
@@ -120,7 +120,7 @@ def propose_simulation_plan(state: PharmState, ctx: ToolContext, args: dict[str,
     })
     ps["plan"] = plan
     ps["provenance"] = provenance
-    wrapped = ProtocolSimDict(ps)
+    wrapped = dict(ps)
     return ToolResult(
         summary=(
             f"Proposed simulation plan ({len(plan['bands'])} band(s), "
@@ -165,7 +165,7 @@ def simulate_trial_pta(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     ps["pta"] = pta_out
     ps["recommendations"] = pta_out.get("recommendations", [])
     ps["provenance"] = provenance
-    wrapped = ProtocolSimDict(ps)
+    wrapped = dict(ps)
     return ToolResult(
         summary=(
             f"Simulated trial PTA over {len(pta_out['rows'])} band x regimen cells "
@@ -211,7 +211,7 @@ def simulate_special_populations(state: PharmState, ctx: ToolContext, args: dict
 
     ps["special_populations"] = sp_out
     ps["provenance"] = provenance
-    wrapped = ProtocolSimDict(ps)
+    wrapped = dict(ps)
     return ToolResult(
         summary=(
             f"Simulated special populations for plan bands {sp_out['bands_simulated']} "
@@ -277,7 +277,7 @@ def propagate_parameter_uncertainty(state: PharmState, ctx: ToolContext, args: d
     ps["recommendations"] = updated_pta.get("recommendations", [])
     ps["uncertainty"] = unc_out
     ps["provenance"] = provenance
-    wrapped = ProtocolSimDict(ps)
+    wrapped = dict(ps)
     requested = unc_out.get("requested_method")
     if unc_out["status"] == "unverifiable":
         summary = (

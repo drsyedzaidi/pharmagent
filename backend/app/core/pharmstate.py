@@ -32,22 +32,6 @@ class PharmStateError(Exception):
     """Raised when an agent writes to a field it does not own."""
 
 
-class ProtocolSimDict(dict):
-    """Dict subclass supporting both key and attribute access for protocol_sim."""
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            val = self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-        if isinstance(val, dict) and not isinstance(val, ProtocolSimDict):
-            val = ProtocolSimDict(val)
-            self[name] = val
-        return val
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        self[name] = value
-
 
 
 class PharmState(BaseModel):
@@ -210,6 +194,4 @@ def apply_writes(state: PharmState, agent: str, writes: dict[str, Any]) -> Pharm
         raise PharmStateError(
             f"Agent '{agent}' may not write {sorted(illegal)}; allowed: {sorted(allowed)}"
         )
-    if "protocol_sim" in writes and isinstance(writes["protocol_sim"], dict):
-        writes = {**writes, "protocol_sim": ProtocolSimDict(writes["protocol_sim"])}
     return state.model_copy(update=writes)
