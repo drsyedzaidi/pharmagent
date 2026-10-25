@@ -144,6 +144,14 @@ def test_workflow_endpoint_hands_an_expensive_leg_to_the_job_queue():
     r = client.post(f"/api/sessions/{sid}/workflow",
                     json={"name": "poppk_modeling", "params": {"path": SAMPLE}}).json()
     assert r.get("kind") == "workflow_start" and "job_id" in r
+    # wait for the job: left running, its fit would continue into later tests on the shared pool
+    import time as _time
+    for _ in range(12000):
+        job = client.get(f"/api/sessions/{sid}/jobs/{r['job_id']}").json()
+        if job["status"] != "running":
+            break
+        _time.sleep(0.05)
+    assert job["status"] == "done", job.get("error")
     # a workflow with no expensive leg still runs inline
     sid2 = client.post("/api/sessions").json()["id"]
     r2 = client.post(f"/api/sessions/{sid2}/workflow",

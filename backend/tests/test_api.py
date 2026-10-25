@@ -101,6 +101,27 @@ def test_nlme_runs_as_background_job(client):
     assert client.get(f"/api/sessions/{sid}/jobs/job_nope").status_code == 404
 
 
+def test_nlme_request_forwards_a_covariate_model(client, monkeypatch):
+    # An SCM-selected model must be refittable (under M3) over HTTP.
+    seen = {}
+
+    def fake_run_tool(sid, tool, agent, args, actor=None):
+        seen.update(tool=tool, args=args)
+        return {"result": {"status": "ok"}}
+
+    monkeypatch.setattr(main.orch, "run_tool", fake_run_tool)
+    sid = client.post("/api/sessions").json()["id"]
+    cov = [{"param": "CL", "covariate": "CRCL", "kind": "power"}]
+    r = client.post(f"/api/sessions/{sid}/nlme",
+                    json={"model_key": "iv_2cmt", "covariate_model": cov}).json()
+    assert _poll(client, sid, r["job_id"])["status"] == "done"
+    assert seen["tool"] == "run_nlme" and seen["args"]["covariate_model"] == cov
+    # omitted -> not forwarded (exclude_none), so the base fit is unchanged
+    r = client.post(f"/api/sessions/{sid}/nlme", json={"method": "focei"}).json()
+    _poll(client, sid, r["job_id"])
+    assert "covariate_model" not in seen["args"]
+
+
 def test_scm_submits_a_job(client):
     sid = client.post("/api/sessions").json()["id"]
     r = client.post(f"/api/sessions/{sid}/scm", json={}).json()
