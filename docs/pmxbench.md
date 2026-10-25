@@ -126,9 +126,8 @@ Next, choose one of two options:
 
 - **A. Continue the template:** `POST /workflow/resume {"approve": true, "reason": "..."}`.
   The rest of the template runs `run_nlme` and `run_scm` with their default
-  arguments. For `iv_2cmt` that means IIV on CL only, a proportional error
-  model, and automatic SCM candidates on CL and on a non-existent `V`
-  parameter (gap G3).
+  arguments. For `iv_2cmt` that means IIV on CL and VC, a proportional error
+  model, and automatic SCM candidates on CL and VC (G3).
 - **B. Recommended:** reject the gate with a reason
   (`{"approve": false, "reason": "IV infusion: modelling steps run with explicit arguments"}`;
   the rejection is signed into the audit chain), then run the modelling steps
@@ -211,9 +210,9 @@ were checked against the code on 2026-10-23 without running a fit.
 | Item | PharmAgent tool | Status | Evidence / caveat |
 |---|---|---|---|
 | `structural_ncmt` | `fit_pk_model` (compare, two-stage AIC) → `run_nlme` | **partial** | `iv_1cmt`, `iv_2cmt` and `iv_3cmt` exist, and `dose_events` turns RATE into a zero-order infusion. Without `models`, the comparison picks the IV set when every dose has `RATE > 0` (true on prepared data) or ROUTE marks every dose IV, and records the set and the reason in `pk_model_results.candidate_set` (G1, resolved). Selection is by two-stage AIC; that fit excludes censored records (M1) and reports `n_blq_dropped` (G5, resolved). There is no NLME-level ΔOFV comparison, and `nlme_results` keeps only the last fit (G2) |
-| `disposition_params` at 70 kg | `run_nlme` theta (or SCM final) | **supported** | Allometry is centred at 70 kg (`pk_simulate.scale_params`), so theta is the 70 kg typical value. Units are L/day and L. Default IIV on `iv_2cmt` resolves to CL only; pass `iiv_params` (G3) |
+| `disposition_params` at 70 kg | `run_nlme` theta (or SCM final) | **supported** | Allometry is centred at 70 kg (`pk_simulate.scale_params`), so theta is the 70 kg typical value. Units are L/day and L. Default IIV on `iv_2cmt` is CL + VC: `V` in `iiv_params`, and in the default, means the model's central volume (G3, resolved) |
 | `error_model` | `run_nlme` sigma | **partial** | Proportional, additive and combined are all supported. The template default is proportional, and there is no automated error-model comparison (G2) |
-| `cov_effects` | `run_scm` | **partial** | Forward p 0.05 / backward p 0.01, estimated coefficients, a post-selection caveat and `screened_out` reporting all work. But: WT exponents are fixed at 0.75/1.0 and cannot be estimated (G4). `run_scm` defaults `iiv_params` to `["CL", "V"]`, so on `iv_2cmt` the automatic candidates target a non-existent `V`: those fits cannot change the OFV but still count in `n_candidates`, and VC is never screened (G3). SCM applies M3 (G5, resolved). There is no decoy-covariate analysis (G6) |
+| `cov_effects` | `run_scm` | **partial** | Forward p 0.05 / backward p 0.01, estimated coefficients, a post-selection caveat and `screened_out` reporting all work. But: WT exponents are fixed at 0.75/1.0 and cannot be estimated (G4). On `iv_2cmt` the automatic candidates target CL and VC, and a covariate effect on a parameter the model lacks is rejected before any fit (G3, resolved). SCM applies M3 (G5, resolved). There is no decoy-covariate analysis (G6) |
 | `outlier_records` | none | **missing** | No record-level screen. `profile_pk_dataset` reports sparse subjects and BLQ %; `validate_cdisc` checks the columns and monotonic time; `stats_advice` counts IQR outliers on exposures, not records (G7) |
 | 1- and 2-cmt IV infusion | `iv_1cmt`, `iv_2cmt` + RATE | **supported** | An infusion disables the matrix-exponential fast path (`dosing.dose_events`), so fits integrate ODEs and run slower |
 | M3 with CENS | `run_nlme`, `run_scm`, `run_diagnostics`, `run_vpc` (BLQ incidence) | **supported** with the adapter | Needs the LLOQ in DV on censored rows (step 1). `run_scm` also applies M3. The two-stage fit, the VPC overlay, `run_prior_check` and the forest/exposure helpers exclude censored records (M1) and report `n_blq_dropped` (G5, resolved). `profile_pk_dataset` reads BLQ % from CENS and reports `blq_basis` (G8, resolved). `run_diagnostics` reports npd as `blq_unsupported` when BLQ records exist |
@@ -225,9 +224,9 @@ were checked against the code on 2026-10-23 without running a fit.
 
 ### Proposals
 
-None of these were implemented in the adapter PR (#31). G1 has since been
-resolved by PR #33, and G5 and G8 by PR #40. The outlier screen (G7) is a
-proposal only.
+None of these were implemented in the adapter PR (#31). G1 and G3 have since
+been resolved by PRs #33 and #35, and G5 and G8 by PR #40. The outlier screen
+(G7) is a proposal only.
 
 **G1 — Route-aware structural candidates. Resolved by PR #33.** When
 `compare` is called without `models`, `fit_pk_model` picks its candidate set
@@ -254,14 +253,14 @@ report ΔOFV and AIC/BIC and leave the choice at a human gate. It is expensive
 (one NLME fit per candidate), so it must go through the existing
 expensive-tool admission and never run from an automated loop.
 
-**G3 — Central-volume alias for IIV and SCM defaults.** `_resolve_iiv` and
-`run_scm` default to `["CL", "V"]`. On 2- and 3-cmt models the central volume
-is `VC`, so the default silently becomes CL-only IIV, and the "V" candidates
-are coefficients that `_apply_cov` ignores (ΔOFV 0, still counted in
-`n_candidates`). Fix: map `V` to the model's central volume (`V` or `VC`).
-Reject, rather than ignore, a covariate effect on a parameter the model does
-not have. Test: SCM candidates for `iv_2cmt` name `VC`, and a `V` effect on
-`iv_2cmt` raises.
+**G3 — Central-volume alias for IIV and SCM defaults. Resolved by PR #35.**
+`V` in `iiv_params`, and in the default `["CL", "V"]`, now means the model's
+central volume (`V`, or `VC` on 2- and 3-cmt models). Duplicates collapse and order is
+kept. `run_scm` and `scm` resolve IIV with the same rule as the fits, so the
+automatic candidates on `iv_2cmt` name `VC`. A covariate effect on a parameter
+the model does not have now raises before any fit (`focei_fit`, `saem_fit`,
+`scm`). It used to be a coefficient that `_apply_cov` ignored: ΔOFV 0, but
+still counted in `n_candidates`.
 
 **G4 — Estimated allometry.** Add `allometry: "fixed" | "estimated" | "off"` to
 `run_nlme` and `run_scm`. `estimated` replaces the fixed exponents with power

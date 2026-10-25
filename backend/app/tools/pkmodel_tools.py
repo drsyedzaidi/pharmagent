@@ -1279,7 +1279,7 @@ def _covariate_candidates(subjects: list[dict], iiv_params: list[str]
 
 def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Stepwise covariate modeling (forward + backward) on a structural model."""
-    from app.compute.nlme import scm  # lazy: heavy + optional dependency
+    from app.compute.nlme import _resolve_iiv, scm  # lazy: heavy + optional dependency
 
     fitted_key, _f, _p, _t = _last_fit(state)
     model_key = args.get("model_key") or fitted_key
@@ -1305,7 +1305,9 @@ def run_scm(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
         return ToolResult(summary="SCM skipped: too few subjects.", action="run_scm(insufficient)",
                           writes={"scm_results": status}, result=status)
 
-    iiv = args.get("iiv_params") or ["CL", "V"]
+    # Same rule as the fit itself, so the automatic candidates name the model's
+    # real parameters (VC, not a phantom V, on the 2- and 3-cmt models).
+    iiv = _resolve_iiv(get_model(model_key), args.get("iiv_params"))
     # Explicit candidates from the caller bypass the automatic screen (the user
     # has pre-specified the covariate plan); only the auto path is screened.
     dropped: list[dict[str, Any]] = []
