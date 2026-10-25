@@ -126,6 +126,7 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
             {"agent": "simulator", "tool": "propose_simulation_plan",
              "label": "Propose simulation plan (human review gate)", "gate": True},
             {"agent": "simulator", "tool": "run_dose_sweep",
+             "args": {"from_protocol_plan": True},
              "label": "Dose sweep across regimens"},
             {"agent": "simulator", "tool": "simulate_trial_pta",
              "label": "Trial simulation & PTA by band"},
