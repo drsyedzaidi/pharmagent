@@ -1745,14 +1745,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     # the reported OFV both use it. ofv_likelihood keeps the penalty-free -2LL.
     pen = tprior.penalty(theta) if tprior is not None else 0.0
     final_ofv = final_ll + pen
-    # Converged if the optimizer reports success, OR it exhausted its evaluation
-    # budget at a finite OFV that improved on the starting value (a stabilized
-    # optimum that simply did not trip Powell's strict tolerance test).
-    improved = (start_ofv["v"] is not None
-                and math.isfinite(start_ofv["v"])
-                and final_ofv <= start_ofv["v"] + 1e-6)
-    converged = (bool(res.success) or improved) \
-        and math.isfinite(final_ofv) and final_ofv < _BIG
+    # Converged only if the optimizer reports success at a finite OFV. Powell
+    # never returns a point worse than its start, so "OFV did not get worse" is
+    # not evidence of convergence; it is kept as a separate diagnostic.
+    ofv_improved = (start_ofv["v"] is not None
+                    and math.isfinite(start_ofv["v"])
+                    and final_ofv <= start_ofv["v"] + 1e-6)
+    converged = (bool(res.success)
+                 and math.isfinite(final_ofv) and final_ofv < _BIG)
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cc, omega2, s_prop, s_add, eta_hats,
@@ -1764,6 +1764,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
                        final_ofv, eta_hats, prepared, n_obs, converged,
                        int(res.nit) if hasattr(res, "nit") else eval_count["n"],
                        omega_matrix=omega_m, uncertainty=uncertainty)
+    result["ofv_improved"] = bool(ofv_improved)
     if tprior is not None:
         prior_sd = np.sqrt(np.clip(np.diag(np.linalg.inv(tprior.prec)), 0.0, None))
         result["map"] = True
@@ -2129,7 +2130,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     final_ofv, eta_hats = _population_ofv(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas,
         omega_m)
-    converged = converged or (math.isfinite(final_ofv) and final_ofv < _BIG)
+    converged = converged and math.isfinite(final_ofv) and final_ofv < _BIG
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, eta_hats,
@@ -2344,7 +2345,10 @@ def _auto_fit(model_key: str, subjects: list[dict], *,
                 model_key, subjects, seed=s,
                 compute_uncertainty=compute_uncertainty, **kw)))
 
-    winner_name, winner = min(candidates, key=lambda kv: _ofv(kv[1]))
+    # A converged candidate always beats an unconverged one; OFV breaks ties.
+    # If none converged the winner is still reported converged=False.
+    winner_name, winner = min(
+        candidates, key=lambda kv: (not kv[1].get("converged"), _ofv(kv[1])))
     if escalated:
         reason = ("starts disagreed on OFV" if disagree
                   else "a start hit the iteration cap without converging")

@@ -300,7 +300,7 @@ def fit_one_subject(time: Any, conc: Any, dose: float, *, model: str,
         return {
             "subject": None,
             "model": model,
-            "converged": True,
+            "converged": bool(sol.success),
             "params": params,
             "rse_pct": rse,
             "aic": round(aic, 4) if math.isfinite(aic) else None,
