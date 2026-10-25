@@ -155,6 +155,13 @@ class PharmState(BaseModel):
 
 # Per-agent write-access whitelist. The orchestrator enforces this on every
 # state mutation; an agent attempting to write outside its set raises.
+#
+# NOTE: ``protocol_sim`` appears in both ``modeler`` and ``simulator``.
+# The protocol_simulation workflow writes it whole in a fixed tool order
+# (load_approved_fit → propose_simulation_plan → run_dose_sweep →
+# simulate_trial_pta → simulate_special_populations →
+# propagate_parameter_uncertainty).  Each step merges into the previous
+# value.  An out-of-workflow write replaces the entire dict.
 AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "supervisor": {"last_agent", "workflow_name", "current_step", "session_id",
                    "pending_tool", "planner_history"},
