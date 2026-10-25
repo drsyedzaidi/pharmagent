@@ -90,5 +90,10 @@ def zip_with_manifest(state, zip_bytes: bytes, *, session_id: str, kind: str, fi
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as dst:
         for info in src.infolist():
             dst.writestr(info, src.read(info.filename))
-        dst.writestr("provenance.json", json.dumps(inner, indent=2, sort_keys=True))
+        # Fixed timestamp: a wall-clock stamp would make the download and its companion manifest's
+        # export.sha256 differ whenever the two requests straddle a 2 s DOS-time tick.
+        pinfo = zipfile.ZipInfo("provenance.json", date_time=(1980, 1, 1, 0, 0, 0))
+        pinfo.compress_type = zipfile.ZIP_DEFLATED
+        pinfo.external_attr = 0o600 << 16  # ?rw-------, as writestr sets for a named member
+        dst.writestr(pinfo, json.dumps(inner, indent=2, sort_keys=True))
     return buf.getvalue()

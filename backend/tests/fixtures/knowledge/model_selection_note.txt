@@ -1,0 +1,36 @@
+# Synthetic teaching note: choosing between structural models
+
+This note is a synthetic fixture written for the PharmAgent test suite. It is not
+taken from any book or paper.
+
+## 1 Objective function and information criteria
+
+Two nested structural models are commonly compared by the drop in the objective
+function value. For one additional parameter a decrease of about 3.84 points
+corresponds to a five percent significance level under the likelihood ratio test,
+and a decrease of 6.63 points corresponds to one percent. Non-nested models are
+compared with an information criterion such as the Akaike information criterion
+(AIC), which penalises each extra parameter by two points.
+
+## 2 Small differences are not decisive
+
+A difference in AIC of less than two points between the best model and the
+runner-up does not distinguish the two models statistically. In that situation
+the simpler model is usually preferred, and the ambiguity should be reported rather
+than hidden behind a single "best" label. Parsimony, mechanistic plausibility and
+the intended use of the model all weigh more than a fraction of an AIC point.
+
+## 3 Convergence and precision
+
+A model that is selected while some subjects or the population run failed to
+converge is not a reliable winner. Check the condition number of the covariance
+matrix: a value above one thousand suggests over-parameterisation or poor
+identifiability. Relative standard errors above fifty percent on a structural
+parameter mean the data barely inform it, and fixing or removing the parameter is
+often the honest choice.
+
+## 4 Diagnostics beyond the number
+
+Information criteria summarise fit; they do not show where a model fails. Always
+pair the criterion with goodness-of-fit plots and a predictive check before
+declaring a structure adequate.

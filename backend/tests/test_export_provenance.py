@@ -8,8 +8,10 @@ import hashlib
 import io
 import itertools
 import json
+import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -93,6 +95,17 @@ def test_cdisc_zip_embeds_the_manifest_and_leaves_define_xml_unchanged(client):
     assert r.headers["X-PharmAgent-Run-Provenance-Status"] == "verified"
     companion = client.get(f"/api/sessions/{sid}/provenance/cdisc").json()
     _check_manifest(companion, sid, r.content)
+
+
+def test_cdisc_companion_manifest_matches_a_download_made_a_dos_tick_earlier(client, monkeypatch):
+    # Both endpoints rebuild the zip; a wall-clock member timestamp made export.sha256 miss the
+    # delivered bytes whenever the two requests straddled a 2 s DOS-time tick.
+    sid = _nca_session(client)
+    now = [1_700_000_000.0]
+    monkeypatch.setattr(zipfile, "time", SimpleNamespace(time=lambda: now[0], localtime=time.localtime))
+    r = client.get(f"/api/sessions/{sid}/cdisc")
+    now[0] += 2.0
+    _check_manifest(client.get(f"/api/sessions/{sid}/provenance/cdisc").json(), sid, r.content)
 
 
 def test_control_stream_gets_a_comment_and_a_manifest(client, monkeypatch):

@@ -146,6 +146,7 @@ class PharmState(BaseModel):
 
     # --- adversarial review (Reviewer Agent) -----------------------------------
     review_results: dict[str, Any] | None = None   # findings, goal, goal_met, counts
+    knowledge_results: list[dict[str, Any]] | None = None  # mikebrain consultations (bounded, newest last)
 
     # --- regulatory (Regulatory Agent) ----------------------------------------
     study_info: StudyInfo | None = None
@@ -184,7 +185,7 @@ AGENT_WRITE_FIELDS: dict[str, set[str]] = {
                 "vpc_results", "diagnostics_results", "engine_comparison_results",
                 "forest_results", "prior_check_results", "protocol_sim", "widgets"},
     "qc": {"qc_verdict", "qc_issues", "qc_checklist"},
-    "reviewer": {"review_results"},
+    "reviewer": {"review_results", "knowledge_results"},
     "report": {"report_path", "report_sections", "memo_path", "memo_results"},
     "simulator": {"simulation_results", "dose_sweep_results", "simest_results",
                   "clinsim_results", "exposure_forest_results", "special_pop_results",

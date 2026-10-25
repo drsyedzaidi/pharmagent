@@ -930,6 +930,7 @@ class Orchestrator:
                                   timestamp=self.clock(), actor=actor)
                 return self._goal_payload(sess, "stopped", executed, stop_reason=exhausted)
             summary = _PLANNER_VIEW._state_summary(sess.state, observations)
+            summary["dataset_configured"] = bool(sess.state.dataset_id or params.get("path"))
             try:
                 plan = self.llm.plan(goal, summary, observations, history,
                                      list(roster.values())) or {}
@@ -951,6 +952,18 @@ class Orchestrator:
                 args["path"] = params["path"]
             rationale = str(plan.get("rationale") or "")
             step = len(history)
+            repaired = bool(plan.get("repaired") or (history and not history[-1].get("allow")))
+            repair_reason = str(
+                plan.get("repair_reason")
+                or (history[-1].get("reason") if history and not history[-1].get("allow") else "")
+                or ""
+            )
+            if plan.get("repaired"):
+                sess.audit.append(
+                    agent="planner", tool=tool_name or "plan", action="plan_repair",
+                    inputs={"workflow": wf["name"], "step": step, "repair_reason": repair_reason},
+                    outputs={"repaired_tool": tool_name, "repaired_args": args},
+                    timestamp=self.clock(), actor=actor)
             sess.audit.append(
                 agent="planner", tool=tool_name or "plan", action="plan",
                 inputs={"workflow": wf["name"], "step": step, "args": args},
@@ -958,9 +971,27 @@ class Orchestrator:
                          "stop_reason": plan.get("stop_reason")},
                 timestamp=self.clock(), actor=actor)
             if not tool_name:
+                reason = str(plan.get("stop_reason") or "planner selected no tool")
+                if (
+                    (plan.get("malformed_tool") or plan.get("premature_stop"))
+                    and not plan.get("repair_attempted")
+                    and policy.consecutive_rejections(history) < 1
+                ):
+                    rejected_name = str(plan.get("malformed_tool") or "plan")
+                    sess.audit.append(
+                        agent="planner", tool=rejected_name, action="policy_rejected",
+                        inputs=args,
+                        outputs={"allow": False, "mode": policy.MODE_REJECTED,
+                                 "reason": reason, "stop": False},
+                        timestamp=self.clock(), actor=actor)
+                    self._record_plan(sess, {"step": step, "tool": rejected_name, "args": args,
+                                             "rationale": rationale, "allow": False,
+                                             "mode": policy.MODE_REJECTED, "reason": reason})
+                    observations.append({"agent": "planner", "tool": rejected_name,
+                                         "status": "rejected", "summary": reason})
+                    continue
                 # A reasoned stop ("goal met", template exhausted) completes the goal; a
                 # silent one (no text, only unknown tool names) is reported as stopped.
-                reason = str(plan.get("stop_reason") or "planner selected no tool")
                 status = "complete" if rationale else "stopped"
                 return self._goal_payload(sess, status, executed, stop_reason=reason,
                                           audit=sess.audit.to_list())
@@ -972,9 +1003,16 @@ class Orchestrator:
                 outputs={"allow": decision.allow, "mode": decision.mode,
                          "reason": decision.reason, "stop": decision.stop},
                 timestamp=self.clock(), actor=actor)
-            self._record_plan(sess, {"step": step, "tool": tool_name, "args": args,
-                                     "rationale": rationale, "allow": decision.allow,
-                                     "mode": decision.mode, "reason": decision.reason})
+            plan_rec: dict[str, Any] = {
+                "step": step, "tool": tool_name, "args": args,
+                "rationale": rationale, "allow": decision.allow,
+                "mode": decision.mode, "reason": decision.reason,
+            }
+            if repaired:
+                plan_rec["repaired"] = True
+                if repair_reason:
+                    plan_rec["repair_reason"] = repair_reason
+            self._record_plan(sess, plan_rec)
             if not decision.allow:
                 observations.append({"agent": "planner", "tool": tool_name,
                                      "status": "rejected", "summary": decision.reason})

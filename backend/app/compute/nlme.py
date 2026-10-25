@@ -1567,17 +1567,59 @@ def _assemble(spec: _PopSpec, method_label: str, model_key: str,
     }
 
 
+#: Central-volume parameter names across the model registry: ``V`` on the
+#: 1-cmt models, ``VC`` on the 2- and 3-cmt models.
+_CENTRAL_VOLUME_NAMES = ("V", "VC")
+
+
+def _central_volume(model: PKModel) -> str | None:
+    """The model's central-volume parameter (``V`` or ``VC``), or None."""
+    return next((p for p in _CENTRAL_VOLUME_NAMES if p in model.params), None)
+
+
 def _resolve_iiv(model: PKModel, iiv_params: list[str] | None) -> list[str]:
-    """Choose IIV parameters: requested ∩ model params, else CL/V, else first 2."""
+    """Choose IIV parameters: requested ∩ model params, else CL + central volume,
+    else the first two parameters.
+
+    ``V`` means the central volume, so ``["CL", "V"]`` on a 2- or 3-cmt model
+    (central volume ``VC``) resolves to ``["CL", "VC"]``. Dropping it instead
+    silently gave CL-only IIV on every multi-compartment fit.
+    """
     model_params = list(model.params)
+    central = _central_volume(model)
     if iiv_params:
-        chosen = [p for p in iiv_params if p in model_params]
+        chosen: list[str] = []
+        for p in iiv_params:
+            name = central if (p == "V" and p not in model_params and central) else p
+            if name in model_params and name not in chosen:
+                chosen.append(name)
         if chosen:
             return chosen
-    default = [p for p in ("CL", "V") if p in model_params]
+    default = [p for p in ("CL", central) if p and p in model_params]
     if default:
         return default
     return model_params[:2]
+
+
+def _check_cov_params(model: PKModel, model_key: str,
+                      covariate_model: list[dict] | None) -> None:
+    """Reject a covariate effect on a parameter the model does not have.
+
+    ``_apply_cov`` skips such an effect, so it used to be estimated as a free
+    coefficient with no influence on the fit (delta-OFV 0, still counted as a
+    tested SCM candidate) instead of failing. Raised before any fitting work.
+    """
+    params = set(model.params)
+    bad = sorted({str(e["param"]) for e in covariate_model or []
+                  if e.get("param") and e.get("covariate") and e["param"] not in params})
+    if not bad:
+        return
+    central = _central_volume(model)
+    hint = (f"; its central volume is '{central}'"
+            if central and any(b in _CENTRAL_VOLUME_NAMES for b in bad) else "")
+    raise ValueError(
+        f"covariate effect on {', '.join(repr(b) for b in bad)}: model {model_key} has "
+        f"no such parameter (parameters: {', '.join(model.params)}){hint}")
 
 
 # ──────────────────────────────── FOCE-I ─────────────────────────────────────
@@ -1616,6 +1658,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         The standard NLME result dict (see module docstring / population_fit).
     """
     model = get_model(model_key)
+    _check_cov_params(model, model_key, covariate_model)
     iiv = _resolve_iiv(model, iiv_params)
     prepared = _prepare_subjects(subjects)
     cov_effects = _build_cov_effects(covariate_model, prepared)
@@ -1975,6 +2018,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     Args, Returns: see module docstring / population_fit.
     """
     model = get_model(model_key)
+    _check_cov_params(model, model_key, covariate_model)
     iiv = _resolve_iiv(model, iiv_params)
     prepared = _prepare_subjects(subjects)
     cov_effects = _build_cov_effects(covariate_model, prepared)
@@ -2150,8 +2194,10 @@ def population_fit(model_key: str, subjects: list[dict], *,
             IIV terms, covariates, or allometric scaling switched off — where
             cold-start Powell can settle in the wrong basin; see
             ``_focei_saem_fit``.
-        iiv_params: structural parameters carrying IIV; default ["CL","V"] ∩
-            model params, with a first-two-params fallback.
+        iiv_params: structural parameters carrying IIV; default CL plus the
+            central volume (``V``, or ``VC`` on 2- and 3-cmt models) ∩ model
+            params, with a first-two-params fallback. ``V`` in a request means
+            the central volume.
         error_model: "proportional" (default), "additive", or "combined".
         max_iter: iteration cap forwarded to the chosen estimator (for
             "focei_saem" this caps the FOCE-I stage; the SAEM seed is capped
@@ -2471,6 +2517,7 @@ def scm(model_key: str, subjects: list[dict], *, candidates: list[dict],
         and the final fitted NLME result (with ``covariate_effects`` + RSE%).
     """
     model = get_model(model_key)
+    _check_cov_params(model, model_key, candidates)
     label = model.label
     prepared = _prepare_subjects(subjects)
 
@@ -2489,7 +2536,7 @@ def scm(model_key: str, subjects: list[dict], *, candidates: list[dict],
         cand_df[key] = df
         uniq.append(cand)
 
-    iiv = iiv_params or ["CL", "V"]
+    iiv = _resolve_iiv(model, iiv_params)
 
     def fit_one(cov_model: list[dict], *, uncertainty: bool = False,
                 init: dict | None = None) -> dict[str, Any]:
