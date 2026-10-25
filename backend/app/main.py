@@ -21,7 +21,7 @@ from app.core import cdisc, export_provenance, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
-from app.core.orchestrator import AccessError, Orchestrator
+from app.core.orchestrator import AccessError, Orchestrator, StaleGateError
 from app.core.provenance import ProvenanceQuarantined
 from app.workflows import WORKFLOWS, get_workflow
 
@@ -183,6 +183,9 @@ class WorkflowRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     approve: bool = True
+    # Id of the gate being decided (``review.gate_id`` from the response that paused the run).
+    # Required: a decision applies to exactly the gate the reviewer saw, never the next one.
+    gate_id: str
     reason: str = ""          # reason-for-change / approval note (audited)
     # Approving a gate runs every remaining step in one call. For a template
     # whose remainder is a population fit (poppk_full: NLME -> SCM -> VPC) that
@@ -532,6 +535,17 @@ def start_workflow(sid: str, req: WorkflowRequest, sess=Depends(owned_session),
     return _start_workflow(sid, req.name, req.params, actor)
 
 
+_STALE_GATE_MSG = ("this gate was already decided or is not the session's current gate; "
+                   "refetch GET /workflow/pending before deciding again")
+
+
+@app.get("/api/sessions/{sid}/workflow/pending")
+def pending_workflow_review(sid: str, sess=Depends(owned_session)) -> dict:
+    """The gate currently awaiting a decision (with its ``gate_id``), or ``review: null``."""
+    with orch.session_lock(sid):
+        return {"review": sess.pending_review}
+
+
 @app.post("/api/sessions/{sid}/workflow/resume")
 def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
                     actor: str = Depends(actor_id)) -> dict:
@@ -553,14 +567,20 @@ def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
         if req.background or needs_job:
             if not sess_now.pending_review:
                 raise HTTPException(400, "no pending review to resume")
+            if sess_now.pending_review.get("gate_id") != req.gate_id:
+                raise HTTPException(409, _STALE_GATE_MSG)
             job_id = jobs.submit(
                 session_id=sid, kind="workflow_resume",
                 fn=lambda: orch.resume_workflow(sid, True, actor=actor,
                                                 reason=req.reason,
-                                                allow_expensive=True))
+                                                allow_expensive=True,
+                                                gate_id=req.gate_id))
             return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
     try:
-        return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason)
+        return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason,
+                                    gate_id=req.gate_id)
+    except StaleGateError as e:
+        raise HTTPException(409, str(e))
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
 

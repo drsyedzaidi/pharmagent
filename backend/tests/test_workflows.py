@@ -174,7 +174,8 @@ def test_background_resume_returns_a_job_that_completes_the_workflow(client):
     assert started["status"] == "awaiting_review"
 
     r = client.post(f"/api/sessions/{sid}/workflow/resume",
-                    json={"approve": True, "background": True}).json()
+                    json={"approve": True, "background": True,
+                          "gate_id": started["review"]["gate_id"]}).json()
     assert r["kind"] == "workflow_resume" and r["status"] == "running"
 
     for _ in range(200):
@@ -204,25 +205,26 @@ def test_background_resume_returns_a_job_that_completes_the_workflow(client):
 def test_background_resume_without_a_pending_review_is_rejected(client):
     sid = client.post("/api/sessions").json()["id"]
     r = client.post(f"/api/sessions/{sid}/workflow/resume",
-                    json={"approve": True, "background": True})
+                    json={"approve": True, "background": True, "gate_id": "none"})
     assert r.status_code == 400
 
 
 def test_background_flag_defaults_off_so_existing_callers_are_unchanged(client):
     sid = client.post("/api/sessions").json()["id"]
-    client.post(f"/api/sessions/{sid}/workflow/start",
-                json={"workflow": "nca_full", "params": {"path": _sample()}})
-    r = client.post(f"/api/sessions/{sid}/workflow/resume", json={"approve": True}).json()
+    gate = client.post(f"/api/sessions/{sid}/workflow/start",
+                       json={"workflow": "nca_full", "params": {"path": _sample()}}).json()["review"]
+    r = client.post(f"/api/sessions/{sid}/workflow/resume",
+                    json={"approve": True, "gate_id": gate["gate_id"]}).json()
     assert r["status"] == "complete" and "job_id" not in r
 
 
 def test_rejection_is_never_backgrounded(client):
     """A rejection does no compute; it must return the signed decision inline."""
     sid = client.post("/api/sessions").json()["id"]
-    client.post(f"/api/sessions/{sid}/workflow/start",
-                json={"workflow": "nca_full", "params": {"path": _sample()}})
+    gate = client.post(f"/api/sessions/{sid}/workflow/start",
+                       json={"workflow": "nca_full", "params": {"path": _sample()}}).json()["review"]
     r = client.post(f"/api/sessions/{sid}/workflow/resume",
-                    json={"approve": False, "background": True}).json()
+                    json={"approve": False, "background": True, "gate_id": gate["gate_id"]}).json()
     assert r["status"] == "rejected" and "job_id" not in r
 
 

@@ -59,6 +59,15 @@ class AccessError(Exception):
     """Raised when a caller requests a session they do not own."""
 
 
+class StaleGateError(Exception):
+    """A gate decision named a gate that is no longer the session's pending one."""
+
+
+def _new_gate(after_step: int, label: str | None, **extra: Any) -> dict[str, Any]:
+    """A pending-review record with a unique id, so a decision can only apply to the gate it was shown."""
+    return {"after_step": after_step, "label": label, "gate_id": uuid.uuid4().hex[:16], **extra}
+
+
 @dataclass
 class Session:
     id: str
@@ -765,12 +774,20 @@ class Orchestrator:
 
     def resume_workflow(self, sid: str, approve: bool = True,
                         actor: str | None = None, reason: str = "",
-                        allow_expensive: bool = False) -> dict[str, Any]:
+                        allow_expensive: bool = False,
+                        gate_id: str | None = None) -> dict[str, Any]:
+        """``gate_id`` (the id in the pending review the client was shown) is verified here, under the
+        session lock, before the gate is consumed; the HTTP layer always supplies it. ``None`` skips
+        the check for in-process callers that drive a single known gate."""
         with self.session_lock(sid):
             sess = self.get_session(sid)
             self._ensure_writable(sess)
             if not sess.pending_review:
                 raise ValueError("no pending review to resume")
+            if gate_id is not None and sess.pending_review.get("gate_id") != gate_id:
+                raise StaleGateError(
+                    "this gate was already decided or is not the session's current gate; "
+                    "refetch GET /workflow/pending before deciding again")
             wf = get_workflow(sess.state.workflow_name)
             params = sess.params
             review = dict(sess.pending_review)
@@ -873,7 +890,7 @@ class Orchestrator:
             i += 1
             sess.state = apply_writes(sess.state, "supervisor", {"current_step": i})
             if step.get("gate"):
-                sess.pending_review = {"after_step": i - 1, "label": step.get("label")}
+                sess.pending_review = _new_gate(i - 1, step.get("label"))
                 self._persist(sess)
                 return {"status": "awaiting_review", "executed": executed,
                         "review": sess.pending_review, "state": sess.state.model_dump(),
@@ -1098,9 +1115,9 @@ class Orchestrator:
             outputs={"status": "pending_approval", "agent": tool.agent,
                      "rationale": rationale, "gate_reason": gate_reason},
             timestamp=ts, actor=actor)
-        sess.pending_review = {"after_step": sess.state.current_step - 1,
-                               "label": f"Planner proposes {tool_name}",
-                               "proposal": {"tool": tool_name, "agent": tool.agent, "args": args}}
+        sess.pending_review = _new_gate(
+            sess.state.current_step - 1, f"Planner proposes {tool_name}",
+            proposal={"tool": tool_name, "agent": tool.agent, "args": args})
         return self._goal_payload(sess, "awaiting_review", executed,
                                   review=sess.pending_review, proposal=pending)
 
