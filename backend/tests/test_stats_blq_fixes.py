@@ -298,3 +298,51 @@ def test_disjoint_subject_groups_are_still_analysed_as_parallel(orch):
         lines += [f"{sid},{t},{c * (1 + 0.1 * sid)},0,0,{trt}" for t, c in zip(TIMES, CONC_T, strict=True)]
     res = orch.run_tool(_load(orch, "\n".join(lines) + "\n"), "run_bioequivalence", "be", {})["result"]
     assert res["design"] == "parallel"
+
+
+# ── F-18: ADPC exports observation rows only, carries the censoring flag, units from metadata ───────────
+def _adpc(df, roles, meta=None):
+    from app.core.cdisc import build_adpc
+    from app.core.pharmstate import PharmState
+    return build_adpc(df, roles, PharmState(dataset_metadata={"dataset_id": "S", **(meta or {})}))
+
+
+def test_adpc_skips_dosing_rows():
+    import pandas as pd
+    df = pd.DataFrame({"ID": [1, 1], "TIME": [0.0, 1.0], "DV": [0.0, 25.0], "AMT": [100, 0], "EVID": [1, 0]})
+    rows, _ = _adpc(df, {"ID": "ID", "TIME": "TIME", "DV": "DV", "AMT": "AMT", "EVID": "EVID"})
+    assert len(rows) == 1 and rows[0]["AVAL"] == 25.0 and rows[0]["ATPTN"] == 1.0
+
+
+def test_adpc_carries_the_censoring_flag_and_does_not_report_the_lloq_as_a_concentration():
+    import pandas as pd
+    df = pd.DataFrame({"ID": [1] * 5, "TIME": [0.0, 1.0, 2.0, 4.0, 8.0], "DV": [0.0, 5.0, 3.0, 0.5, 0.5],
+                       "AMT": [0] * 5, "EVID": [0] * 5, "CENS": [1, 0, 0, 1, 1]})
+    roles = {"ID": "ID", "TIME": "TIME", "DV": "DV", "AMT": "AMT", "EVID": "EVID", "CENS": "CENS"}
+    rows, cols = _adpc(df, roles)
+    assert "BLQFL" in cols and "ANL01FL" in cols
+    assert [r["BLQFL"] for r in rows] == ["Y", "", "", "Y", "Y"]
+    assert [r["AVAL"] for r in rows if r["BLQFL"] == "Y"] == [None, None, None]
+    assert [r["LLOQ"] for r in rows if r["BLQFL"] == "Y"][1:] == [0.5, 0.5]
+    # M1: the leading BLQ is a zero baseline (analysed), later BLQ rows are not
+    assert [r["ANL01FL"] for r in rows] == ["Y", "Y", "Y", "N", "N"]
+
+
+def test_adpc_and_adpp_units_come_from_dataset_metadata_else_stay_blank():
+    import pandas as pd
+
+    from app.core.cdisc import build_adpp
+    from app.core.pharmstate import PharmState
+    df = pd.DataFrame({"ID": [1], "TIME": [1.0], "DV": [5.0]})
+    roles = {"ID": "ID", "TIME": "TIME", "DV": "DV"}
+    blank, _ = _adpc(df, roles)
+    assert blank[0]["AVALU"] == ""
+    rows, _ = _adpc(df, roles, {"units": {"conc": "ng/mL", "time": "h", "dose": "mg"}})
+    assert rows[0]["AVALU"] == "ng/mL"
+    nca = [{"subject": 1, "dose": 100, "Cmax": 10.0, "Tmax": 1.0, "AUC_last": 40.0, "t_half": 7.0, "CL_F": 2.0}]
+    pp = build_adpp(PharmState(nca_parameters=nca, dataset_metadata={
+        "dataset_id": "S", "units": {"conc": "ng/mL", "time": "h", "dose": "mg"}}))[0]
+    units = {r["PARAMCD"]: r["PPSTRESU"] for r in pp}
+    assert units == {"CMAX": "ng/mL", "TMAX": "h", "AUCLST": "h*ng/mL", "LAMZHL": "h", "CLFO": "mg/(h*ng/mL)"}
+    bare = build_adpp(PharmState(nca_parameters=nca, dataset_metadata={"dataset_id": "S"}))[0]
+    assert {r["PPSTRESU"] for r in bare} == {""}

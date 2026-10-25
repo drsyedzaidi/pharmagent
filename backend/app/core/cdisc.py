@@ -15,6 +15,7 @@ from xml.sax.saxutils import escape
 
 import pandas as pd
 
+from app.core.obs_loader import load_observations
 from app.core.pharmstate import PharmState
 
 # NCA result key -> (PARAMCD, PARAM) using common CDISC PK parameter terms.
@@ -38,6 +39,28 @@ _ADPP_PARAMS: dict[str, tuple[str, str]] = {
 }
 
 
+def _units(state: PharmState) -> dict[str, str]:
+    """Concentration/time/dose units from ``dataset_metadata["units"]`` ({"conc", "time", "dose"}). The session
+    state does not capture units at upload, so unless the caller put them there every unit is blank rather than
+    guessed (a wrong unit in a regulatory dataset is worse than an empty one)."""
+    u = (state.dataset_metadata or {}).get("units")
+    u = u if isinstance(u, dict) else {}
+    return {k: str(u.get(k) or "").strip() for k in ("conc", "time", "dose")}
+
+
+def _pp_unit(key: str, u: dict[str, str]) -> str:
+    """PPSTRESU for an NCA result key from the conc/time/dose units; blank when a needed unit is unknown."""
+    c, t, d = u["conc"], u["time"], u["dose"]
+    auc = f"{t}*{c}" if c and t else ""
+    table = {
+        "Cmax": c, "Cmin": c, "Cavg": c, "Tmax": t, "t_half": t, "MRT": t, "AUC_last": auc, "AUC_inf": auc,
+        "AUC_tau": auc, "lambda_z": f"1/{t}" if t else "", "pct_AUC_extrap": "%", "fluctuation_pct": "%",
+        "CL_F": f"{d}/({auc})" if d and auc else "", "Vz_F": f"{d}/({c})" if d and c else "",
+    }
+    table["Vss"] = table["Vz_F"]
+    return table.get(key, "")
+
+
 def _csv_bytes(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
     from app.core.exporters import sanitize_cell  # shared formula-injection guard
     buf = io.StringIO()
@@ -52,6 +75,7 @@ def build_adpp(state: PharmState) -> tuple[list[dict], list[str]]:
     params = state.nca_parameters or []
     study = (state.dataset_metadata or {}).get("dataset_id", "STUDY")
     ss = bool((state.nca_summary or {}).get("steady_state"))
+    units = _units(state)
     rows: list[dict] = []
     for p in params:
         subj = p.get("subject")
@@ -62,18 +86,24 @@ def build_adpp(state: PharmState) -> tuple[list[dict], list[str]]:
             rows.append({
                 "STUDYID": study, "USUBJID": f"{study}-{subj}", "SUBJID": subj,
                 "PARAMCD": pcd, "PARAM": plbl, "AVAL": val,
-                "DOSEA": p.get("dose"), "PPSTRESU": "", "PARCAT1": "NCA",
+                "DOSEA": p.get("dose"), "PPSTRESU": _pp_unit(key, units), "PARCAT1": "NCA",
                 "AVISIT": "Steady State" if ss else "Single Dose",
             })
     cols = ["STUDYID", "USUBJID", "SUBJID", "PARCAT1", "PARAMCD", "PARAM",
-            "AVAL", "DOSEA", "AVISIT"]
+            "AVAL", "PPSTRESU", "DOSEA", "AVISIT"]
     return rows, cols
 
 
 def build_adpc(df: pd.DataFrame | None, roles: dict[str, str],
                state: PharmState) -> tuple[list[dict], list[str]]:
-    """ADPC — plasma concentrations in BDS long format (one row per sample)."""
-    cols = ["STUDYID", "USUBJID", "SUBJID", "PARAMCD", "PARAM", "AVAL", "ATPTN", "AVISIT"]
+    """ADPC — plasma concentrations in BDS long format (one row per sample).
+
+    Observation rows only (EVID/AMT/MDV, via the shared ``load_observations``), never dosing records. A
+    below-LOQ record (CENS role column, or DV < an LLOQ column) is kept but flagged ``BLQFL='Y'`` with AVAL blank and
+    the LLOQ in ``LLOQ``: a censored DV is not a measured concentration. ``ANL01FL`` is 'Y' for the records the NCA
+    uses under rule M1 (quantifiable values and the leading-BLQ zero baseline), 'N' for the rest."""
+    cols = ["STUDYID", "USUBJID", "SUBJID", "PARAMCD", "PARAM", "AVAL", "AVALU", "BLQFL", "LLOQ", "ANL01FL",
+            "ATPTN", "AVISIT"]
     if df is None:
         return [], cols
     study = (state.dataset_metadata or {}).get("dataset_id", "STUDY")
@@ -82,18 +112,28 @@ def build_adpc(df: pd.DataFrame | None, roles: dict[str, str],
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
     if not (id_col and time_col and dv_col):
         return [], cols
-    t = pd.to_numeric(df[time_col], errors="coerce")
-    dv = pd.to_numeric(df[dv_col], errors="coerce")
+    lloq_col = next((c for c, r in roles.items() if r == "LLOQ"), None)
+    loaded = load_observations(df, roles)
+    cens_col, analysed = loaded.cens_col, set(loaded.obs.index)
+    conc_unit = _units(state)["conc"]
     rows: list[dict] = []
-    for i in range(len(df)):
-        if pd.isna(dv.iloc[i]):
+    for idx, rec in loaded.raw_obs.iterrows():
+        blq = bool(cens_col is not None and rec[cens_col])
+        dv = rec[dv_col]
+        if pd.isna(dv) and not blq:
             continue
-        subj = df[id_col].iloc[i]
+        if lloq_col is not None and pd.notna(pd.to_numeric(rec[lloq_col], errors="coerce")):
+            lloq = float(pd.to_numeric(rec[lloq_col]))
+        else:
+            lloq = float(dv) if blq and pd.notna(dv) else None
+        t = rec[time_col]
+        subj = rec[id_col]
         rows.append({
             "STUDYID": study, "USUBJID": f"{study}-{subj}", "SUBJID": subj,
             "PARAMCD": "CONC", "PARAM": "Plasma Drug Concentration",
-            "AVAL": float(dv.iloc[i]),
-            "ATPTN": None if pd.isna(t.iloc[i]) else float(t.iloc[i]),
+            "AVAL": None if blq else float(dv), "AVALU": conc_unit,
+            "BLQFL": "Y" if blq else "", "LLOQ": lloq, "ANL01FL": "Y" if idx in analysed else "N",
+            "ATPTN": None if pd.isna(t) else float(t),
             "AVISIT": "PK Profile",
         })
     return rows, cols
@@ -134,7 +174,7 @@ def build_define_xml(datasets: dict[str, list[str]], study: str) -> bytes:
             if oid in seen:
                 continue
             seen.add(oid)
-            dtype = "float" if c in {"AVAL", "ATPTN", "DOSEA"} else "text"
+            dtype = "float" if c in {"AVAL", "ATPTN", "DOSEA", "LLOQ"} else "text"
             parts.append(f'      <ItemDef OID="{oid}" Name="{c}" DataType="{dtype}">\n'
                          f"        <Description><TranslatedText xml:lang=\"en\">"
                          f"{escape(c)}</TranslatedText></Description>\n      </ItemDef>\n")

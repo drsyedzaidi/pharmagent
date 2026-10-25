@@ -10,10 +10,10 @@ from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose
 from app.compute.nca import _round_sig, run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.conventions.runtime import applied_conventions
+from app.core.obs_loader import PRE_DOSE_RULE, _apply_m1, _blq_flags, load_observations  # noqa: F401
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
-from app.tools.obs_loader import PRE_DOSE_RULE, _apply_m1, _blq_flags, load_observations  # noqa: F401
 
 # Catalog conventions each NCA path applies (app/conventions/catalog.json); named in results, no number depends on them.
 _CONV_SD = ["nca.linear_up_log_down", "nca.auc_last_ends_at_tlast", "nca.pre_dose_records", "nca.lambda_z_window"]

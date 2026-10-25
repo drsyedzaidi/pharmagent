@@ -12,10 +12,10 @@ import pandas as pd
 
 from app.compute.bioequivalence import PAIRED_LABEL, assess_bioequivalence
 from app.compute.nca import INF_DERIVED, Profile, lambda_z_exclusion_note, nca_subject
+from app.core.obs_loader import load_observations
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
-from app.tools.obs_loader import load_observations
 
 _TRT_NAMES = {"trt", "treat", "treatment", "form", "formulation", "drug", "period_trt"}
 _REF_TOKENS = {"r", "ref", "reference", "rld"}

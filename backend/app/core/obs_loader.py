@@ -100,6 +100,7 @@ class LoadedObservations:
     n_blq: int
     cens_col: str | None
     dose_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
+    raw_obs: pd.DataFrame = field(default_factory=pd.DataFrame)   # observation rows before M1 (absolute TIME)
     key_col: str = "_pkey"
 
 
@@ -169,10 +170,11 @@ def load_observations(df: pd.DataFrame, roles: dict[str, str], *,
     else:
         n_blq = int((obs[dv_col] <= 0).sum())
 
+    raw_obs = obs
     obs = _from_dose_time(obs, key_col, time_col, dv_col, cens_col, dose_times)
     if cens_col is not None:
         obs = _apply_m1(obs, key_col, time_col, dv_col, cens_col)
     obs = obs.dropna(subset=[time_col, dv_col])
     return LoadedObservations(obs=obs, dose_by_subject=dose_by_subject, dose_times=dose_times,
                               t_inf_by_subject=t_inf, n_blq=n_blq, cens_col=cens_col,
-                              dose_rows=dose_rows, key_col=key_col)
+                              dose_rows=dose_rows, raw_obs=raw_obs, key_col=key_col)

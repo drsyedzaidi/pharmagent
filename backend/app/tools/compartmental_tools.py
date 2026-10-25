@@ -7,10 +7,10 @@ import pandas as pd
 
 from app.compute.compartmental import fit_compartmental, fit_compartmental_ss
 from app.compute.dosing import extract_ss_intervals, is_multiple_dose
+from app.core.obs_loader import load_observations
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
-from app.tools.obs_loader import load_observations
 
 
 def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
