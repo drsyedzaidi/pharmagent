@@ -8,7 +8,15 @@ import numpy as np
 import pandas as pd
 
 from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose, parse_blq_flag
-from app.compute.nca import _round_sig, run_nca
+from app.compute.nca import (
+    Profile,
+    _round_sig,
+    manual_lambda_z_fit,
+    nca_subject,
+    refit_lambda_z_manual,
+    run_nca,
+    summarize_by_dose,
+)
 from app.compute.nca_ss import run_nca_ss
 from app.conventions.runtime import applied_conventions
 from app.core.pharmstate import PharmState
@@ -118,6 +126,51 @@ def _ss_endpoint_rule(ctau_assumed: list[str], c0_assumed: list[str]) -> str:
     return text
 
 
+def _single_dose_observations(df: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, amt_col: str | None,
+                              evid_col: str | None, cens_col: str | None) -> tuple[pd.DataFrame, dict[Any, float], int]:
+    """Observation rows (time since the subject's first dose, M1 BLQ rule applied), dose per subject and the
+    below-LOQ record count for a single-dose dataset. Shared by compute_nca and the manual λz refit."""
+    df[time_col] = pd.to_numeric(df[time_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if amt_col:
+        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+    # split dosing vs observation rows
+    if evid_col:
+        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
+        dose_rows = df[ev == 1]
+        obs = df[ev == 0]
+    elif amt_col:
+        dose_rows = df[df[amt_col].fillna(0) > 0]
+        obs = df[(df[amt_col].fillna(0) == 0)]
+    else:
+        dose_rows = df.iloc[0:0]
+        obs = df
+
+    # dose per subject (single-dose: first dosing amount) and its time (the first dose record's TIME)
+    dose_by_subject: dict[Any, float] = {}
+    if amt_col and len(dose_rows):
+        for sid, g in dose_rows.groupby(id_col):
+            amts = g[amt_col].dropna()
+            if len(amts):
+                dose_by_subject[sid] = float(amts.iloc[0])
+    timed = dose_rows[np.isfinite(dose_rows[time_col].to_numpy(dtype=float))]
+    dose_times = {sid: float(t) for sid, t in timed.groupby(id_col)[time_col].min().items()}
+
+    # BLQ accounting (transparency): count below-LOQ observation records, by an
+    # explicit CENS flag if present, else non-positive concentrations.
+    if cens_col is not None:
+        n_blq = int(obs[cens_col].sum())
+    else:
+        n_blq = int((obs[dv_col] <= 0).sum())
+
+    obs = _from_dose_time(obs, id_col, time_col, dv_col, cens_col, dose_times)
+    if cens_col is not None:
+        obs = _apply_m1(obs, id_col, time_col, dv_col, cens_col)
+    obs = obs.dropna(subset=[time_col, dv_col])
+    return obs, dose_by_subject, n_blq
+
+
 def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     dsid, df = require_dataset(ctx, state, args)
     df = df.copy()
@@ -197,44 +250,8 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                 result={"n_subjects": n, "steady_state": True, "nca_summary": out["nca_summary"]},
             )
 
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    if amt_col:
-        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-
-    # split dosing vs observation rows
-    if evid_col:
-        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-        dose_rows = df[ev == 1]
-        obs = df[ev == 0]
-    elif amt_col:
-        dose_rows = df[df[amt_col].fillna(0) > 0]
-        obs = df[(df[amt_col].fillna(0) == 0)]
-    else:
-        dose_rows = df.iloc[0:0]
-        obs = df
-
-    # dose per subject (single-dose: first dosing amount) and its time (the first dose record's TIME)
-    dose_by_subject: dict[Any, float] = {}
-    if amt_col and len(dose_rows):
-        for sid, g in dose_rows.groupby(id_col):
-            amts = g[amt_col].dropna()
-            if len(amts):
-                dose_by_subject[sid] = float(amts.iloc[0])
-    timed = dose_rows[np.isfinite(dose_rows[time_col].to_numpy(dtype=float))]
-    dose_times = {sid: float(t) for sid, t in timed.groupby(id_col)[time_col].min().items()}
-
-    # BLQ accounting (transparency): count below-LOQ observation records, by an
-    # explicit CENS flag if present, else non-positive concentrations.
-    if cens_col is not None:
-        n_blq = int(obs[cens_col].sum())
-    else:
-        n_blq = int((obs[dv_col] <= 0).sum())
-
-    obs = _from_dose_time(obs, id_col, time_col, dv_col, cens_col, dose_times)
-    if cens_col is not None:
-        obs = _apply_m1(obs, id_col, time_col, dv_col, cens_col)
-    obs = obs.dropna(subset=[time_col, dv_col])
+    obs, dose_by_subject, n_blq = _single_dose_observations(
+        df, id_col=id_col, time_col=time_col, dv_col=dv_col, amt_col=amt_col, evid_col=evid_col, cens_col=cens_col)
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
                   dose_by_subject=dose_by_subject, is_iv=is_iv)
@@ -305,6 +322,88 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     )
 
 
+_LZ_TIME_ATOL = 5e-4     # the UI rounds time to 4 dp and concentration to 6 significant figures
+_LZ_CONC_RTOL = 1e-5
+
+
+def _match_profile_points(times: list[float], concs: list[float], prof_t: np.ndarray, prof_c: np.ndarray,
+                          subject: Any) -> list[int]:
+    """Index of the subject's real profile point behind each selection; ValueError if any selection is not one."""
+    if len(times) != len(concs):
+        raise ValueError("selected_times and selected_concs must be the same length")
+    picked: list[int] = []
+    for t, c in zip(times, concs, strict=True):
+        hits = [i for i in range(len(prof_t))
+                if i not in picked and prof_c[i] > 0
+                and abs(prof_t[i] - float(t)) <= _LZ_TIME_ATOL
+                and abs(prof_c[i] - float(c)) <= _LZ_CONC_RTOL * abs(prof_c[i])]
+        if not hits:
+            raise ValueError(f"selected point (t={t}, C={c}) is not a distinct measured point of subject "
+                             f"{subject!r}'s concentration-time profile")
+        picked.append(hits[0])
+    return picked
+
+
+def refit_lambda_z(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Analyst override of the terminal-slope window for one subject. The points are checked against the subject's
+    real profile in the session dataset and the regression runs on the dataset's values, never the client's."""
+    if not state.nca_parameters:
+        raise ValueError("run compute_nca before refitting λz")
+    if (state.nca_summary or {}).get("steady_state") or any("AUC_tau" in r for r in state.nca_parameters):
+        raise ValueError("manual λz refit supports single-dose NCA only")
+    subject = str(args.get("subject", ""))
+    idx = next((i for i, r in enumerate(state.nca_parameters) if str(r["subject"]) == subject), None)
+    if idx is None:
+        raise ValueError(f"unknown subject {subject!r}")
+    times, concs = list(args.get("selected_times") or []), list(args.get("selected_concs") or [])
+    reason = str(args.get("reason") or "")
+
+    dsid, df = require_dataset(ctx, state, args)
+    df = df.copy()
+    roles = _roles(df, state)
+    cols = {r: next((c for c, role in roles.items() if role == r), None)
+            for r in ("ID", "TIME", "DV", "AMT", "EVID", "CENS")}
+    if not (cols["ID"] and cols["TIME"] and cols["DV"]):
+        raise ValueError("dataset missing required ID/TIME/DV roles for NCA")
+    if cols["CENS"] is not None:
+        df = df.assign(**{cols["CENS"]: _blq_flags(df[cols["CENS"]], cols["CENS"])})
+    obs, dose_by_subject, _ = _single_dose_observations(
+        df, id_col=cols["ID"], time_col=cols["TIME"], dv_col=cols["DV"], amt_col=cols["AMT"],
+        evid_col=cols["EVID"], cens_col=cols["CENS"])
+    sub = obs[obs[cols["ID"]].astype(str) == subject].sort_values(cols["TIME"])
+    if sub.empty:
+        raise ValueError(f"subject {subject!r} has no observations in the session dataset")
+    prof_t = sub[cols["TIME"]].to_numpy(dtype=float)
+    prof_c = sub[cols["DV"]].to_numpy(dtype=float)
+
+    picked = _match_profile_points(times, concs, prof_t, prof_c, subject)
+    sel_t, sel_c = [float(prof_t[i]) for i in picked], [float(prof_c[i]) for i in picked]
+    fit = manual_lambda_z_fit(sel_t, sel_c)
+    old = state.nca_parameters[idx]
+    new_row = nca_subject(Profile(subject=old["subject"], time=prof_t, conc=prof_c, dose=float(old["dose"])),
+                          is_iv=(state.nca_summary or {}).get("route") == "IV", lz_override=fit)
+    new_row = {**new_row, "lambda_z_manual": True}
+    params = [new_row if i == idx else r for i, r in enumerate(state.nca_parameters)]
+    summary = {**(state.nca_summary or {}), **summarize_by_dose(params)}
+
+    plot = state.nca_plot_data or {}
+    subjects = [{**ps, "lz_x": [round(v, 4) for v in sel_t], "lz_y": [_round_sig(v, 6) for v in sel_c],
+                 "lambda_z": new_row["lambda_z"], "t_half": new_row["t_half"],
+                 "r2_adj": new_row["lambda_z_r2_adj"], "n_pts": new_row["lambda_z_n_points"]}
+                if str(ps.get("id")) == subject else ps for ps in plot.get("subjects", [])]
+    writes: dict[str, Any] = {"nca_parameters": params, "nca_summary": summary}
+    if plot:
+        writes["nca_plot_data"] = {**plot, "subjects": subjects}
+    return ToolResult(
+        summary=f"Manual λz refit for subject {subject}: {len(picked)} analyst-selected points, "
+                f"λz = {new_row['lambda_z']}, t½ = {new_row['t_half']}.",
+        action=f"refit_lambda_z(subject={subject}, times={[round(v, 4) for v in sel_t]}, dataset={dsid})",
+        reason=reason,
+        writes=writes,
+        result=refit_lambda_z_manual(sel_t, sel_c),
+    )
+
+
 TOOLS = [
     Tool("compute_nca",
          "Compute non-compartmental PK parameters (Cmax, Tmax, AUClast, AUCinf, "
@@ -314,4 +413,15 @@ TOOLS = [
          {"type": "object",
           "properties": {"dataset_id": {"type": "string"}}, "required": []},
          compute_nca),
+    Tool("refit_lambda_z",
+         "Analyst override of one subject's terminal-slope (lambda_z) points; recomputes that subject's "
+         "lambda_z-dependent NCA parameters from the dataset profile and records the intervention.",
+         "nca",
+         {"type": "object",
+          "properties": {"subject": {"type": "string"},
+                         "selected_times": {"type": "array", "items": {"type": "number"}},
+                         "selected_concs": {"type": "array", "items": {"type": "number"}},
+                         "reason": {"type": "string"}},
+          "required": ["subject", "selected_times", "selected_concs"]},
+         refit_lambda_z),
 ]

@@ -35,6 +35,7 @@ class ToolResult:
     writes: dict[str, Any] = field(default_factory=dict)   # -> PharmState
     result: dict[str, Any] = field(default_factory=dict)   # payload for UI/LLM
     action: str = ""                  # audit action description
+    reason: str = ""                  # analyst-supplied reason for change, recorded on the audit entry
 
 
 def require_dataset(ctx: ToolContext, state: PharmState,
@@ -170,6 +171,7 @@ class ToolRegistry:
             outputs=res.result,
             timestamp=timestamp,
             actor=actor,
+            reason=res.reason,
         )
         new_state = apply_writes(state, tool.agent, res.writes) if res.writes else state
         return new_state, res

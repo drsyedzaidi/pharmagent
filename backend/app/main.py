@@ -294,6 +294,7 @@ class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
     selected_concs: list[float]
+    reason: str = ""          # analyst's reason for the manual window (audited)
 
 
 class FlexplotRequest(BaseModel):
@@ -586,14 +587,18 @@ def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
 
 
 @app.post("/api/sessions/{sid}/nca/refit_lz")
-def refit_lz(sid: str, req: RefitLzRequest, sess=Depends(owned_session)) -> dict:
-    from app.compute.nca import refit_lambda_z_manual
+def refit_lz(sid: str, req: RefitLzRequest, sess=Depends(owned_session),
+             actor: str = Depends(actor_id)) -> dict:
+    """A manual λz window is an analyst intervention: it runs through the audited ``refit_lambda_z`` tool."""
     if len(req.selected_times) != len(req.selected_concs):
         raise HTTPException(400, "selected_times and selected_concs must be the same length")
     try:
-        return refit_lambda_z_manual(req.selected_times, req.selected_concs)
+        out = orch.run_tool(sid, "refit_lambda_z", "nca",
+                            {"subject": req.subject, "selected_times": req.selected_times,
+                             "selected_concs": req.selected_concs, "reason": req.reason}, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return out["result"]
 
 
 @app.post("/api/sessions/{sid}/pkmodel")

@@ -108,12 +108,10 @@ def _best_lambda_z(time: np.ndarray, conc: np.ndarray, tmax: float) -> dict[str,
     return best
 
 
-def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, Any]:
-    """Fit terminal slope on an exact caller-specified set of points.
+def manual_lambda_z_fit(times: list[float], concs: list[float]) -> dict[str, Any]:
+    """Terminal-slope regression on an exact caller-specified point set, shaped like ``_best_lambda_z``.
 
-    Raises ValueError with a user-readable message on bad inputs so the
-    API endpoint can return it as a 400 without a traceback.
-    """
+    Raises ValueError with a user-readable message on bad inputs."""
     if len(times) < 3:
         raise ValueError("Select ≥ 3 points for λz estimation")
     t = np.array(times, dtype=float)
@@ -130,7 +128,29 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
     ss_tot = float(np.sum((lnc - lnc.mean()) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     adj = 1.0 - (1.0 - r2) * (k - 1) / (k - 2) if k > 2 else r2
-    lz = float(-slope)
+    return {
+        "lambda_z": float(-slope),
+        "lambda_z_r2": round(r2, 6),
+        "lambda_z_r2_adj": round(adj, 6),
+        "lambda_z_n_points": k,
+        "lambda_z_intervals": [float(t.min()), float(t.max())],
+        "lambda_z_intercept": float(intercept),
+        "lambda_z_pts_t": t.tolist(),
+        "lambda_z_pts_c": c.tolist(),
+    }
+
+
+def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, Any]:
+    """Fit terminal slope on an exact caller-specified set of points.
+
+    Raises ValueError with a user-readable message on bad inputs so the
+    API endpoint can return it as a 400 without a traceback.
+    """
+    fit = manual_lambda_z_fit(times, concs)
+    t = np.array(times, dtype=float)
+    slope, intercept = -fit["lambda_z"], fit["lambda_z_intercept"]
+    k, adj = fit["lambda_z_n_points"], fit["lambda_z_r2_adj"]
+    lz = fit["lambda_z"]
     t_half = math.log(2) / lz
     t0, t1 = float(t.min()), float(t.max())
     fit_x = [round(t0 + (t1 - t0) * i / 29, 3) for i in range(30)]
@@ -148,13 +168,16 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
     }
 
 
-def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
+def nca_subject(p: Profile, *, is_iv: bool = False, lz_override: dict[str, Any] | None = None) -> dict[str, Any]:
     """Compute NCA parameters for a single subject's profile.
 
     ``is_iv`` controls route-dependent parameters: MRT and Vss are only
     physiologically meaningful for intravenous data. For extravascular (oral)
     data the AUMC-derived MRT includes the mean absorption time, so Vss (= CL·MRT)
     would be biased high — it is therefore suppressed and MRT is flagged.
+
+    ``lz_override`` (a ``manual_lambda_z_fit`` result) replaces the best-fit terminal slope with an analyst's
+    selection; every λz-dependent parameter is recomputed from it.
     """
     raw_t = np.asarray(p.time, dtype=float)
     raw_c = np.asarray(p.conc, dtype=float)
@@ -187,7 +210,7 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
         "Tlast": _round_sig(t_last, 6),
     }
 
-    lz = _best_lambda_z(time, conc, tmax)
+    lz = lz_override if lz_override else _best_lambda_z(time, conc, tmax)
     if lz:
         lam = lz["lambda_z"]
         auc_inf = auc_last + c_last / lam
