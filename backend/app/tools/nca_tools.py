@@ -127,7 +127,8 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     cens_col = loaded.cens_col               # also set when BLQ came from an LLOQ column
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
-                  dose_by_subject=dose_by_subject, t_inf_by_subject=loaded.t_inf_by_subject, is_iv=is_iv)
+                  dose_by_subject=dose_by_subject, t_inf_by_subject=loaded.t_inf_by_subject, is_iv=is_iv,
+                  include_unacceptable_lambda_z=bool(args.get("include_unacceptable_lambda_z", False)))
     out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
     out["nca_summary"]["conventions"] = applied_conventions(_CONV_SD + (_CONV_BLQ if cens_col else []))
     vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."
@@ -184,10 +185,13 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
 
     nca_plot_data = {"subjects": lz_subjects}
 
+    n_lz_excl = out["nca_summary"]["lambda_z_excluded"]["n_subjects"]
     return ToolResult(
         summary=f"NCA complete ({'IV' if is_iv else 'extravascular'}): {n} subjects, "
                 f"{len(out['nca_summary']['by_dose'])} dose group(s), {n_blq} BLQ "
-                f"(linear-up/log-down, best-fit lambda_z).",
+                f"(linear-up/log-down, best-fit lambda_z)." + (
+                    f" {n_lz_excl} subject(s) with an unacceptable lambda_z fit are left out of AUC_inf-derived "
+                    "summaries." if n_lz_excl else ""),
         action=f"compute_nca({dsid})",
         writes={"nca_parameters": out["nca_parameters"], "nca_summary": out["nca_summary"],
                 "nca_plot_data": nca_plot_data},
@@ -202,6 +206,11 @@ TOOLS = [
          "best-fit terminal slope.",
          "nca",
          {"type": "object",
-          "properties": {"dataset_id": {"type": "string"}}, "required": []},
+          "properties": {"dataset_id": {"type": "string"},
+                         "include_unacceptable_lambda_z": {
+                             "type": "boolean",
+                             "description": "Pool AUC_inf-derived values (AUC_inf, CL/F, Vz/F, Vss, MRT) of subjects "
+                                            "whose lambda_z fit fails the acceptance criteria. Default false."}},
+          "required": []},
          compute_nca),
 ]

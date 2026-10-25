@@ -109,3 +109,77 @@ def test_compute_nca_derives_infusion_time_from_rate(orch):
     orch.run_tool(sid, "compute_nca", "nca", {})
     params = orch.get_session(sid).state.nca_parameters
     assert abs(params[0]["Vss"] - 20.0) < 0.5, params[0]["Vss"]
+
+
+# ── F-16: poor terminal fits must not pool into AUC_inf-derived summaries ──────────────────────────────
+POOR = [0, 10, 7, 9, 5, 6]          # adj R^2 ~0.04 on 4 points, ~69 % extrapolated: accepted by _best_lambda_z (> 0)
+GOOD = [0, 10, 6, 3.6, 1.3, 0.47]   # clean mono-exponential tail
+LZ_T = [0, 1, 2, 4, 8, 12]
+
+
+def _profile(conc):
+    import numpy as np
+
+    from app.compute.nca import Profile, nca_subject
+    return nca_subject(Profile("S", np.array(LZ_T, float), np.array(conc, float), 100.0))
+
+
+def test_lambda_z_acceptable_flags_a_low_r2_fit_and_passes_a_clean_one():
+    poor, good = _profile(POOR), _profile(GOOD)
+    assert poor["lambda_z_r2_adj"] < 0.8 and poor["AUC_inf"] is not None   # the fit IS accepted by the picker
+    assert poor["lambda_z_acceptable"] is False
+    assert good["lambda_z_acceptable"] is True
+    assert _profile([0, 10, 5, 0, 0, 0])["lambda_z_acceptable"] is None    # no terminal fit at all: not evaluated
+
+
+def _rows():
+    return [{**_profile(c), "subject": i, "dose": 100} for i, c in enumerate([GOOD, GOOD, POOR, GOOD], 1)]
+
+
+def test_summarize_by_dose_excludes_unacceptable_fits_and_says_so():
+    from app.compute.nca import summarize_by_dose
+    rows = _rows()
+    s = summarize_by_dose(rows)
+    entry = s["by_dose"][0]
+    assert entry["n"] == 4 and entry["n_lambda_z_excluded"] == 1
+    assert s["lambda_z_excluded"]["subjects"] == [3] and s["lambda_z_excluded"]["include_unacceptable"] is False
+    inf = next(p for p in s["descriptive"][0]["parameters"] if p["parameter"] == "AUC_inf")
+    assert inf["n"] == 3
+    # Cmax / AUC_last do not depend on lambda_z: all four stay
+    assert next(p for p in s["descriptive"][0]["parameters"] if p["parameter"] == "Cmax")["n"] == 4
+    kept = summarize_by_dose(rows, include_unacceptable_lambda_z=True)
+    assert kept["by_dose"][0]["n_lambda_z_excluded"] == 0
+    assert next(p for p in kept["descriptive"][0]["parameters"] if p["parameter"] == "AUC_inf")["n"] == 4
+    assert rows[2]["AUC_inf"] is not None            # the stored per-subject result is untouched
+
+
+def test_dose_proportionality_excludes_unacceptable_fits(orch):
+    sid = orch.create_session().id
+    rows = []
+    for dose, scale in ((50, 0.5), (100, 1.0), (200, 2.0)):
+        for i, c in enumerate([GOOD, GOOD, POOR]):
+            r = _profile([x * scale for x in c])
+            rows.append({**r, "subject": f"{dose}-{i}", "dose": dose})
+    orch.get_session(sid).state.nca_parameters = rows
+    res = orch.run_tool(sid, "run_dose_proportionality", "dose_prop", {})["result"]
+    assert res["lambda_z_excluded"]["n_subjects"] == 3 and res["lambda_z_excluded"]["include_unacceptable"] is False
+    res_all = orch.run_tool(sid, "run_dose_proportionality", "dose_prop",
+                            {"include_unacceptable_lambda_z": True})["result"]
+    assert res_all["lambda_z_excluded"]["n_subjects"] == 0
+
+
+def test_bioequivalence_excludes_unacceptable_auc_inf_and_reports_it(orch):
+    lines = ["ID,TIME,DV,AMT,EVID,TRT"]
+    for sid in (1, 2, 3, 4, 5):
+        for trt in ("T", "R"):
+            conc = POOR if (sid == 5 and trt == "T") else GOOD
+            lines.append(f"{sid},0,0,100,1,{trt}")
+            lines += [f"{sid},{t},{c * (1.1 if trt == 'T' else 1.0) * (1 + 0.05 * sid)},0,0,{trt}"
+                      for t, c in zip(LZ_T, conc, strict=True) if t > 0]
+    s = _load(orch, "\n".join(lines) + "\n")
+    res = orch.run_tool(s, "run_bioequivalence", "be", {})["result"]
+    assert res["lambda_z_excluded"]["subjects"] == {"T": [5], "R": []}
+    assert res["lambda_z_excluded"]["include_unacceptable"] is False
+    assert res["parameters"]["AUC_inf"]["n_test"] == 4 and res["parameters"]["AUC_last"]["n_test"] == 5
+    res2 = orch.run_tool(s, "run_bioequivalence", "be", {"include_unacceptable_lambda_z": True})["result"]
+    assert res2["parameters"]["AUC_inf"]["n_test"] == 5

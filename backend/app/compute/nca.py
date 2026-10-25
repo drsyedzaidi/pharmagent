@@ -46,6 +46,14 @@ def _auc_intervals(time: np.ndarray, conc: np.ndarray) -> tuple[float, float]:
     return auc, aumc
 
 
+# Acceptance criteria for a terminal fit feeding AUC_inf-derived summaries (F-16). The picker itself only needs
+# adj R^2 > 0, so a fit can be accepted by it and still be too poor to pool.
+LZ_MIN_ADJ_R2 = 0.80
+LZ_MIN_POINTS = 3
+LZ_MIN_SPAN_RATIO = 2.0       # (t_last - t_first of the fit window) / t_half
+LZ_MAX_PCT_EXTRAP = 20.0
+INF_DERIVED = ("AUC_inf", "CL_F", "Vz_F", "Vss", "MRT")   # values that depend on the extrapolated tail
+
 _MIN_LAMBDA_Z = 1e-9  # reject floating-point noise on flat terminal phases
 
 
@@ -220,12 +228,57 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
                 "lambda_z_pts_c": lz["lambda_z_pts_c"],
             }
         )
+        out["lambda_z_acceptable"] = lambda_z_acceptable(out)
     else:
         out.update({k: None for k in (
             "lambda_z", "t_half", "AUC_inf", "pct_AUC_extrap", "MRT", "MRT_note",
             "CL_F", "Vz_F", "Vss", "route", "lambda_z_r2_adj", "lambda_z_n_points",
             "lambda_z_intervals", "lambda_z_intercept", "lambda_z_pts_t", "lambda_z_pts_c")})
+        out["lambda_z_acceptable"] = None
     return out
+
+
+def lambda_z_acceptable(out: dict[str, Any]) -> bool | None:
+    """Is the terminal fit good enough for AUC_inf-derived summaries? None = no fit to judge.
+
+    adj R^2 >= LZ_MIN_ADJ_R2, >= LZ_MIN_POINTS points, span ratio >= LZ_MIN_SPAN_RATIO (taken from
+    ``lambda_z_span_ratio`` when the row carries it, else computed from the fit window) and
+    %AUC_extrap <= LZ_MAX_PCT_EXTRAP."""
+    lam, r2 = out.get("lambda_z"), out.get("lambda_z_r2_adj")
+    if lam is None or r2 is None:
+        return None
+    span = out.get("lambda_z_span_ratio")
+    window = out.get("lambda_z_intervals")
+    if span is None and window and lam > 0:
+        span = (window[1] - window[0]) * lam / math.log(2)
+    extrap = out.get("pct_AUC_extrap")
+    return bool(r2 >= LZ_MIN_ADJ_R2
+                and (out.get("lambda_z_n_points") or 0) >= LZ_MIN_POINTS
+                and (span is None or span >= LZ_MIN_SPAN_RATIO)
+                and (extrap is None or extrap <= LZ_MAX_PCT_EXTRAP))
+
+
+def apply_lambda_z_quality(rows: list[dict[str, Any]], include_unacceptable: bool = False
+                           ) -> tuple[list[dict[str, Any]], list[Any]]:
+    """Copies of ``rows`` with AUC_inf-derived values blanked where ``lambda_z_acceptable`` is False, plus the ids
+    of those subjects. Rows without the flag (steady-state NCA, older results) are left as they are."""
+    if include_unacceptable:
+        return rows, []
+    out, excluded = [], []
+    for r in rows:
+        if r.get("lambda_z_acceptable") is False:
+            excluded.append(r.get("subject"))
+            r = {**r, **{k: None for k in INF_DERIVED}}
+        out.append(r)
+    return out, excluded
+
+
+def lambda_z_exclusion_note(excluded: list[Any], include_unacceptable: bool) -> dict[str, Any]:
+    return {"n_subjects": len(excluded), "subjects": excluded, "include_unacceptable": include_unacceptable,
+            "rule": (f"AUC_inf-derived values ({', '.join(INF_DERIVED)}) are excluded for subjects whose terminal "
+                     f"fit has adj R^2 < {LZ_MIN_ADJ_R2}, < {LZ_MIN_POINTS} points, span ratio < "
+                     f"{LZ_MIN_SPAN_RATIO} or %AUC_extrap > {LZ_MAX_PCT_EXTRAP}; pass "
+                     "include_unacceptable_lambda_z=true to pool them anyway.")}
 
 
 def _geomean(vals: list[float]) -> float | None:
@@ -299,9 +352,12 @@ def descriptive_stats(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return groups
 
 
-def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_by_dose(params: list[dict[str, Any]], *,
+                      include_unacceptable_lambda_z: bool = False) -> dict[str, Any]:
     """Dose-group geometric mean and geometric CV% for key parameters, plus the
-    full descriptive-statistics table (``descriptive``)."""
+    full descriptive-statistics table (``descriptive``). AUC_inf-derived values of subjects with an unacceptable
+    terminal fit are left out unless ``include_unacceptable_lambda_z`` (the exclusion is reported)."""
+    params, excluded = apply_lambda_z_quality(params, include_unacceptable_lambda_z)
     keys = ["Cmax", "AUC_last", "AUC_inf", "CL_F", "Vz_F"]
     groups: dict[float, list[dict]] = {}
     for row in params:
@@ -309,7 +365,8 @@ def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
 
     summary = {"by_dose": [], "n_subjects": len(params)}
     for dose, rows in sorted(groups.items(), key=lambda kv: (kv[0] is None, kv[0])):
-        entry: dict[str, Any] = {"dose": dose, "n": len(rows)}
+        entry: dict[str, Any] = {"dose": dose, "n": len(rows),
+                                 "n_lambda_z_excluded": sum(1 for r in rows if r.get("subject") in excluded)}
         for k in keys:
             vals = [r.get(k) for r in rows]
             entry[f"{k}_geomean"] = _round(_geomean(vals))
@@ -318,6 +375,7 @@ def summarize_by_dose(params: list[dict[str, Any]]) -> dict[str, Any]:
         entry["t_half_median"] = _round(float(np.median(thalf))) if thalf else None
         summary["by_dose"].append(entry)
     summary["descriptive"] = descriptive_stats(params)
+    summary["lambda_z_excluded"] = lambda_z_exclusion_note(excluded, include_unacceptable_lambda_z)
     return summary
 
 
@@ -329,7 +387,7 @@ def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
             dv_col: str, dose_by_subject: dict[Any, float],
             dose_time_by_subject: dict[Any, float] | None = None,
             t_inf_by_subject: dict[Any, float] | None = None,
-            is_iv: bool = False) -> dict[str, Any]:
+            is_iv: bool = False, include_unacceptable_lambda_z: bool = False) -> dict[str, Any]:
     """Top-level entry: build per-subject profiles and compute NCA + summary.
 
     `records` are plain dicts (already loaded). Observation rows only
@@ -360,4 +418,5 @@ def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
                                   is_iv=is_iv))
 
     params.sort(key=lambda r: str(r["subject"]))
-    return {"nca_parameters": params, "nca_summary": summarize_by_dose(params)}
+    return {"nca_parameters": params, "nca_summary": summarize_by_dose(
+        params, include_unacceptable_lambda_z=include_unacceptable_lambda_z)}

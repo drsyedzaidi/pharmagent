@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from app.compute.bioequivalence import assess_bioequivalence
-from app.compute.nca import Profile, nca_subject
+from app.compute.nca import INF_DERIVED, Profile, lambda_z_exclusion_note, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
@@ -40,8 +40,10 @@ def _find_treatment_col(df: pd.DataFrame, roles: dict[str, str]) -> str | None:
 
 def _exposures_by_treatment(
     obs: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, trt_col: str,
+    include_unacceptable_lambda_z: bool = False, excluded: dict[Any, list[Any]] | None = None,
 ) -> dict[Any, dict[Any, dict[str, float]]]:
-    """Return {treatment: {subject: {Cmax, AUC_last, AUC_inf}}}."""
+    """Return {treatment: {subject: {Cmax, AUC_last, AUC_inf}}}. A profile whose terminal fit is unacceptable has
+    AUC_inf left out (None) unless ``include_unacceptable_lambda_z``; its subject id is added to ``excluded[trt]``."""
     out: dict[Any, dict[Any, dict[str, float]]] = {}
     for (sid, trt), g in obs.groupby([id_col, trt_col]):
         g = g.dropna(subset=[time_col, dv_col]).sort_values(time_col)
@@ -50,7 +52,12 @@ def _exposures_by_treatment(
         prof = Profile(subject=sid, time=g[time_col].to_numpy(float),
                        conc=g[dv_col].to_numpy(float), dose=float("nan"))
         p = nca_subject(prof)
-        out.setdefault(trt, {})[sid] = {k: p.get(k) for k in _BE_PARAMS}
+        vals = {k: p.get(k) for k in _BE_PARAMS}
+        if p.get("lambda_z_acceptable") is False and not include_unacceptable_lambda_z:
+            vals.update({k: None for k in _BE_PARAMS if k in INF_DERIVED})
+            if excluded is not None:
+                excluded.setdefault(trt, []).append(sid)
+        out.setdefault(trt, {})[sid] = vals
     return out
 
 
@@ -102,8 +109,11 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
             writes={"be_results": status}, result=status)
     test_lv, ref_lv = picked
 
+    include = bool(args.get("include_unacceptable_lambda_z", False))
+    excluded: dict[Any, list[Any]] = {}
     exposures = _exposures_by_treatment(
-        obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
+        obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col,
+        include_unacceptable_lambda_z=include, excluded=excluded)
     test_subj = exposures.get(test_lv, {})
     ref_subj = exposures.get(ref_lv, {})
 
@@ -120,6 +130,9 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     res = assess_bioequivalence(test_by_param, ref_by_param, paired=paired)
     res.update({"status": "ok", "test_level": str(test_lv), "reference_level": str(ref_lv),
                 "n_test": len(test_subj), "n_reference": len(ref_subj)})
+    ex_note = lambda_z_exclusion_note([s for v in excluded.values() for s in v], include)
+    ex_note["subjects"] = {"T" if lv == test_lv else "R": excluded.get(lv, []) for lv in (test_lv, ref_lv)}
+    res["lambda_z_excluded"] = ex_note
 
     verdict = "BIOEQUIVALENT" if res.get("bioequivalent") else "NOT bioequivalent"
     return ToolResult(
@@ -139,7 +152,11 @@ TOOLS = [
           "properties": {"dataset_id": {"type": "string"},
                          "treatment_col": {"type": "string"},
                          "test": {"type": "string"},
-                         "reference": {"type": "string"}},
+                         "reference": {"type": "string"},
+                         "include_unacceptable_lambda_z": {
+                             "type": "boolean",
+                             "description": "Use AUC_inf of profiles whose lambda_z fit fails the acceptance "
+                                            "criteria. Default false (excluded and reported)."}},
           "required": []},
          run_bioequivalence),
 ]
