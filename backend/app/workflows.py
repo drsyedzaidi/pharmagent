@@ -116,6 +116,9 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
             "before expensive uncertainty job) → outer-loop parameter uncertainty "
             "propagation → adversarial review (human gate) → regulatory report."
         ),
+        # Documentary only — nothing reads this key.  The real precondition
+        # is enforced by load_approved_fit, which raises if nlme_results or
+        # review_results are absent/invalid.
         "requires": ["nlme_results.status == 'ok'"],
         "steps": [
             {"agent": "modeler", "tool": "load_approved_fit",
