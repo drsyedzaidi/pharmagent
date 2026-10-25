@@ -338,6 +338,10 @@ def check_skills(
                     False,
                     "produced_artifacts must be a list of PharmState field names",
                 )
+            elif fm.get("runtime_available") is False:
+                # A disabled specification (runtime_available: false) describes outputs
+                # that do not exist yet, so its artifact names are not live PharmState fields.
+                add(slug, "produced_artifacts_valid", True, "disabled specification: artifact names not checked")
             else:
                 unknown_fields = [a for a in produced_artifacts if a not in known_fields]
                 add(
