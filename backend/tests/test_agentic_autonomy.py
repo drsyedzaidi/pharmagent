@@ -211,7 +211,11 @@ def test_review_loop_auto_remediate_resolves_incomplete_and_stale_memo(tmp_path,
     sess.audit = full_chain(genesis=(sess.id, dict(sess.state.run_provenance)))
     orch.run_tool(sid, "build_briefing_memo", "report", {}, actor="alice")
     nl = {**sess.state.nlme_results, "ofv": -220.2}
-    sess.state = sess.state.model_copy(update={"nlme_results": nl})
+    # A refit invalidates PopPK QC; the deliverable gate requires it to be re-run
+    # for the new fit before any memo is (re)built. Simulate that re-run.
+    from app.core.audit import hash_payload
+    sess.state = sess.state.model_copy(update={"nlme_results": nl,
+                                               "poppk_qc_nlme_digest": hash_payload(nl)})
     # Verify without auto_remediate it fails with memo-stale
     without_rem = orch.review_loop(sid, max_iter=3, actor="alice", auto_remediate=False)
     assert without_rem["goal_met"] is False

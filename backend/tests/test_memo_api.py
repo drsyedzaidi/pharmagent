@@ -12,6 +12,7 @@ from app.config import settings
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
+from tests.qc_gate_helpers import accept_via_api
 
 THEOPH = str(Path(__file__).parent.parent / "sample_data" / "theoph_pk.csv")
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -32,6 +33,7 @@ def _analysed_session(client, headers=None) -> str:
     r = client.post(f"/api/sessions/{sid}/workflow/start", headers=headers,
                     json={"workflow": "nca_full", "params": {"path": THEOPH}})
     assert r.json()["status"] == "awaiting_review"
+    accept_via_api(client, sid, headers)
     return sid
 
 

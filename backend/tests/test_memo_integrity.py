@@ -21,6 +21,7 @@ from app.core.store import SessionStore
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
 from tests.memo_fixtures import full_chain, full_state, full_trail
+from tests.qc_gate_helpers import pass_qc_gates_via_orch
 
 DATA = Path(__file__).parent.parent / "sample_data"
 
@@ -120,6 +121,7 @@ def test_orchestrated_reload_of_another_file_does_not_mix_datasets(tmp_path, mon
     orch.run_tool(sid, "load_dataset", "data_manager", {"path": str(DATA / "theoph_pk.csv")})
     for tool, agent in (("profile_pk_dataset", "data_manager"), ("compute_nca", "nca"), ("run_qc", "qc")):
         orch.run_tool(sid, tool, agent, {})
+    pass_qc_gates_via_orch(orch, sid)      # analyst reviewed the theoph fits before the reload
     orch.run_tool(sid, "load_dataset", "data_manager", {"path": str(DATA / "oral_pk.csv")})
     res = orch.run_tool(sid, "build_briefing_memo", "report", {})["result"]
     assert res["sections_included"] == ["dataset"]

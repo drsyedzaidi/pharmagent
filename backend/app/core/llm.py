@@ -236,6 +236,7 @@ _TEMPLATE_DONE_KEYS: dict[str, str] = {
     "profile_pk_dataset": "data_quality",
     "fit_pk_model": "pk_model_results",
     "run_nlme": "nlme_results",
+    "run_poppk_qc": "poppk_qc_verdict",
     "generate_report": "report_path",
 }
 
@@ -276,12 +277,8 @@ class MockLLM:
             return None if rev.get("status") else {"name": "adversarial_review", "input": {}}
         if agent == "qc":
             low = (message or "").lower()
-            if ("accept" in low or "revise" in low) and (
-                s.get("lambda_z_review_status") == "awaiting_analyst_decision"
-                or any(k in low for k in ("lambda_z", "span", "terminal"))
-            ):
-                decision = "revise" if "revise" in low else "accept"
-                return {"name": "review_lambda_z_fits", "input": {"decision": decision}}
+            # The lambda_z accept/revise decision is a human action (human_only tool);
+            # the agent never selects it.
             if any(k in low for k in ("poppk", "nlme", "mixed-effects", "mixed effects")) or (
                 s.get("nlme_results") == "present" and not s.get("nca_parameters")
             ):

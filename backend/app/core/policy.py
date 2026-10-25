@@ -57,6 +57,7 @@ PREREQUISITES: dict[str, tuple[str, ...]] = {
     "run_diagnostics": ("nlme_results",),
     "run_covariate_forest": ("nlme_results",),
     "run_vpc": ("nlme_results",),
+    "run_poppk_qc": ("nlme_results",),
 }
 
 # Tools the policy may admit WITHOUT a human gate when their arguments carry
@@ -65,7 +66,7 @@ PREREQUISITES: dict[str, tuple[str, ...]] = {
 AUTONOMOUS_TOOLS: frozenset[str] = frozenset({
     "load_dataset", "profile_pk_dataset", "validate_cdisc", "generate_spaghetti_plot",
     "fit_pk_model", "run_diagnostics", "run_covariate_forest", "run_vpc",
-    "adversarial_review",
+    "run_poppk_qc", "adversarial_review",
 })
 
 # Always a human decision regardless of arguments (the report is the deliverable).

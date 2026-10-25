@@ -377,6 +377,8 @@ def generate_272(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
     """Generate an ICH M4E Module 2.7.2 CTD-compliant DOCX."""
     from app.core.provenance import run_provenance_report_lines
     prov_lines = run_provenance_report_lines(state)    # refuses a quarantined (mismatched) session before any work
+    from app.tools.qc_tools import assert_deliverable_qc_gates  # local: avoid import cycle
+    assert_deliverable_qc_gates(state, "Module 2.7.2 document")
     # Merge args into study info; existing study_info in state takes lower priority
     si_data = (state.study_info.model_dump() if state.study_info else {})
     for k in ("drug_name", "sponsor", "study_id", "route", "indication",

@@ -160,8 +160,9 @@ class Agent:
                 }),
             }
 
-        from app.tools.qc_tools import is_poppk_qc_current
+        from app.tools.qc_tools import is_nca_qc_current, is_poppk_qc_current
         poppk_qc_current = is_poppk_qc_current(state)
+        nca_qc_current = is_nca_qc_current(state)
         poppk_qc_stale = bool(
             nl.get("status") == "ok"
             and state.poppk_qc_verdict is not None
@@ -194,7 +195,10 @@ class Agent:
             "dose_selection": "present" if state.dose_selection_results else None,
             "last_calculation": (state.clinpharm_results or {}).get("tool"),
             "pending_tool": (state.pending_tool or {}).get("tool"),
-            "qc_verdict": state.qc_verdict,
+            # A verdict for different NCA parameters is stale: hide it so the QC
+            # agent re-runs run_qc instead of trusting it.
+            "qc_verdict": state.qc_verdict if nca_qc_current else None,
+            "qc_stale": (state.qc_verdict is not None and not nca_qc_current) or None,
             "lambda_z_review_status": (state.lambda_z_review or {}).get("status"),
             "poppk_qc_verdict": state.poppk_qc_verdict if poppk_qc_current else None,
             "poppk_qc_stale": poppk_qc_stale or None,

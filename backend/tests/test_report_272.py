@@ -24,6 +24,7 @@ from app.core.pharmstate import PharmState, StudyInfo
 from app.core.store import SessionStore
 from app.tools.base import ToolContext
 from app.tools.regulatory_tools import generate_272
+from tests.qc_gate_helpers import qc_gated_state
 
 SAMPLE = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
 
@@ -105,20 +106,20 @@ def _scm_state(base: PharmState | None = None) -> PharmState:
 # ── unit tests ────────────────────────────────────────────────────────────────
 
 def test_empty_state_generates_file(tmp_path):
-    result = generate_272(PharmState(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(PharmState()), _ctx(tmp_path), {})
     p = Path(result.result["report_path"])
     assert p.exists() and p.suffix == ".docx"
 
 
 def test_placeholders_when_no_analyses(tmp_path):
-    result = generate_272(PharmState(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(PharmState()), _ctx(tmp_path), {})
     doc = Document(result.result["report_path"])
     full_text = "\n".join(p.text for p in doc.paragraphs)
     assert "To be completed" in full_text or "not yet" in full_text.lower()
 
 
 def test_nca_state_contains_table_header(tmp_path):
-    result = generate_272(_nca_state(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(_nca_state()), _ctx(tmp_path), {})
     doc = Document(result.result["report_path"])
     full_text = "\n".join(p.text for p in doc.paragraphs)
     # Table 2.7.2.1 header is in paragraph text for headings
@@ -127,7 +128,7 @@ def test_nca_state_contains_table_header(tmp_path):
 
 
 def test_nlme_state_table_272_populated(tmp_path):
-    result = generate_272(_nlme_state(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(_nlme_state()), _ctx(tmp_path), {})
     doc = Document(result.result["report_path"])
     # Table 2.7.2.2 should have theta rows; CL appears in table
     all_cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
@@ -136,7 +137,7 @@ def test_nlme_state_table_272_populated(tmp_path):
 
 
 def test_nlme_conclusions_mention_model(tmp_path):
-    result = generate_272(_nlme_state(), _ctx(tmp_path), {"drug_name": "DrugX"})
+    result = generate_272(qc_gated_state(_nlme_state()), _ctx(tmp_path), {"drug_name": "DrugX"})
     doc = Document(result.result["report_path"])
     full_text = "\n".join(p.text for p in doc.paragraphs)
     assert "oral_1cmt" in full_text
@@ -144,14 +145,14 @@ def test_nlme_conclusions_mention_model(tmp_path):
 
 
 def test_scm_selected_appears_in_special_pops(tmp_path):
-    result = generate_272(_scm_state(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(_scm_state()), _ctx(tmp_path), {})
     doc = Document(result.result["report_path"])
     full_text = "\n".join(p.text for p in doc.paragraphs)
     assert "CRCL" in full_text or "renal" in full_text.lower()
 
 
 def test_study_info_args_propagate(tmp_path):
-    result = generate_272(PharmState(), _ctx(tmp_path), {
+    result = generate_272(qc_gated_state(PharmState()), _ctx(tmp_path), {
         "drug_name": "TestMol", "sponsor": "ACME Pharma",
         "indication": "hypertension", "route": "oral",
     })
@@ -163,7 +164,7 @@ def test_study_info_args_propagate(tmp_path):
 
 
 def test_reproducibility_section_present(tmp_path):
-    result = generate_272(_base_state(), _ctx(tmp_path), {})
+    result = generate_272(qc_gated_state(_base_state()), _ctx(tmp_path), {})
     doc = Document(result.result["report_path"])
     full_text = "\n".join(p.text for p in doc.paragraphs)
     assert "PharmAgent" in full_text
@@ -173,7 +174,7 @@ def test_reproducibility_section_present(tmp_path):
 
 
 def test_writes_study_info_and_report_path(tmp_path):
-    result = generate_272(PharmState(), _ctx(tmp_path), {
+    result = generate_272(qc_gated_state(PharmState()), _ctx(tmp_path), {
         "drug_name": "DrugY", "sponsor": "LabCo"
     })
     si = result.writes["study_info"]
@@ -185,7 +186,7 @@ def test_writes_study_info_and_report_path(tmp_path):
 def test_state_study_info_merges_with_args(tmp_path):
     """Args override state.study_info for the same key; unchanged keys from state persist."""
     st = PharmState(study_info=StudyInfo(drug_name="OldName", sponsor="OldSponsor"))
-    result = generate_272(st, _ctx(tmp_path), {"drug_name": "NewName"})
+    result = generate_272(qc_gated_state(st), _ctx(tmp_path), {"drug_name": "NewName"})
     si = result.writes["study_info"]
     assert si.drug_name == "NewName"
     assert si.sponsor == "OldSponsor"
@@ -198,7 +199,7 @@ def test_full_state_no_crash(tmp_path):
         "parameters": {"AUCinf": {"slope": 1.02, "slope_ci_lower": 0.95,
                                    "slope_ci_upper": 1.09, "proportional": True}}
     }})
-    result = generate_272(st, _ctx(tmp_path), {"drug_name": "FullDrug"})
+    result = generate_272(qc_gated_state(st), _ctx(tmp_path), {"drug_name": "FullDrug"})
     p = Path(result.result["report_path"])
     assert p.exists()
     doc = Document(str(p))

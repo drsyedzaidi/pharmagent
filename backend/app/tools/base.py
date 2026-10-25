@@ -57,6 +57,12 @@ class CrossAgentToolError(RuntimeError):
     """Raised when an agent attempts to execute a tool owned by another agent."""
 
 
+class HumanOnlyToolError(RuntimeError):
+    """Raised when an agent (LLM) loop tries to execute a tool that records a human
+    decision. Such tools are reachable only through the audited, actor-attributed
+    API path (``Orchestrator.run_tool``), never from a chat turn."""
+
+
 class ExpensiveToolError(RuntimeError):
     """Raised when a long-running fit is invoked from a path that has no admission
     control. Callers that ARE admission-controlled (the job-backed endpoints via
@@ -79,6 +85,9 @@ class Tool:
     #                                   reject; it is never executed on the turn
     uses_audit_trail: bool = False    # tool cites audit entries (briefing memo): the
     #                                   registry hands it ``ctx.audit_trail``, a copy
+    human_only: bool = False          # records a HUMAN decision (e.g. analyst accept):
+    #                                   refused on the agent/LLM path (caller_agent set);
+    #                                   runs only via the actor-attributed API path
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
@@ -119,7 +128,8 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def for_agent(self, agent: str) -> list[Tool]:
-        return [t for t in self._tools.values() if t.agent == agent]
+        """Tools an agent (LLM) may be offered. Human-only tools are never offered."""
+        return [t for t in self._tools.values() if t.agent == agent and not t.human_only]
 
     def execute(
         self,
@@ -133,6 +143,7 @@ class ToolRegistry:
         actor: str = "",
         allow_expensive: bool = False,
         caller_agent: str | None = None,
+        allow_human_only: bool = False,
     ) -> tuple[PharmState, ToolResult]:
         """Run a tool: compute → audit → apply writes. The only execution path.
 
@@ -159,6 +170,13 @@ class ToolRegistry:
         if caller_agent is not None and tool.agent != caller_agent:
             raise CrossAgentToolError(
                 f"Agent '{caller_agent}' may not execute '{name}' (owned by '{tool.agent}').")
+        # Deny by default: a human-only tool runs only when the caller explicitly
+        # vouches that a human submitted it (the review endpoint). Skill replay,
+        # workflow and goal steps, and agent turns never pass this flag.
+        if tool.human_only and (caller_agent is not None or not allow_human_only):
+            raise HumanOnlyToolError(
+                f"'{name}' records a human decision and cannot be run by an agent; "
+                "the analyst must submit it from the review control (API) instead.")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
         res = tool.run(state, run_ctx, args)

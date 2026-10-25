@@ -14,6 +14,7 @@ from app.core.store import SessionStore
 from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
 from tests.memo_fixtures import full_chain, full_state
+from tests.qc_gate_helpers import pass_qc_gates_via_orch
 
 THEOPH = str(Path(__file__).parent.parent / "sample_data" / "theoph_pk.csv")
 
@@ -91,6 +92,7 @@ def test_review_loop_end_to_end_clean_then_tampered(tmp_path, monkeypatch):
     orch = Orchestrator(llm=MockLLM(), clock=lambda: f"t{next(counter)}", store=SessionStore(":memory:"))
     sid = orch.create_session().id
     orch.start_workflow(sid, "nca_full", {"path": THEOPH})
+    pass_qc_gates_via_orch(orch, sid)
     orch.run_tool(sid, "build_briefing_memo", "report", {})
 
     clean = orch.review_loop(sid)
