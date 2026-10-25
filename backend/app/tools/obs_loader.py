@@ -96,6 +96,7 @@ class LoadedObservations:
     obs: pd.DataFrame                       # M1-applied, time since dose, finite TIME/DV only
     dose_by_subject: dict[Any, float]       # keyed by profile key (subject id, or tuple when ``group_cols`` given)
     dose_times: dict[Any, float]
+    t_inf_by_subject: dict[Any, float]      # dose / RATE of the first dose record with RATE > 0 (dosing.py rule)
     n_blq: int
     cens_col: str | None
     dose_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -120,6 +121,7 @@ def load_observations(df: pd.DataFrame, roles: dict[str, str], *,
         raise ValueError("dataset missing required ID/TIME/DV roles")
     amt_col, evid_col = _first_col(roles, "AMT"), _first_col(roles, "EVID")
     mdv_col, cens_col, lloq_col = _first_col(roles, "MDV"), _first_col(roles, "CENS"), _first_col(roles, "LLOQ")
+    rate_col = _first_col(roles, "RATE")
 
     df[time_col] = pd.to_numeric(df[time_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
     df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -153,6 +155,12 @@ def load_observations(df: pd.DataFrame, roles: dict[str, str], *,
             amts = g[amt_col].dropna()
             if len(amts):
                 dose_by_subject[key] = float(amts.iloc[0])
+    t_inf: dict[Any, float] = {}
+    if amt_col and rate_col and len(dose_rows):
+        rates = pd.to_numeric(dose_rows[rate_col], errors="coerce")
+        for key, g in dose_rows[(rates > 0) & (dose_rows[amt_col] > 0)].groupby(key_col, sort=False):
+            first = g.iloc[0]
+            t_inf[key] = float(first[amt_col]) / float(pd.to_numeric(first[rate_col]))
     timed = dose_rows[np.isfinite(dose_rows[time_col].to_numpy(dtype=float))]
     dose_times = {key: float(t) for key, t in timed.groupby(key_col, sort=False)[time_col].min().items()}
 
@@ -165,5 +173,6 @@ def load_observations(df: pd.DataFrame, roles: dict[str, str], *,
     if cens_col is not None:
         obs = _apply_m1(obs, key_col, time_col, dv_col, cens_col)
     obs = obs.dropna(subset=[time_col, dv_col])
-    return LoadedObservations(obs=obs, dose_by_subject=dose_by_subject, dose_times=dose_times, n_blq=n_blq,
-                              cens_col=cens_col, dose_rows=dose_rows, key_col=key_col)
+    return LoadedObservations(obs=obs, dose_by_subject=dose_by_subject, dose_times=dose_times,
+                              t_inf_by_subject=t_inf, n_blq=n_blq, cens_col=cens_col,
+                              dose_rows=dose_rows, key_col=key_col)

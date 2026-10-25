@@ -71,3 +71,41 @@ def test_compartmental_censored_rows_are_not_fitted_as_concentrations(orch):
     ra = orch.run_tool(_load(orch, csv(0.5), "a.csv"), "fit_compartmental", "compartmental", {"models": ["1cmt"]})
     rb = orch.run_tool(_load(orch, csv(0.0), "b.csv"), "fit_compartmental", "compartmental", {"models": ["1cmt"]})
     assert [f["params"] for f in ra["result"]["fits"]] == [f["params"] for f in rb["result"]["fits"]]
+
+
+# ── F-15: IV infusion MRT/Vss need the infusion-duration correction ─────────────────────────────────────
+def _infusion_profile(dose=100.0, cl=10.0, v=20.0, t_inf=2.0):
+    import numpy as np
+    k = cl / v
+    rate = dose / t_inf
+    # dense sampling: the linear trapezoid is the only approximation left, so keep its error well under the 0.5 bound
+    t = np.round(np.concatenate([np.arange(0.1, 6.0, 0.1), np.arange(6.0, 12.5, 0.5), [14, 16, 20, 24, 30, 36]]), 3)
+    during = rate / cl * (1 - np.exp(-k * np.minimum(t, t_inf)))
+    c = np.where(t <= t_inf, during, rate / cl * (1 - math.exp(-k * t_inf)) * np.exp(-k * (t - t_inf)))
+    return t, c
+
+
+def test_vss_of_an_iv_infusion_is_corrected_for_infusion_time():
+    from app.compute.nca import Profile, nca_subject
+    t, c = _infusion_profile()
+    out = nca_subject(Profile("S", t, c, 100.0, t_inf=2.0), is_iv=True)
+    assert abs(out["Vss"] - 20.0) < 0.5, out["Vss"]
+    assert abs(out["MRT"] - 2.0) < 0.1
+
+
+def test_iv_bolus_default_is_unchanged_by_t_inf():
+    from app.compute.nca import Profile, nca_subject
+    t, c = _infusion_profile()
+    a = nca_subject(Profile("S", t, c, 100.0), is_iv=True)
+    b = nca_subject(Profile("S", t, c, 100.0, t_inf=0.0), is_iv=True)
+    assert a["MRT"] == b["MRT"] and a["Vss"] == b["Vss"]
+
+
+def test_compute_nca_derives_infusion_time_from_rate(orch):
+    t, c = _infusion_profile()
+    lines = ["ID,TIME,DV,AMT,EVID,RATE,ROUTE", "1,0,0,100,1,50,IV"]
+    lines += [f"1,{ti},{ci},0,0,0,IV" for ti, ci in zip(t, c, strict=True)]
+    sid = _load(orch, "\n".join(lines) + "\n")
+    orch.run_tool(sid, "compute_nca", "nca", {})
+    params = orch.get_session(sid).state.nca_parameters
+    assert abs(params[0]["Vss"] - 20.0) < 0.5, params[0]["Vss"]

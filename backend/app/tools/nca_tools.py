@@ -127,7 +127,7 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     cens_col = loaded.cens_col               # also set when BLQ came from an LLOQ column
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
-                  dose_by_subject=dose_by_subject, is_iv=is_iv)
+                  dose_by_subject=dose_by_subject, t_inf_by_subject=loaded.t_inf_by_subject, is_iv=is_iv)
     out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
     out["nca_summary"]["conventions"] = applied_conventions(_CONV_SD + (_CONV_BLQ if cens_col else []))
     vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."

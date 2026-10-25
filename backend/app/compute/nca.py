@@ -23,6 +23,7 @@ class Profile:
     time: np.ndarray
     conc: np.ndarray
     dose: float
+    t_inf: float = 0.0     # zero-order infusion duration (dose / rate); 0 = bolus. Only used for IV MRT/Vss
 
 
 def _auc_intervals(time: np.ndarray, conc: np.ndarray) -> tuple[float, float]:
@@ -193,6 +194,8 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
         auc_inf = auc_last + c_last / lam
         aumc_inf = aumc_last + t_last * c_last / lam + c_last / (lam * lam)
         mrt = aumc_inf / auc_inf if auc_inf > 0 else float("nan")
+        if is_iv and p.t_inf > 0 and not math.isnan(mrt):
+            mrt -= p.t_inf / 2.0       # MRT_iv = AUMC/AUC - T_inf/2 (infusion adds T_inf/2 to the apparent MRT)
         cl_f = p.dose / auc_inf if auc_inf > 0 else float("nan")
         vz_f = cl_f / lam if not math.isnan(cl_f) else float("nan")
         # Vss = CL·MRT is only valid for IV; MRT_oral includes absorption time.
@@ -325,6 +328,7 @@ def _round(x):
 def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
             dv_col: str, dose_by_subject: dict[Any, float],
             dose_time_by_subject: dict[Any, float] | None = None,
+            t_inf_by_subject: dict[Any, float] | None = None,
             is_iv: bool = False) -> dict[str, Any]:
     """Top-level entry: build per-subject profiles and compute NCA + summary.
 
@@ -351,7 +355,8 @@ def run_nca(records: list[dict[str, Any]], *, id_col: str, time_col: str,
         time = np.array([p[0] for p in pts])
         conc = np.array([p[1] for p in pts])
         dose = float(dose_by_subject.get(sid, float("nan")))
-        params.append(nca_subject(Profile(subject=sid, time=time, conc=conc, dose=dose),
+        params.append(nca_subject(Profile(subject=sid, time=time, conc=conc, dose=dose,
+                                          t_inf=float((t_inf_by_subject or {}).get(sid, 0.0))),
                                   is_iv=is_iv))
 
     params.sort(key=lambda r: str(r["subject"]))
