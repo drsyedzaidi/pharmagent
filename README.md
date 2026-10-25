@@ -103,6 +103,9 @@ logged; an empty, duplicate or malformed entry stops startup. Leaving both varia
 mode. Audit enforcement (`PHARMAGENT_AUDIT_MODE=enforce`) is required whenever either variable is set.
 Uploads are stored per session under `<data_dir>/sessions/<session id>/` and reports under
 `<data_dir>/reports/<session id>/`; a session can load only its own uploads and the bundled `sample_data`.
+**Residual exposure:** files placed directly in `<data_dir>` (operator-placed files and every upload made before
+this change) remain readable by any session, because they cannot be attributed to one. Move such files into
+`<data_dir>/sessions/<session id>/` or out of `<data_dir>` if that matters.
 `PHARMAGENT_MAX_LOADED_DATASETS` (default 8) bounds the datasets kept in memory across all sessions.
 
 ## Desktop app (macOS)
