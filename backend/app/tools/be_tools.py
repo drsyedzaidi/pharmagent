@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from app.compute.bioequivalence import assess_bioequivalence
+from app.compute.bioequivalence import PAIRED_LABEL, assess_bioequivalence
 from app.compute.nca import INF_DERIVED, Profile, lambda_z_exclusion_note, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
@@ -59,6 +59,34 @@ def _exposures_by_treatment(
                 excluded.setdefault(trt, []).append(sid)
         out.setdefault(trt, {})[sid] = vals
     return out
+
+
+def _col(df: pd.DataFrame, names: set[str]) -> str | None:
+    return next((c for c in df.columns if str(c).strip().lower() in names), None)
+
+
+def _design_columns(df: pd.DataFrame, obs: pd.DataFrame, id_col: str, trt_col: str, test_lv: Any, ref_lv: Any,
+                    common: list[Any]) -> dict[str, dict[Any, Any]] | None:
+    """Per-subject sequence and (test period, reference period) from PERIOD / SEQUENCE columns, or None when the
+    columns are missing or are not a two-period, multi-sequence layout. Subjects without a usable value are simply
+    absent from the returned maps (the caller reports them as excluded)."""
+    per_col, seq_col = _col(df, {"period", "per", "prd"}), _col(df, {"sequence", "seq", "sequ"})
+    if per_col is None or seq_col is None:
+        return None
+    o = obs[obs[id_col].isin(common)]
+    first_period = o.dropna(subset=[per_col]).groupby([id_col, trt_col])[per_col].first()
+    sequence = o.dropna(subset=[seq_col]).groupby(id_col)[seq_col].first()
+    periods: dict[Any, tuple[Any, Any]] = {}
+    for sid in common:
+        if (sid, test_lv) in first_period.index and (sid, ref_lv) in first_period.index:
+            tp, rp = first_period[(sid, test_lv)], first_period[(sid, ref_lv)]
+            if tp != rp:
+                periods[sid] = (tp, rp)
+    levels = {p for pr in periods.values() for p in pr}
+    if len(levels) != 2 or len({sequence.get(s) for s in periods if s in sequence.index}) < 2:
+        return None
+    return {"periods": {s: pr for s, pr in periods.items() if s in sequence.index},
+            "sequence": {s: sequence[s] for s in periods if s in sequence.index}}
 
 
 def _pick_levels(levels: list[Any], ref_arg: Any, test_arg: Any) -> tuple[Any, Any] | None:
@@ -118,18 +146,40 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     ref_subj = exposures.get(ref_lv, {})
 
     common = sorted(set(test_subj) & set(ref_subj), key=lambda x: str(x))
-    paired = len(common) >= 2 and len(common) == len(test_subj) == len(ref_subj)
-
-    if paired:
+    # A subject seen under only one treatment is a dropout / incomplete crossover. The design is never changed for
+    # it: with any overlap the study is a crossover analysed on its completers, and the excluded ids are reported.
+    warnings: list[str] = []
+    crossover = None
+    if common:
+        excluded_ids = sorted((set(test_subj) | set(ref_subj)) - set(common), key=str)
+        design_cols = _design_columns(df, obs, id_col, trt_col, test_lv, ref_lv, common)
+        if design_cols is not None:
+            keep = [sid for sid in common if sid in design_cols["periods"]]
+            excluded_ids += [sid for sid in common if sid not in keep]
+            common = keep
+            crossover = {"sequences": [design_cols["sequence"][sid] for sid in common],
+                         "test_periods": [design_cols["periods"][sid][0] for sid in common],
+                         "ref_periods": [design_cols["periods"][sid][1] for sid in common]}
+        else:
+            warnings.append("No usable PERIOD and SEQUENCE columns: crossover analysed as a paired t on log "
+                            "differences (df = n - 1) without period or sequence adjustment. Add PERIOD and SEQUENCE "
+                            "columns for the standard 2x2 crossover model.")
         test_by_param = {p: [test_subj[s][p] for s in common] for p in _BE_PARAMS}
         ref_by_param = {p: [ref_subj[s][p] for s in common] for p in _BE_PARAMS}
+        res = assess_bioequivalence(test_by_param, ref_by_param, paired=True, crossover=crossover)
+        if crossover is None:
+            res["design"] = PAIRED_LABEL
     else:
+        excluded_ids = []
         test_by_param = {p: [v[p] for v in test_subj.values()] for p in _BE_PARAMS}
         ref_by_param = {p: [v[p] for v in ref_subj.values()] for p in _BE_PARAMS}
-
-    res = assess_bioequivalence(test_by_param, ref_by_param, paired=paired)
+        res = assess_bioequivalence(test_by_param, ref_by_param, paired=False)
     res.update({"status": "ok", "test_level": str(test_lv), "reference_level": str(ref_lv),
-                "n_test": len(test_subj), "n_reference": len(ref_subj)})
+                "n_test": len(test_subj), "n_reference": len(ref_subj), "n_completers": len(common),
+                "excluded_subjects": {"n": len(excluded_ids), "subject_ids": excluded_ids,
+                                      "reason": "not observed under both treatments, or period/sequence missing "
+                                                "(dropout); analysed on completers, design unchanged"},
+                "warnings": warnings})
     ex_note = lambda_z_exclusion_note([s for v in excluded.values() for s in v], include)
     ex_note["subjects"] = {"T" if lv == test_lv else "R": excluded.get(lv, []) for lv in (test_lv, ref_lv)}
     res["lambda_z_excluded"] = ex_note
