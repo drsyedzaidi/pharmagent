@@ -131,8 +131,8 @@ def test_policy_rejects_an_identical_repeat_and_stops_the_loop():
                       budget=policy.Budget())
     assert not d.allow and d.stop and "identical" in d.reason
     # Different arguments are not a repeat — the same rule Agent.run_turn applies.
-    assert policy.canonical_call("validate_cdisc", {}) != policy.canonical_call("validate_cdisc", {"strict": True})
-    d = policy.decide("validate_cdisc", {"strict": True}, PharmState(), roster=roster, history=history,
+    assert policy.canonical_call("validate_cdisc", {}) != policy.canonical_call("validate_cdisc", {"dataset_id": "ds_x"})
+    d = policy.decide("validate_cdisc", {"dataset_id": "ds_x"}, PharmState(), roster=roster, history=history,
                       budget=policy.Budget())
     assert d.allow
     # Only the LAST proposal counts, exactly like run_turn's last_call.

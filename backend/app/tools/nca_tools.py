@@ -312,6 +312,7 @@ TOOLS = [
          "best-fit terminal slope.",
          "nca",
          {"type": "object",
-          "properties": {"dataset_id": {"type": "string"}}, "required": []},
+          "properties": {"dataset_id": {"type": "string"}, "is_iv": {"type": "boolean"}},
+          "required": []},
          compute_nca),
 ]

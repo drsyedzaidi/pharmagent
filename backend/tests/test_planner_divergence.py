@@ -198,10 +198,10 @@ def test_cli_mock_self_test_fails_when_replicates_differ(tmp_path, monkeypatch):
 
     def drifting(self, goal, summary, observations, history, tools):
         out = original(self, goal, summary, observations, history, tools)
-        if out.get("tool") == "validate_cdisc":
+        if out.get("tool") == "generate_spaghetti_plot":
             calls["n"] += 1
             if calls["n"] == 2:
-                return {**out, "args": {"strict": True}}
+                return {**out, "args": {"log_scale": True}}
         return out
 
     monkeypatch.setattr(llm_mod.MockLLM, "plan", drifting)
@@ -236,26 +236,29 @@ def test_a_planner_alternating_model_key_is_diverged_args_naming_model_key():
 
 
 def test_an_ungated_argument_that_varies_is_flagged_as_admitted_without_a_gate():
-    scripts = [lambda: _Script([LOAD, {"tool": "validate_cdisc", "args": {}, "rationale": "check"}]),
-               lambda: _Script([LOAD, {"tool": "validate_cdisc", "args": {"strict": True},
+    scripts = [lambda: _Script([LOAD, {"tool": "generate_spaghetti_plot", "args": {}, "rationale": "check"}]),
+               lambda: _Script([LOAD, {"tool": "generate_spaghetti_plot", "args": {"log_scale": True},
                                        "rationale": "check"}])]
     report = _run(scripts)
     (gap,) = report["candidate_rule_gaps"]["arg_keys"]
-    assert (gap["tool"], gap["key"], gap["policy_scientific_choice"]) == ("validate_cdisc", "strict", False)
+    assert (gap["tool"], gap["key"], gap["policy_scientific_choice"]) == ("generate_spaghetti_plot", "log_scale", False)
     assert gap["admitted_without_gate"] is True and gap["note"] == dr.UNGATED_KEY_NOTE
     assert all(r["stop_reason"] == "planner_complete" for r in report["replicates"])
 
 
 def test_a_key_carried_only_by_gated_variants_is_reviewed_even_if_a_sibling_ran():
-    """fit_pk_model(compare) runs autonomously in one replicate; the other replicate's
-    variant carries `foo` but is gated (model_key). `foo` was always seen by a human."""
-    scripts = [lambda: _Script([LOAD, FIT_COMPARE]),
+    """fit_pk_model() with no arguments runs autonomously in one replicate; the other
+    replicate's variant carries `compare` but is gated (model_key). `compare` was always
+    seen by a human. (`compare` stands in for any unpinned, non-scientific declared key:
+    arguments the tool does not declare are now refused before the policy classifies them.)"""
+    scripts = [lambda: _Script([LOAD, {"tool": "fit_pk_model", "args": {}, "rationale": "fit"}]),
                lambda: _Script([LOAD, {"tool": "fit_pk_model",
-                                       "args": {"compare": True, "model_key": "oral_1cmt", "foo": 1},
+                                       "args": {"compare": True, "model_key": "oral_1cmt"},
                                        "rationale": "pin it"}])]
     gaps = {g["key"]: g for g in _run(scripts)["candidate_rule_gaps"]["arg_keys"]}
-    assert set(gaps) == {"foo", "model_key"}
-    assert gaps["foo"]["admitted_without_gate"] is False and gaps["foo"]["note"] == dr.REVIEWED_KEY_NOTE
+    assert set(gaps) == {"compare", "model_key"}
+    assert gaps["compare"]["admitted_without_gate"] is False
+    assert gaps["compare"]["note"] == dr.REVIEWED_KEY_NOTE
     assert gaps["model_key"]["admitted_without_gate"] is False
     assert gaps["model_key"]["note"] == dr.GATED_KEY_NOTE
 

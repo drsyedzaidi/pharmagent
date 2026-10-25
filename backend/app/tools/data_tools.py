@@ -222,5 +222,6 @@ TOOLS = [
     Tool("validate_cdisc", "Validate basic CDISC/NONMEM structure and time ordering.",
          "data_manager", _schema({"dataset_id": {"type": "string"}}, []), validate_cdisc),
     Tool("generate_spaghetti_plot", "Build an interactive concentration-time spaghetti plot.",
-         "data_manager", _schema({"dataset_id": {"type": "string"}}, []), generate_spaghetti_plot),
+         "data_manager", _schema({"dataset_id": {"type": "string"}, "log_scale": {"type": "boolean"}}, []),
+         generate_spaghetti_plot),
 ]
