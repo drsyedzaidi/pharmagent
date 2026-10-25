@@ -94,6 +94,17 @@ session immediately and is remembered (provider, model, URL) in
 and must be re-entered after a relaunch unless set in the environment. The same
 switch is `GET/PUT /api/llm` (bearer-token gated when `PHARMAGENT_API_TOKEN` is set).
 
+## Shared server: per-user tokens
+
+`PHARMAGENT_API_TOKEN` is one shared secret (every holder is the same user). For several analysts set
+`PHARMAGENT_API_TOKENS=alice=<token>,bob=<token>` instead (or as well). Each user is then the audit actor and the
+owner of their sessions and skills: other users get 403 on them. Tokens are compared in constant time and never
+logged; an empty, duplicate or malformed entry stops startup. Leaving both variables unset keeps open (no-auth)
+mode. Audit enforcement (`PHARMAGENT_AUDIT_MODE=enforce`) is required whenever either variable is set.
+Uploads are stored per session under `<data_dir>/sessions/<session id>/` and reports under
+`<data_dir>/reports/<session id>/`; a session can load only its own uploads and the bundled `sample_data`.
+`PHARMAGENT_MAX_LOADED_DATASETS` (default 8) bounds the datasets kept in memory across all sessions.
+
 ## Desktop app (macOS)
 
 One process, one window: the FastAPI backend serves the built React frontend

@@ -25,6 +25,10 @@ from typing import Any
 _SKIP_TOOLS = {"load_dataset", "profile_pk_dataset", "validate_cdisc",
                "generate_spaghetti_plot"}
 
+class SkillOwnershipError(Exception):
+    """A skill with this name belongs to another owner."""
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS skills (
     name           TEXT PRIMARY KEY,
@@ -107,6 +111,9 @@ class SkillStore:
 
     def save(self, skill: Skill) -> None:
         with self._lock:
+            row = self._conn.execute("SELECT owner FROM skills WHERE name=?", (skill.name,)).fetchone()
+            if row is not None and row["owner"] is not None and row["owner"] != skill.owner:
+                raise SkillOwnershipError(f"skill '{skill.name}' belongs to another user")
             self._conn.execute(
                 """INSERT INTO skills
                    (name, description, goal, steps_json, source_session, owner,

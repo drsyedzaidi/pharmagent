@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _csvs(d: Path) -> list[Path]:
-    return [p for p in d.iterdir() if p.suffix == ".csv"]
+    return [p for p in d.rglob("*.csv")]
 
 
 def test_a_failure_after_the_csv_is_stored_removes_it(client, tmp_path, monkeypatch):
