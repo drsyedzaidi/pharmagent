@@ -5,6 +5,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -164,6 +165,13 @@ def actor_id(owner: str | None = Depends(current_owner)) -> str:
 # ── request bodies ───────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
+
+
+class LambdaZReviewRequest(BaseModel):
+    """The analyst's accept/revise decision on flagged NCA terminal-slope fits."""
+    decision: Literal["accept", "revise"]
+    subject_ids: list[int | str] | None = None   # omit = all currently flagged subjects
+    notes: str = ""
 
 
 class PendingToolDecision(BaseModel):
@@ -1021,6 +1029,21 @@ def adversarial_review(sid: str, req: ReviewRequest, sess=Depends(owned_session)
     current results, emit severity-ranked findings, loop until the goal is met."""
     try:
         return orch.review_loop(sid, goal=req.goal, max_iter=req.max_iter, actor=actor)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sessions/{sid}/lambda-z-review")
+def lambda_z_review(sid: str, req: LambdaZReviewRequest, sess=Depends(owned_session),
+                    actor: str = Depends(actor_id)) -> dict:
+    """Record the human analyst's accept/revise decision for flagged lambda_z fits.
+
+    The only path to this decision: the tool is human_only, so no agent/LLM turn can
+    run it. The audit entry carries the authenticated actor."""
+    try:
+        return orch.run_tool(sid, "review_lambda_z_fits", "qc",
+                             req.model_dump(exclude_none=True), actor=actor,
+                             allow_human_only=True)
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
 

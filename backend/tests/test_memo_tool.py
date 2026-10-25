@@ -19,6 +19,7 @@ from app.tools.base import ToolContext
 from app.tools.builtins import default_registry
 from app.tools.memo_tools import docx_plain_text
 from tests.memo_fixtures import IDX, full_chain, full_state
+from tests.qc_gate_helpers import pass_qc_gates_via_orch
 
 THEOPH = str(Path(__file__).parent.parent / "sample_data" / "theoph_pk.csv")
 
@@ -165,6 +166,7 @@ def test_memo_builds_end_to_end_on_theoph_through_the_orchestrator(tmp_path, mon
     orch.run_tool(sid, "indirect_comparison", "statistician", {
         "ab": {"estimate": 0.5, "se": 0.2}, "cb": {"estimate": 0.8, "se": 0.3}, "scale": "HR"})
 
+    pass_qc_gates_via_orch(orch, sid)
     out = orch.run_tool(sid, "build_briefing_memo", "report", {})
     res, sess = out["result"], orch.get_session(sid)
 

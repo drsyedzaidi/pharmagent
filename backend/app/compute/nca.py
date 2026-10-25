@@ -6,7 +6,8 @@ slope (lambda_z) by maximizing adjusted R-squared.
 
 Per-subject parameters returned:
     Cmax, Tmax, AUC_last, AUC_inf, lambda_z, t_half, CL_F, Vz_F, MRT, Vss,
-    pct_AUC_extrap, lambda_z_n_points, lambda_z_r2_adj, lambda_z_intervals
+    pct_AUC_extrap, lambda_z_n_points, lambda_z_r2_adj, lambda_z_intervals,
+    lambda_z_span_ratio
 """
 from __future__ import annotations
 
@@ -95,12 +96,16 @@ def _best_lambda_z(time: np.ndarray, conc: np.ndarray, tmax: float) -> dict[str,
         if adj <= 0:
             continue  # meaningless terminal fit
         if not best or adj > best["lambda_z_r2_adj"]:
+            lam = float(-slope)
+            t_half = math.log(2) / lam
+            span_ratio = float((tt[-1] - tt[0]) / t_half) if t_half > 0 else 0.0
             best = {
-                "lambda_z": float(-slope),
+                "lambda_z": lam,
                 "lambda_z_r2": round(r2, 6),
                 "lambda_z_r2_adj": round(adj, 6),
                 "lambda_z_n_points": int(k),
                 "lambda_z_intervals": [float(tt[0]), float(tt[-1])],
+                "lambda_z_span_ratio": round(span_ratio, 6),
                 "lambda_z_intercept": float(intercept),
                 "lambda_z_pts_t": tt.tolist(),
                 "lambda_z_pts_c": np.exp(ll).tolist(),
@@ -133,6 +138,7 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
     lz = float(-slope)
     t_half = math.log(2) / lz
     t0, t1 = float(t.min()), float(t.max())
+    span_ratio = round((t1 - t0) / t_half, 4) if t_half > 0 else 0.0
     fit_x = [round(t0 + (t1 - t0) * i / 29, 3) for i in range(30)]
     fit_y = [_round_sig(math.exp(float(intercept) + slope * tx), 6) for tx in fit_x]
     return {
@@ -141,6 +147,7 @@ def refit_lambda_z_manual(times: list[float], concs: list[float]) -> dict[str, A
         "t_half": _round_sig(t_half, 4),
         "r2_adj": round(adj, 6),
         "n_pts": k,
+        "span_ratio": span_ratio,
         "lz_x": [round(float(v), 4) for v in times],
         "lz_y": [_round_sig(float(v), 6) for v in concs],
         "fit_x": fit_x,
@@ -212,6 +219,7 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
                 "lambda_z_r2_adj": lz["lambda_z_r2_adj"],
                 "lambda_z_n_points": lz["lambda_z_n_points"],
                 "lambda_z_intervals": lz["lambda_z_intervals"],
+                "lambda_z_span_ratio": lz["lambda_z_span_ratio"],
                 "lambda_z_intercept": lz["lambda_z_intercept"],
                 "lambda_z_pts_t": lz["lambda_z_pts_t"],
                 "lambda_z_pts_c": lz["lambda_z_pts_c"],
@@ -221,7 +229,8 @@ def nca_subject(p: Profile, *, is_iv: bool = False) -> dict[str, Any]:
         out.update({k: None for k in (
             "lambda_z", "t_half", "AUC_inf", "pct_AUC_extrap", "MRT", "MRT_note",
             "CL_F", "Vz_F", "Vss", "route", "lambda_z_r2_adj", "lambda_z_n_points",
-            "lambda_z_intervals", "lambda_z_intercept", "lambda_z_pts_t", "lambda_z_pts_c")})
+            "lambda_z_intervals", "lambda_z_span_ratio", "lambda_z_intercept",
+            "lambda_z_pts_t", "lambda_z_pts_c")})
     return out
 
 

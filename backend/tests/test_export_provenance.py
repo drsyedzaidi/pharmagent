@@ -22,6 +22,7 @@ from app.core import exporters
 from app.core.llm import MockLLM
 from app.core.orchestrator import Orchestrator
 from app.core.store import SessionStore
+from tests.qc_gate_helpers import pass_qc_gates_via_orch
 
 SAMPLE = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
 DIGEST = "conventions_catalog_canonical_json_sha256"
@@ -122,6 +123,7 @@ def test_control_stream_gets_a_comment_and_a_manifest(client, monkeypatch):
 
 def test_report_download_has_headers_and_a_manifest(client):
     sid = _nca_session(client)
+    pass_qc_gates_via_orch(main.orch, sid)
     main.orch.run_tool(sid, "generate_report", "report", {})
     path = main.orch.get_session(sid).state.report_path
     r = client.get(f"/api/sessions/{sid}/report/{Path(path).name}")
