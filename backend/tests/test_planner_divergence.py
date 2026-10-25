@@ -274,6 +274,23 @@ def test_a_key_carried_only_by_a_rejected_variant_is_not_called_human_reviewed()
     gaps = {g["key"]: g for g in report["candidate_rule_gaps"]["arg_keys"]}
     assert gaps["foo"]["admitted_without_gate"] is False and gaps["foo"]["rejected_by_policy"] is True
     assert gaps["foo"]["note"] == dr.REJECTED_KEY_NOTE != dr.REVIEWED_KEY_NOTE
+    # model_key is a scientific-choice key, but its only carrier was rejected too
+    assert gaps["model_key"]["rejected_by_policy"] is True
+    assert gaps["model_key"]["note"] == dr.SCIENTIFIC_REJECTED_KEY_NOTE != dr.GATED_KEY_NOTE
+
+
+@pytest.mark.parametrize(("modes", "note"), [
+    (["gated", "gated"], "GATED_KEY_NOTE"),
+    (["gated", "rejected"], "SCIENTIFIC_REJECTED_KEY_NOTE"),    # one value never reached the gate
+    (["rejected", "rejected"], "SCIENTIFIC_REJECTED_KEY_NOTE"),
+])
+def test_a_scientific_key_is_called_gated_only_when_no_carrier_was_rejected(modes, note):
+    variants = [{"tool": "fit_pk_model", "args": {"model_key": k}, "policy_mode": m}
+                for k, m in zip(("oral_1cmt", "oral_2cmt"), modes, strict=True)]
+    point = {"step": 1, "label": dr.DIVERGED_ARGS, "replicates": [0, 1], "prefix": [],
+             "variants": variants, "varied_arg_keys": {"fit_pk_model": ["model_key"]}}
+    (gap,) = dr.candidate_rule_gaps([point])["arg_keys"]
+    assert gap["policy_scientific_choice"] is True and gap["note"] == getattr(dr, note)
 
 
 @pytest.mark.parametrize(("modes", "note"), [

@@ -51,6 +51,11 @@ OWNER_DECISION = ("Nothing here is applied automatically. Converting a divergenc
 GATED_KEY_NOTE = ("a policy scientific-choice key, so every proposal carrying it is gated: replicates "
                   "disagree on the value, a judgment branch for the human at the gate or a default the "
                   "owner may choose to write down")
+SCIENTIFIC_REJECTED_KEY_NOTE = ("a policy scientific-choice key, but the policy rejected at least one "
+                                "variant carrying it, so that value neither ran nor reached the human "
+                                "gate and no human is known to have seen it (see the policy rejections "
+                                "for why): replicates disagree on the value, and a human saw it only "
+                                "where a variant carrying it was gated")
 REVIEWED_KEY_NOTE = ("not a policy scientific-choice key, but every variant carrying it was gated for "
                      "another reason (the tool itself or another argument), so a human saw the value; a "
                      "candidate for SCIENTIFIC_CHOICE_KEYS only if it should be gated on its own")
@@ -146,7 +151,7 @@ def decision_points(replicates: Sequence[Mapping[str, Any]]) -> list[dict[str, A
 # -- what varied --------------------------------------------------------------
 def _key_note(scientific: bool, unreviewed: bool, rejected: bool) -> str:
     if scientific:
-        return GATED_KEY_NOTE
+        return SCIENTIFIC_REJECTED_KEY_NOTE if rejected else GATED_KEY_NOTE
     if unreviewed:
         return UNGATED_KEY_NOTE
     return REJECTED_KEY_NOTE if rejected else REVIEWED_KEY_NOTE
