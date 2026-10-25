@@ -87,7 +87,7 @@ def form_closes(monkeypatch):
 
 
 def _csvs(d: Path) -> list[Path]:
-    return [p for p in d.iterdir() if p.suffix == ".csv"]
+    return [p for p in d.rglob("*.csv")]
 
 
 def test_a_malformed_multipart_body_is_a_client_error_not_a_crash(client):
