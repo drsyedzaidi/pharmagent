@@ -83,11 +83,16 @@ def test_obs_vs_pred_pred_includes_covariate_effect():
     assert plain["pred"] != cov["pred"]
 
 
-def test_npde_accepts_covariates_and_omega():
-    subs = _subjects(n_per=2)
+def test_npde_uses_covariates_and_omega():
+    subs = _subjects(n_per=3)           # data generated WITH the SEX effect on CL
+    kw = dict(sigma_prop=0.1, sigma_add=0.0, n_sim=200)
+    cv = {"CL": 30.0, "V": 20.0}
+    plain = npde("oral_1cmt", subs, TYP, cv, **kw)
+    fit = npde("oral_1cmt", subs, TYP, cv, covariate_effects=SEX_CL, **kw)
+    assert abs(fit["summary"]["mean"]) < 0.3 < abs(plain["summary"]["mean"])
     om = [[0.09, 0.0], [0.0, 0.04]]
-    out = npde("oral_1cmt", subs, TYP, {"CL": 30.0, "V": 20.0}, sigma_prop=0.1, sigma_add=0.0,
-               n_sim=50, covariate_effects=SEX_CL, omega_matrix=om, omega_params=["CL", "V"])
+    out = npde("oral_1cmt", subs, TYP, cv, covariate_effects=SEX_CL, omega_matrix=om,
+               omega_params=["CL", "V"], **kw)
     assert out["summary"]["n"] > 0
 
 
