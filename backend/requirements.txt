@@ -11,6 +11,6 @@ scipy==1.17.1
 python-docx==1.2.0
 python-multipart==0.0.32
 anthropic==0.109.1
-pypdf==6.14.2            # mikebrain corpus: lightweight PDF text extraction (app/knowledge)
+pypdf==6.21.2            # mikebrain corpus: lightweight PDF text extraction (app/knowledge)
 # PMxbench adapter (app/benchmarks) reads/writes YAML; already installed via uvicorn[standard].
 PyYAML==6.0.3
