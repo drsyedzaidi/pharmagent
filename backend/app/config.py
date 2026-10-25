@@ -90,5 +90,4 @@ class Settings(BaseSettings):
         return [self.data_dir.resolve(), (here / "sample_data").resolve()]
 
 
-settings = Settings()
-settings.data_dir.mkdir(parents=True, exist_ok=True)
+settings = Settings()   # data_dir is created at startup (Orchestrator.__init__), never at import

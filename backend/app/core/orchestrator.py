@@ -11,6 +11,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +35,7 @@ from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import (
     ProvenanceQuarantined,
     collect_provenance,
+    describe_llm,
     genesis_outputs,
     verify_run_provenance,
 )
@@ -57,6 +59,9 @@ def _iso_clock() -> str:
 
 class AccessError(Exception):
     """Raised when a caller requests a session they do not own."""
+
+
+llm_change_actor: ContextVar[str] = ContextVar("llm_change_actor", default="system")
 
 
 class StaleGateError(Exception):
@@ -96,6 +101,7 @@ class Orchestrator:
                  skills: SkillStore | None = None,
                  audit_security: AuditSecurity | None | object =
                  _AUDIT_SECURITY_FROM_SETTINGS) -> None:
+        settings.data_dir.mkdir(parents=True, exist_ok=True)   # was an import-time side effect of app.config
         self.llm = llm or get_llm()
         self.registry = registry or default_registry()
         self.supervisor = Supervisor(self.llm)
@@ -123,9 +129,27 @@ class Orchestrator:
 
     def set_llm(self, llm: LLM) -> None:
         """Swap the routing/tool-selection model at runtime (UI provider switch).
-        Tools, state and audit are untouched — the LLM only decides what to call."""
+        Tools and state are untouched — the LLM only decides what to call. The switch applies to every session,
+        so it is recorded (provider, model, base-URL host; never a key) in each loaded writable session's audit
+        chain; genesis provenance keeps naming the LLM the session was created under."""
+        before, after = describe_llm(self.llm), describe_llm(llm)
         self.llm = llm
         self.supervisor = Supervisor(llm)
+        if before == after:
+            return
+        actor = llm_change_actor.get()
+        for sid, sess in list(self.sessions.items()):
+            try:
+                with self.session_lock(sid):
+                    self._ensure_writable(sess)
+                    sess.audit.append(
+                        agent="system", tool="llm_config", action="llm_config_changed",
+                        inputs={"from": before}, outputs={"to": after},
+                        timestamp=self.clock(), actor=actor,
+                        reason="runtime LLM switch applies to all sessions")
+                    self._persist(sess)
+            except Exception:   # one session's refusal (quarantine, sealed-store conflict) must not block the switch
+                log.warning("llm_change_not_recorded", extra={"session": sid}, exc_info=True)
 
     def session_lock(self, sid: str) -> threading.RLock:
         """Return (creating if needed) the per-session mutation lock."""
@@ -365,7 +389,9 @@ class Orchestrator:
     # -- sessions ----------------------------------------------------------
     def create_session(self, owner: str | None = None) -> Session:
         sid = f"sess_{uuid.uuid4().hex[:8]}"
-        prov = collect_provenance()     # recorded once, at creation: kept in state and bound into the genesis entry
+        llm_now = describe_llm(self.llm)
+        # recorded once, at creation: kept in state and bound into the genesis entry
+        prov = collect_provenance(llm_provider=llm_now["provider"], llm_model=llm_now["model"])
         sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=tuple(prov.items())),
                        ctx=ToolContext(data_dir=str(settings.data_dir)),
                        owner=owner, created_at=self.clock(),
@@ -419,6 +445,11 @@ class Orchestrator:
         with self.session_lock(sid):
             sess = self.get_session(sid)
             self._ensure_writable(sess)
+            now = describe_llm(self.llm)       # which model acts on this turn (the LLM can be switched at runtime)
+            sess.audit.append(
+                agent="supervisor", tool="chat", action=f"chat_turn(llm={now['provider']}:{now['model']})",
+                inputs={"llm": now}, outputs={"status": "started"},
+                timestamp=self.clock(), actor=actor or "")
             primary_agent, primary_method = self.supervisor.route(message)
             plan = self.supervisor.route_plan(message)
             all_messages: list[str] = []

@@ -86,6 +86,15 @@ at load). Rewriting those rows is not detected by the keyed seal.
 `absent` (legacy v1 seal, state is **not** covered), `mismatch` (v2 seal,
 state differs → `verified: false`).
 
+### LLM attribution
+
+Genesis provenance records the provider/model the session was created under
+(`llm_provider`, `llm_model`; sessions created earlier have no such fields). The
+model can be switched at runtime for all sessions; each switch appends an
+`llm_config_changed` entry (provider, model, base-URL host, actor — never a key)
+to every loaded writable session, and every chat turn appends a
+`chat_turn(llm=provider:model)` entry. Genesis provenance is never rewritten.
+
 ### Seals created before `seal_version` 2
 
 Existing sealed sessions carry v1 seals with no `state_digest`. They keep

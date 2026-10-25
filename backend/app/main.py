@@ -21,7 +21,7 @@ from app.core import cdisc, export_provenance, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
-from app.core.orchestrator import AccessError, Orchestrator, StaleGateError
+from app.core.orchestrator import AccessError, Orchestrator, StaleGateError, llm_change_actor
 from app.core.provenance import ProvenanceQuarantined
 from app.workflows import WORKFLOWS, get_workflow
 
@@ -350,7 +350,11 @@ def set_llm_config(req: LlmChoiceRequest, owner: str | None = Depends(current_ow
     if req.test_only:
         return {"ok": True, "tested": choice.public(), "detail": result["detail"],
                 "current": llm_manager.choice.public()}
-    llm_manager.apply(choice, orch)
+    token = llm_change_actor.set(owner or "anonymous")   # attribution for the llm_config_changed audit entries
+    try:
+        llm_manager.apply(choice, orch)
+    finally:
+        llm_change_actor.reset(token)
     return {"ok": True, "current": llm_manager.choice.public(), "detail": result["detail"],
             "label": settings.llm_label}
 
