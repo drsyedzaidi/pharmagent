@@ -272,22 +272,30 @@ def _extra_sections(doc: Document, state: PharmState,
         _protocol_sim_section(doc, state, n, audit_trail=audit_trail)
 
 
-def _find_gate_approval(audit_trail: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
-    """Find the last human_review approval entry in the audit trail.
+def _find_gate_approval(audit_trail: tuple[dict[str, Any], ...],
+                        gate_label: str = "Adversarial review") -> dict[str, Any] | None:
+    """Find the human_review approval for a specific gate in the audit trail.
 
-    Returns a dict with ``actor``, ``timestamp`` and ``reason`` keys, or None
-    if no approval is found.  Searches backwards so the most recent approval
-    (which follows the adversarial review gate) wins.
+    Matches audit entries whose ``inputs.review.label`` contains *gate_label*
+    (case-insensitive).  This prevents attributing an earlier gate's approval
+    (e.g. the plan gate or special-population gate) to the adversarial-review
+    gate.  Returns a dict with ``actor``, ``timestamp`` and ``reason`` keys,
+    or None if no matching approval is found.  Searches backwards so the most
+    recent matching approval wins.
     """
+    needle = gate_label.lower()
     for entry in reversed(audit_trail):
         if (entry.get("tool") == "human_review"
                 and isinstance(entry.get("action"), str)
                 and entry["action"].startswith("approved")):
-            return {
-                "actor": entry.get("actor") or "unknown",
-                "timestamp": entry.get("timestamp") or "unknown",
-                "reason": entry.get("reason") or "(no reason recorded)",
-            }
+            review = (entry.get("inputs") or {}).get("review") or {}
+            label = (review.get("label") or "").lower()
+            if needle in label:
+                return {
+                    "actor": entry.get("actor") or "unknown",
+                    "timestamp": entry.get("timestamp") or "unknown",
+                    "reason": entry.get("reason") or "(no reason recorded)",
+                }
     return None
 
 
