@@ -757,7 +757,10 @@ def test_end_to_end_propose_then_owner_approves_then_it_fires(corpus, empty_cat,
                                                              for f in proposed.result["findings"])   # pending: nothing
 
     raw = json.loads(empty_cat.read_text())                                  # the owner's reviewed edit
-    raw["rules"][0]["approval"] = {"status": "approved", "by": "Dr. Owner Example", "date": "2026-10-24"}
+    # The CLI stamps proposed_on with today's UTC date and the schema rejects an approval dated before the
+    # proposal, so the owner's approval date must come from the same clock, not a fixed day.
+    today = datetime.now(UTC).date().isoformat()
+    raw["rules"][0]["approval"] = {"status": "approved", "by": "Dr. Owner Example", "date": today}
     empty_cat.write_text(json.dumps(raw, indent=2))
     cio.cached_rule_catalog.cache_clear()
     (_, approved), audit = _review(_clean_state())
