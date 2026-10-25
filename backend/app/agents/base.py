@@ -65,6 +65,29 @@ def idle_hint(agent: str, state: PharmState) -> str:
         return (f"[er_dose] {where}; {have_fits}. Name the exposure column and the response column "
                 "(or time and event columns), e.g. 'logistic E-R of AE vs exposure'. With fits labelled "
                 "'efficacy' and 'toxicity' I can select a dose once you declare the utility weight w.")
+    if agent == "simulator":
+        nl_ok = (
+            (state.nlme_results or {}).get("status") == "ok"
+            and (state.nlme_results or {}).get("converged") is not False
+        )
+        rev_ok = (state.review_results or {}).get("goal_met") is True
+        if not nl_ok or not rev_ok:
+            missing = []
+            if not nl_ok:
+                missing.append("a converged PopPK NLME fit (nlme_results.status == 'ok')")
+            if not rev_ok:
+                missing.append("an approved adversarial review (review_results.goal_met == True)")
+            return (
+                f"[simulator] Protocol simulation (PTA, target attainment, dose selection, "
+                f"trial simulation, and regimen comparison) requires an approved PopPK fit "
+                f"first: missing {' and '.join(missing)}. Run the poppk_full workflow and "
+                f"approve its review gate before starting protocol_simulation."
+            )
+        return (
+            f"[simulator] Approved PopPK fit is ready on {where}. Start the "
+            f"'protocol_simulation' workflow or ask to propose a simulation plan for PTA "
+            f"and regimen comparison."
+        )
     done = []
     if n_nca:
         done.append(f"NCA {n_nca} subjects")
@@ -180,6 +203,15 @@ class Agent:
             "pk_model_diagnostics": pk_diag,
             "nlme_results": "present" if nl.get("status") == "ok" else None,
             "nlme_diagnostics": nlme_diag,
+            "protocol_sim": (
+                {
+                    "has_source_fit": bool((state.protocol_sim or {}).get("source_fit")),
+                    "has_plan": bool((state.protocol_sim or {}).get("plan")),
+                    "has_pta": bool((state.protocol_sim or {}).get("pta")),
+                }
+                if state.protocol_sim
+                else None
+            ),
             "simest_results": "present" if state.simest_results else None,
             "stats_advice": "present" if state.stats_advice else None,
             "er_fits": sorted((state.er_results or {}).get("fits") or {}) or None,

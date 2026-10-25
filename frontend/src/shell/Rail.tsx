@@ -7,6 +7,7 @@ const WORKFLOW_DISPLAY: Record<string, string> = {
   nca_full: 'NCA',
   poppk_modeling: 'Modeling + engines',
   poppk_full: 'Population PK',
+  protocol_simulation: 'Protocol simulation',
 };
 
 export type DatasetMeta = { n_records?: unknown; n_subjects?: unknown; n_columns?: unknown };

@@ -1622,7 +1622,18 @@ def run_covariate_forest(state: PharmState, ctx: ToolContext, args: dict[str, An
 
 
 def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    import time
+    t0 = time.perf_counter() if state.protocol_sim is not None else 0.0
     fitted_key, _fits, _pop, typical = _last_fit(state)
+    ps = dict(state.protocol_sim) if state.protocol_sim is not None else {}
+    source_fit = ps.get("source_fit") or {}
+    plan = ps.get("plan") or {}
+
+    if state.protocol_sim is not None and not fitted_key:
+        nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else {}
+        fitted_key = source_fit.get("model_key") or nl.get("model_key")
+        typical = dict(source_fit.get("theta") or nl.get("theta") or {})
+
     model_key = args.get("model_key") or fitted_key
     if not model_key or model_key not in REGISTRY:
         status = {"status": "no_model", "message": "Fit a model first, or pass a model_key."}
@@ -1631,24 +1642,43 @@ def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
     model = get_model(model_key)
     params = dict(model.defaults)
     if model_key == fitted_key:
-        params.update(typical)
+        params.update({k: float(v) for k, v in typical.items() if k in model.params and v is not None})
+    if source_fit.get("theta") and model_key == source_fit.get("model_key"):
+        params.update({k: float(v) for k, v in source_fit["theta"].items() if k in model.params and v is not None})
     if isinstance(args.get("params"), dict):
         params.update({k: float(v) for k, v in args["params"].items() if k in model.params})
 
+    plan_regimens = plan.get("regimens") or []
+    plan_doses = sorted({float(r.get("dose_mg") or r.get("dose")) for r in plan_regimens
+                         if (r.get("dose_mg") or r.get("dose")) is not None})
     base = float(args.get("dose", 100.0))
-    doses = [float(d) for d in (args.get("doses") or [base * 0.5, base, base * 2.0])]
-    tau = float(args.get("tau", 24.0))
-    n_doses = int(args.get("n_doses", 1))
+    doses = [float(d) for d in (args.get("doses") or plan_doses or [base * 0.5, base, base * 2.0])]
+    default_tau = float(plan_regimens[0].get("tau_h", 24.0)) if plan_regimens else 24.0
+    default_ndoses = int(plan_regimens[0].get("n_doses", 1)) if plan_regimens else 1
+    tau = float(args.get("tau", default_tau))
+    n_doses = int(args.get("n_doses", default_ndoses))
     tmax = float(args.get("tmax") or (max(tau * n_doses, 24.0) + tau))
 
     out = dose_sweep(model_key, params, doses, tau=tau, n_doses=n_doses, tmax=tmax,
                      wt=float(args.get("wt", 70.0)))
     payload = {"status": "ok", **out}
+    writes: dict[str, Any] = {"dose_sweep_results": payload}
+    if state.protocol_sim is not None:
+        prov = dict(ps.get("provenance") or {})
+        tv = dict(prov.get("tool_versions") or {})
+        tv["run_dose_sweep"] = "1.0.0"
+        wc = dict(prov.get("wall_clock") or {})
+        wc["run_dose_sweep"] = round(time.perf_counter() - t0, 6)
+        prov["tool_versions"] = tv
+        prov["wall_clock"] = wc
+        ps["dose_sweep"] = payload
+        ps["provenance"] = prov
+        writes["protocol_sim"] = ps
     return ToolResult(
         summary=(f"Dose sweep ({model.label}): {len(doses)} levels {doses} "
                  f"q{tau}h ×{n_doses}; Cmax {[p['cmax'] for p in out['profiles']]}."),
         action=f"run_dose_sweep({model_key})",
-        writes={"dose_sweep_results": payload},
+        writes=writes,
         result={"status": "ok", "model_key": model_key, "doses": doses,
                 "cmax": [p["cmax"] for p in out["profiles"]]})
 

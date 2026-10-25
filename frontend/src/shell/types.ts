@@ -31,7 +31,7 @@ export type VerifyNote = { tone: 'ok' | 'dim' | 'bad'; text: string };
 /** One row of a workflow's step tracker. */
 export type StepView = { key: string; label: string; gate?: boolean };
 
-export type WorkflowName = 'nca_full' | 'poppk_modeling' | 'poppk_full';
+export type WorkflowName = 'nca_full' | 'poppk_modeling' | 'poppk_full' | 'protocol_simulation';
 
 /** Below this width the review column is a fixed drawer (index.css: the
  *  `@media (max-width: 1180px)` block). App opens it when a gate arrives. */

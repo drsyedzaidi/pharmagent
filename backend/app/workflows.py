@@ -106,6 +106,36 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
         ],
         "budget": {"max_steps": 20, "max_gated": 6},
     },
+    "protocol_simulation": {
+        "name": "protocol_simulation",
+        "description": (
+            "Governed protocol simulation and dose selection from an approved "
+            "population PK fit: load approved fit → propose simulation plan "
+            "(human gate) → dose sweep → trial PTA across covariate bands and "
+            "regimens → special-population / pediatric simulations (human gate "
+            "before expensive uncertainty job) → outer-loop parameter uncertainty "
+            "propagation → adversarial review (human gate) → regulatory report."
+        ),
+        "requires": ["nlme_results.status == 'ok'"],
+        "steps": [
+            {"agent": "modeler", "tool": "load_approved_fit",
+             "label": "Load approved PopPK fit"},
+            {"agent": "simulator", "tool": "propose_simulation_plan",
+             "label": "Propose simulation plan (human review gate)", "gate": True},
+            {"agent": "simulator", "tool": "run_dose_sweep",
+             "label": "Dose sweep across regimens"},
+            {"agent": "simulator", "tool": "simulate_trial_pta",
+             "label": "Trial simulation & PTA by band"},
+            {"agent": "simulator", "tool": "simulate_special_populations",
+             "label": "Special-population / pediatric exposures", "gate": True},
+            {"agent": "simulator", "tool": "propagate_parameter_uncertainty",
+             "label": "Parameter uncertainty in PTA (job)"},
+            {"agent": "reviewer", "tool": "adversarial_review",
+             "label": "Adversarial review of simulation claims", "gate": True},
+            {"agent": "report", "tool": "generate_report",
+             "label": "Protocol simulation report section"},
+        ],
+    },
 }
 
 
