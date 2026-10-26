@@ -12,7 +12,8 @@ is bioequivalent when the entire CI lies within the regulatory limits
 
 Per-parameter keys returned:
     n_test, n_ref, gmr_pct, ci_lower_pct, ci_upper_pct, within_limits,
-    cv_intra_pct, alpha, limits
+    cv_intra_pct, alpha, limits, and the unrounded gmr_raw, ci_lower_raw, ci_upper_raw
+    (the *_pct values are rounded to 4 decimals for display only)
 """
 from __future__ import annotations
 
@@ -42,6 +43,9 @@ def _null_result(n_test: int, n_ref: int, alpha: float,
         "cv_intra_pct": None,
         "alpha": alpha,
         "limits": [lower, upper],
+        "gmr_raw": None,
+        "ci_lower_raw": None,
+        "ci_upper_raw": None,
     }
 
 
@@ -118,6 +122,9 @@ def _be_paired(test_vals: list[float], ref_vals: list[float], *,
         "cv_intra_pct": round(cv_intra_pct, 4),
         "alpha": alpha,
         "limits": [lower, upper],
+        "gmr_raw": gmr_pct,
+        "ci_lower_raw": ci_lower_pct,
+        "ci_upper_raw": ci_upper_pct,
     }
 
 
@@ -185,6 +192,10 @@ def _be_crossover_2x2(test_vals: list[float], ref_vals: list[float], sequences: 
         "cv_intra_pct": round(cv_intra_pct, 4),
         "alpha": alpha,
         "limits": [lower, upper],
+        # unrounded values: a decision rule must round these once, never the 4-dp display copies above
+        "gmr_raw": gmr_pct,
+        "ci_lower_raw": ci_lower_pct,
+        "ci_upper_raw": ci_upper_pct,
     }
 
 
@@ -217,6 +228,10 @@ def _be_parallel(test_vals: list[float], ref_vals: list[float], *,
         "cv_intra_pct": None,
         "alpha": alpha,
         "limits": [lower, upper],
+        # unrounded values: a decision rule must round these once, never the 4-dp display copies above
+        "gmr_raw": gmr_pct,
+        "ci_lower_raw": ci_lower_pct,
+        "ci_upper_raw": ci_upper_pct,
     }
 
 
