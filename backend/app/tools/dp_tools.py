@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.compute.dose_proportionality import assess_dose_proportionality
+from app.compute.nca import apply_lambda_z_quality, lambda_z_exclusion_note
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -20,6 +21,8 @@ def run_dose_proportionality(state: PharmState, ctx: ToolContext, args: dict[str
             writes={"dose_prop_results": status}, result=status)
 
     # align dose with each exposure, keeping only rows that have a dose
+    include = bool(args.get("include_unacceptable_lambda_z", False))
+    params, excluded = apply_lambda_z_quality(params, include)
     rows = [r for r in params if r.get("dose") is not None]
     doses = [float(r["dose"]) for r in rows]
     values_by_param = {p: [r.get(p) for r in rows] for p in _DP_PARAMS}
@@ -34,7 +37,8 @@ def run_dose_proportionality(state: PharmState, ctx: ToolContext, args: dict[str
             writes={"dose_prop_results": status}, result=status)
 
     res = assess_dose_proportionality(doses, values_by_param)
-    res.update({"status": "ok", "dose_levels": distinct, "n_subjects": len(rows)})
+    res.update({"status": "ok", "dose_levels": distinct, "n_subjects": len(rows),
+                "lambda_z_excluded": lambda_z_exclusion_note(excluded, include)})
 
     verdict = "dose-proportional" if res.get("proportional") else "NOT dose-proportional"
     return ToolResult(
@@ -50,6 +54,11 @@ TOOLS = [
          "reports slope, its CI, and the Smith critical-region verdict for Cmax and AUC.",
          "dose_prop",
          {"type": "object",
-          "properties": {"dataset_id": {"type": "string"}}, "required": []},
+          "properties": {"dataset_id": {"type": "string"},
+                         "include_unacceptable_lambda_z": {
+                             "type": "boolean",
+                             "description": "Pool AUC_inf of subjects whose lambda_z fit fails the acceptance "
+                                            "criteria. Default false (excluded and reported)."}},
+          "required": []},
          run_dose_proportionality),
 ]

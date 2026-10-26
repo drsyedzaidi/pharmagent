@@ -21,9 +21,21 @@ Profiles and their sources (texts downloaded and read 2026-10-23):
 - ``ema_2010``: EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr** (sec. 4.1.8, rounding to two decimals; at least 12
   evaluable subjects).
 
-Statistical model: this slice keeps the existing estimator (paired log differences for a crossover, pooled two-sample
-log means for a parallel design). It has no period or sequence terms; the profile-specific models are a separate
-change, and every result says the model is interim.
+Statistical model, by design and by what the caller supplies:
+
+- crossover WITH a layout (``layout`` = {subject: (sequence, test period, reference period)}, which the tool builds
+  from the PERIOD and SEQUENCE columns when there are two period levels in at least two sequences): the 2x2
+  fixed-effects model ln y ~ subject(sequence) + period + treatment on the subjects evaluable under both products
+  (``MODEL_2X2``). The treatment contrast and its 90% CI use the residual mean square with df = n1 + n2 - 2, and
+  CV_intra comes from that mean square. Period and sequence effects are therefore accounted for (sequence is
+  absorbed by the nested subject term).
+- crossover WITHOUT a layout (no usable sequence column, or periods that are not two levels in two or more
+  sequences): the interim paired t on log differences, df = n - 1, with NO period or sequence adjustment
+  (``INTERIM_MODEL``). The tool says so in ``warnings``, and ``be_one_parameter`` labels it ``PAIRED_LABEL``.
+- parallel: pooled two-sample log means (df = n1 + n2 - 2), also reported as ``INTERIM_MODEL``.
+
+``result["model"]`` states which one was used. The regulatory profiles' own model requirements beyond this
+fixed-effects 2x2 model are a separate change.
 """
 from __future__ import annotations
 
@@ -36,7 +48,7 @@ from typing import Any
 
 from numpy import bool_ as np_bool
 
-from app.compute.bioequivalence import be_one_parameter
+from app.compute.bioequivalence import MODEL_2X2, be_one_parameter
 
 DESIGNS = ("crossover", "parallel")
 INTERIM_MODEL = ("interim: paired log differences (crossover) or pooled two-sample log means (parallel); no period "
@@ -86,10 +98,11 @@ def regulatory_round(value: float) -> Decimal:
     return Decimal(str(float(value))).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
 
 
-def _estimate(test_vals: list[float], ref_vals: list[float], *, paired: bool, alpha: float) -> dict[str, Any]:
-    r = be_one_parameter(test_vals, ref_vals, paired=paired, alpha=alpha)
+def _estimate(test_vals: list[float], ref_vals: list[float], *, paired: bool, alpha: float,
+              design_cols: dict[str, list[Any]] | None = None) -> dict[str, Any]:
+    r = be_one_parameter(test_vals, ref_vals, paired=paired, alpha=alpha, **(design_cols or {}))
     return {k: r.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
-                                  "ci_lower_raw", "ci_upper_raw")}
+                                  "ci_lower_raw", "ci_upper_raw", "df")}
 
 
 def _real(x) -> bool:
@@ -187,7 +200,7 @@ def _verdict(est, prof, lo, hi, enough):
             "ci_lower_rounded": rounded[0], "ci_upper_rounded": rounded[1]}
 
 
-def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, lo, hi, ledger):
+def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, lo, hi, ledger, layout=None):
     t_arm, r_arm = by[test], by[reference]
     usable = {lv: {} for lv in (test, reference)}
     for lv, arm in ((test, t_arm), (reference, r_arm)):
@@ -206,6 +219,14 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
         for lv, other in ((test, reference), (reference, test)):
             for s in sorted(set(usable[lv]) - set(usable[other]), key=str):
                 ledger.append(_entry(s, lv, name, "no_evaluable_counterpart", usable[lv][s], False))
+        design_cols = None
+        if layout is not None:
+            for s in [s for s in common if s not in layout]:
+                ledger.append(_entry(s, test, name, "no_period_or_sequence", usable[test][s], False))
+            common = [s for s in common if s in layout]
+            design_cols = {"sequences": [layout[s][0] for s in common],
+                           "test_periods": [layout[s][1] for s in common],
+                           "ref_periods": [layout[s][2] for s in common]}
         tv, rv = [usable[test][s] for s in common], [usable[reference][s] for s in common]
         n_t = n_r = len(common)
         enough = len(common) >= prof.min_evaluable
@@ -213,9 +234,10 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
         tv, rv = list(usable[test].values()), list(usable[reference].values())
         n_t, n_r = len(tv), len(rv)
         enough = min(n_t, n_r) >= prof.min_evaluable
-    est = _estimate(tv, rv, paired=design == "crossover", alpha=prof.alpha)
+        design_cols = None
+    est = _estimate(tv, rv, paired=design == "crossover", alpha=prof.alpha, design_cols=design_cols)
     shown = {k: est.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
-                                     "ci_lower_raw", "ci_upper_raw")}
+                                     "ci_lower_raw", "ci_upper_raw", "df")}
     return {**shown, **_verdict(est, prof, lo, hi, enough),
             "n_evaluable": n_t if design == "crossover" else n_t + n_r, "n_test": n_t, "n_reference": n_r,
             "min_evaluable": prof.min_evaluable}
@@ -223,13 +245,17 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
 
 def assess_average_be(records: list[dict], *, design: str | None, profile: str | None, test: Any, reference: Any,
                       prespecified_exclusions: list[dict] | None = None, limits: tuple[float, float] | None = None,
-                      limits_justification: str | None = None) -> dict[str, Any]:
+                      limits_justification: str | None = None,
+                      layout: dict[Any, tuple[Any, Any, Any]] | None = None) -> dict[str, Any]:
     """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``).
+
+    ``layout`` ({subject: (sequence, test period, reference period)}) selects the 2x2 crossover model with
+    sequence, subject(sequence), period and treatment terms; without it a crossover is the interim paired model.
 
     Any malformed input is a BEContractError, never another exception."""
     try:
         return _assess(records, design, profile, test, reference, prespecified_exclusions, limits,
-                       limits_justification)
+                       limits_justification, layout)
     except BEContractError:
         raise
     except (TypeError, ValueError, ArithmeticError, InvalidOperation, KeyError, AttributeError) as exc:
@@ -262,14 +288,17 @@ def _exclusion_map(prespecified_exclusions, subjects) -> dict[Any, str]:
     return excluded
 
 
-def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification):
+def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification,
+            layout=None):
     prof, lo, hi = _validate(records, design, profile, test, reference, limits, limits_justification)
     by = _index(records, design, test, reference)
     subjects = set(by[test]) | set(by[reference])
     excluded = _exclusion_map(prespecified_exclusions, subjects)
     names = sorted({k for arm in by.values() for p in arm.values() for k in p})
     ledger: list[dict] = []
-    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger) for n in names}
+    layout = layout if design == "crossover" else None
+    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger, layout)
+              for n in names}
     custom = (lo, hi) != (prof.lower, prof.upper)
     return {
         "design": design, "profile": prof.name, "profile_source": prof.source,
@@ -280,7 +309,7 @@ def _assess(records, design, profile, test, reference, prespecified_exclusions, 
                      "implementation convention (the guidance does not define tie handling)" if prof.rounding_source
                      else "none (the profile's source states no rounding rule)"),
         "rounding_mode": "ROUND_HALF_UP" if prof.rounding_source else None,
-        "model": INTERIM_MODEL,
+        "model": MODEL_2X2 if layout is not None else INTERIM_MODEL,
         "ignored_treatments": sorted({r["treatment"] for r in records} - {test, reference}, key=str),
         "parameters": params, "exclusions": ledger,
         "bioequivalent": bool(params) and all(p["within_limits"] for p in params.values()),
