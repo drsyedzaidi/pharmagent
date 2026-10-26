@@ -418,9 +418,29 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     subjects, _multi, _has_pd, n_blq = _build_subjects_counted(df, _roles(df, state))
     indiv = {f["subject"]: f["params"] for f in fits
              if f.get("converged") and f.get("params")}
-
-    ovp = obs_vs_pred(model_key, subjects, indiv, typical)
     iiv = {k: v.get("iiv_cv_pct") for k, v in (pop.get("parameters") or {}).items()}
+
+    # Fitted-model fidelity: when a converged NLME fit of THIS model carries a
+    # covariate model or a correlated Omega, simulate THAT model (single
+    # provenance: its theta, Omega, EBE-based individual parameters, covariate
+    # multipliers and full Omega) rather than the two-stage typical values, which
+    # have neither. Otherwise the legacy two-stage path is unchanged.
+    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
+    if nl is not None and nl.get("model_key") != model_key:
+        nl = None
+    cov_fx = om_mat = om_par = None
+    if nl and nl.get("theta") and (nl.get("covariate_effects") or nl.get("omega_matrix")):
+        typical = {**model.defaults, **nl["theta"]}
+        iiv = nl.get("omega_cv_pct") or iiv
+        cov_fx = nl.get("covariate_effects") or None
+        om_mat = nl.get("omega_matrix")
+        om_par = list(nl.get("iiv_params") or []) or None
+        nl_ind = {r["subject"]: r["params"] for r in (nl.get("individual") or [])
+                  if r.get("params")}
+        indiv = nl_ind or indiv
+    fx = dict(covariate_effects=cov_fx, omega_matrix=om_mat, omega_params=om_par)
+
+    ovp = obs_vs_pred(model_key, subjects, indiv, typical, covariate_effects=cov_fx)
 
     # representative regimen for the VPC band: the most common dose group
     groups: dict[Any, list[dict]] = {}
@@ -434,7 +454,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
         rep = max(grp, key=lambda s: len(s["obs_t"]))
         tmax = float(max(rep["obs_t"])) if len(rep["obs_t"]) else 24.0
         band = vpc_band(model_key, typical, iiv, rep["doses"], tmax=tmax,
-                        wt=float(rep.get("wt", 70.0)))
+                        wt=float(rep.get("wt", 70.0)), cov=rep.get("cov"), **fx)
         for s in grp:
             obs_t += [float(t) for t in s["obs_t"]]
             obs_c += [float(c) for c in s["obs_c"]]
@@ -442,14 +462,13 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
     # Prediction-corrected VPC over the whole dataset. Residual error: prefer a
     # fitted NLME sigma; otherwise use the log-scale GOF RMSE as a proportional
     # proxy so the simulated band reflects realistic scatter.
-    nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
     sig = (nl or {}).get("sigma") or {}
     sigma_prop = float(sig.get("prop") or 0.0)
     sigma_add = float(sig.get("add") or 0.0)
     if sigma_prop <= 0.0 and sigma_add <= 0.0:
         sigma_prop = float(ovp["gof"].get("rmse_log_ipred") or 0.1) or 0.1
     pc = pcvpc(model_key, subjects, typical, iiv,
-               sigma_prop=sigma_prop, sigma_add=sigma_add)
+               sigma_prop=sigma_prop, sigma_add=sigma_add, **fx)
 
     payload = {"status": "ok", "model_key": model_key, "label": model.label,
                "gof": ovp["gof"], "obs_vs_pred": {k: ovp[k] for k in ("observed", "ipred", "pred")},
@@ -476,7 +495,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
                 model_key, subjects, typical, iiv,
                 stratify_by=stratify_by,
                 correction="dose" if dose_normalize else "pred", x_by=x_by,
-                sigma_prop=sigma_prop, sigma_add=sigma_add)
+                sigma_prop=sigma_prop, sigma_add=sigma_add, **fx)
 
     # Exposure predictive check (Week-11): observed group-mean AUC/Cmax vs the
     # simulated-replicate mean distribution. Additive; grouped by the requested
@@ -485,7 +504,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
         exp_group = stratify_by or "DOSE"
         payload["exposure_pc"] = exposure_predictive_check(
             model_key, subjects, typical, iiv, group_by=exp_group,
-            sigma_prop=sigma_prop, sigma_add=sigma_add)
+            sigma_prop=sigma_prop, sigma_add=sigma_add, **fx)
 
     # BLQ-incidence VPC (Week-11): needs censoring flags, so subjects are rebuilt
     # with with_blq=True (BLQ rows carry the LLOQ in DV; the overlay drops them, M1)
@@ -504,7 +523,7 @@ def run_vpc(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolRe
             lloq = float(np.median(lloqs)) if lloqs else None
         payload["blq_vpc"] = blq_predictive_check(
             model_key, blq_subjects, typical, iiv, lloq=lloq,
-            sigma_prop=sigma_prop, sigma_add=sigma_add, x_by=x_by)
+            sigma_prop=sigma_prop, sigma_add=sigma_add, x_by=x_by, **fx)
 
     g = ovp["gof"]
     strat = payload.get("stratified")
@@ -563,6 +582,16 @@ def _covariate_rows(state: PharmState, ctx: ToolContext) -> tuple[list[dict], li
     return cov_rows, wt_rows
 
 
+def _fitted_omega_kwargs(fit: dict | None) -> dict[str, Any]:
+    """``omega_matrix`` / ``omega_params`` of the fit the
+    simulation adopted (empty for a diagonal fit, which keeps the %CV draws)."""
+    out: dict[str, Any] = {}
+    if fit and fit.get("omega_matrix") and fit.get("iiv_params"):
+        out["omega_matrix"] = fit["omega_matrix"]
+        out["omega_params"] = list(fit["iiv_params"])
+    return out
+
+
 def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Clinical trial simulation → probability of target attainment across doses."""
     from app.compute.clinsim import clinical_trial_simulation  # lazy: may import nlme
@@ -588,8 +617,11 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
     # Single provenance: if we adopt the NLME covariate model, take that fit's
     # theta AND between-subject variability too — never layer an NLME covariate
     # model onto two-stage typical values (a hybrid that is neither validated fit).
-    if cov_effects and nl.get("theta"):
+    # A correlated-Omega fit is adopted the same way, so its covariances survive.
+    om_src = None
+    if (cov_effects or (nl or {}).get("omega_matrix")) and nl.get("theta"):
         typical = {**model.defaults, **nl["theta"]}
+        om_src = nl
         if nl.get("omega_cv_pct"):
             iiv = nl["omega_cv_pct"]
             iiv_params = list(nl.get("iiv_params") or iiv_params)
@@ -636,7 +668,7 @@ def run_clinsim(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
         target_fraction=float(args.get("target_fraction", 0.9)),
         cov_rows=cov_rows if cov_effects else None, wt_rows=wt_rows,
         covariate_effects=cov_effects, n_subjects=n_subjects,
-        param_draws=param_draws)
+        param_draws=param_draws, **_fitted_omega_kwargs(om_src))
 
     if payload.get("status") != "ok":
         return ToolResult(summary=f"Clinical trial simulation: {payload.get('message', payload['status'])}.",
@@ -790,18 +822,21 @@ def run_special_population(state: PharmState, ctx: ToolContext, args: dict[str, 
     cov_effects = None
     # Single provenance: when we adopt a fit's covariate model, take that fit's
     # theta AND between-subject variability (omega), never mix with the two-stage IIV.
+    om_src = None
     if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
         final = scm_outer["final"]
         if final.get("model_key") == model_key:
             cov_effects = final.get("covariate_effects")
             typical = {**model.defaults, **(final.get("theta") or typical)}
+            om_src = final
             if final.get("omega_cv_pct"):
                 iiv = final["omega_cv_pct"]
                 iiv_params = list(final.get("iiv_params") or iiv_params)
     if cov_effects is None and nl and nl.get("model_key") == model_key:
         cov_effects = nl.get("covariate_effects")
-        if cov_effects and nl.get("theta"):
+        if (cov_effects or nl.get("omega_matrix")) and nl.get("theta"):
             typical = {**model.defaults, **nl["theta"]}
+            om_src = nl
             if nl.get("omega_cv_pct"):
                 iiv = nl["omega_cv_pct"]
                 iiv_params = list(nl.get("iiv_params") or iiv_params)
@@ -837,7 +872,8 @@ def run_special_population(state: PharmState, ctx: ToolContext, args: dict[str, 
         covariate_effects=cov_effects, metrics=metrics,
         reference_stratum=args.get("reference_stratum", "Normal"),
         reference_dose=args.get("reference_dose"),
-        n_per_stratum=int(args.get("n_per_stratum", 600)))
+        n_per_stratum=int(args.get("n_per_stratum", 600)),
+        **_fitted_omega_kwargs(om_src))
     # A covariate model that includes the stratifying covariate is what makes the
     # strata differ; flag when it is missing so a flat result is not misread.
     cov_in_model = bool(cov_effects) and any(
@@ -924,6 +960,8 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
 
     from app.compute.clinsim import (  # lazy: imports nlme
         _cv_pct_to_omega2,
+        _draw_etas,
+        _omega_for_sampling,
         individual_exposures,
         pediatric_reference_population,
         pediatric_simulation,
@@ -946,19 +984,22 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
     nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else None
     scm_outer = state.scm_results if (state.scm_results or {}).get("status") == "ok" else None
     cov_effects = None
+    om_src = None
     # Single provenance: adopt the covariate model's fit theta AND omega together.
     if scm_outer and (scm_outer.get("final") or {}).get("covariate_effects"):
         final = scm_outer["final"]
         if final.get("model_key") == model_key:
             cov_effects = final.get("covariate_effects")
             typical = {**model.defaults, **(final.get("theta") or typical)}
+            om_src = final
             if final.get("omega_cv_pct"):
                 iiv = final["omega_cv_pct"]
                 iiv_params = list(final.get("iiv_params") or iiv_params)
     if cov_effects is None and nl and nl.get("model_key") == model_key:
         cov_effects = nl.get("covariate_effects")
-        if cov_effects and nl.get("theta"):
+        if (cov_effects or nl.get("omega_matrix")) and nl.get("theta"):
             typical = {**model.defaults, **nl["theta"]}
+            om_src = nl
             if nl.get("omega_cv_pct"):
                 iiv = nl["omega_cv_pct"]
                 iiv_params = list(nl.get("iiv_params") or iiv_params)
@@ -1002,10 +1043,12 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
             adult_wt = [adult_wt[i] for i in keep]
     rng = np.random.default_rng(20250614)
     sds = {p: (_cv_pct_to_omega2(iiv.get(p)) ** 0.5) for p in iiv_params}
+    omega_kw = _fitted_omega_kwargs(om_src)
     adults = [{"subject": str(i), "cov": adult_rows[i], "wt": float(adult_wt[i])}
               for i in range(len(adult_rows))]
-    etas = {str(i): {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
-            for i in range(len(adult_rows))}
+    omega = _omega_for_sampling(iiv_params, omega_kw.get("omega_matrix"),
+                                omega_kw.get("omega_params"))
+    etas = {str(i): _draw_etas(rng, iiv_params, sds, omega) for i in range(len(adult_rows))}
     adult_ie = individual_exposures(
         model_key, theta=typical, subjects=adults, etas=etas, covariate_effects=cov_effects,
         iiv_params=iiv_params, dose=ref_dose, tau=tau, n_doses=n_doses, wt_exponents=wt_exponents)
@@ -1023,7 +1066,8 @@ def run_pediatric_simulation(state: PharmState, ctx: ToolContext, args: dict[str
     payload = pediatric_simulation(
         model_key, theta=typical, omega_cv_pct=iiv, iiv_params=iiv_params, cov_rows=ped_rows,
         wt_rows=ped_wt, reference_exposures=ref_exp, doses=doses, tau=tau, n_doses=n_doses,
-        covariate_effects=cov_effects, wt_exponents=wt_exponents, n_per_stratum=n_per)
+        covariate_effects=cov_effects, wt_exponents=wt_exponents, n_per_stratum=n_per,
+        **omega_kw)
     if payload.get("status") == "ok":
         payload["reference_dose"] = ref_dose
         payload["reference_source"] = adult_source
@@ -1457,7 +1501,8 @@ def run_diagnostics(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
             iiv_params=list(nl.get("iiv_params") or []),
             error_model=nl.get("error_model", "proportional"),
             covariate_effects=nl.get("covariate_effects"),
-            etas=etas, interaction=interaction)
+            etas=etas, interaction=interaction,
+            omega_matrix=nl.get("omega_matrix"))
 
         if n_blq > 0:
             npde_res = {"status": "blq_unsupported", "n_blq": n_blq,
@@ -1467,7 +1512,10 @@ def run_diagnostics(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
                                     "observed side creates a spurious trend near the LLOQ.")}
         else:
             npde_res = npde(model_key, subjects, theta_nl, omega_cv,
-                            sigma_prop=sigma_prop, sigma_add=sigma_add)
+                            sigma_prop=sigma_prop, sigma_add=sigma_add,
+                            covariate_effects=nl.get("covariate_effects") or None,
+                            omega_matrix=nl.get("omega_matrix"),
+                            omega_params=list(nl.get("iiv_params") or []) or None)
 
     payload = {"status": "ok", "model_key": model_key, "label": model.label,
                "residuals": res, "cwres": cwres_res, "npde": npde_res,
