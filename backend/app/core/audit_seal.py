@@ -35,10 +35,14 @@ from typing import IO, Protocol
 from app.core.audit import GENESIS, AuditChain
 
 NO_SEAL = "0" * 64
-SEAL_VERSION = 1
+SEAL_VERSION = 2
+LEGACY_SEAL_VERSION = 1   # no state_digest field; verified as before, state_binding="absent"
 MAC_ALGORITHM = "HMAC-SHA-256"
 _SEAL_DOMAIN = b"pharmagent.audit-seal.v1\x00"
 _SNAPSHOT_DOMAIN = b"pharmagent.audit-snapshot.v1\x00"
+_STATE_DOMAIN = b"pharmagent.session-state.v1\x00"
+# Recomputed from the audit chain on every read (Orchestrator._refresh_provenance_status), never trusted.
+TRANSIENT_STATE_FIELDS = ("run_provenance_status", "run_provenance_assurance")
 _KEY_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _UNSET = object()
@@ -141,6 +145,18 @@ class AuditKeyring:
         return hmac.compare_digest(expected, candidate)
 
 
+def state_digest(state: Mapping) -> str:
+    """SHA-256 over the canonical persisted state, minus the transient provenance verdict fields."""
+    try:   # normalise exactly as the store persists it (default=str), so save- and load-side digests agree
+        plain = json.loads(json.dumps(dict(state), default=str))
+    except (TypeError, ValueError) as exc:
+        raise AuditIntegrityError("session state is not canonical JSON") from exc
+    for name in TRANSIENT_STATE_FIELDS:
+        plain.pop(name, None)
+    body = json.dumps(plain, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(_STATE_DOMAIN + body).hexdigest()
+
+
 @dataclass(frozen=True)
 class AuditSeal:
     seal_version: int
@@ -157,21 +173,29 @@ class AuditSeal:
     key_id: str
     baseline: str
     legacy_entry_count: int
+    state_digest: str = ""   # v2+: signed commitment to sessions.state_json; absent from v1 seals
     seal_mac: str = ""
 
-    def payload(self) -> dict:
+    def to_dict(self) -> dict:
         value = asdict(self)
-        value.pop("seal_mac")
+        if self.seal_version < 2:   # v1 seals were signed and stored without the field
+            value.pop("state_digest")
         return value
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def payload(self) -> dict:
+        value = self.to_dict()
+        value.pop("seal_mac")
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping | None) -> AuditSeal:
         if not isinstance(value, Mapping):
             raise AuditIntegrityError("audit seal is missing or malformed")
         expected = {item.name for item in fields(cls)}
+        if value.get("seal_version") == LEGACY_SEAL_VERSION and "state_digest" not in value:
+            value = {**value, "state_digest": ""}
+        elif value.get("seal_version") == LEGACY_SEAL_VERSION:
+            raise AuditIntegrityError("audit seal has an unsupported schema")
         if set(value) != expected:
             raise AuditIntegrityError("audit seal has an unsupported schema")
         try:
@@ -192,7 +216,7 @@ class AuditSeal:
             seal.seal_mac,
         )
         if (
-            seal.seal_version != SEAL_VERSION
+            seal.seal_version not in (LEGACY_SEAL_VERSION, SEAL_VERSION)
             or seal.mac_algorithm != MAC_ALGORITHM
             or not all(isinstance(item, str) for item in string_values)
             or type(seal.generation) is not int
@@ -206,6 +230,8 @@ class AuditSeal:
             or not _HEX64.fullmatch(seal.semantic_digest)
             or not _HEX64.fullmatch(seal.previous_seal_mac)
             or not _HEX64.fullmatch(seal.seal_mac)
+            or not isinstance(seal.state_digest, str)
+            or (seal.seal_version >= 2) != bool(_HEX64.fullmatch(seal.state_digest))
             or seal.baseline not in {"fresh", "operator_attested_legacy"}
         ):
             raise AuditIntegrityError("audit seal contains unsupported values")
@@ -443,7 +469,11 @@ class AuditSecurity:
         previous: AuditSeal | None = None,
         baseline: str = "fresh",
         legacy_entry_count: int = 0,
+        state: Mapping | None = None,
     ) -> AuditSeal:
+        """Seal the audit snapshot (and, when ``state`` is given, the persisted session state).
+
+        ``state=None`` yields a legacy-format v1 seal; production callers always pass the state."""
         if previous is not None:
             if previous.session_id != session_id:
                 raise AuditIntegrityError("audit seal session changed")
@@ -455,7 +485,8 @@ class AuditSecurity:
         if not isinstance(entry_head, str):
             raise AuditIntegrityError("audit entry head is malformed")
         unsigned = AuditSeal(
-            seal_version=SEAL_VERSION,
+            seal_version=SEAL_VERSION if state is not None else LEGACY_SEAL_VERSION,
+            state_digest=state_digest(state) if state is not None else "",
             mac_algorithm=MAC_ALGORITHM,
             installation_id=self.anchor.installation_id,
             session_id=session_id,
@@ -471,7 +502,7 @@ class AuditSecurity:
             legacy_entry_count=legacy_entry_count,
         )
         key_id, seal_mac = self.keyring.sign(self._seal_payload(unsigned))
-        return AuditSeal(**{**unsigned.to_dict(), "key_id": key_id, "seal_mac": seal_mac})
+        return AuditSeal(**{**asdict(unsigned), "key_id": key_id, "seal_mac": seal_mac})
 
     def _verify_mac(self, seal: AuditSeal) -> bool:
         if seal.installation_id != self.anchor.installation_id:
@@ -512,6 +543,7 @@ class AuditSecurity:
         *,
         owner: str | None | object = _UNSET,
         created_at: str | object = _UNSET,
+        state: Mapping | None | object = _UNSET,
     ) -> bool:
         head = entries[-1].get("entry_hash", GENESIS) if entries else GENESIS
         return (
@@ -522,7 +554,15 @@ class AuditSecurity:
             and seal.entry_head == head
             and hmac.compare_digest(seal.semantic_digest, audit_snapshot_digest(entries))
             and self._verify_mac(seal)
+            and self._state_matches(seal, state) is not False
         )
+
+    @staticmethod
+    def _state_matches(seal: AuditSeal, state: Mapping | None | object) -> bool | None:
+        """True/False for a v2 seal, None when there is nothing to compare (legacy seal or no state given)."""
+        if seal.seal_version < 2 or state is _UNSET or state is None:
+            return None
+        return hmac.compare_digest(seal.state_digest, state_digest(state))
 
     def assert_current(
         self,
@@ -533,6 +573,7 @@ class AuditSecurity:
         owner: str | None | object = _UNSET,
         created_at: str | object = _UNSET,
         recover: bool = False,
+        state: Mapping | None | object = _UNSET,
     ) -> AuditSeal:
         chain_status = AuditChain.from_list(entries).verify_status()
         if not chain_status["ok"]:
@@ -548,6 +589,8 @@ class AuditSecurity:
             session_id, entries, seal, owner=owner, created_at=created_at
         ):
             raise AuditIntegrityError("audit snapshot does not match its keyed seal")
+        if self._state_matches(seal, state) is False:
+            raise AuditIntegrityError("persisted session state does not match its keyed seal")
         anchored = self.anchor_head(session_id)
         if anchored is None:
             if (
@@ -579,6 +622,7 @@ class AuditSecurity:
         *,
         owner: str | None | object = _UNSET,
         created_at: str | object = _UNSET,
+        state: Mapping | None | object = _UNSET,
     ) -> dict:
         chain_status = AuditChain.from_list(entries).verify_status()
         status = {
@@ -592,6 +636,7 @@ class AuditSecurity:
             "generation": None,
             "key_id": None,
             "trusted_since_index": None,
+            "state_binding": None,
         }
         try:
             seal = AuditSeal.from_dict(seal_value)
@@ -600,6 +645,10 @@ class AuditSecurity:
         mac_ok = self._verify_snapshot(
             session_id, entries, seal, owner=owner, created_at=created_at
         )
+        # "absent": legacy v1 seal, the state row is NOT covered (rebound at the next legitimate save).
+        state_ok = self._state_matches(seal, state)
+        state_binding = ("absent" if seal.seal_version < 2 else
+                         "unchecked" if state_ok is None else "verified" if state_ok else "mismatch")
         anchored = self.anchor_head(session_id)
         anchor_ok = (
             anchored is not None
@@ -610,7 +659,8 @@ class AuditSecurity:
             **status,
             "mac_ok": mac_ok,
             "anchor_ok": anchor_ok,
-            "verified": bool(chain_status["ok"] and mac_ok and anchor_ok),
+            "verified": bool(chain_status["ok"] and mac_ok and anchor_ok and state_binding != "mismatch"),
+            "state_binding": state_binding,
             "baseline": seal.baseline,
             "generation": seal.generation,
             "key_id": seal.key_id,
@@ -701,6 +751,7 @@ def enroll_legacy_session(
         entries=entries,
         baseline="operator_attested_legacy",
         legacy_entry_count=legacy_count,
+        state=row["state"],
     )
     store.save_secured(
         id=session_id,
@@ -718,6 +769,7 @@ def enroll_legacy_session(
         commands=row["commands"],
         expected_audit_json=row["_audit_json_raw"],
         expected_audit_seal_json=None,
+        expected_state_json=row["_state_json_raw"],
     )
     security.advance(NO_SEAL, seal)
-    return security.inspect(session_id, entries, seal.to_dict())
+    return security.inspect(session_id, entries, seal.to_dict(), state=row["state"])

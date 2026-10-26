@@ -109,6 +109,7 @@ class SessionStore:
         commands: list[dict] | None = None,
         expected_audit_json: str | None,
         expected_audit_seal_json: str | None,
+        expected_state_json: str | None = None,
     ) -> None:
         """Persist a sealed session using an exact audit+seal predecessor CAS.
 
@@ -170,6 +171,9 @@ class SessionStore:
                         expected_audit_json,
                         expected_audit_seal_json,
                     )
+                if expected_state_json is not None:   # the sealed state must be the one we verified
+                    seal_predicate += " AND state_json=?"
+                    predicate_values = (*predicate_values, expected_state_json)
                 cursor = self._conn.execute(
                     f"""UPDATE sessions SET
                           owner=?, updated_at=?, state_json=?, audit_json=?,
@@ -212,5 +216,6 @@ class SessionStore:
                 json.loads(r["audit_seal_json"]) if r["audit_seal_json"] else None
             ),
             "_audit_json_raw": r["audit_json"],
+            "_state_json_raw": r["state_json"],
             "_audit_seal_json_raw": r["audit_seal_json"],
         }

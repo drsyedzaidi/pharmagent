@@ -74,7 +74,7 @@ def test_a_new_session_records_the_catalog_identity_at_creation(orch):
 
     prov = dict(orch.create_session().state.run_provenance)
     assert {k: prov[k] for k in catalog_identity()} == catalog_identity()
-    assert prov == collect_provenance()                      # the same fingerprint the genesis entry hashes
+    assert prov == collect_provenance(llm_provider="mock", llm_model="mock")                      # the same fingerprint the genesis entry hashes
 
 
 def test_the_genesis_audit_entry_binds_the_recorded_provenance(orch):
@@ -92,7 +92,7 @@ def test_the_record_is_a_snapshot_taken_at_creation(orch, monkeypatch):
     before = sess.state.run_provenance
     import app.core.orchestrator as orch_mod
     monkeypatch.setattr(orch_mod, "collect_provenance",
-                        lambda: {**dict(before), "conventions_catalog_version": "9.9.9"})
+                        lambda **_kw: {**dict(before), "conventions_catalog_version": "9.9.9"})
     assert orch.get_session(sess.id).state.run_provenance == before
     assert dict(orch.create_session().state.run_provenance)["conventions_catalog_version"] == "9.9.9"
 

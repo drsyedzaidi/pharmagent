@@ -12,6 +12,7 @@ import shutil
 import threading
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,9 +26,11 @@ from app.core import policy
 from app.core.audit import AuditChain
 from app.core.audit_seal import (
     NO_SEAL,
+    SEAL_VERSION,
     AuditIntegrityError,
     AuditSecurity,
     audit_security_from_settings,
+    state_digest,
 )
 from app.core.dataset_store import DatasetCache, SessionDatasets
 from app.core.llm import LLM, get_llm
@@ -35,6 +38,7 @@ from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import (
     ProvenanceQuarantined,
     collect_provenance,
+    describe_llm,
     genesis_outputs,
     verify_run_provenance,
 )
@@ -59,6 +63,18 @@ def _iso_clock() -> str:
 
 class AccessError(Exception):
     """Raised when a caller requests a session they do not own."""
+
+
+llm_change_actor: ContextVar[str] = ContextVar("llm_change_actor", default="system")
+
+
+class StaleGateError(Exception):
+    """A gate decision named a gate that is no longer the session's pending one."""
+
+
+def _new_gate(after_step: int, label: str | None, **extra: Any) -> dict[str, Any]:
+    """A pending-review record with a unique id, so a decision can only apply to the gate it was shown."""
+    return {"after_step": after_step, "label": label, "gate_id": uuid.uuid4().hex[:16], **extra}
 
 
 @dataclass
@@ -89,6 +105,7 @@ class Orchestrator:
                  skills: SkillStore | None = None,
                  audit_security: AuditSecurity | None | object =
                  _AUDIT_SECURITY_FROM_SETTINGS) -> None:
+        settings.data_dir.mkdir(parents=True, exist_ok=True)   # was an import-time side effect of app.config
         self.llm = llm or get_llm()
         self.registry = registry or default_registry()
         self.supervisor = Supervisor(self.llm)
@@ -118,9 +135,27 @@ class Orchestrator:
 
     def set_llm(self, llm: LLM) -> None:
         """Swap the routing/tool-selection model at runtime (UI provider switch).
-        Tools, state and audit are untouched — the LLM only decides what to call."""
+        Tools and state are untouched — the LLM only decides what to call. The switch applies to every session,
+        so it is recorded (provider, model, base-URL host; never a key) in each loaded writable session's audit
+        chain; genesis provenance keeps naming the LLM the session was created under."""
+        before, after = describe_llm(self.llm), describe_llm(llm)
         self.llm = llm
         self.supervisor = Supervisor(llm)
+        if before == after:
+            return
+        actor = llm_change_actor.get()
+        for sid, sess in list(self.sessions.items()):
+            try:
+                with self.session_lock(sid):
+                    self._ensure_writable(sess)
+                    sess.audit.append(
+                        agent="system", tool="llm_config", action="llm_config_changed",
+                        inputs={"from": before}, outputs={"to": after},
+                        timestamp=self.clock(), actor=actor,
+                        reason="runtime LLM switch applies to all sessions")
+                    self._persist(sess)
+            except Exception:   # one session's refusal (quarantine, sealed-store conflict) must not block the switch
+                log.warning("llm_change_not_recorded", extra={"session": sid}, exc_info=True)
 
     def session_lock(self, sid: str) -> threading.RLock:
         """Return (creating if needed) the per-session mutation lock."""
@@ -153,12 +188,14 @@ class Orchestrator:
             if self.audit_security is not None:
                 self.audit_security.assert_current(
                     row["id"], row["audit"], row["audit_seal"],
-                    owner=row["owner"], created_at=row["created_at"], recover=True
+                    owner=row["owner"], created_at=row["created_at"], recover=True,
+                    state=row["state"]
                 )
             seal_baseline = None
             if self.audit_security is not None:
                 seal_baseline = self.audit_security.inspect(
-                    row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"]
+                    row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"],
+                    state=row["state"]
                 ).get("baseline")
             ctx = self._new_context(row["id"])
             state = PharmState.model_validate(row["state"])
@@ -254,11 +291,14 @@ class Orchestrator:
         previous = None
         expected_audit_json = None
         expected_seal_json = None
+        expected_state_json = None
         if row is not None:
             previous = self.audit_security.assert_current(
                 sess.id, row["audit"], row["audit_seal"],
-                owner=row["owner"], created_at=row["created_at"], recover=True
+                owner=row["owner"], created_at=row["created_at"], recover=True,
+                state=row["state"]
             )
+            expected_state_json = row["_state_json_raw"]
             expected_audit_json = row["_audit_json_raw"]
             expected_seal_json = row["_audit_seal_json_raw"]
             current = row["audit"]
@@ -277,6 +317,8 @@ class Orchestrator:
             previous is not None
             and proposed_entries == row["audit"]
             and previous.key_id == self.audit_security.keyring.active_key_id
+            and previous.seal_version == SEAL_VERSION
+            and previous.state_digest == state_digest(values["state"])
         ):
             seal = previous
         else:
@@ -287,6 +329,7 @@ class Orchestrator:
                 entries=proposed_entries,
                 previous=previous,
                 baseline="fresh",
+                state=values["state"],
             )
         try:
             self.store.save_secured(
@@ -294,6 +337,7 @@ class Orchestrator:
                 audit_seal=seal.to_dict(),
                 expected_audit_json=expected_audit_json,
                 expected_audit_seal_json=expected_seal_json,
+                expected_state_json=expected_state_json,
             )
         except SecureWriteConflict as exc:
             raise AuditIntegrityError(
@@ -347,7 +391,7 @@ class Orchestrator:
             }
         return {**self.audit_security.inspect(
             sid, row["audit"], row["audit_seal"],
-            owner=row["owner"], created_at=row["created_at"]
+            owner=row["owner"], created_at=row["created_at"], state=row["state"]
         ), "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance}
 
     def _is_human_only(self, tool: str) -> bool:
@@ -364,7 +408,9 @@ class Orchestrator:
     # -- sessions ----------------------------------------------------------
     def create_session(self, owner: str | None = None) -> Session:
         sid = f"sess_{uuid.uuid4().hex[:8]}"
-        prov = collect_provenance()     # recorded once, at creation: kept in state and bound into the genesis entry
+        llm_now = describe_llm(self.llm)
+        # recorded once, at creation: kept in state and bound into the genesis entry
+        prov = collect_provenance(llm_provider=llm_now["provider"], llm_model=llm_now["model"])
         sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=tuple(prov.items())),
                        ctx=self._new_context(sid),
                        owner=owner, created_at=self.clock(),
@@ -418,6 +464,11 @@ class Orchestrator:
         with self.session_lock(sid):
             sess = self.get_session(sid)
             self._ensure_writable(sess)
+            now = describe_llm(self.llm)       # which model acts on this turn (the LLM can be switched at runtime)
+            sess.audit.append(
+                agent="supervisor", tool="chat", action=f"chat_turn(llm={now['provider']}:{now['model']})",
+                inputs={"llm": now}, outputs={"status": "started"},
+                timestamp=self.clock(), actor=actor or "")
             primary_agent, primary_method = self.supervisor.route(message)
             plan = self.supervisor.route_plan(message)
             all_messages: list[str] = []
@@ -810,12 +861,20 @@ class Orchestrator:
 
     def resume_workflow(self, sid: str, approve: bool = True,
                         actor: str | None = None, reason: str = "",
-                        allow_expensive: bool = False) -> dict[str, Any]:
+                        allow_expensive: bool = False,
+                        gate_id: str | None = None) -> dict[str, Any]:
+        """``gate_id`` (the id in the pending review the client was shown) is verified here, under the
+        session lock, before the gate is consumed; the HTTP layer always supplies it. ``None`` skips
+        the check for in-process callers that drive a single known gate."""
         with self.session_lock(sid):
             sess = self.get_session(sid)
             self._ensure_writable(sess)
             if not sess.pending_review:
                 raise ValueError("no pending review to resume")
+            if gate_id is not None and sess.pending_review.get("gate_id") != gate_id:
+                raise StaleGateError(
+                    "this gate was already decided or is not the session's current gate; "
+                    "refetch GET /workflow/pending before deciding again")
             wf = get_workflow(sess.state.workflow_name)
             params = sess.params
             review = dict(sess.pending_review)
@@ -918,7 +977,7 @@ class Orchestrator:
             i += 1
             sess.state = apply_writes(sess.state, "supervisor", {"current_step": i})
             if step.get("gate"):
-                sess.pending_review = {"after_step": i - 1, "label": step.get("label")}
+                sess.pending_review = _new_gate(i - 1, step.get("label"))
                 self._persist(sess)
                 return {"status": "awaiting_review", "executed": executed,
                         "review": sess.pending_review, "state": sess.state.model_dump(),
@@ -1143,9 +1202,9 @@ class Orchestrator:
             outputs={"status": "pending_approval", "agent": tool.agent,
                      "rationale": rationale, "gate_reason": gate_reason},
             timestamp=ts, actor=actor)
-        sess.pending_review = {"after_step": sess.state.current_step - 1,
-                               "label": f"Planner proposes {tool_name}",
-                               "proposal": {"tool": tool_name, "agent": tool.agent, "args": args}}
+        sess.pending_review = _new_gate(
+            sess.state.current_step - 1, f"Planner proposes {tool_name}",
+            proposal={"tool": tool_name, "agent": tool.agent, "args": args})
         return self._goal_payload(sess, "awaiting_review", executed,
                                   review=sess.pending_review, proposal=pending)
 

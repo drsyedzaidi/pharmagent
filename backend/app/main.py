@@ -23,7 +23,7 @@ from app.core import cdisc, export_provenance, exporters
 from app.core.audit_seal import AuditSecurityError
 from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
-from app.core.orchestrator import AccessError, Orchestrator
+from app.core.orchestrator import AccessError, Orchestrator, StaleGateError, llm_change_actor
 from app.core.provenance import ProvenanceQuarantined
 from app.core.skills import SkillOwnershipError
 from app.workflows import WORKFLOWS, get_workflow
@@ -203,6 +203,9 @@ class WorkflowRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     approve: bool = True
+    # Id of the gate being decided (``review.gate_id`` from the response that paused the run).
+    # Required: a decision applies to exactly the gate the reviewer saw, never the next one.
+    gate_id: str
     reason: str = ""          # reason-for-change / approval note (audited)
     # Approving a gate runs every remaining step in one call. For a template
     # whose remainder is a population fit (poppk_full: NLME -> SCM -> VPC) that
@@ -311,6 +314,7 @@ class RefitLzRequest(BaseModel):
     subject: str
     selected_times: list[float]
     selected_concs: list[float]
+    reason: str = ""          # analyst's reason for the manual window (audited)
 
 
 class FlexplotRequest(BaseModel):
@@ -366,7 +370,11 @@ def set_llm_config(req: LlmChoiceRequest, owner: str | None = Depends(current_ow
     if req.test_only:
         return {"ok": True, "tested": choice.public(), "detail": result["detail"],
                 "current": llm_manager.choice.public()}
-    llm_manager.apply(choice, orch)
+    token = llm_change_actor.set(owner or "anonymous")   # attribution for the llm_config_changed audit entries
+    try:
+        llm_manager.apply(choice, orch)
+    finally:
+        llm_change_actor.reset(token)
     return {"ok": True, "current": llm_manager.choice.public(), "detail": result["detail"],
             "label": settings.llm_label}
 
@@ -558,6 +566,17 @@ def start_workflow(sid: str, req: WorkflowRequest, sess=Depends(owned_session),
     return _start_workflow(sid, req.name, req.params, actor)
 
 
+_STALE_GATE_MSG = ("this gate was already decided or is not the session's current gate; "
+                   "refetch GET /workflow/pending before deciding again")
+
+
+@app.get("/api/sessions/{sid}/workflow/pending")
+def pending_workflow_review(sid: str, sess=Depends(owned_session)) -> dict:
+    """The gate currently awaiting a decision (with its ``gate_id``), or ``review: null``."""
+    with orch.session_lock(sid):
+        return {"review": sess.pending_review}
+
+
 @app.post("/api/sessions/{sid}/workflow/resume")
 def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
                     actor: str = Depends(actor_id)) -> dict:
@@ -579,27 +598,37 @@ def resume_workflow(sid: str, req: ResumeRequest, sess=Depends(owned_session),
         if req.background or needs_job:
             if not sess_now.pending_review:
                 raise HTTPException(400, "no pending review to resume")
+            if sess_now.pending_review.get("gate_id") != req.gate_id:
+                raise HTTPException(409, _STALE_GATE_MSG)
             job_id = jobs.submit(
                 session_id=sid, kind="workflow_resume",
                 fn=lambda: orch.resume_workflow(sid, True, actor=actor,
                                                 reason=req.reason,
-                                                allow_expensive=True))
+                                                allow_expensive=True,
+                                                gate_id=req.gate_id))
             return {"job_id": job_id, "status": "running", "kind": "workflow_resume"}
     try:
-        return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason)
+        return orch.resume_workflow(sid, req.approve, actor=actor, reason=req.reason,
+                                    gate_id=req.gate_id)
+    except StaleGateError as e:
+        raise HTTPException(409, str(e))
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
 
 
 @app.post("/api/sessions/{sid}/nca/refit_lz")
-def refit_lz(sid: str, req: RefitLzRequest, sess=Depends(owned_session)) -> dict:
-    from app.compute.nca import refit_lambda_z_manual
+def refit_lz(sid: str, req: RefitLzRequest, sess=Depends(owned_session),
+             actor: str = Depends(actor_id)) -> dict:
+    """A manual λz window is an analyst intervention: it runs through the audited ``refit_lambda_z`` tool."""
     if len(req.selected_times) != len(req.selected_concs):
         raise HTTPException(400, "selected_times and selected_concs must be the same length")
     try:
-        return refit_lambda_z_manual(req.selected_times, req.selected_concs)
+        out = orch.run_tool(sid, "refit_lambda_z", "nca",
+                            {"subject": req.subject, "selected_times": req.selected_times,
+                             "selected_concs": req.selected_concs, "reason": req.reason}, actor=actor)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return out["result"]
 
 
 @app.post("/api/sessions/{sid}/pkmodel")

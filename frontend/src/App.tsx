@@ -3878,6 +3878,8 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState(-1);
   /** Index of the step the workflow is paused at (from the gate payload). */
   const [gateStep, setGateStep] = useState(-1);
+  /** Id of the pending gate; echoed on resume so a decision cannot land on a later gate. */
+  const [gateId, setGateId] = useState('');
   /** Executed workflow steps that put no section in the document (load,
    *  validate, adversarial review…): shown once, folded, as the run log. */
   const [runLog, setRunLog] = useState<WorkflowExecutedStep[]>([]);
@@ -4165,6 +4167,7 @@ export default function App() {
 
     if (res.status === 'awaiting_review') {
       setGateStep(res.review?.after_step ?? (res.state.current_step ?? 0) - 1);
+      setGateId(res.review?.gate_id ?? '');
       setDecision('pending');
       setWfStatus('awaiting_review');
       // ≤1180px the panel is a closed drawer: a gate opens it, so a paused run
@@ -4202,6 +4205,7 @@ export default function App() {
     // A new run has no gate yet: an earlier run's sealed decision at the same
     // step must not read as this run's.
     setGateStep(-1);
+    setGateId('');
     setActiveWorkflow(workflow);
     setLoading(true);
     setWfStatus('running');
@@ -4257,13 +4261,13 @@ export default function App() {
     let accepted = false;
     try {
       if (isLongLeg) {
-        const { job_id } = await api.resumeWorkflowAsync(session.id, reason);
+        const { job_id } = await api.resumeWorkflowAsync(session.id, gateId, reason);
         accepted = true;
         setWfStatus('running');
         handleWorkflowResponse(await pollWorkflowJob(session.id, job_id, 'Population fit running…'));
         return;
       }
-      const res = await api.resumeWorkflow(session.id, approve, reason);
+      const res = await api.resumeWorkflow(session.id, approve, gateId, reason);
       accepted = true;
       setWfStatus('running');
       await settleWorkflow(res);

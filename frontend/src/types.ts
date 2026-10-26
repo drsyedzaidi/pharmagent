@@ -1205,6 +1205,8 @@ export type WorkflowStartResponse = WorkflowResponse | WorkflowJobHandle;
 export interface WorkflowGate {
   after_step: number;
   label: string | null;
+  /** Unique id of this gate; a resume must echo it (stale ids are refused with 409). */
+  gate_id: string;
 }
 
 export interface AgentMessage {

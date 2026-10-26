@@ -103,22 +103,22 @@ export const api = {
 
   // `reason` is the reviewer's free-text note; the backend seals it into the
   // human_review audit entry (ResumeRequest.reason, default "").
-  resumeWorkflow: (sid: string, approve: boolean, reason = ''): Promise<WorkflowStartResponse> =>
+  resumeWorkflow: (sid: string, approve: boolean, gateId: string, reason = ''): Promise<WorkflowStartResponse> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve, reason }),
+      body: JSON.stringify({ approve, reason, gate_id: gateId }),
     }),
 
   // Approving a gate runs every remaining step in one call. When that remainder
   // is a population fit (poppk_full), ask for a job id and poll it rather than
   // holding the request open for minutes.
-  resumeWorkflowAsync: (sid: string, reason = ''):
+  resumeWorkflowAsync: (sid: string, gateId: string, reason = ''):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve: true, reason, background: true }),
+      body: JSON.stringify({ approve: true, reason, background: true, gate_id: gateId }),
     }),
 
   getState: (sid: string): Promise<PharmState> =>
