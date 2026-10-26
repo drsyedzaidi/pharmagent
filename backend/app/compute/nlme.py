@@ -102,6 +102,7 @@ _THETA_REL_MAX = 1e7
 _THETA_CLAMP_MARGIN = 10.0
 _SIGMA_FLOOR = 1e-4          # hard floor on a residual-error sigma
 _BIG = 1e10                  # objective value returned on any failure
+_POWELL_MAXFEV = 800         # outer-fit evaluation ceiling (a converged fit needs ~250-300)
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
 _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covariance
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
@@ -1726,13 +1727,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         return ofv
 
     # ``maxfev`` bounds the total objective evaluations (each is a full
-    # population Laplace pass), keeping wall-time predictable on large cohorts.
-    # A handful of Powell sweeps suffice because the inner EBEs are warm-started.
-    n_par = (spec.n_theta + spec.n_cov + spec.n_omega_par
-             + int(spec.has_prop) + int(spec.has_add))
+    # population Laplace pass), so wall-time stays bounded by ``max_iter``.
+    # It must NOT be tighter than Powell needs: a 12*n_par cap stopped the
+    # search after a single sweep, which the old finite-OFV rule then reported
+    # as converged. A genuinely converged fit needs ~3 sweeps (~240 evals for
+    # CL/V/KA + 2 IIV + sigma), so only ``max_iter`` bounds the budget.
     res = minimize(outer_obj, x0, method="Powell",
                    options={"maxiter": max_iter,
-                            "maxfev": min(max(12 * n_par, 24), 25 * max_iter),
+                            "maxfev": min(max(25 * max_iter, 24), _POWELL_MAXFEV),
                             "xtol": 1e-3, "ftol": 1e-3})
 
     x_final = np.asarray(res.x, dtype=float)
@@ -1745,14 +1747,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     # the reported OFV both use it. ofv_likelihood keeps the penalty-free -2LL.
     pen = tprior.penalty(theta) if tprior is not None else 0.0
     final_ofv = final_ll + pen
-    # Converged if the optimizer reports success, OR it exhausted its evaluation
-    # budget at a finite OFV that improved on the starting value (a stabilized
-    # optimum that simply did not trip Powell's strict tolerance test).
-    improved = (start_ofv["v"] is not None
-                and math.isfinite(start_ofv["v"])
-                and final_ofv <= start_ofv["v"] + 1e-6)
-    converged = (bool(res.success) or improved) \
-        and math.isfinite(final_ofv) and final_ofv < _BIG
+    # Converged only if the optimizer reports success at a finite OFV. Powell
+    # never returns a point worse than its start, so "OFV did not get worse" is
+    # not evidence of convergence; it is kept as a separate diagnostic.
+    ofv_improved = (start_ofv["v"] is not None
+                    and math.isfinite(start_ofv["v"])
+                    and final_ofv <= start_ofv["v"] + 1e-6)
+    converged = (bool(res.success)
+                 and math.isfinite(final_ofv) and final_ofv < _BIG)
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cc, omega2, s_prop, s_add, eta_hats,
@@ -1764,6 +1766,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
                        final_ofv, eta_hats, prepared, n_obs, converged,
                        int(res.nit) if hasattr(res, "nit") else eval_count["n"],
                        omega_matrix=omega_m, uncertainty=uncertainty)
+    result["ofv_improved"] = bool(ofv_improved)
     if tprior is not None:
         prior_sd = np.sqrt(np.clip(np.diag(np.linalg.inv(tprior.prec)), 0.0, None))
         result["map"] = True
@@ -2129,7 +2132,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     final_ofv, eta_hats = _population_ofv(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas,
         omega_m)
-    converged = converged or (math.isfinite(final_ofv) and final_ofv < _BIG)
+    converged = converged and math.isfinite(final_ofv) and final_ofv < _BIG
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, eta_hats,
@@ -2344,7 +2347,10 @@ def _auto_fit(model_key: str, subjects: list[dict], *,
                 model_key, subjects, seed=s,
                 compute_uncertainty=compute_uncertainty, **kw)))
 
-    winner_name, winner = min(candidates, key=lambda kv: _ofv(kv[1]))
+    # A converged candidate always beats an unconverged one; OFV breaks ties.
+    # If none converged the winner is still reported converged=False.
+    winner_name, winner = min(
+        candidates, key=lambda kv: (not kv[1].get("converged"), _ofv(kv[1])))
     if escalated:
         reason = ("starts disagreed on OFV" if disagree
                   else "a start hit the iteration cap without converging")
