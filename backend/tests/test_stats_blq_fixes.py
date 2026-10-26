@@ -33,27 +33,35 @@ def _load(orch, text: str, name: str = "d.csv"):
 
 
 # ── F-05: BE / compartmental honour CENS (M1), like compute_nca ──────────────────────────────────────────
+# PR #22's safety contract: design, profile, test and reference (and PERIOD for a crossover) are explicit.
+BE_X = {"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R", "period_col": "PERIOD"}
+BE_PARALLEL = {"design": "parallel", "profile": "fda_2026", "test": "T", "reference": "R"}
+
+
 def _be_csv(cens_dv: float) -> str:
-    lines = ["ID,TIME,DV,AMT,EVID,TRT,CENS"]
+    lines = ["ID,TIME,DV,AMT,EVID,TRT,PERIOD,SEQUENCE,CENS"]
     scale = {1: 1.0, 2: 1.2, 3: 0.9, 4: 1.1}
     for sid in (1, 2, 3, 4):
+        seq = "TR" if sid <= 2 else "RT"
         for trt, conc in (("T", CONC_T), ("R", CONC_R)):
-            lines.append(f"{sid},0,0,100,1,{trt},0")
+            per = seq.index(trt) + 1
+            d = f"{trt},{per},{seq}"
+            lines.append(f"{sid},0,0,100,1,{d},0")
             for t, c in zip(TIMES, conc, strict=True):
-                lines.append(f"{sid},{t},{c * scale[sid] * (1.05 if trt == 'T' else 1.0)},0,0,{trt},0")
+                lines.append(f"{sid},{t},{c * scale[sid] * (1.05 if trt == 'T' else 1.0)},0,0,{d},0")
             for t in (24, 48):
-                lines.append(f"{sid},{t},{cens_dv},0,0,{trt},1")
+                lines.append(f"{sid},{t},{cens_dv},0,0,{d},1")
     return "\n".join(lines) + "\n"
 
 
 def test_be_censored_rows_are_not_integrated_as_concentrations(orch):
-    a = orch.run_tool(_load(orch, _be_csv(0.5), "a.csv"), "run_bioequivalence", "be", {})["result"]
-    b = orch.run_tool(_load(orch, _be_csv(0.0), "b.csv"), "run_bioequivalence", "be", {})["result"]
+    a = orch.run_tool(_load(orch, _be_csv(0.5), "a.csv"), "run_bioequivalence", "be", BE_X)["result"]
+    b = orch.run_tool(_load(orch, _be_csv(0.0), "b.csv"), "run_bioequivalence", "be", BE_X)["result"]
     for p in ("Cmax", "AUC_last", "AUC_inf"):
         assert a["parameters"][p] == b["parameters"][p], p
     # the censored tail must equal the dataset with those rows absent
     no_tail = "\n".join(ln for ln in _be_csv(0.5).splitlines() if not ln.endswith(",1")) + "\n"
-    c = orch.run_tool(_load(orch, no_tail, "c.csv"), "run_bioequivalence", "be", {})["result"]
+    c = orch.run_tool(_load(orch, no_tail, "c.csv"), "run_bioequivalence", "be", BE_X)["result"]
     assert a["parameters"]["AUC_inf"]["gmr_pct"] == c["parameters"]["AUC_inf"]["gmr_pct"]
     assert a["parameters"]["AUC_last"]["gmr_pct"] == c["parameters"]["AUC_last"]["gmr_pct"]
 
@@ -170,19 +178,21 @@ def test_dose_proportionality_excludes_unacceptable_fits(orch):
 
 
 def test_bioequivalence_excludes_unacceptable_auc_inf_and_reports_it(orch):
-    lines = ["ID,TIME,DV,AMT,EVID,TRT"]
+    lines = ["ID,TIME,DV,AMT,EVID,TRT,PERIOD,SEQUENCE"]
     for sid in (1, 2, 3, 4, 5):
+        seq = "TR" if sid % 2 else "RT"
         for trt in ("T", "R"):
             conc = POOR if (sid == 5 and trt == "T") else GOOD
-            lines.append(f"{sid},0,0,100,1,{trt}")
-            lines += [f"{sid},{t},{c * (1.1 if trt == 'T' else 1.0) * (1 + 0.05 * sid)},0,0,{trt}"
+            d = f"{trt},{seq.index(trt) + 1},{seq}"
+            lines.append(f"{sid},0,0,100,1,{d}")
+            lines += [f"{sid},{t},{c * (1.1 if trt == 'T' else 1.0) * (1 + 0.05 * sid)},0,0,{d}"
                       for t, c in zip(LZ_T, conc, strict=True) if t > 0]
     s = _load(orch, "\n".join(lines) + "\n")
-    res = orch.run_tool(s, "run_bioequivalence", "be", {})["result"]
+    res = orch.run_tool(s, "run_bioequivalence", "be", BE_X)["result"]
     assert res["lambda_z_excluded"]["subjects"] == {"T": [5], "R": []}
     assert res["lambda_z_excluded"]["include_unacceptable"] is False
     assert res["parameters"]["AUC_inf"]["n_test"] == 4 and res["parameters"]["AUC_last"]["n_test"] == 5
-    res2 = orch.run_tool(s, "run_bioequivalence", "be", {"include_unacceptable_lambda_z": True})["result"]
+    res2 = orch.run_tool(s, "run_bioequivalence", "be", {**BE_X, "include_unacceptable_lambda_z": True})["result"]
     assert res2["parameters"]["AUC_inf"]["n_test"] == 5
 
 
@@ -246,8 +256,8 @@ def test_2x2_matches_the_closed_form_sequence_difference_estimator_with_noise():
     assert math.log(res["gmr_pct"] / 100) == pytest.approx(theta_hat, abs=1e-4)
 
 
-def _be_tool_csv(drop_subject_period: tuple[int, str] | None = None, with_design_cols=True) -> str:
-    head = "ID,TIME,DV,AMT,EVID,TRT" + (",PERIOD,SEQUENCE" if with_design_cols else "")
+def _be_tool_csv(drop_subject_period: tuple[int, str] | None = None, with_sequence=True) -> str:
+    head = "ID,TIME,DV,AMT,EVID,TRT,PERIOD" + (",SEQUENCE" if with_sequence else "")
     lines = [head]
     n = 0
     for seq, size in (("TR", 4), ("RT", 4)):
@@ -258,34 +268,34 @@ def _be_tool_csv(drop_subject_period: tuple[int, str] | None = None, with_design
                 if drop_subject_period == (n, trt):
                     continue
                 f = (1.1 if trt == "T" else 1.0) * (0.8 if period == 2 else 1.0) * (1 + 0.1 * n)
-                extra = f",{period},{seq}" if with_design_cols else ""
+                extra = f",{period},{seq}" if with_sequence else f",{period}"
                 lines.append(f"{n},0,0,100,1,{trt}{extra}")
                 lines += [f"{n},{t},{c * f},0,0,{trt}{extra}" for t, c in zip(TIMES, CONC_T, strict=True)]
     return "\n".join(lines) + "\n"
 
 
 def test_tool_fits_the_2x2_model_when_period_and_sequence_columns_exist(orch):
-    res = orch.run_tool(_load(orch, _be_tool_csv()), "run_bioequivalence", "be", {})["result"]
+    res = orch.run_tool(_load(orch, _be_tool_csv()), "run_bioequivalence", "be", BE_X)["result"]
     cmax = res["parameters"]["Cmax"]
-    assert "2x2 crossover" in res["design"] and cmax["df"] == 4 + 4 - 2
+    assert "2x2 crossover" in res["model"] and cmax["df"] == 4 + 4 - 2
     assert cmax["gmr_pct"] == pytest.approx(110.0, abs=1e-3)       # profile shapes are identical: only the factor
     assert res["excluded_subjects"]["n"] == 0
 
 
 def test_a_dropout_does_not_switch_the_design_to_parallel(orch):
     res = orch.run_tool(_load(orch, _be_tool_csv(drop_subject_period=(3, "R"))), "run_bioequivalence", "be",
-                        {})["result"]
-    assert "parallel" not in res["design"] and "2x2 crossover" in res["design"]
+                        BE_X)["result"]
+    assert res["design"] == "crossover" and "2x2 crossover" in res["model"]
     assert res["excluded_subjects"]["n"] == 1 and res["excluded_subjects"]["subject_ids"] == [3]
     assert res["n_completers"] == 7
     assert res["parameters"]["Cmax"]["df"] == 4 + 3 - 2            # n1 + n2 - 2 on the completers (3 TR, 4 RT)
 
 
 def test_without_design_columns_the_paired_analysis_is_labelled_and_warned(orch):
-    res = orch.run_tool(_load(orch, _be_tool_csv(drop_subject_period=(3, "R"), with_design_cols=False)),
-                        "run_bioequivalence", "be", {})["result"]
-    assert "paired, no period/sequence adjustment" in res["design"]
-    assert "parallel" not in res["design"]
+    res = orch.run_tool(_load(orch, _be_tool_csv(drop_subject_period=(3, "R"), with_sequence=False)),
+                        "run_bioequivalence", "be", BE_X)["result"]
+    assert "no period or sequence terms" in res["model"]
+    assert res["design"] == "crossover" and "paired log differences (crossover)" in res["model"]
     assert res["excluded_subjects"]["subject_ids"] == [3] and res["n_completers"] == 7
     assert any("period" in w and "sequence" in w for w in res["warnings"])
 
@@ -296,7 +306,7 @@ def test_disjoint_subject_groups_are_still_analysed_as_parallel(orch):
         trt = "T" if sid <= 4 else "R"
         lines.append(f"{sid},0,0,100,1,{trt}")
         lines += [f"{sid},{t},{c * (1 + 0.1 * sid)},0,0,{trt}" for t, c in zip(TIMES, CONC_T, strict=True)]
-    res = orch.run_tool(_load(orch, "\n".join(lines) + "\n"), "run_bioequivalence", "be", {})["result"]
+    res = orch.run_tool(_load(orch, "\n".join(lines) + "\n"), "run_bioequivalence", "be", BE_PARALLEL)["result"]
     assert res["design"] == "parallel"
 
 
@@ -346,3 +356,52 @@ def test_adpc_and_adpp_units_come_from_dataset_metadata_else_stay_blank():
     assert units == {"CMAX": "ng/mL", "TMAX": "h", "AUCLST": "h*ng/mL", "LAMZHL": "h", "CLFO": "mg/(h*ng/mL)"}
     bare = build_adpp(PharmState(nca_parameters=nca, dataset_metadata={"dataset_id": "S"}))[0]
     assert {r["PPSTRESU"] for r in bare} == {""}
+
+
+# ── PR #22 safety contract x 2x2 crossover model (merge of main into this branch) ───────────────────────
+def _many_subject_csv(n_per_seq: int, drop: tuple[int, str] | None = None) -> str:
+    """n_per_seq subjects in each of TR and RT, shared profile shape, design columns present."""
+    lines = ["ID,TIME,DV,AMT,EVID,TRT,PERIOD,SEQUENCE"]
+    n = 0
+    for seq in ("TR", "RT"):
+        for _ in range(n_per_seq):
+            n += 1
+            for period, trt in enumerate(seq, 1):
+                if drop == (n, trt):
+                    continue
+                f = (1.0 if trt == "T" else 1.0) * (1 + 0.03 * math.sin(n * 2.3 + (0.2 if trt == "T" else 0.0)))
+                lines.append(f"{n},0,0,100,1,{trt},{period},{seq}")
+                lines += [f"{n},{t},{c * f},0,0,{trt},{period},{seq}" for t, c in zip(TIMES, CONC_T, strict=True)]
+    return "\n".join(lines) + "\n"
+
+
+def test_contract_refusals_still_apply_on_the_2x2_path(orch):
+    # missing required arguments: nothing is inferred, even though PERIOD and SEQUENCE are present
+    s = _load(orch, _many_subject_csv(6))
+    res = orch.run_tool(s, "run_bioequivalence", "be", {"design": "crossover", "period_col": "PERIOD"})["result"]
+    assert res["status"] == "missing_required_args" and "profile" in res["missing"]
+    # a replicate (same treatment in two periods) is refused, not fitted
+    lines = _many_subject_csv(6).splitlines()
+    last_r = max(i for i, ln in enumerate(lines) if ln.startswith("1,") and ",R,2,TR" in ln)
+    lines[last_r] = lines[last_r].replace(",R,2,TR", ",R,3,TR")          # subject 1 gets R in two periods
+    bad = "\n".join(lines) + "\n"
+    res = orch.run_tool(_load(orch, bad, "rep.csv"), "run_bioequivalence", "be", BE_X)["result"]
+    assert res["status"] == "unsupported_design"
+    # the evaluable-subject floor still blocks a pass: 12 per sequence is required by the profile, 6 is not enough
+    res = orch.run_tool(s, "run_bioequivalence", "be", {**BE_X, "profile": "ich_m13a"})["result"]
+    assert res["status"] == "ok" and "2x2 crossover" in res["model"]
+    assert res["parameters"]["Cmax"]["n_evaluable"] == 12
+    res = orch.run_tool(_load(orch, _many_subject_csv(3), "small.csv"), "run_bioequivalence", "be", BE_X)["result"]
+    assert res["parameters"]["Cmax"]["acceptance"] == "insufficient_evaluable_subjects"
+    assert res["bioequivalent"] is False
+
+
+def test_valid_2x2_crossover_is_analysed_with_excluded_subjects_reported(orch):
+    s = _load(orch, _many_subject_csv(7, drop=(2, "R")), "dropout.csv")
+    res = orch.run_tool(s, "run_bioequivalence", "be", {**BE_X, "profile": "ich_m13a"})["result"]
+    assert res["status"] == "ok" and "2x2 crossover" in res["model"] and res["design"] == "crossover"
+    cmax = res["parameters"]["Cmax"]
+    assert cmax["n_evaluable"] == 13 and cmax["df"] == 13 * 2 - (13 + 1 + 1)      # N_obs - rank(subject, period, trt)
+    assert res["excluded_subjects"] == {**res["excluded_subjects"], "n": 1, "subject_ids": [2]}
+    assert any(e["subject"] == 2 and e["reason"] == "no_evaluable_counterpart" for e in res["exclusions"])
+    assert res["n_completers"] == 13

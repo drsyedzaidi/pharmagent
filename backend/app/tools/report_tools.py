@@ -5,6 +5,7 @@ from typing import Any
 
 from docx import Document
 
+from app.compute.be_contract import report_ci, report_disclosure
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult, session_report_dir
 
@@ -138,9 +139,12 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
         doc.add_paragraph(f"{be['design']}: {be.get('test_level')} vs {be.get('reference_level')}; "
                           f"limits {be['limits'][0]}–{be['limits'][1]}%. Overall: "
                           f"{'BIOEQUIVALENT' if be.get('bioequivalent') else 'NOT bioequivalent'}.")
-        _kv_table(doc, ["Parameter", "GMR %", "90% CI", "Within"],
-                  [[k, v.get("gmr_pct"), f"{_fmt(v.get('ci_lower_pct'))}–{_fmt(v.get('ci_upper_pct'))}",
-                    "yes" if v.get("within_limits") else "no"] for k, v in (be.get("parameters") or {}).items()])
+        if be.get("profile"):
+            doc.add_paragraph(report_disclosure(be))
+        _kv_table(doc, ["Parameter", "GMR %", "90% CI", "n", "Acceptance"],
+                  [[k, v.get("gmr_pct"), report_ci(v), str(v.get("n_evaluable", "n/a")),
+                    v.get("acceptance") or ("within limits" if v.get("within_limits") else "outside limits")]
+                   for k, v in (be.get("parameters") or {}).items()])
 
     dp = state.dose_prop_results
     if dp and dp.get("status") == "ok":

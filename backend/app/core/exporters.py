@@ -50,9 +50,12 @@ def _nca(state: PharmState) -> str:
 def _be(state: PharmState) -> str:
     r = state.be_results or {}
     params = r.get("parameters") or {}
-    rows = [{"parameter": k, **v} for k, v in params.items()]
-    return _csv(rows, ["parameter", "gmr_pct", "ci_lower_pct", "ci_upper_pct",
-                       "within_limits", "cv_intra_pct"])
+    rows = [{"parameter": k, "profile": r.get("profile"), "design": r.get("design"), **v}
+            for k, v in params.items()]
+    # the decision fields: the rounded bounds the verdict used, the acceptance reason and the evaluable count
+    return _csv(rows, ["parameter", "profile", "design", "gmr_pct", "ci_lower_pct", "ci_upper_pct",
+                       "ci_lower_rounded", "ci_upper_rounded", "within_limits", "acceptance",
+                       "n_evaluable", "n_test", "n_reference", "cv_intra_pct"])
 
 
 def _dose_prop(state: PharmState) -> str:
