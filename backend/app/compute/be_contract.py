@@ -21,9 +21,21 @@ Profiles and their sources (texts downloaded and read 2026-10-23):
 - ``ema_2010``: EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr** (sec. 4.1.8, rounding to two decimals; at least 12
   evaluable subjects).
 
-Statistical model: this slice keeps the existing estimator (paired log differences for a crossover, pooled two-sample
-log means for a parallel design). It has no period or sequence terms; the profile-specific models are a separate
-change, and every result says the model is interim.
+Statistical model, by design and by what the caller supplies:
+
+- crossover WITH a layout (``layout`` = {subject: (sequence, test period, reference period)}, which the tool builds
+  from the PERIOD and SEQUENCE columns when there are two period levels in at least two sequences): the 2x2
+  fixed-effects model ln y ~ subject(sequence) + period + treatment on the subjects evaluable under both products
+  (``MODEL_2X2``). The treatment contrast and its 90% CI use the residual mean square with df = n1 + n2 - 2, and
+  CV_intra comes from that mean square. Period and sequence effects are therefore accounted for (sequence is
+  absorbed by the nested subject term).
+- crossover WITHOUT a layout (no usable sequence column, or periods that are not two levels in two or more
+  sequences): the interim paired t on log differences, df = n - 1, with NO period or sequence adjustment
+  (``INTERIM_MODEL``). The tool says so in ``warnings``, and ``be_one_parameter`` labels it ``PAIRED_LABEL``.
+- parallel: pooled two-sample log means (df = n1 + n2 - 2), also reported as ``INTERIM_MODEL``.
+
+``result["model"]`` states which one was used. The regulatory profiles' own model requirements beyond this
+fixed-effects 2x2 model are a separate change.
 """
 from __future__ import annotations
 
