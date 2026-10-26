@@ -8,12 +8,14 @@ pausing at review gates).
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.agents.base import Agent
@@ -30,6 +32,7 @@ from app.core.audit_seal import (
     audit_security_from_settings,
     state_digest,
 )
+from app.core.dataset_store import DatasetCache, SessionDatasets
 from app.core.llm import LLM, get_llm
 from app.core.pharmstate import PharmState, apply_writes
 from app.core.provenance import (
@@ -44,6 +47,7 @@ from app.core.store import SecureWriteConflict, SessionStore
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 from app.tools.builtins import default_registry
 from app.tools.data_tools import _read as _read_dataset
+from app.tools.data_tools import session_upload_dir
 from app.workflows import get_workflow
 
 log = logging.getLogger("pharmagent")
@@ -120,6 +124,8 @@ class Orchestrator:
         else:
             self.audit_security = audit_security
         self.sessions: dict[str, Session] = {}
+        # One bounded LRU of loaded DataFrames shared by every session (F-23): persisted sessions load lazily.
+        self._dataset_cache = DatasetCache(settings.max_loaded_datasets)
         # Per-session re-entrant locks serialize mutations (and let readers take a
         # consistent snapshot) when background jobs run a tool off the request
         # thread. See app/core/jobs.py.
@@ -160,6 +166,13 @@ class Orchestrator:
                 self._locks[sid] = lock
             return lock
 
+    def _new_context(self, session_id: str) -> ToolContext:
+        # Registered paths were confined when load_dataset accepted them (or are persisted records of older
+        # versions that verified their sha256 at startup), so a reload reads them with the data-root confinement.
+        return ToolContext(data_dir=str(settings.data_dir),
+                           dataset_store=SessionDatasets(self._dataset_cache, session_id,
+                                                         lambda path, _sid: _read_dataset(path)))
+
     # -- persistence -------------------------------------------------------
     def _load_persisted(self) -> None:
         from app.core.provenance import file_sha256  # local: keep import graph light
@@ -184,7 +197,7 @@ class Orchestrator:
                     row["id"], row["audit"], row["audit_seal"], owner=row["owner"], created_at=row["created_at"],
                     state=row["state"]
                 ).get("baseline")
-            ctx = ToolContext(data_dir=str(settings.data_dir))
+            ctx = self._new_context(row["id"])
             state = PharmState.model_validate(row["state"])
             path, dsid = row.get("dataset_path"), row.get("dataset_id")
             audit = AuditChain.from_list(row["audit"])
@@ -226,7 +239,7 @@ class Orchestrator:
                                         verdict, row["id"], dsid)
                             integrity_changed = True
                     else:
-                        ctx.dataset_store[dsid] = _read_dataset(path)
+                        ctx.dataset_store.register(dsid, path, recorded)   # loaded lazily on first access
                         if (state.dataset_metadata or {}).get("dataset_integrity"):
                             # The digest matches again (file restored, or re-imported),
                             # so clear the flag — a sticky failure would otherwise mark
@@ -393,7 +406,7 @@ class Orchestrator:
         # recorded once, at creation: kept in state and bound into the genesis entry
         prov = collect_provenance(llm_provider=llm_now["provider"], llm_model=llm_now["model"])
         sess = Session(id=sid, state=PharmState(session_id=sid, run_provenance=tuple(prov.items())),
-                       ctx=ToolContext(data_dir=str(settings.data_dir)),
+                       ctx=self._new_context(sid),
                        owner=owner, created_at=self.clock(),
                        seal_baseline="fresh" if self.audit_security is not None else None)
         # Genesis provenance entry: stamp the software/platform fingerprint into
@@ -723,13 +736,46 @@ class Orchestrator:
             saved = self.skills.get(name)
             return {"skill": saved.to_dict() if saved else skill.to_dict()}
 
+    def _adopt_upload(self, dataset_path: str, owner: str | None) -> Path | None:
+        """If ``dataset_path`` is another session's upload, return it when that session belongs to ``owner``
+        (so a user can replay a skill on their own earlier upload); refuse (ValueError) otherwise."""
+        root = (Path(settings.data_dir).resolve() / "sessions")
+        p = Path(dataset_path).resolve()
+        if root not in p.parents:
+            return None
+        src = self.sessions.get(p.relative_to(root).parts[0])
+        if src is None or src.owner != owner:
+            raise ValueError("path not permitted: that upload belongs to another session")
+        return p
+
+    def record_upload(self, sid: str, *, filename: str, size: int, sha256: str, dataset_id: str,
+                      actor: str | None = None) -> None:
+        """Append a dataset_uploaded entry (raw upload SHA-256) to the session's audit chain and persist it."""
+        with self.session_lock(sid):
+            sess = self.get_session(sid)
+            self._ensure_writable(sess)
+            sess.audit.append(agent="system", tool="upload", action="dataset_uploaded",
+                              inputs={"filename": filename, "size_bytes": size},
+                              outputs={"sha256": sha256, "dataset_id": dataset_id},
+                              timestamp=self.clock(), actor=actor or "anonymous",
+                              reason=f"sha256={sha256} size_bytes={size} filename={filename}")
+            self._persist(sess)
+
     def run_skill(self, name: str, *, dataset_path: str, owner: str | None = None,
                   actor: str | None = None) -> dict[str, Any]:
         """Replay a captured skill on a new dataset in a fresh session."""
         skill = self.skills.get(name)
         if skill is None:
             raise KeyError(f"unknown skill: {name}")
+        if owner is not None and skill.owner is not None and skill.owner != owner:
+            raise AccessError(f"skill {name} belongs to another user")
+        adopted = self._adopt_upload(dataset_path, owner)
         sess = self.create_session(owner=owner)
+        if adopted is not None:          # the new session reads its own copy: uploads stay per-session
+            dest = session_upload_dir(sess.id)
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(adopted, dest / adopted.name)
+            dataset_path = str(dest / adopted.name)
         executed: list[dict[str, Any]] = []
         # create_session already registered this id, so a concurrent reader can reach
         # it mid-replay: hold the same per-session lock every other mutator uses.

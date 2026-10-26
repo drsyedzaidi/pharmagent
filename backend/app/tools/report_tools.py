@@ -1,13 +1,12 @@
 """Report Agent tools: generate a regulatory-style DOCX from PharmState."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from docx import Document
 
 from app.core.pharmstate import PharmState
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, session_report_dir
 
 METHODS_NCA = (
     "Non-compartmental analysis was performed using the linear-up/log-down "
@@ -599,7 +598,7 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
     _extra_sections(doc, state)
     _reproducibility_section(doc, state)
 
-    out_dir = Path(ctx.data_dir)
+    out_dir = session_report_dir(ctx, state)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = str(out_dir / f"report_{meta.get('dataset_id', 'analysis')}.docx")
     doc.save(path)
