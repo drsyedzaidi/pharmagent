@@ -28,6 +28,7 @@ from typing import Any
 
 from app.compute.pk_models import REGISTRY
 from app.core.pharmstate import PharmState
+from app.tools.arg_validation import validate_args
 from app.tools.base import Tool
 
 MODE_AUTONOMOUS = "autonomous"
@@ -57,6 +58,7 @@ PREREQUISITES: dict[str, tuple[str, ...]] = {
     "run_diagnostics": ("nlme_results",),
     "run_covariate_forest": ("nlme_results",),
     "run_vpc": ("nlme_results",),
+    "run_poppk_qc": ("nlme_results",),
 }
 
 # Tools the policy may admit WITHOUT a human gate when their arguments carry
@@ -65,7 +67,7 @@ PREREQUISITES: dict[str, tuple[str, ...]] = {
 AUTONOMOUS_TOOLS: frozenset[str] = frozenset({
     "load_dataset", "profile_pk_dataset", "validate_cdisc", "generate_spaghetti_plot",
     "fit_pk_model", "run_diagnostics", "run_covariate_forest", "run_vpc",
-    "adversarial_review",
+    "run_poppk_qc", "adversarial_review",
 })
 
 # Always a human decision regardless of arguments (the report is the deliverable).
@@ -139,20 +141,23 @@ def unmet_prerequisite(tool: str, state: PharmState) -> str | None:
 def invalid_model_keys(tool: str, args: Mapping[str, Any] | None) -> str | None:
     """A refusal reason when ``args`` names a model outside the PK model library, or None.
 
-    An absent or empty value is not checked: the tools treat it as "use the fitted
-    model". Every offending name is reported with the valid keys, so the planner
+    An absent (or null) value is not checked: the tools treat it as "use the fitted
+    model". An empty list / string or a wrong type is refused. Every offending name is
+    reported with the valid keys, so the planner
     can correct the proposal from its own history.
     """
     bad: list[str] = []
     for key in MODEL_KEY_ARGS.get(tool, ()):
-        value = (args or {}).get(key)
-        if not value:
+        if key not in (args or {}) or (args or {})[key] is None:
             continue
+        value = (args or {})[key]
         if isinstance(value, str):
             names: Sequence[Any] = [value]
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, (list, tuple)) and value:
             names = value
         else:
+            # empty string / empty list / wrong type: the tool would silently fall
+            # back to its default candidate set, which the reviewer never saw
             bad.append(f"{key}={value!r}")
             continue
         bad.extend(repr(n) for n in names if not isinstance(n, str) or n not in REGISTRY)
@@ -225,6 +230,10 @@ def decide(tool_name: str, args: Mapping[str, Any] | None, state: PharmState, *,
     invalid = invalid_model_keys(tool_name, args)
     if invalid:
         return Decision(False, MODE_REJECTED, invalid, stop=repair_limit_hit)
+    bad_args = validate_args(roster[tool_name].input_schema, args)
+    if bad_args:
+        return Decision(False, MODE_REJECTED,
+                        f"{tool_name} arguments are invalid: {bad_args}", stop=repair_limit_hit)
     unmet = unmet_prerequisite(tool_name, state)
     if unmet:
         return Decision(False, MODE_REJECTED, unmet, stop=repair_limit_hit)

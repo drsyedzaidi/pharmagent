@@ -11,7 +11,6 @@ Table numbering follows ICH M4E convention:
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from docx import Document
@@ -19,7 +18,7 @@ from docx.shared import Pt
 
 from app.compute.be_contract import report_ci, report_disclosure
 from app.core.pharmstate import PharmState, StudyInfo
-from app.tools.base import Tool, ToolContext, ToolResult
+from app.tools.base import Tool, ToolContext, ToolResult, session_report_dir
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -383,6 +382,8 @@ def generate_272(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
     """Generate an ICH M4E Module 2.7.2 CTD-compliant DOCX."""
     from app.core.provenance import run_provenance_report_lines
     prov_lines = run_provenance_report_lines(state)    # refuses a quarantined (mismatched) session before any work
+    from app.tools.qc_tools import assert_deliverable_qc_gates  # local: avoid import cycle
+    assert_deliverable_qc_gates(state, "Module 2.7.2 document")
     # Merge args into study info; existing study_info in state takes lower priority
     si_data = (state.study_info.model_dump() if state.study_info else {})
     for k in ("drug_name", "sponsor", "study_id", "route", "indication",
@@ -454,7 +455,7 @@ def generate_272(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
     )
 
     # ── write file ─────────────────────────────────────────────────────────
-    out_dir = Path(ctx.data_dir)
+    out_dir = session_report_dir(ctx, state)
     out_dir.mkdir(parents=True, exist_ok=True)
     study_id_slug = (si.study_id or meta.get("dataset_id") or "analysis").replace(" ", "_")
     path = str(out_dir / f"module_272_{study_id_slug}.docx")

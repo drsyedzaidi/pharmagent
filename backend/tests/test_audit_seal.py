@@ -574,3 +574,122 @@ def test_enforced_configuration_requires_distinct_complete_strong_keys(tmp_path)
         audit_security_from_settings(
             Settings(_env_file=None, api_token="production-token", audit_mode="off")
         )
+
+
+# --- F-01: the keyed seal binds the persisted session state -----------------
+from itertools import count  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_SAMPLE = str(Path(__file__).parent.parent / "sample_data" / "oral_pk.csv")
+
+
+def _orch_long(db: str, security: AuditSecurity) -> Orchestrator:
+    ticks = count()
+    return Orchestrator(
+        llm=MockLLM(), clock=lambda: f"t{next(ticks):04d}",
+        store=SessionStore(db), audit_security=security,
+    )
+
+
+def _nca_session(db: str, security: AuditSecurity):
+    orch = _orch_long(db, security)
+    sid = orch.create_session(owner="alice").id
+    orch.run_tool(sid, "load_dataset", "data_manager", {"path": _SAMPLE}, actor="alice")
+    orch.run_tool(sid, "compute_nca", "nca", {}, actor="alice")
+    return orch, sid
+
+
+def _edit_state(db: str, sid: str, mutate) -> None:
+    with sqlite3.connect(db) as conn:
+        raw = conn.execute("SELECT state_json FROM sessions WHERE id=?", (sid,)).fetchone()[0]
+        state = json.loads(raw)
+        mutate(state)
+        conn.execute("UPDATE sessions SET state_json=? WHERE id=?", (json.dumps(state), sid))
+        conn.commit()
+
+
+def test_direct_state_edit_under_current_seal_is_detected(tmp_path):
+    db = str(tmp_path / "state-tamper.db")
+    security = _security()
+    orch, sid = _nca_session(db, security)
+    assert orch.audit_status(sid)["state_binding"] == "verified"
+    assert orch.audit_status(sid)["verified"] is True
+
+    def tamper(state):
+        state["nca_parameters"] = {"forged": {"cmax": 1.0}}
+        state["be_results"] = {"forged": True}
+
+    _edit_state(db, sid, tamper)
+    with pytest.raises(AuditIntegrityError, match="state"):
+        _orch_long(db, security)
+    store = SessionStore(db)
+    row = store.get(sid)
+    status = security.inspect(
+        sid, row["audit"], row["audit_seal"], owner=row["owner"],
+        created_at=row["created_at"], state=row["state"],
+    )
+    assert status["verified"] is False
+    assert status["state_binding"] == "mismatch"
+
+
+def test_state_edit_between_verification_and_save_is_rejected_by_cas(tmp_path):
+    db = str(tmp_path / "state-cas.db")
+    security = _security()
+    orch, sid = _nca_session(db, security)
+    sess = orch.get_session(sid)
+    original = orch.store.save_secured
+
+    def race(**kwargs):
+        _edit_state(db, sid, lambda s: s.update(be_results={"raced": True}))
+        return original(**kwargs)
+
+    orch.store.save_secured = race
+    sess.state = sess.state.model_copy(update={"be_results": {"mine": True}})
+    with pytest.raises(AuditIntegrityError):
+        orch._persist(sess)
+
+
+def test_transient_provenance_status_is_not_bound(tmp_path):
+    db = str(tmp_path / "state-transient.db")
+    security = _security()
+    orch, sid = _nca_session(db, security)
+    _edit_state(db, sid, lambda s: s.update(run_provenance_status="mismatch",
+                                             run_provenance_assurance="hash_only"))
+    assert _orch_long(db, security).audit_status(sid)["state_binding"] == "verified"
+
+
+def _downgrade_to_v1(db: str, sid: str, security: AuditSecurity, anchor: MemoryAnchorStore):
+    """Rewrite a session's seal+anchor as a pre-F-01 (v1) seal over the same entries."""
+    row = SessionStore(db).get(sid)
+    v1 = security.create_seal(
+        session_id=sid, owner=row["owner"], created_at=row["created_at"],
+        entries=row["audit"], baseline="fresh",           # state=None -> legacy v1 format
+    )
+    assert "state_digest" not in v1.to_dict() and v1.seal_version == 1
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE sessions SET audit_seal_json=? WHERE id=?",
+                     (json.dumps(v1.to_dict()), sid))
+        conn.commit()
+    return v1
+
+
+def test_legacy_v1_seal_loads_reports_absent_and_rebinds_on_next_save(tmp_path):
+    db = str(tmp_path / "state-legacy.db")
+    anchor = MemoryAnchorStore(installation_id="install-test")
+    security = _security(anchor)
+    orch = _orch_long(db, security)
+    sid = orch.create_session(owner="alice").id
+    v1 = _downgrade_to_v1(db, sid, security, anchor)
+    anchor._heads = {sid: v1}
+    anchor._history = {sid: (v1,)}
+
+    legacy = _orch_long(db, security)                    # must never fail to load
+    status = legacy.audit_status(sid)
+    assert status["state_binding"] == "absent"
+    assert status["verified"] is True
+
+    legacy.run_tool(sid, "load_dataset", "data_manager", {"path": _SAMPLE}, actor="alice")
+    after = legacy.audit_status(sid)
+    assert after["state_binding"] == "verified"
+    assert after["generation"] == 2
+    assert _orch_long(db, security).audit_status(sid)["verified"] is True

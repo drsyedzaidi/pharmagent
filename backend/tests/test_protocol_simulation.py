@@ -39,6 +39,7 @@ from app.tools.protocol_sim_tools import (
     simulate_special_populations,
     simulate_trial_pta,
 )
+from app.tools.qc_tools import run_poppk_qc
 from app.tools.report_tools import generate_report
 from app.workflows import get_workflow
 
@@ -54,8 +55,11 @@ def _approved_nlme_state(with_maturation_range: bool = False) -> PharmState:
         "method": "focei",
         "ofv": 112.4,
         "theta": {"ka": 1.15, "CL": 4.8, "V": 38.0},
+        "theta_bounds": {"ka": [1.0e-7, 1.0e7], "CL": [5.0e-7, 5.0e7], "V": [50.0e-7, 50.0e7]},
         "theta_rse_pct": {"ka": 12.0, "CL": 8.5, "V": 9.2},
         "omega_cv_pct": {"CL": 24.0, "V": 18.0},
+        "shrinkage_pct": {"CL": 9.5, "V": 14.0},      # estimation-health diagnostics a healthy fit carries
+        "condition_number": 14.2,
         "iiv_params": ["CL", "V"],
         "sigma": {"prop": 0.12, "add": 0.0},
         "covariate_effects": [],
@@ -349,6 +353,7 @@ def test_report_discloses_the_uncertainty_approximation_and_what_was_requested(t
     st, ctx = _planned_state(
         tmp_path, {"n_subjects": 30, "replicates": 4, "seed": 55, "uncertainty_method": "sir"})
     st = apply_writes(st, "simulator", propagate_parameter_uncertainty(st, ctx, {"n_draws": 8}).writes)
+    st = apply_writes(st, "qc", run_poppk_qc(st, ctx, {}).writes)    # reports on an NLME fit need a current verdict
     res = generate_report(st, ctx, {"study_title": "Approximation disclosure"})
     sec = res.writes["report_sections"]["protocol_simulation"]
     assert sec["uncertainty_method"] == "asymptotic_lognormal"
@@ -621,6 +626,7 @@ def test_report_section_renders_gracefully_when_optional_steps_skipped(tmp_path:
     # Skip run_dose_sweep, simulate_special_populations, and propagate_parameter_uncertainty
     st = apply_writes(st, "simulator", simulate_trial_pta(st, ctx, {}).writes)
 
+    st = apply_writes(st, "qc", run_poppk_qc(st, ctx, {}).writes)    # reports on an NLME fit need a current verdict
     rep = generate_report(st, ctx, {"title": "Partial Protocol Simulation Report"})
     st = apply_writes(st, "report", rep.writes)
     ps_sec = st.report_sections["protocol_simulation"]
@@ -636,6 +642,7 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
     assert wf["requires"] == ["nlme_results.status == 'ok'"]
     assert [s["tool"] for s in wf["steps"]] == [
         "load_approved_fit",
+        "run_poppk_qc",
         "propose_simulation_plan",
         "run_dose_sweep",
         "simulate_trial_pta",
@@ -666,8 +673,9 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
     # Leg 1: start_workflow runs load_approved_fit -> propose_simulation_plan and pauses at Gate 1
     leg1 = orch.start_workflow(sid, "protocol_simulation", actor="pharmacometrician_test")
     assert leg1["status"] == "awaiting_review"
-    assert leg1["review"]["after_step"] == 1
-    assert [s["tool"] for s in leg1["executed"]] == ["load_approved_fit", "propose_simulation_plan"]
+    assert leg1["review"]["after_step"] == 2
+    assert [s["tool"] for s in leg1["executed"]] == [
+        "load_approved_fit", "run_poppk_qc", "propose_simulation_plan"]
 
     # Human edits the plan at Gate 1 (adjusts seed and replicates) before approving
     sess = orch.get_session(sid)
@@ -686,7 +694,7 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
         reason="Simulation plan reviewed and approved with seed=20261023",
     )
     assert leg2["status"] == "awaiting_review"
-    assert leg2["review"]["after_step"] == 4
+    assert leg2["review"]["after_step"] == 5
     assert [s["tool"] for s in leg2["executed"]] == [
         "run_dose_sweep",
         "simulate_trial_pta",
@@ -694,7 +702,7 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
     ]
 
     # Verify next leg requires a background job (propagate_parameter_uncertainty is expensive=True)
-    assert orch.workflow_needs_job(wf, from_step=5) is True
+    assert orch.workflow_needs_job(wf, from_step=6) is True
 
     # Leg 3: resume_workflow (as background job with allow_expensive=True) runs
     # propagate_parameter_uncertainty -> adversarial_review (Gate 3)
@@ -706,7 +714,7 @@ def test_full_protocol_simulation_workflow_end_to_end_with_gates_and_report(tmp_
         allow_expensive=True,
     )
     assert leg3["status"] == "awaiting_review"
-    assert leg3["review"]["after_step"] == 6
+    assert leg3["review"]["after_step"] == 7
     assert [s["tool"] for s in leg3["executed"]] == [
         "propagate_parameter_uncertainty",
         "adversarial_review",

@@ -119,6 +119,8 @@ export interface PharmState {
   data_quality: Record<string, unknown> | null;
   spaghetti_data: SpaghettiData | null;
   nca_parameters: NcaSubject[] | null;
+  nca_flagged_subjects?: LambdaZFlaggedSubject[] | null;
+  lambda_z_review?: LambdaZReview | null;
   nca_summary: NcaSummary | null;
   nca_plot_data: NcaPlotData | null;
   be_results: BeResults | null;
@@ -1203,6 +1205,8 @@ export type WorkflowStartResponse = WorkflowResponse | WorkflowJobHandle;
 export interface WorkflowGate {
   after_step: number;
   label: string | null;
+  /** Unique id of this gate; a resume must echo it (stale ids are refused with 409). */
+  gate_id: string;
 }
 
 export interface AgentMessage {
@@ -1306,4 +1310,23 @@ export interface FlexplotData {
   cells: FlexplotCell[];
   ghost_line: FlexplotGhostLine[] | null;
   summary: FlexplotSummary;
+}
+
+/** Analyst accept/revise gate for flagged NCA terminal-slope fits (backend/app/tools/qc_tools.py). */
+export type LambdaZReviewDecision = 'accept' | 'revise';
+export interface LambdaZFlaggedSubject {
+  id: string | number;
+  span_ratio?: number | null;
+  r2_adj?: number | null;
+  n_points?: number | null;
+  reasons?: string[];
+}
+export interface LambdaZReview {
+  status: 'not_required' | 'awaiting_analyst_decision' | 'revision_requested' | 'accepted' | string;
+  gate_open?: boolean;
+  decision?: LambdaZReviewDecision | null;
+  flagged_subjects: LambdaZFlaggedSubject[];
+  accepted_subjects: Array<string | number>;
+  revision_subjects: Array<string | number>;
+  notes?: string;
 }

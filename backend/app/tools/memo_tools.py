@@ -112,6 +112,8 @@ def _verify(memo: Memo, data: bytes, n_entries_after: int) -> str:
 
 
 def build_briefing_memo(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    from app.tools.qc_tools import assert_deliverable_qc_gates  # local: avoid import cycle
+    assert_deliverable_qc_gates(state, "briefing memo")
     trace = AuditTrace(ctx.audit_trail)
     # The registry appends this call's own entry right after run(): its index is the
     # current length. An empty snapshot means a direct call outside the registry.

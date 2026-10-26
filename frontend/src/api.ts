@@ -1,7 +1,7 @@
 import type {
   Session, ChatResponse, PendingToolDecision, WorkflowStartResponse, LlmConfig, LlmChoiceBody, LlmSwitchResult, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
-  AuditIntegrityStatus,
+  AuditIntegrityStatus, LambdaZReviewDecision,
 } from './types';
 import { describeApiError } from './provenance';
 
@@ -103,22 +103,22 @@ export const api = {
 
   // `reason` is the reviewer's free-text note; the backend seals it into the
   // human_review audit entry (ResumeRequest.reason, default "").
-  resumeWorkflow: (sid: string, approve: boolean, reason = ''): Promise<WorkflowStartResponse> =>
+  resumeWorkflow: (sid: string, approve: boolean, gateId: string, reason = ''): Promise<WorkflowStartResponse> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve, reason }),
+      body: JSON.stringify({ approve, reason, gate_id: gateId }),
     }),
 
   // Approving a gate runs every remaining step in one call. When that remainder
   // is a population fit (poppk_full), ask for a job id and poll it rather than
   // holding the request open for minutes.
-  resumeWorkflowAsync: (sid: string, reason = ''):
+  resumeWorkflowAsync: (sid: string, gateId: string, reason = ''):
     Promise<{ job_id: string; status: string; kind: string }> =>
     req(`/sessions/${sid}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve: true, reason, background: true }),
+      body: JSON.stringify({ approve: true, reason, background: true, gate_id: gateId }),
     }),
 
   getState: (sid: string): Promise<PharmState> =>
@@ -246,6 +246,16 @@ export const api = {
     fit_x: number[]; fit_y: number[];
   }> =>
     req(`/sessions/${sid}/nca/refit_lz`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  /** Human-only accept/revise decision on flagged λz fits; omit subject_ids for all flagged subjects. */
+  lambdaZReview: (sid: string, body: {
+    decision: LambdaZReviewDecision; subject_ids?: Array<string | number>; notes?: string;
+  }): Promise<{ summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/lambda-z-review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

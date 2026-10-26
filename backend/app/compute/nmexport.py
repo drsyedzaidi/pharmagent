@@ -116,6 +116,25 @@ def _omega_lower_rows(nl: dict, blk: list[str]) -> list[list[float]]:
             for i, p in enumerate(blk)]
 
 
+def _allometry(nl: dict, our: str) -> float:
+    """WT exponent the estimator applies to structural parameter ``our``.
+
+    The estimator multiplies by ``(WT/70)**e`` on every parameter in the model's
+    allometric map (0.75 on CL/Q/Vmax, 1.0 on volumes) whenever a WT column
+    exists, and that is mandatory here. A fitted ``wt_exponents`` map overrides
+    the fixed value. 0.0 means no scaling for this parameter.
+    """
+    from app.compute.pk_models import get_model  # lazy: keeps this module light
+
+    fitted = nl.get("wt_exponents") or {}
+    if our in fitted:
+        return float(fitted[our])
+    try:
+        return float(get_model(nl.get("model_key")).allometric.get(our, 0.0))
+    except KeyError:
+        return 0.0
+
+
 def _nm_cov_multiplier(ce: dict, theta_idx: int) -> str | None:
     """NONMEM $PK multiplier string for a continuous covariate effect, or None
     (categorical -> handled by the caller as a manual-coding note)."""
@@ -177,10 +196,15 @@ def build_nonmem(nl: dict) -> str | None:
 
     # $PK block
     pk: list[str] = list(cov_notes)
+    uses_wt = False
     for our, sym in spec["map"]:
         pk.append(f"  TV{sym} = THETA({theta_idx[our]})")
         for mult in cov_mult.get(our, []):
             pk.append(f"  TV{sym} = TV{sym} * {mult}")
+        expo = _allometry(nl, our)
+        if expo:
+            uses_wt = True
+            pk.append(f"  TV{sym} = TV{sym} * (WT/70)**{_g(expo)}")
         if our in eta_no:
             pk.append(f"  {sym} = TV{sym} * EXP(ETA({eta_no[our]}))")
         else:
@@ -217,6 +241,8 @@ def build_nonmem(nl: dict) -> str | None:
         omega = [f"  {_g(_cv_to_omega2(omega_cv.get(p, 30.0)))}"
                  f"   ; IIV {p} (variance)" for p in iiv]
 
+    if uses_wt and "WT" not in cov_cols:
+        cov_cols.append("WT")
     inp = "ID TIME DV AMT EVID MDV" + ("".join(f" {c}" for c in cov_cols))
     label = nl.get("label", nl.get("model_key", "model"))
     out = [
@@ -256,6 +282,8 @@ def build_mrgsolve(nl: dict) -> str | None:
         if ce["covariate"] not in cov_cols and ce.get("kind") != "categorical":
             cov_cols.append(ce["covariate"])
     param_kv += [f"{c}={_g(_center_default(cov_effects, c))}" for c in cov_cols]
+    if any(_allometry(nl, our) for our, _ in spec["map"]) and "WT" not in cov_cols:
+        param_kv.append("WT=70")      # mandatory allometric scaling needs a WT column
 
     eta_lab = [f"E{p}" for p in iiv]
 
@@ -276,6 +304,9 @@ def build_mrgsolve(nl: dict) -> str | None:
         expr = f"TV{our}"
         for mult in cov_by_param.get(our, []):
             expr += f" * {mult}"
+        expo = _allometry(nl, our)
+        if expo:
+            expr += f" * pow(WT/70, {_g(expo)})"
         if our in iiv:
             expr += f" * exp(E{our})"
         main.append(f"  double {our} = {expr};")

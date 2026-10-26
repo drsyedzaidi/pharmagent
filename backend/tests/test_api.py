@@ -37,7 +37,9 @@ def test_session_and_nca_workflow(client):
     assert r["status"] == "awaiting_review"
     # The UI derives the review-banner subtitle from this gate payload: the
     # 0-based index of the gated step (QC review) and its template label.
-    assert r["review"] == {"after_step": 6, "label": "QC review"}
+    review = dict(r["review"])
+    assert review.pop("gate_id")        # unique per gate; the resume request must echo it (F-06)
+    assert review == {"after_step": 6, "label": "QC review"}
     assert r["state"]["nca_parameters"] and len(r["state"]["nca_parameters"]) == 12
     audit = client.get(f"/api/sessions/{sid}/audit").json()
     assert audit["count"] >= 1

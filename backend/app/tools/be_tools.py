@@ -12,7 +12,8 @@ from typing import Any
 import pandas as pd
 
 from app.compute.be_contract import PROFILES, BEContractError, assess_average_be
-from app.compute.nca import Profile, nca_subject
+from app.compute.nca import INF_DERIVED, Profile, lambda_z_exclusion_note, nca_subject
+from app.core.obs_loader import load_observations
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
@@ -39,6 +40,10 @@ def _find_treatment_col(df: pd.DataFrame, roles: dict[str, str]) -> str | None:
     return None
 
 
+def _col(df: pd.DataFrame, names: set[str]) -> str | None:
+    return next((c for c in df.columns if str(c).strip().lower() in names), None)
+
+
 def _py(v: Any) -> Any:
     """numpy scalars -> plain Python, so ledger entries serialise and compare as the data shows them."""
     return v.item() if hasattr(v, "item") else v
@@ -46,11 +51,15 @@ def _py(v: Any) -> Any:
 
 def _exposures_by_treatment(
     obs: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, trt_col: str,
-) -> tuple[list[dict], list[dict]]:
-    """Per-(subject, treatment) NCA exposures as contract records, plus ledger entries for profiles too short to
-    analyse (fewer than 3 samples): those subjects are left out of every parameter for that treatment."""
+    include_unacceptable_lambda_z: bool = False,
+) -> tuple[list[dict], list[dict], list[tuple[Any, Any]]]:
+    """Per-(subject, treatment) NCA exposures as contract records, ledger entries for profiles too short to
+    analyse (fewer than 3 samples: left out of every parameter for that treatment) and the (subject, treatment)
+    pairs whose AUC_inf was withheld because the terminal fit is unacceptable (unless
+    ``include_unacceptable_lambda_z``)."""
     records: list[dict] = []
     ledger: list[dict] = []
+    withheld: list[tuple[Any, Any]] = []
     for (trt, sid), g in obs.groupby([trt_col, id_col]):
         g = g.dropna(subset=[time_col, dv_col]).sort_values(time_col)
         if len(g) < 3:
@@ -60,8 +69,34 @@ def _exposures_by_treatment(
         prof = Profile(subject=sid, time=g[time_col].to_numpy(float),
                        conc=g[dv_col].to_numpy(float), dose=float("nan"))
         p = nca_subject(prof)
-        records.append({"subject": _py(sid), "treatment": _py(trt), "params": {k: p.get(k) for k in _BE_PARAMS}})
-    return records, ledger
+        vals = {k: p.get(k) for k in _BE_PARAMS}
+        if p.get("lambda_z_acceptable") is False and not include_unacceptable_lambda_z:
+            vals.update({k: None for k in _BE_PARAMS if k in INF_DERIVED})
+            withheld.append((_py(sid), _py(trt)))
+        records.append({"subject": _py(sid), "treatment": _py(trt), "params": vals})
+    return records, ledger, withheld
+
+
+_SEQ_NAMES = {"sequence", "seq", "sequ"}
+
+
+def _crossover_layout(obs: pd.DataFrame, *, id_col: str, trt_col: str, period_col: str, seq_col: str | None,
+                      test_lv: Any, ref_lv: Any) -> tuple[dict[Any, tuple[Any, Any, Any]] | None, str | None]:
+    """{subject: (sequence, test period, reference period)} for the 2x2 crossover model, or (None, why) when the
+    sequence column is missing or the layout is not two periods in at least two sequences."""
+    if seq_col is None or seq_col not in obs.columns:
+        return None, "no SEQUENCE column (pass sequence_col)"
+    first_period = obs.dropna(subset=[period_col]).groupby([id_col, trt_col])[period_col].first()
+    sequence = obs.dropna(subset=[seq_col]).groupby(id_col)[seq_col].first()
+    layout: dict[Any, tuple[Any, Any, Any]] = {}
+    for sid in sequence.index:
+        if (sid, test_lv) in first_period.index and (sid, ref_lv) in first_period.index:
+            tp, rp = first_period[(sid, test_lv)], first_period[(sid, ref_lv)]
+            if tp != rp:
+                layout[_py(sid)] = (_py(sequence[sid]), _py(tp), _py(rp))
+    if len({p for v in layout.values() for p in v[1:]}) != 2 or len({v[0] for v in layout.values()}) < 2:
+        return None, "the periods are not two levels in at least two sequences"
+    return layout, None
 
 
 def _row_ledger(obs: pd.DataFrame, raw_dv: pd.Series, *, id_col: str, time_col: str, dv_col: str,
@@ -164,8 +199,6 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     id_col = next((c for c, r in roles.items() if r == "ID"), None)
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
-    amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
-    evid_col = next((c for c, r in roles.items() if r == "EVID"), None)
     trt_col = args.get("treatment_col") or _find_treatment_col(df, roles)
     if not (id_col and time_col and dv_col):
         raise ValueError("dataset missing required ID/TIME/DV roles for BE")
@@ -174,48 +207,75 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
                         "TRT/TREATMENT/FORMULATION or pass treatment_col")
 
     raw_dv = df[dv_col].copy()
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
-    if evid_col:
-        obs = df[pd.to_numeric(df[evid_col], errors="coerce").fillna(0) == 0]
-    elif amt_col:
-        obs = df[pd.to_numeric(df[amt_col], errors="coerce").fillna(0) == 0]
-    else:
-        obs = df
-
-    if obs[id_col].isna().any() or obs[trt_col].isna().any():
+    # One loader for every profile analysis (EVID/MDV rows removed, below-LOQ rule M1, records before the dose
+    # dropped); ``raw_obs`` is the observation rows before M1 so the ledger still lists every unusable row.
+    loaded = load_observations(df, roles, group_cols=[id_col, trt_col])
+    raw = loaded.raw_obs
+    if raw[id_col].isna().any() or raw[trt_col].isna().any():
         return _refusal("invalid_arguments", "observation rows without a subject id or treatment cannot be "
                         "assigned; fix the data")
-    timed = obs[obs[time_col].notna()]          # rows without a time are ledgered below, not called duplicates
+    timed = raw[raw[time_col].notna()]          # rows without a time are ledgered below, not called duplicates
     if timed.duplicated([id_col, trt_col, time_col]).any():
         return _refusal("unsupported_design", "duplicate sampling rows (same subject, treatment and time): "
                         "replicate or duplicated data is not pooled")
     period_col = args.get("period_col")
     if period_col:
-        refusal = _check_periods(obs, period_col, id_col=id_col, trt_col=trt_col, roles={
+        refusal = _check_periods(raw, period_col, id_col=id_col, trt_col=trt_col, roles={
             id_col, trt_col, time_col, dv_col}, crossover=args["design"] == "crossover")
         if refusal:
             return refusal
 
-    obs, dropped = _row_ledger(obs, raw_dv, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
+    # the loader turns +-inf into missing; the ledger classifies the DV as it was supplied
+    shown = raw.assign(**{dv_col: pd.to_numeric(raw_dv.loc[raw.index], errors="coerce")})
+    _, dropped = _row_ledger(shown, raw_dv, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col)
+    obs = loaded.obs
     levels = list(pd.unique(obs[trt_col]))
     try:
         test_lv, ref_lv = _match_level(levels, args["test"]), _match_level(levels, args["reference"])
-        records, short = _exposures_by_treatment(obs, id_col=id_col, time_col=time_col, dv_col=dv_col,
-                                                 trt_col=trt_col)
+        include_lz = bool(args.get("include_unacceptable_lambda_z", False))
+        records, short, withheld = _exposures_by_treatment(
+            obs, id_col=id_col, time_col=time_col, dv_col=dv_col, trt_col=trt_col,
+            include_unacceptable_lambda_z=include_lz)
+        layout, layout_note = None, None
+        if args["design"] == "crossover":
+            seq_col = args.get("sequence_col") or _col(df, _SEQ_NAMES)
+            layout, layout_note = _crossover_layout(obs, id_col=id_col, trt_col=trt_col, period_col=period_col,
+                                                    seq_col=seq_col, test_lv=test_lv, ref_lv=ref_lv)
         res = assess_average_be(
             records, design=args["design"], profile=args["profile"], test=_py(test_lv), reference=_py(ref_lv),
             prespecified_exclusions=args.get("prespecified_exclusions"),
-            limits=args.get("limits"), limits_justification=args.get("limits_justification"))
+            limits=args.get("limits"), limits_justification=args.get("limits_justification"), layout=layout)
     except BEContractError as exc:
         status = "unsupported_design" if "replicate" in str(exc) else "invalid_arguments"
         return _refusal(status, str(exc))
-    res = {**res, "status": "ok", "exclusions": dropped + short + res["exclusions"],
-           "test_level": str(test_lv), "reference_level": str(ref_lv)}
+    lz_pairs = set(withheld)
+    ledger = [{**e, "reason": "lambda_z_unacceptable"}
+              if e["parameter"] in INF_DERIVED and (e["subject"], e["treatment"]) in lz_pairs
+              and e["reason"] == "missing_value" else e for e in res["exclusions"]]
+    exclusions = dropped + short + ledger
+    out_ids = sorted({e["subject"] for e in exclusions
+                      if e["reason"] in {"fewer_than_3_samples", "no_evaluable_counterpart", "no_period_or_sequence"}},
+                     key=str)
+    lz_note = lambda_z_exclusion_note(sorted({s for s, _ in withheld}, key=str), include_lz)
+    lz_note["subjects"] = {"T": [s for s, t in withheld if t == _py(test_lv)],
+                           "R": [s for s, t in withheld if t == _py(ref_lv)]}
+    warnings = ([f"Crossover analysed as a paired t on log differences without period or sequence terms: "
+                 f"{layout_note}."] if args["design"] == "crossover" and layout is None else [])
+    res = {**res, "status": "ok", "exclusions": exclusions,
+           "test_level": str(test_lv), "reference_level": str(ref_lv),
+           "excluded_subjects": {"n": len(out_ids), "subject_ids": out_ids,
+                                 "reason": "not evaluable under both treatments, or period/sequence missing; "
+                                           "the design is never changed for them"},
+           "n_completers": len({r["subject"] for r in records if r["treatment"] == _py(test_lv)}
+                               & {r["subject"] for r in records if r["treatment"] == _py(ref_lv)}
+                               - set(out_ids)),
+           "lambda_z_excluded": lz_note, "warnings": warnings,
+           "n_blq_records": loaded.n_blq,
+           "blq_rule": "below-LOQ records handled by rule M1 (leading BLQ = 0, later BLQ excluded)"}
     verdict = "BIOEQUIVALENT" if res["bioequivalent"] else "NOT bioequivalent"
     return ToolResult(
         summary=(f"Bioequivalence ({res['design']}, profile {res['profile']}): {test_lv} vs {ref_lv} - {verdict}; "
-                 f"{len(res['exclusions'])} excluded value(s) listed; model is interim (no period/sequence terms)."),
+                 f"{len(res['exclusions'])} excluded value(s) listed; model: {res['model'].split(':')[0]}."),
         action=f"run_bioequivalence({dsid}, {res['profile']}, {res['design']}, {test_lv} vs {ref_lv})",
         writes={"be_results": res}, result=res)
 
@@ -233,6 +293,11 @@ TOOLS = [
                          "profile": {"type": "string", "enum": ["fda_2026", "ich_m13a", "ema_2010"]},
                          "treatment_col": {"type": "string"},
                          "period_col": {"type": "string"},
+                         "sequence_col": {"type": "string"},
+                         "include_unacceptable_lambda_z": {
+                             "type": "boolean",
+                             "description": "Use AUC_inf of profiles whose lambda_z fit fails the acceptance "
+                                            "criteria. Default false (withheld, ledgered and reported)."},
                          "group_col": {"type": "string"},
                          "test": {"type": "string"},
                          "reference": {"type": "string"},

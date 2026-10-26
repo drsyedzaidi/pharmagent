@@ -63,7 +63,7 @@ def test_a_normal_session_can_still_upload(client, tmp_path):
     sid = client.post("/api/sessions").json()["id"]
     r = client.post(f"/api/sessions/{sid}/upload", files={"file": ("oral_pk.csv", SAMPLE.read_bytes(), "text/csv")})
     assert r.status_code == 200 and r.json()["dataset_id"]
-    assert any(p.suffix == ".csv" for p in tmp_path.iterdir())
+    assert any(p.suffix == ".csv" for p in tmp_path.rglob("*.csv"))
 
 
 def test_ownership_is_checked_before_quarantine(client):

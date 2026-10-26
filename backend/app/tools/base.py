@@ -8,14 +8,21 @@ which every computation flows.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from app.core.audit import AuditChain
 from app.core.pharmstate import PharmState, apply_writes
+from app.tools.arg_validation import UNADVERTISED_ARGS, validate_args
+
+# Keys the framework adds itself: an approved pending tool is re-run with confirm=True
+# (Orchestrator.take_pending_tool) whether or not its schema declares it.
+FRAMEWORK_ARG_KEYS = frozenset({"confirm"})
 
 
 @dataclass
@@ -35,6 +42,14 @@ class ToolResult:
     writes: dict[str, Any] = field(default_factory=dict)   # -> PharmState
     result: dict[str, Any] = field(default_factory=dict)   # payload for UI/LLM
     action: str = ""                  # audit action description
+    reason: str = ""                  # analyst-supplied reason for change, recorded on the audit entry
+
+
+def session_report_dir(ctx: ToolContext, state: PharmState) -> Path:
+    """Where this session's generated reports live: ``<data_dir>/reports/<session_id>/``. Scoping by session means
+    two sessions on the same dataset id never overwrite each other's file."""
+    sid = re.sub(r"[^A-Za-z0-9_-]", "", state.session_id or "")[:64] or "_nosession"
+    return Path(ctx.data_dir) / "reports" / sid
 
 
 def require_dataset(ctx: ToolContext, state: PharmState,
@@ -55,6 +70,12 @@ def require_dataset(ctx: ToolContext, state: PharmState,
 
 class CrossAgentToolError(RuntimeError):
     """Raised when an agent attempts to execute a tool owned by another agent."""
+
+
+class HumanOnlyToolError(RuntimeError):
+    """Raised when an agent (LLM) loop tries to execute a tool that records a human
+    decision. Such tools are reachable only through the audited, actor-attributed
+    API path (``Orchestrator.run_tool``), never from a chat turn."""
 
 
 class ExpensiveToolError(RuntimeError):
@@ -79,6 +100,9 @@ class Tool:
     #                                   reject; it is never executed on the turn
     uses_audit_trail: bool = False    # tool cites audit entries (briefing memo): the
     #                                   registry hands it ``ctx.audit_trail``, a copy
+    human_only: bool = False          # records a HUMAN decision (e.g. analyst accept):
+    #                                   refused on the agent/LLM path (caller_agent set);
+    #                                   runs only via the actor-attributed API path
 
     def to_anthropic(self) -> dict[str, Any]:
         """Tool definition in Anthropic tool-use format."""
@@ -119,7 +143,8 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def for_agent(self, agent: str) -> list[Tool]:
-        return [t for t in self._tools.values() if t.agent == agent]
+        """Tools an agent (LLM) may be offered. Human-only tools are never offered."""
+        return [t for t in self._tools.values() if t.agent == agent and not t.human_only]
 
     def execute(
         self,
@@ -133,6 +158,7 @@ class ToolRegistry:
         actor: str = "",
         allow_expensive: bool = False,
         caller_agent: str | None = None,
+        allow_human_only: bool = False,
     ) -> tuple[PharmState, ToolResult]:
         """Run a tool: compute → audit → apply writes. The only execution path.
 
@@ -159,6 +185,17 @@ class ToolRegistry:
         if caller_agent is not None and tool.agent != caller_agent:
             raise CrossAgentToolError(
                 f"Agent '{caller_agent}' may not execute '{name}' (owned by '{tool.agent}').")
+        # Deny by default: a human-only tool runs only when the caller explicitly
+        # vouches that a human submitted it (the review endpoint). Skill replay,
+        # workflow and goal steps, and agent turns never pass this flag.
+        if tool.human_only and (caller_agent is not None or not allow_human_only):
+            raise HumanOnlyToolError(
+                f"'{name}' records a human decision and cannot be run by an agent; "
+                "the analyst must submit it from the review control (API) instead.")
+        extra = FRAMEWORK_ARG_KEYS | UNADVERTISED_ARGS.get(name, frozenset())
+        invalid = validate_args(tool.input_schema, args, allow_extra=extra)
+        if invalid:
+            raise ValueError(f"invalid arguments for '{name}': {invalid}")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
         res = tool.run(state, run_ctx, args)
@@ -170,6 +207,7 @@ class ToolRegistry:
             outputs=res.result,
             timestamp=timestamp,
             actor=actor,
+            reason=res.reason,
         )
         new_state = apply_writes(state, tool.agent, res.writes) if res.writes else state
         return new_state, res

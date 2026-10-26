@@ -12,6 +12,7 @@ import subprocess
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _PACKAGES = ("numpy", "scipy", "pandas", "fastapi", "pydantic", "python-docx")
 
@@ -53,10 +54,28 @@ def _collect(app_version: str) -> tuple[tuple[str, str], ...]:
     return tuple(prov.items())
 
 
-def collect_provenance(app_version: str = "0.1.0") -> dict[str, str]:
-    """Software/platform fingerprint of this run, including the conventions catalog identity. Constant per process;
-    a fresh dict each call, so a caller cannot alter the cached value."""
-    return dict(_collect(app_version))
+def describe_llm(llm: object) -> dict[str, str | None]:
+    """Provider, model and base-URL host of an LLM object. Never includes a key or the URL's path/credentials."""
+    base_url = getattr(llm, "base_url", None)
+    model = getattr(llm, "model", None)
+    if isinstance(base_url, str) and base_url:
+        return {"provider": "openai-compatible", "model": str(model), "base_url_host": urlsplit(base_url).hostname}
+    if type(llm).__name__ == "RealLLM":
+        return {"provider": "anthropic", "model": str(model), "base_url_host": None}
+    return {"provider": "mock", "model": "mock", "base_url_host": None}
+
+
+def collect_provenance(app_version: str = "0.1.0", *, llm_provider: str | None = None,
+                       llm_model: str | None = None) -> dict[str, str]:
+    """Software/platform fingerprint of this run, including the conventions catalog identity. The process-constant
+    part is cached; a fresh dict each call, so a caller cannot alter the cached value. ``llm_provider``/``llm_model``
+    are the LLM actually driving the session (Orchestrator.create_session passes it); other callers default to the
+    configured settings."""
+    from app.config import settings  # local: keep core import graph light
+    prov = dict(_collect(app_version))
+    prov["llm_provider"] = llm_provider if llm_provider is not None else settings.llm_provider_effective
+    prov["llm_model"] = llm_model if llm_model is not None else settings.model
+    return prov
 
 
 RUN_PROVENANCE_SCHEMA = 1

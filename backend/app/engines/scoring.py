@@ -50,7 +50,8 @@ def score_from_population(model_key: str, subjects: list[dict], *,
                           sigma_prop: float | None, sigma_add: float | None,
                           iiv_params: list[str],
                           error_model: str = "proportional",
-                          covariate_effects: list[dict] | None = None) -> dict[str, Any]:
+                          covariate_effects: list[dict] | None = None,
+                          omega_matrix: Any = None) -> dict[str, Any]:
     """Score an engine given only its POPULATION model (θ, Ω%CV, σ).
 
     Individual predictions are derived on our side via the app's own
@@ -81,7 +82,9 @@ def score_from_population(model_key: str, subjects: list[dict], *,
                          "(model=%s): %s", s.get("subject"), model_key, exc)
             ind[s["subject"]] = theta  # fall back to typical prediction
     out = score_predictions(model_key, subjects, ind, theta,
-                            omega_cv_pct, sigma_prop, sigma_add)
+                            omega_cv_pct, sigma_prop, sigma_add,
+                            covariate_effects=covariate_effects,
+                            omega_matrix=omega_matrix, omega_params=iiv_params)
     # Surface the fallback count so a mis-fed score is distinguishable from a
     # genuinely poor fit (a full fallback collapses IPRED to PRED for all subjects).
     out["n_map_fallback"] = n_fallback
@@ -91,15 +94,27 @@ def score_from_population(model_key: str, subjects: list[dict], *,
 def score_predictions(model_key: str, subjects: list[dict],
                       individual_params_by_subject: dict, typical_params: dict,
                       iiv_cv_by_param: dict,
-                      sigma_prop: float | None, sigma_add: float | None) -> dict[str, Any]:
-    """Compute the engine-agnostic goodness fields from supplied predictions."""
+                      sigma_prop: float | None, sigma_add: float | None,
+                      *, covariate_effects: list[dict] | None = None,
+                      omega_matrix: Any = None,
+                      omega_params: list[str] | None = None) -> dict[str, Any]:
+    """Compute the engine-agnostic goodness fields from supplied predictions.
+
+    ``covariate_effects`` / ``omega_matrix`` (ordered as ``omega_params``) carry
+    the engine's fitted covariate model and full Omega into PRED and the pcVPC
+    simulation; omitted, the original covariate-free, independent-eta behaviour
+    is unchanged.
+    """
     from app.compute.vpc import obs_vs_pred, pcvpc  # lazy: heavy
 
-    ovp = obs_vs_pred(model_key, subjects, individual_params_by_subject, typical_params)
+    ovp = obs_vs_pred(model_key, subjects, individual_params_by_subject, typical_params,
+                      covariate_effects=covariate_effects)
     gof = ovp.get("gof", {})
     try:
         pc = pcvpc(model_key, subjects, typical_params, iiv_cv_by_param,
-                   sigma_prop=sigma_prop or 0.0, sigma_add=sigma_add or 0.0)
+                   sigma_prop=sigma_prop or 0.0, sigma_add=sigma_add or 0.0,
+                   covariate_effects=covariate_effects,
+                   omega_matrix=omega_matrix, omega_params=omega_params)
         cov90 = vpc_coverage(pc)
     except Exception:
         cov90 = None  # a pcVPC failure must not sink the whole score

@@ -64,11 +64,26 @@ def test_unit_changes_do_not_trip_the_detector():
 # ── reporting ────────────────────────────────────────────────────────────────
 
 def _subjects():
-    """Two trivially-fittable subjects (one-compartment-ish decay)."""
-    return [{"subject": i, "doses": [{"time": 0.0, "amt": 100.0}],
-             "obs_t": [1.0, 4.0, 8.0, 24.0],
-             "obs_c": [9.0, 7.0, 5.0, 2.0], "wt": 70.0, "cov": {}}
-            for i in (1, 2, 3, 4)]
+    """Four trivially-fittable subjects WITH an absorption phase.
+
+    Samples start at 0.25 h so KA is identifiable. (The earlier t>=1 h design
+    had no absorption information: a fully converged fit pushed KA to its
+    clamp and was correctly flagged degenerate; the old early-stopped fit hid
+    that.)
+    """
+    from app.compute.pk_models import get_model
+    from app.compute.pk_simulate import simulate
+    model = get_model("oral_1cmt")
+    t = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 24.0]
+    subs = []
+    for i, (cl, v) in enumerate([(4.5, 48.0), (5.5, 52.0), (5.0, 45.0), (4.8, 55.0)], 1):
+        doses = [{"time": 0.0, "amt": 100.0}]
+        cp = simulate(model, {"CL": cl, "V": v, "KA": 1.0}, doses, t, wt=70.0)["cp"]
+        subs.append({"subject": i, "doses": doses, "obs_t": t,
+                     "obs_c": [float(c) * (1.0 + 0.03 * ((-1) ** (i + j)))
+                               for j, c in enumerate(cp)],
+                     "wt": 70.0, "cov": {}})
+    return subs
 
 
 def test_assemble_forces_not_converged_and_names_the_parameter():
