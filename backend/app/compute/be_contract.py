@@ -37,9 +37,12 @@ from typing import Any
 
 from numpy import bool_ as np_bool
 
+from app.compute import be_qc
 from app.compute.be_model import VARIANCES, crossover_2x2, not_estimable, parallel_two_group
 
 DESIGNS = ("crossover", "parallel")
+PREDOSE_POLICIES = ("profile_rule", "flag_only")
+_QC_RECORD_KEYS = ("predose", "predose_samples", "predose_time", "cmax_first_point")
 MODEL_TEXT = {
     "crossover": ("interim (validation pending): fixed-effects ANOVA on the log scale with sequence, subject within "
                   "sequence, period and formulation; the formulation difference uses the residual mean square on "
@@ -72,21 +75,28 @@ class Profile:
     min_evaluable: int
     source: str
     rounding_source: str | None
+    decision_parameters: tuple[str, ...] = ("Cmax", "AUC_last")
+    decision_source: str = ""
 
 
 PROFILES: dict[str, Profile] = {
     "fda_2026": Profile(
         "fda_2026", Decimal("80.00"), Decimal("125.00"), 90, 0.10, 12,
         "FDA, Statistical Approaches to Establishing Bioequivalence (May 2026)",
-        "FDA May 2026, sec. II.A footnote 6: rounded CI at least 80.00% and not more than 125.00%"),
+        "FDA May 2026, sec. II.A footnote 6: rounded CI at least 80.00% and not more than 125.00%",
+        decision_source="FDA ANDA PK BE guidance (May 2026): for immediate-release products the statistical "
+                        "information is for AUC0-t and Cmax; AUC0-inf is added for modified-release products"),
     "ich_m13a": Profile(
         "ich_m13a", Decimal("80.00"), Decimal("125.00"), 90, 0.10, 12,
         "ICH M13A, EMA/CHMP/ICH/953493/2022 (Step 5, 25 July 2024)",
-        None),
+        None,
+        decision_source="ICH M13A sec. 2.2.4: Cmax and AUC(0-t) (CmaxSS and AUC(0-tauSS) at steady state); AUC(0-inf) "
+                        "is an acceptability measure (sec. 2.2.2.2)"),
     "ema_2010": Profile(
         "ema_2010", Decimal("80.00"), Decimal("125.00"), 90, 0.10, 12,
         "EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr**",
-        "EMA 2010, sec. 4.1.8: bounds compared when rounded to two decimal places"),
+        "EMA 2010, sec. 4.1.8: bounds compared when rounded to two decimal places",
+        decision_source="EMA 2010 sec. 4.1.8: AUC(0-t) and Cmax for single-dose studies"),
 }
 
 
@@ -158,6 +168,7 @@ def _index(records, design, test, reference):
     replicate and cross-arm subjects."""
     by: dict[Any, dict[Any, dict]] = {test: {}, reference: {}}
     periods: dict[tuple, Any] = {}
+    extras: dict[tuple, dict[str, Any]] = {}
     for r in records:
         if r["treatment"] not in by:
             continue
@@ -167,11 +178,12 @@ def _index(records, design, test, reference):
                                       "replicate designs are not supported")
         arm[r["subject"]] = dict(r["params"])
         periods[(r["treatment"], r["subject"])] = r.get("period")
+        extras[(r["treatment"], r["subject"])] = {k: r[k] for k in _QC_RECORD_KEYS if k in r}
     if design == "parallel":
         both = set(by[test]) & set(by[reference])
         if both:
             raise BEContractError(f"parallel design but subject(s) {sorted(map(str, both))} received both products")
-    return by, periods
+    return by, periods, extras
 
 
 def period_label(x: Any) -> Any:
@@ -265,7 +277,8 @@ def _verdict(est, prof, lo, hi, enough):
 
 
 def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, lo, hi, ledger, layout=None,
-                   variance=None):
+                   variance=None, qc_excluded=None):
+    qc_excluded = qc_excluded or {}
     t_arm, r_arm = by[test], by[reference]
     usable = {lv: {} for lv in (test, reference)}
     for lv, arm in ((test, t_arm), (reference, r_arm)):
@@ -273,6 +286,10 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
             v = params.get(name)
             if s in excluded_subjects:
                 ledger.append(_entry(s, lv, name, excluded_subjects[s], v, True))
+                continue
+            if (lv, s) in qc_excluded:
+                f = qc_excluded[(lv, s)]
+                ledger.append({**_entry(s, lv, name, f["rule"], v, False), "detail": f["detail"]})
                 continue
             problem = _value_problem(v)
             if problem:
@@ -304,20 +321,26 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
              "anova": est.get("anova"), "n_per_sequence": est.get("n_per_sequence"),
              "geo_mean_test": est.get("geo_mean_test"), "geo_mean_ref": est.get("geo_mean_ref"),
              "arith_mean_test": est.get("arith_mean_test"), "arith_mean_ref": est.get("arith_mean_ref")}
+    analysed = set(common) if design == "crossover" else set(usable[test]) | set(usable[reference])
     return {**shown, **model, **_verdict(est, prof, lo, hi, enough),
             "n_evaluable": n_t if design == "crossover" else n_t + n_r, "n_test": n_t, "n_reference": n_r,
-            "min_evaluable": prof.min_evaluable}
+            "min_evaluable": prof.min_evaluable, "_analysed": analysed}
 
 
 def assess_average_be(records: list[dict], *, design: str | None, profile: str | None, test: Any, reference: Any,
                       prespecified_exclusions: list[dict] | None = None, limits: tuple[float, float] | None = None,
-                      limits_justification: str | None = None, variance: str | None = None) -> dict[str, Any]:
-    """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``).
+                      limits_justification: str | None = None, variance: str | None = None,
+                      decision_parameters: list[str] | None = None, decision_justification: str | None = None,
+                      predose_policy: str = "profile_rule", predose_justification: str | None = None
+                      ) -> dict[str, Any]:
+    """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``; optional
+    per-record ``period``, ``predose`` (concentration, or None when no sample) and ``cmax_first_point``).
 
     Any malformed input is a BEContractError, never another exception."""
     try:
         return _assess(records, design, profile, test, reference, prespecified_exclusions, limits,
-                       limits_justification, variance)
+                       limits_justification, variance, decision_parameters, decision_justification, predose_policy,
+                       predose_justification)
     except BEContractError:
         raise
     except (TypeError, ValueError, ArithmeticError, InvalidOperation, KeyError, AttributeError) as exc:
@@ -350,18 +373,65 @@ def _exclusion_map(prespecified_exclusions, subjects) -> dict[Any, str]:
     return excluded
 
 
+def _decision_set(prof, names, decision_parameters, decision_justification) -> tuple[list[str], bool, list[str]]:
+    """The parameters that decide the verdict, whether the caller overrode the profile's set, and the profile
+    parameters the override left out because the data do not carry them. An override may add parameters; it may not
+    drop a profile decision parameter that the data carry."""
+    if decision_parameters is None:
+        return list(prof.decision_parameters), False, []
+    if (not isinstance(decision_parameters, (list, tuple)) or not decision_parameters
+            or not all(isinstance(x, str) and x for x in decision_parameters)
+            or len(set(decision_parameters)) != len(decision_parameters)):
+        raise BEContractError("decision_parameters must be a non-empty list of distinct parameter names")
+    unknown = [x for x in decision_parameters if x not in names]
+    if unknown:
+        raise BEContractError(f"decision parameter(s) {unknown} are not in the data (parameters: {names})")
+    chosen = list(decision_parameters)
+    dropped = [n for n in prof.decision_parameters if n in names and n not in chosen]
+    if dropped:
+        raise BEContractError(f"decision_parameters cannot drop {dropped}: the profile's decision parameters that "
+                              "the data carry always decide (a parameter counts as carried if any subject has it); "
+                              "an override may only add parameters")
+    if set(chosen) != set(prof.decision_parameters) and not (decision_justification or "").strip():
+        raise BEContractError("decision_parameters differs from the profile's set "
+                              f"{list(prof.decision_parameters)}: it needs a written justification "
+                              "(decision_justification)")
+    omitted = [n for n in prof.decision_parameters if n not in chosen]
+    return chosen, set(chosen) != set(prof.decision_parameters), omitted
+
+
+def _predose_policy(policy, justification) -> dict[str, Any]:
+    if policy not in PREDOSE_POLICIES:
+        raise BEContractError(f"predose_policy must be one of {PREDOSE_POLICIES}; got {policy!r}")
+    if policy == "flag_only" and not (justification or "").strip():
+        raise BEContractError("predose_policy 'flag_only' needs a written justification (predose_justification), "
+                              "for example an endogenous compound")
+    return {"policy": policy, "justification": (justification or "").strip() or None}
+
+
 def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification,
-            variance=None):
+            variance=None, decision_parameters=None, decision_justification=None, predose_policy="profile_rule",
+            predose_justification=None):
     prof, lo, hi = _validate(records, design, profile, test, reference, limits, limits_justification, variance)
-    by, periods = _index(records, design, test, reference)
+    policy = _predose_policy(predose_policy, predose_justification)
+    by, periods, extras = _index(records, design, test, reference)
     layout = _crossover_layout(by, periods, test, reference) if design == "crossover" else None
     variance = (variance or "pooled") if design == "parallel" else None
     subjects = set(by[test]) | set(by[reference])
     excluded = _exclusion_map(prespecified_exclusions, subjects)
     names = sorted({k for arm in by.values() for p in arm.values() for k in p})
+    decision, decision_custom, decision_omitted = _decision_set(prof, names, decision_parameters,
+                                                                decision_justification)
+    findings, qc_excluded = be_qc.run_qc(by, extras, periods, test, reference, policy=policy["policy"],
+                                         prespecified=set(excluded))
     ledger: list[dict] = []
-    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger, layout, variance)
-              for n in names}
+    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger, layout, variance,
+                                qc_excluded) for n in names}
+    analysed = {n: p.pop("_analysed") for n, p in params.items()}
+    for n, p in params.items():
+        p["role"] = "decision" if n in decision else "supportive"
+    gap = [n for n in decision if n not in params]
+    dispositions = be_qc.build_dispositions(by, periods, design, test, reference, layout, analysed, ledger, findings)
     custom = (lo, hi) != (prof.lower, prof.upper)
     return {
         "design": design, "profile": prof.name, "profile_source": prof.source,
@@ -376,7 +446,13 @@ def _assess(records, design, profile, test, reference, prespecified_exclusions, 
         "variance": variance,
         "ignored_treatments": sorted({r["treatment"] for r in records} - {test, reference}, key=str),
         "parameters": params, "exclusions": ledger,
-        "bioequivalent": bool(params) and all(p["within_limits"] for p in params.values()),
+        "decision_parameters": decision, "decision_source": prof.decision_source,
+        "decision_justification": (decision_justification or "").strip() or None if decision_custom else None,
+        "supportive_parameters": [n for n in params if n not in decision], "decision_gap": gap,
+        "decision_omitted": decision_omitted,
+        "predose_policy": policy, "qc_findings": findings, "qc_summary": be_qc.summarise(findings),
+        "dispositions": dispositions,
+        "bioequivalent": bool(decision) and not gap and all(params[n]["within_limits"] for n in decision),
     }
 
 
@@ -395,3 +471,47 @@ def report_ci(v: dict[str, Any]) -> str:
     lo = v.get("ci_lower_raw", v.get("ci_lower_pct"))
     hi = v.get("ci_upper_raw", v.get("ci_upper_pct"))
     return "n/a" if lo is None else f"{lo!r}–{hi!r} (unrounded, as compared)"
+
+
+def _short(v: Any) -> str:
+    return f"{v:.4g}" if isinstance(v, float) else str(v)
+
+
+PREDATES_ROLES = ("This result predates recorded decision parameters: its verdict was computed under the rule in "
+                  "force when it was produced, which may differ from the current decision set. Re-run the analysis "
+                  "to apply the current rules.")
+
+
+def report_roles(res: dict[str, Any]) -> str:
+    """One sentence naming the decision and supportive parameters and where the decision set comes from; for a
+    result saved before roles existed, a note that its verdict predates them."""
+    if not res.get("decision_parameters"):
+        return PREDATES_ROLES
+    dec, sup = res.get("decision_parameters") or [], res.get("supportive_parameters") or []
+    text = (f"Decision parameters: {', '.join(dec) or 'none'}; supportive (reported, not part of the verdict): "
+            f"{', '.join(sup) or 'none'}. Basis: {res.get('decision_source') or 'n/a'}.")
+    if res.get("decision_justification"):
+        text += f" The decision set was changed by the user, justified as: {res['decision_justification']}."
+    if res.get("decision_gap"):
+        text += f" No conclusion: decision parameter(s) {', '.join(res['decision_gap'])} are missing from the data."
+    return text
+
+
+def report_qc_rows(res: dict[str, Any]) -> list[list[str]]:
+    """Rows for the QC-findings table: rule, subject, treatment, period, action, the numbers behind it."""
+    return [[f["rule"], "all" if f["subject"] is None else str(f["subject"]),
+             "" if f["treatment"] is None else str(f["treatment"]), "" if f["period"] is None else str(f["period"]),
+             f["action"], ", ".join(f"{k}={_short(v)}" for k, v in (f.get("detail") or {}).items())]
+            for f in res.get("qc_findings") or []]
+
+
+def report_disposition_rows(res: dict[str, Any]) -> list[list[str]]:
+    """Rows for the subject-disposition table: subject, sequence or arm, disposition, reasons, flags and notes."""
+    rows = []
+    for r in res.get("dispositions") or []:
+        reasons: list[str] = []
+        for info in (r.get("parameters") or {}).values():
+            reasons += [x for x in info.get("reasons", []) if x not in reasons]
+        rows.append([str(r["subject"]), str(r.get("sequence") or r.get("arm") or ""), r["disposition"],
+                     ", ".join(reasons), ", ".join((r.get("qc_flags") or []) + (r.get("notes") or []))])
+    return rows

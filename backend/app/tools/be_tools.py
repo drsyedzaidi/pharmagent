@@ -19,6 +19,7 @@ from app.compute.be_contract import (
     ordered_periods,
     period_label,
 )
+from app.compute.be_qc import natural_key
 from app.compute.nca import Profile, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
@@ -68,6 +69,7 @@ def _exposures_by_treatment(
                        conc=g[dv_col].to_numpy(float), dose=float("nan"))
         p = nca_subject(prof)
         rec = {"subject": _py(sid), "treatment": _py(trt), "params": {k: p.get(k) for k in _BE_PARAMS}}
+        rec.update(_qc_inputs(g, time_col, dv_col))
         if period_col:                       # one value per (subject, treatment): _check_periods refused anything else
             rec["period"] = _py(g[period_col].iloc[0])
         records.append(rec)
@@ -152,6 +154,45 @@ def _missing_args(df: pd.DataFrame, state: PharmState, args: dict[str, Any], mis
                     "inferred", missing=missing, accepted_values=accepted, example=example)
 
 
+def _qc_inputs(g: pd.DataFrame, time_col: str, dv_col: str) -> dict[str, Any]:
+    """The pre-dose concentration (the highest sample at or before time 0, or None when there is none) and whether
+    Cmax falls on the first post-dose sample, for one subject and treatment (rows sorted by time)."""
+    pre = g[g[time_col] <= 0]
+    post = g[g[time_col] > 0]
+    # every sample at or before time 0 is a pre-dose sample and the highest decides: any one above 5 % of Cmax
+    # signals carry-over; more than one is reported
+    out: dict[str, Any] = {"predose": float(pre[dv_col].max()) if len(pre) else None, "predose_samples": int(len(pre))}
+    if len(pre):
+        out["predose_time"] = float(pre.loc[pre[dv_col].idxmax(), time_col])        # the sample the rule used
+    if len(post):
+        peak_time = post.loc[post[dv_col].idxmax(), time_col]
+        out["cmax_first_point"] = bool(peak_time == post[time_col].min())
+    return out
+
+
+def _merge_pre_contract_entries(res: dict[str, Any], entries: list[dict[str, Any]]) -> None:
+    """Rows and records removed before the contract saw the data (non-numeric or missing values, profiles with fewer
+    than 3 samples) belong in the disposition table too: a note for a dropped row, a reason (and a row, when the
+    subject vanished entirely) for a dropped record."""
+    rows = {r["subject"]: r for r in res["dispositions"]}
+    names = list(res["parameters"])
+    for e in entries:
+        subject = e["subject"]
+        row = rows.get(subject)
+        if row is None:
+            row = {"subject": subject, "sequence": None, "arm": None, "periods": {}, "qc_flags": [],
+                   "disposition": "excluded", "parameters": {n: {"status": "excluded", "reasons": []} for n in names}}
+            rows[subject] = row
+        if e["reason"] == "fewer_than_3_samples":
+            for info in row["parameters"].values():
+                if info["status"] == "excluded" and e["reason"] not in info["reasons"]:
+                    info["reasons"].append(e["reason"])
+        t = e.get("time")
+        row.setdefault("notes", []).append(f"{e['reason']}" + (f" at t={t}" if t is not None else "")
+                                           + f" ({e['treatment']})")
+    res["dispositions"] = sorted(rows.values(), key=lambda r: natural_key(r["subject"]))
+
+
 def _refusal(status: str, message: str, **extra: Any) -> ToolResult:
     payload = {"status": status, "message": f"{message}. {_NO_CONCLUSION}", **extra}
     return ToolResult(summary=f"Bioequivalence not run: {message}", action=f"run_bioequivalence({status})",
@@ -233,15 +274,20 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
             records, design=args["design"], profile=args["profile"], test=_py(test_lv), reference=_py(ref_lv),
             prespecified_exclusions=args.get("prespecified_exclusions"),
             limits=args.get("limits"), limits_justification=args.get("limits_justification"),
-            variance=args.get("variance"))
+            variance=args.get("variance"), decision_parameters=args.get("decision_parameters"),
+            decision_justification=args.get("decision_justification"),
+            predose_policy=args.get("predose_policy") or "profile_rule",
+            predose_justification=args.get("predose_justification"))
     except BEContractError as exc:
         return _refusal("unsupported_design" if isinstance(exc, BEUnsupportedDesign) else "invalid_arguments", str(exc))
     res = {**res, "status": "ok", "exclusions": dropped + short + res["exclusions"],
            "test_level": str(test_lv), "reference_level": str(ref_lv)}
+    _merge_pre_contract_entries(res, dropped + short)
     verdict = "BIOEQUIVALENT" if res["bioequivalent"] else "NOT bioequivalent"
     return ToolResult(
         summary=(f"Bioequivalence ({res['design']}, profile {res['profile']}): {test_lv} vs {ref_lv} - {verdict}; "
-                 f"{len(res['exclusions'])} excluded value(s) listed; interim model, validation pending."),
+                 f"{len(res['exclusions'])} excluded value(s) listed, {res['qc_summary']['excluded']} excluded by QC; "
+                 "interim model, validation pending."),
         action=f"run_bioequivalence({dsid}, {res['profile']}, {res['design']}, {test_lv} vs {ref_lv})",
         writes={"be_results": res}, result=res)
 
@@ -253,7 +299,9 @@ TOOLS = [
          "test and reference treatment levels; nothing is inferred. A crossover is analysed with the 2x2 "
          "fixed-effects model (sequence, subject within sequence, period, formulation) and needs period_col. "
          "Optional: treatment_col, variance ('pooled' or 'welch', parallel only), "
-         "prespecified_exclusions [{subject, reason}], limits [lower, upper] with limits_justification.",
+         "prespecified_exclusions [{subject, reason}], limits [lower, upper] with limits_justification. Cmax and "
+         "AUC_last decide (AUC_inf is supportive unless named in decision_parameters with a justification); a "
+         "pre-dose above 5% of Cmax drops that subject-period (predose_policy 'flag_only' needs a justification).",
          "be",
          {"type": "object",
           "properties": {"dataset_id": {"type": "string"},
@@ -263,6 +311,10 @@ TOOLS = [
                          "period_col": {"type": "string"},
                          "group_col": {"type": "string"},
                          "variance": {"type": "string", "enum": ["pooled", "welch"]},
+                         "decision_parameters": {"type": "array", "items": {"type": "string"}},
+                         "decision_justification": {"type": "string"},
+                         "predose_policy": {"type": "string", "enum": ["profile_rule", "flag_only"]},
+                         "predose_justification": {"type": "string"},
                          "test": {"type": "string"},
                          "reference": {"type": "string"},
                          "prespecified_exclusions": {"type": "array", "items": {"type": "object"}},

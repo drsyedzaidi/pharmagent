@@ -104,8 +104,16 @@ SIM_ANCHOR = re.compile(
 )
 
 
+#: A file path or data-file name is an argument, not intent: 'qc_results.csv' or a checkout
+#: directory called 'pharmagent-be-qc' must not claim the request for the qc agent. Matches a
+#: token that starts like a path (/, ~, ./, C:\\) or names a data file; 'mg/l' and 'pk/pd' stay.
+_PATH_TOKEN = re.compile(
+    r"(?:(?<=\s)|^)(?:[a-z]:[\\/]|[~./\\])\S*"
+    r"|\S+\.(?:csv|tsv|txt|xpt|sas7bdat|xlsx?|rds|json)\b")
+
+
 def score(message: str) -> dict[str, int]:
-    low = (message or "").lower()
+    low = _PATH_TOKEN.sub(" ", (message or "").lower())
     return {agent: sum(low.count(k) for k in kws) for agent, kws in KEYWORDS.items()}
 
 

@@ -223,22 +223,26 @@ def test_the_endpoint_closure_wording_is_consistent():
 
 
 BE_STATEMENT = (
-    "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation "
-    "and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and "
-    "period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite "
-    "parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the "
-    "confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model "
-    "with sequence, subject within sequence, period and formulation, and a parallel design as two independent "
-    "groups. These estimators are interim until independent validation is complete and are not yet cleared as the "
-    "regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition "
-    "ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring "
-    "the reference formulation.")
+    "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test "
+    "formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, "
+    "treatment and period identifiers, exactly two periods and at least two observed treatment sequences. "
+    "Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile "
+    "controls the confidence level, acceptance limits and rounding policy. A crossover is analysed with a "
+    "fixed-effects model with sequence, subject within sequence, period and formulation, and a parallel "
+    "design as two independent groups. Cmax and AUC(0-t) decide the verdict; other parameters are supportive "
+    "unless a justified decision set is given. A pre-dose concentration above 5 percent of the period's Cmax "
+    "excludes the affected period, unless a justified flag-only policy is chosen; very low exposure, "
+    "incomplete AUC extrapolation and a Cmax at the first sample are flagged for discussion and never exclude "
+    "a subject. These estimators are interim until independent validation is complete and are not yet cleared "
+    "as the regulatory model. Missing, excluded and invalid observations, and every QC finding, are reported "
+    "in a parameter-level disposition ledger and a subject-level disposition table. Ambiguous, incomplete or "
+    "unsupported designs fail closed rather than switching design or inferring the reference formulation.")
 
 
 def test_the_be_entry_states_the_current_model_and_stays_pending():
     c = {c.id: c for c in load_catalog().conventions}["be.average_tost"]
     assert c.statement == BE_STATEMENT and c.parameters == {}
-    assert c.approval.status == "pending_owner_review" and c.version == "2.2.0"
+    assert c.approval.status == "pending_owner_review" and c.version == "2.3.0"
     gaps = " ".join(c.known_gaps).lower()
     assert "half-up" in gaps and "implementation convention" in gaps
     for design in ("nti", "highly variable", "replicate", "reference-scaled"):
@@ -246,11 +250,14 @@ def test_the_be_entry_states_the_current_model_and_stays_pending():
     assert "independent validation" in gaps and "biostatistician" in gaps and "nlme" in gaps
     assert "pooled variance" in gaps and "welch" in gaps and "stratification" in gaps
     assert "agree with base r" in gaps and "r 4.5.1" in gaps and "optimizer" in gaps   # what R confirmed, and how far
+    assert "single-dose" in gaps and "immediate-release" in gaps and "partial auc" in gaps   # QC and decision-set limits
+    assert "may only add" in gaps                                                    # decision-set overrides
+    assert "flags only" in gaps and "highest sample at or before time 0" in gaps
     assert "not implemented" not in gaps or "period/sequence/formulation model" not in gaps   # that gap is closed
     assert "paired log differences" not in c.statement and "not yet cleared as the regulatory model" in c.statement
     assert all(t.startswith(("tests/test_be_contract", "tests/test_be_tool_contract", "tests/test_be_compute",
                              "tests/test_be_model", "tests/test_be_engine_contract",
-                             "tests/test_be_crosscheck_r_anova")) for t in c.tests)
+                             "tests/test_be_crosscheck_r_anova", "tests/test_be_qc")) for t in c.tests)
     assert not any("test_paired_gmr" in t for t in c.tests)          # the paired t-test is no longer the estimator
     assert any(t.startswith("tests/test_be_model.py") for t in c.tests)
 
