@@ -24,6 +24,7 @@ from typing import Any, Protocol
 import requests
 
 from app.config import settings
+from app.core.prompt_safety import untrusted_block
 from app.tools.base import Tool
 
 log = logging.getLogger("pharmagent")
@@ -187,6 +188,12 @@ def _active_tools(
     return (filtered if filtered else list(tools)), admissible
 
 
+def untrusted_state_block(state_summary: Any) -> str:
+    """The state summary as a delimited, size-capped untrusted-data block (it carries
+    dataset-derived strings such as column names)."""
+    return untrusted_block(str(state_summary), label="session state")
+
+
 def _planner_system(goal: str, state_summary: dict[str, Any], observations: list[dict[str, Any]],
                     history: list[dict[str, Any]], tools: list[Tool] | None = None) -> str:
     """System text shared by the hosted planners (Anthropic / OpenAI-compatible)."""
@@ -223,7 +230,8 @@ def _planner_system(goal: str, state_summary: dict[str, Any], observations: list
         f"Valid PK model library keys (for model_key / models): {valid_models}\n"
         f"Policy prerequisites: {prereqs}\n"
         f"Current admissible actions:\n{_format_admissible(admissible)}\n"
-        f"Goal: {goal}\nState: {visible_state}\nObservations this leg: {visible_obs}\n"
+        f"Goal: {goal}\nState: {untrusted_state_block(visible_state)}\n"
+        f"Observations this leg: {visible_obs}\n"
         f"Prior proposals and policy decisions: {visible_hist}"
         + repair_note
     )
@@ -411,7 +419,7 @@ class RealLLM:
                        f"{domain_prompt}\n" if domain_prompt else
                        f"You are the {agent} agent in a pharmacometrics platform. ")
         system_text += ("Use a tool to make progress, or answer directly if the task is done. "
-                        f"Current state: {state_summary}")
+                        f"Current state: {untrusted_state_block(state_summary)}")
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=settings.max_tokens,
@@ -651,7 +659,7 @@ class OpenAICompatLLM:
                        f"{domain_prompt}\n" if domain_prompt else
                        f"You are the {agent} agent in a pharmacometrics platform. ")
         system_text += ("Call a tool to make progress, or answer in plain text if the task is "
-                        f"done. Current state: {state_summary}")
+                        f"done. Current state: {untrusted_state_block(state_summary)}")
         msg = self._chat([
             {"role": "system", "content": system_text},
             {"role": "user", "content": message},

@@ -295,7 +295,7 @@ TOOLS = [
          "best-fit terminal slope.",
          "nca",
          {"type": "object",
-          "properties": {"dataset_id": {"type": "string"},
+          "properties": {"dataset_id": {"type": "string"}, "is_iv": {"type": "boolean"},
                          "include_unacceptable_lambda_z": {
                              "type": "boolean",
                              "description": "Pool AUC_inf-derived values (AUC_inf, CL/F, Vz/F, Vss, MRT) of subjects "
