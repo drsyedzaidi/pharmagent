@@ -302,15 +302,336 @@ def _scm_refute(scm: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+_CIRCULAR_SOURCES = frozenset({
+    "this_simulation",
+    "protocol_sim",
+    "self",
+    "internal_simulation",
+    "simulated_pta",
+    "current_simulation",
+    "circular",
+})
+
+
+def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
+    """Seven simulation-specific refutations for the governed protocol_simulation workflow.
+
+    Every check emits HIGH severity so any violation blocks the review gate:
+      1. Target window provenance missing or circular.
+      2. PTA reported without Monte Carlo SE or with fewer than the plan's replicates.
+      3. Any band where PTA depends on extrapolation outside the fit's covariate range,
+         or on a covariate the fit never observed (unverifiable, not silently passed).
+      4. Regimen recommended on PTA alone while trough or peak metric fails its limit.
+      5. Parameter uncertainty omitted when a recommendation is made.
+      6. Pediatric band below the maturation function's data range (or fit lacks that range).
+      7. The uncertainty actually propagated is not the method the approved plan named.
+    """
+    import math
+
+    out: list[dict[str, Any]] = []
+    plan = ps.get("plan") or {}
+    pta = ps.get("pta") or {}
+    source_fit = ps.get("source_fit") or {}
+    tw = plan.get("target_window") or pta.get("target_window") or {}
+
+    # 1. Target window provenance missing or circular
+    prov = tw.get("provenance")
+    source_str = str((prov or {}).get("source") or "").strip() if isinstance(prov, dict) else ""
+    citation_str = str((prov or {}).get("citation") or "").strip() if isinstance(prov, dict) else ""
+    is_circular = (
+        source_str.lower() in _CIRCULAR_SOURCES
+        or "same simulation" in citation_str.lower()
+        or "this simulation" in citation_str.lower()
+        or "derived from current simulation" in citation_str.lower()
+    )
+    if not isinstance(prov, dict) or not source_str or not citation_str or is_circular:
+        reason = (
+            f"target_window.provenance is circular (source={source_str!r}, citation={citation_str!r})"
+            if is_circular
+            else "target_window.provenance is missing a non-empty external source and citation"
+        )
+        out.append(_finding(
+            "sim-target-window-provenance",
+            HIGH,
+            "protocol_sim.plan.target_window",
+            "Target exposure window has valid external provenance",
+            reason,
+            "Supply an independent external source and citation in protocol_sim.plan.target_window.provenance",
+        ))
+
+    # 2. PTA reported without Monte Carlo SE or with fewer than the plan's replicates
+    plan_reps = int(plan.get("replicates") or pta.get("replicates") or 1)
+    pta_rows = pta.get("rows") or []
+    if pta and not pta_rows:
+        out.append(_finding(
+            "sim-pta-mc-se-empty",
+            HIGH,
+            "protocol_sim.pta",
+            "PTA table reports replicate summary across plan bands and regimens",
+            "protocol_sim.pta contains no band x regimen rows",
+            "Run simulate_trial_pta over all plan bands and regimens with replicates >= 2",
+        ))
+    for row in pta_rows:
+        bname = row.get("band", "unknown")
+        rname = row.get("regimen", "unknown")
+        mc_se = row.get("mc_se")
+        row_reps = int(row.get("replicates") or 0)
+        mc_missing = mc_se is None or not isinstance(mc_se, (int, float)) or not math.isfinite(float(mc_se))
+        reps_short = row_reps < plan_reps
+        if mc_missing or reps_short:
+            detail = []
+            if mc_missing:
+                detail.append(f"mc_se={mc_se!r} is missing/non-finite")
+            if reps_short:
+                detail.append(f"replicates={row_reps} < plan.replicates={plan_reps}")
+            out.append(_finding(
+                f"sim-pta-mc-se-{bname}-{rname}",
+                HIGH,
+                "protocol_sim.pta",
+                f"PTA for band '{bname}' regimen '{rname}' carries MC SE across {plan_reps} replicates",
+                "; ".join(detail),
+                "Run simulate_trial_pta with the full replicate count and report Monte Carlo SE",
+            ))
+
+    # 3. Any band where PTA depends on extrapolation outside the fit's covariate range,
+    #    or on a covariate the fit never observed (then the check cannot be made at all).
+    cov_ranges = source_fit.get("covariate_ranges") or {}
+    for band in plan.get("bands") or []:
+        bname = str(band.get("name") or "band")
+        extrap_msgs: list[str] = []
+        unverifiable_msgs: list[str] = []
+        for cov_key, label in (("wt_kg", "weight (wt_kg)"), ("age_yr", "age (age_yr)"),
+                               ("crcl_ml_min", "creatinine clearance (crcl_ml_min)")):
+            b_range = band.get(cov_key)
+            if not (isinstance(b_range, (list, tuple)) and len(b_range) == 2):
+                continue
+            b_lo, b_hi = float(b_range[0]), float(b_range[1])
+            f_range = cov_ranges.get(cov_key)
+            if not (isinstance(f_range, (list, tuple)) and len(f_range) == 2):
+                unverifiable_msgs.append(
+                    f"{label} band [{b_lo:g}, {b_hi:g}] cannot be checked: the source fit "
+                    f"carries no observed range for {cov_key}")
+                continue
+            f_lo, f_hi = float(f_range[0]), float(f_range[1])
+            if b_lo < f_lo - 1e-6 or b_hi > f_hi + 1e-6:
+                extrap_msgs.append(
+                    f"{label} band [{b_lo:g}, {b_hi:g}] extrapolates outside fit data range [{f_lo:g}, {f_hi:g}]"
+                )
+        if unverifiable_msgs:
+            out.append(_finding(
+                f"sim-covariate-range-unverifiable-{bname}",
+                HIGH,
+                "protocol_sim.plan.bands",
+                f"Band '{bname}' can be checked against the source fit's observed covariate range",
+                "; ".join(unverifiable_msgs),
+                "Load the source dataset so its observed covariate ranges are carried by the fit, "
+                "or omit that covariate from the band",
+            ))
+        if extrap_msgs:
+            out.append(_finding(
+                f"sim-covariate-extrapolation-{bname}",
+                HIGH,
+                "protocol_sim.plan.bands",
+                f"Band '{bname}' lies within the source fit's observed covariate range",
+                "; ".join(extrap_msgs),
+                "Restrict simulation bands to the fit's observed covariate range or re-estimate on an expanded cohort",
+            ))
+
+    # 4. Regimen recommended on PTA alone while trough or peak metric fails its limit
+    recommendations = ps.get("recommendations") or pta.get("recommendations") or []
+    rows_by_key = {(r.get("band"), r.get("regimen")): r for r in pta_rows}
+    cmax_max = tw.get("cmax_max")
+    ctrough_min = tw.get("ctrough_min")
+    for rec in recommendations:
+        rec_reg = rec.get("recommended_regimen")
+        if not rec_reg:
+            continue
+        bname = str(rec.get("band") or "band")
+        row = rows_by_key.get((bname, rec_reg)) or {}
+        cmax_info = row.get("cmax") or {}
+        ctr_info = row.get("ctrough") or {}
+        peak_fail = bool(
+            rec.get("peak_limit_failed")
+            or row.get("peak_limit_failed")
+            or cmax_info.get("limit_failed")
+            or (
+                cmax_max is not None
+                and cmax_info.get("median") is not None
+                and float(cmax_info["median"]) > float(cmax_max)
+            )
+        )
+        trough_fail = bool(
+            rec.get("trough_limit_failed")
+            or row.get("trough_limit_failed")
+            or ctr_info.get("limit_failed")
+            or (
+                ctrough_min is not None
+                and ctr_info.get("median") is not None
+                and float(ctr_info["median"]) < float(ctrough_min)
+            )
+        )
+        if peak_fail or trough_fail:
+            failed_parts = []
+            if peak_fail:
+                failed_parts.append(
+                    f"peak Cmax median={cmax_info.get('median')} exceeds cmax_max={cmax_max}"
+                )
+            if trough_fail:
+                failed_parts.append(
+                    f"trough Ctrough median={ctr_info.get('median')} falls below ctrough_min={ctrough_min}"
+                )
+            out.append(_finding(
+                f"sim-limit-violation-{bname}",
+                HIGH,
+                "protocol_sim.recommendations",
+                f"Recommended regimen '{rec_reg}' for band '{bname}' satisfies peak and trough safety limits",
+                "; ".join(failed_parts),
+                "Do not recommend a regimen on PTA alone when Cmax or Ctrough violates its limit",
+            ))
+
+    # 5. Parameter uncertainty omitted when a recommendation is made
+    has_active_rec = any(bool(r.get("recommended_regimen")) for r in recommendations)
+    if has_active_rec:
+        unc = ps.get("uncertainty")
+        unc_ok = (
+            isinstance(unc, dict)
+            and unc.get("status") == "ok"
+            and bool(unc.get("intervals"))
+        )
+        missing_ci_bands: list[str] = []
+        for rec in recommendations:
+            rec_reg = rec.get("recommended_regimen")
+            if not rec_reg:
+                continue
+            bname = str(rec.get("band") or "band")
+            row = rows_by_key.get((bname, rec_reg)) or {}
+            ci_lo = rec.get("pta_ci_lo") if rec.get("pta_ci_lo") is not None else row.get("pta_ci_lo")
+            ci_hi = rec.get("pta_ci_hi") if rec.get("pta_ci_hi") is not None else row.get("pta_ci_hi")
+            if ci_lo is None or ci_hi is None:
+                missing_ci_bands.append(f"{bname}:{rec_reg}")
+        if not unc_ok or missing_ci_bands:
+            if unc_ok:
+                ev = (f"recommended regimen(s) {missing_ci_bands} lack "
+                      "parameter-uncertainty PTA intervals (pta_ci_lo/pta_ci_hi)")
+            elif isinstance(unc, dict) and unc.get("status") == "unverifiable":
+                ev = f"protocol_sim.uncertainty is unverifiable: {unc.get('reason')}"
+            else:
+                ev = "protocol_sim.uncertainty is missing or incomplete"
+            out.append(_finding(
+                "sim-uncertainty-omitted",
+                HIGH,
+                "protocol_sim.uncertainty",
+                "Regimen recommendations include outer-loop parameter uncertainty intervals in PTA",
+                ev,
+                "Store a bootstrap, SIR or profile result on the source fit (run_bootstrap / "
+                "run_sir / run_profile) and run propagate_parameter_uncertainty before "
+                "recommending a regimen",
+            ))
+
+    # 7. The uncertainty actually propagated is not what the approved plan requested
+    unc = ps.get("uncertainty")
+    plan_method = str(plan.get("uncertainty_method") or "").lower()
+    if isinstance(unc, dict) and unc.get("status") == "ok" and plan_method:
+        actual = str(unc.get("method") or "").lower()
+        if actual != plan_method:
+            out.append(_finding(
+                "sim-uncertainty-method-deviation",
+                HIGH,
+                "protocol_sim.uncertainty",
+                f"PTA parameter-uncertainty intervals come from the approved method ({plan_method})",
+                f"protocol_sim.uncertainty.method = {actual} but the approved plan requested "
+                f"{plan_method}"
+                + ("; the intervals are an asymptotic approximation from theta RSE%"
+                   if unc.get("approximation") else ""),
+                f"Run run_{plan_method} on the source fit and re-run propagate_parameter_uncertainty, "
+                "or re-propose the plan with uncertainty_method='asymptotic_lognormal' and "
+                "re-approve it at the plan gate",
+            ))
+
+    # 6. Pediatric band below the maturation function's data range (fit must carry that range)
+    mat_range = source_fit.get("maturation_data_range")
+    for band in plan.get("bands") or []:
+        bname = str(band.get("name") or "band")
+        age_r = band.get("age_yr")
+        pma_r = band.get("pma_weeks")
+        is_ped = (
+            bool(band.get("is_pediatric"))
+            or (isinstance(age_r, (list, tuple)) and len(age_r) == 2 and float(age_r[0]) < 18.0)
+            or (isinstance(pma_r, (list, tuple)) and len(pma_r) == 2)
+        )
+        if not is_ped:
+            continue
+        if not isinstance(mat_range, dict) or not (mat_range.get("pma_weeks") or mat_range.get("age_yr")):
+            out.append(_finding(
+                f"sim-pediatric-maturation-missing-{bname}",
+                HIGH,
+                "protocol_sim.source_fit.maturation_data_range",
+                f"Source fit carries maturation_data_range supporting pediatric band '{bname}'",
+                (
+                    f"Pediatric band '{bname}' is present in protocol_sim.plan.bands, "
+                    "but protocol_sim.source_fit does not carry maturation_data_range"
+                ),
+                "Provide a source fit with a validated maturation_data_range before simulating pediatric bands",
+            ))
+            continue
+
+        below_msgs: list[str] = []
+        if isinstance(mat_range.get("pma_weeks"), (list, tuple)) and len(mat_range["pma_weeks"]) == 2:
+            m_pma_lo, m_pma_hi = float(mat_range["pma_weeks"][0]), float(mat_range["pma_weeks"][1])
+            if isinstance(pma_r, (list, tuple)) and len(pma_r) == 2:
+                b_pma_lo = float(pma_r[0])
+            elif isinstance(age_r, (list, tuple)) and len(age_r) == 2:
+                b_pma_lo = float(age_r[0]) * 52.0 + 40.0
+            else:
+                b_pma_lo = m_pma_lo
+            if b_pma_lo < m_pma_lo - 1e-6:
+                below_msgs.append(
+                    f"band lower PMA ({b_pma_lo:g} weeks) is below maturation "
+                    f"function data range [{m_pma_lo:g}, {m_pma_hi:g}] weeks"
+                )
+        if isinstance(mat_range.get("age_yr"), (list, tuple)) and len(mat_range["age_yr"]) == 2:
+            m_age_lo, m_age_hi = float(mat_range["age_yr"][0]), float(mat_range["age_yr"][1])
+            if isinstance(age_r, (list, tuple)) and len(age_r) == 2:
+                b_age_lo = float(age_r[0])
+                if b_age_lo < m_age_lo - 1e-6:
+                    below_msgs.append(
+                        f"band lower age ({b_age_lo:g} yr) is below maturation "
+                        f"function data range [{m_age_lo:g}, {m_age_hi:g}] yr"
+                    )
+        if below_msgs:
+            out.append(_finding(
+                f"sim-pediatric-maturation-extrapolation-{bname}",
+                HIGH,
+                "protocol_sim.source_fit.maturation_data_range",
+                f"Pediatric band '{bname}' lies above the maturation function's lower data bound",
+                "; ".join(below_msgs),
+                "Do not extrapolate pediatric dosing below the maturation function's observed data range",
+            ))
+
+    return out
+
+
 # ── public API ──────────────────────────────────────────────────────────────────
+#: severities an externally supplied finding may carry. CRITICAL/HIGH decide ``goal_met``; a finding
+#: that arrives from outside this module (the mikebrain rule catalog) must never be able to.
+NON_BLOCKING_EXTRA = (MEDIUM, LOW)
+
+
 def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
-           roles: dict[str, str] | None, goal: str = DEFAULT_GOAL) -> dict[str, Any]:
+           roles: dict[str, str] | None, goal: str = DEFAULT_GOAL,
+           extra_findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Run all refutation checks over the current analysis state.
 
     `state_dump` is PharmState.model_dump(); `df` + `roles` are the raw dataset and
     its column-role map (optional — recomputation checks degrade gracefully without
-    them, the state-internal checks still run).
+    them, the state-internal checks still run). `extra_findings` are additional,
+    already-formed findings from an owner-approved rule catalog; they must be MEDIUM
+    or LOW (anything that could change `goal_met` is refused, not downgraded).
     """
+    for extra in extra_findings or []:
+        if extra.get("severity") not in NON_BLOCKING_EXTRA:
+            raise ValueError(f"extra finding {extra.get('id')!r} has severity {extra.get('severity')!r}; "
+                             f"only {NON_BLOCKING_EXTRA} may be supplied from outside the engine")
     findings: list[dict[str, Any]] = []
     params = state_dump.get("nca_parameters") or []
     if params:
@@ -332,9 +653,14 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
     scm = state_dump.get("scm_results") or {}
     if scm.get("status") == "ok":
         findings += _scm_refute(scm)
+    ps = state_dump.get("protocol_sim") or {}
+    ps_checked = bool(ps and (ps.get("plan") or ps.get("pta") or ps.get("recommendations")))
+    if ps_checked:
+        findings += _protocol_sim_refute(ps)
     memo_checked = memo_present(state_dump)
     if memo_checked:   # briefing memo: every printed number must trace to current state
         findings += memo_findings(state_dump, _finding)
+    findings += [dict(f) for f in extra_findings or []]
 
     findings.sort(key=lambda f: _RANK.get(f["severity"], 9))
     counts = {sev: sum(1 for f in findings if f["severity"] == sev)
@@ -348,6 +674,7 @@ def review(state_dump: dict[str, Any], df: pd.DataFrame | None,
         "pkmodel": pm.get("status") == "ok",
         "engine": ec.get("status") == "ok",
         "scm": scm.get("status") == "ok",
+        "protocol_sim": ps_checked,
         "memo": memo_checked,
     }
     # Fail closed: a review that had nothing to inspect must not report GOAL MET —

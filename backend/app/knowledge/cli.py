@@ -4,6 +4,7 @@
     python -m app.knowledge list
     python -m app.knowledge search "eta shrinkage EBE diagnostics" [-k 6] [--no-embed]
     python -m app.knowledge remove <sha256 or unique prefix>
+    python -m app.knowledge rules add|list|verify        (owner-approved rule catalog; see rules_cli.py)
 
 The corpus root defaults to ``<PHARMAGENT_DATA_DIR>/knowledge`` (git-ignored).
 Documents are the owner's own copies; only extracted text and hashes are stored.
@@ -18,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.knowledge import manifest as mf
+from app.knowledge import rules_cli
 from app.knowledge.extract import ExtractionError, extract_text
 from app.knowledge.index import DEFAULT_K, Embedder, NoEmbedder, default_embedder, load_index
 
@@ -120,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-embed", action="store_true", help="BM25 only")
     r = sub.add_parser("remove", help="remove a document by sha256 (prefix)")
     r.add_argument("sha")
+    rules_cli.register(sub)
     return p
 
 
@@ -133,6 +136,8 @@ def _dispatch(args: argparse.Namespace, root: Path) -> int:
         return cmd_search(root, args.query, args.k, args.no_embed)
     if args.cmd == "remove":
         return cmd_remove(root, args.sha)
+    if args.cmd == "rules":
+        return rules_cli.run(args, root)
     return 2   # pragma: no cover - argparse rejects unknown commands first
 
 

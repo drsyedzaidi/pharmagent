@@ -54,7 +54,10 @@ def test_every_workflow_loads_data_first_and_carries_a_human_gate():
         if wf.get("kind") == "goal":
             continue        # gates come from the policy, not a step list (test_planner_leg.py)
         steps = wf["steps"]
-        assert steps[0]["tool"] == "load_dataset", f"{wf_name}: must start by loading data"
+        expected_first = "load_approved_fit" if wf.get("requires") else "load_dataset"
+        assert steps[0]["tool"] == expected_first, (
+            f"{wf_name}: must start with {expected_first}"
+        )
         # This is a regulated-style app: no template may run start to finish
         # without a scientific decision point a human has to sign. A gate on the
         # final step is allowed — poppk_modeling deliberately ends at one.
