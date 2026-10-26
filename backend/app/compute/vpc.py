@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.compute.diagnostics import _keep_mask
 from app.compute.dosing import time_after_dose
 from app.compute.pk_models import get_model
 from app.compute.pk_simulate import simulate
@@ -54,9 +55,58 @@ def _cv_pct_to_sd(cv_pct: float | None) -> float:
     return float(np.sqrt(np.log1p((cv / 100.0) ** 2)))
 
 
+def make_param_sampler(model, typical_params: dict, iiv_cv_by_param: dict, *,
+                       covariate_effects: list[dict] | None = None,
+                       omega_matrix=None, omega_params: list[str] | None = None):
+    """Return ``draw(rng, cov) -> {param: value}`` for one virtual subject.
+
+    Reproduces the FITTED model: the subject's typical values carry the fitted
+    covariate multipliers (``covariate_effects`` evaluated at ``cov``), and the
+    etas come from the full fitted Omega (``rng.multivariate_normal``, so a
+    correlated block keeps its covariances) when ``omega_matrix`` (ordered as
+    ``omega_params``) is given. Without either, it consumes the RNG exactly like
+    the original independent log-normal draw, one ``rng.normal`` per parameter
+    with a positive CV in ``model.params`` order, so existing results are unchanged.
+    """
+    names = model.params
+    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in names}
+    if covariate_effects:
+        from app.compute.clinsim import _covariate_applier  # lazy: pulls in nlme
+        apply_cov = _covariate_applier(covariate_effects)
+    else:
+        def apply_cov(theta, cov):
+            return theta
+    om = None
+    if omega_matrix is not None and omega_params:
+        om = np.asarray(omega_matrix, dtype=float)
+        om = 0.5 * (om + om.T)
+        om_names = [p for p in omega_params if p in names]
+        if len(om_names) != len(omega_params) or om.shape != (len(omega_params),) * 2:
+            om = None
+
+    def draw(rng, cov: dict | None) -> dict[str, float]:
+        base = apply_cov({p: float(typical_params[p]) for p in names}, cov or {})
+        if om is not None:
+            eta = dict(zip(omega_params, rng.multivariate_normal(np.zeros(len(omega_params)), om)))
+            return {p: float(base[p]) * float(np.exp(eta.get(p, 0.0))) for p in names}
+        return {p: float(base[p]) *
+                float(np.exp(rng.normal(0.0, sds[p]) if sds[p] > 0 else 0.0)) for p in names}
+
+    return draw
+
+
+def _typical_for(model, typical_params: dict, covariate_effects: list[dict] | None, cov: dict | None):
+    """Population-typical parameters for one subject (fitted covariate effects applied)."""
+    if not covariate_effects:
+        return dict(typical_params)
+    from app.compute.clinsim import _covariate_applier  # lazy: pulls in nlme
+    return _covariate_applier(covariate_effects)(dict(typical_params), cov or {})
+
+
 def obs_vs_pred(model_key: str, subjects: list[dict],
                 individual_params_by_subject: dict, typical_params: dict,
-                *, wt_default: float = 70.0) -> dict:
+                *, wt_default: float = 70.0,
+                covariate_effects: list[dict] | None = None) -> dict:
     """Pair observed concentrations with individual and population predictions.
 
     Parameters
@@ -71,6 +121,10 @@ def obs_vs_pred(model_key: str, subjects: list[dict],
         ``{param: value}`` population typical parameters (e.g. geometric means).
     wt_default:
         Weight used when a subject has no ``wt`` entry.
+    covariate_effects:
+        Fitted covariate records; when given, PRED uses each subject's
+        covariate-adjusted typical values. BLQ-flagged observations
+        (``obs_blq``) are excluded, as in :mod:`app.compute.diagnostics`.
 
     Returns
     -------
@@ -99,9 +153,14 @@ def obs_vs_pred(model_key: str, subjects: list[dict],
         wt = float(subject.get("wt", wt_default))
 
         sim_ipred = simulate(model, dict(indiv), doses, obs_t, wt=wt)["cp"]
-        sim_pred = simulate(model, dict(typical_params), doses, obs_t, wt=wt)["cp"]
+        sim_pred = simulate(model, _typical_for(model, typical_params, covariate_effects,
+                                                subject.get("cov")),
+                            doses, obs_t, wt=wt)["cp"]
 
-        for obs_val, ip_val, pr_val in zip(obs_c, sim_ipred, sim_pred):
+        keep = _keep_mask(subject, obs_t.size)
+        for obs_val, ip_val, pr_val, kept in zip(obs_c, sim_ipred, sim_pred, keep):
+            if not kept:
+                continue  # BLQ (censored): not a quantified observation
             obs_f = float(obs_val)
             if not np.isfinite(obs_f) or obs_f <= 0.0:
                 continue  # only positive observations are paired (log scale)
@@ -156,7 +215,9 @@ def _gof_log(observed: list[float], ipred: list[float]) -> dict:
 def vpc_band(model_key: str, typical_params: dict, iiv_cv_by_param: dict,
              doses: list[dict], *, tmax: float, n_grid: int = 80,
              n_sim: int = 500, seed: int = 20250614,
-             wt: float = 70.0) -> dict:
+             wt: float = 70.0, cov: dict | None = None,
+             covariate_effects: list[dict] | None = None,
+             omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Visual predictive check band of predicted concentration over time.
 
     Simulate ``n_sim`` virtual subjects on a common grid
@@ -176,17 +237,13 @@ def vpc_band(model_key: str, typical_params: dict, iiv_cv_by_param: dict,
     grid = np.linspace(0.0, float(tmax), int(n_grid))
 
     rng = np.random.default_rng(seed)
-    param_names = model.params
-    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
+    draw = make_param_sampler(model, typical_params, iiv_cv_by_param,
+                              covariate_effects=covariate_effects,
+                              omega_matrix=omega_matrix, omega_params=omega_params)
 
     cp_matrix = np.empty((int(n_sim), grid.size), dtype=float)
     for i in range(int(n_sim)):
-        params_i: dict[str, float] = {}
-        for p in param_names:
-            base = float(typical_params[p])
-            sd = sds[p]
-            eta = rng.normal(0.0, sd) if sd > 0.0 else 0.0
-            params_i[p] = base * float(np.exp(eta))
+        params_i = draw(rng, cov)
         cp_matrix[i, :] = simulate(model, params_i, list(doses), grid, wt=wt)["cp"]
 
     p05, p50, p95 = np.percentile(cp_matrix, _VPC_PERCENTILES, axis=0)
@@ -203,7 +260,9 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
           iiv_cv_by_param: dict, *, sigma_prop: float = 0.0,
           sigma_add: float = 0.0, n_bins: int = 8, n_sim: int = 200,
           seed: int = 20250614, wt_default: float = 70.0,
-          correction: str = "pred", x_by: str = "time") -> dict:
+          correction: str = "pred", x_by: str = "time",
+          covariate_effects: list[dict] | None = None,
+          omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Prediction-corrected VPC (Bergstrand et al. 2011).
 
     Each observation is corrected by a per-observation factor that is applied
@@ -236,6 +295,14 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
     With ``correction="pred"`` and ``x_by="time"`` this is byte-for-byte the
     original prediction-corrected VPC.
 
+    Fitted-model fidelity: ``covariate_effects`` (the fit's records) applies each
+    subject's covariate multipliers to PRED and to every simulated draw (from the
+    subject's ``cov``); ``omega_matrix`` (ordered as ``omega_params``) replaces the
+    independent log-normal etas with draws from the full, possibly correlated,
+    Omega. BLQ policy (all VPC paths, same as diagnostics): observations flagged
+    ``obs_blq`` are EXCLUDED from the observed percentiles and from the matching
+    simulated rows; use :func:`blq_predictive_check` to assess censoring itself.
+
     Returns ``{"status", "n_bins", "n_sim", "correction", "x_by",
     "bins": [{t, n, obs_p05/50/95, sim_p05/50/95, sim_med_lo, sim_med_hi}]}``.
     """
@@ -246,8 +313,9 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
         raise ValueError(f"x_by must be 'time'|'tad'; got {x_by!r}")
     x_by = x_by.lower()
     model = get_model(model_key)
-    param_names = model.params
-    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
+    draw = make_param_sampler(model, typical_params, iiv_cv_by_param,
+                              covariate_effects=covariate_effects,
+                              omega_matrix=omega_matrix, omega_params=omega_params)
 
     # ── observed table: PRED (population, eta=0) at every observation ──
     rows: list[list[float]] = []          # [t, y, pred, subject_index, tad, dose]
@@ -259,18 +327,21 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
             continue
         doses = list(s.get("doses", []))
         wt = float(s.get("wt", wt_default))
-        pred = np.asarray(simulate(model, dict(typical_params), doses, obs_t, wt=wt)["cp"],
-                          dtype=float)
+        pred = np.asarray(simulate(model, _typical_for(model, typical_params, covariate_effects,
+                                                       s.get("cov")),
+                                   doses, obs_t, wt=wt)["cp"], dtype=float)
         # TAD per observation (None before the first dose -> NaN, excluded from
         # a TAD-binned VPC). Dose = first-dose amount, for dose normalization.
         tad = time_after_dose(list(obs_t), doses)
         dose_amt = float(doses[0]["amt"]) if doses else float("nan")
         start = len(rows)
-        subj_rec.append({"doses": doses, "wt": wt, "obs_t": obs_t,
+        subj_rec.append({"doses": doses, "wt": wt, "obs_t": obs_t, "cov": s.get("cov"),
                          "idx": list(range(start, start + obs_t.size))})
+        keep = _keep_mask(s, obs_t.size)
         for k in range(obs_t.size):
             tv = tad[k]
-            rows.append([float(obs_t[k]), float(obs_c[k]), float(pred[k]), float(si),
+            rows.append([float(obs_t[k]), float(obs_c[k]) if keep[k] else float("nan"),
+                         float(pred[k]), float(si),
                          float(tv) if tv is not None else float("nan"), dose_amt])
 
     if not rows:
@@ -329,9 +400,7 @@ def pcvpc(model_key: str, subjects: list[dict], typical_params: dict,
     for r in range(int(n_sim)):
         sim_vals = np.full(len(rows), np.nan)
         for s in subj_rec:
-            params_i = {p: float(typical_params[p]) *
-                        float(np.exp(rng.normal(0.0, sds[p]) if sds[p] > 0 else 0.0))
-                        for p in param_names}
+            params_i = draw(rng, s["cov"])
             cp = np.asarray(simulate(model, params_i, s["doses"], s["obs_t"],
                                      wt=s["wt"])["cp"], dtype=float)
             var = sigma_add ** 2 + (sigma_prop * cp) ** 2
@@ -430,7 +499,9 @@ def stratified_vpc(model_key: str, subjects: list[dict], typical_params: dict,
                    correction: str = "pred", x_by: str = "time",
                    sigma_prop: float = 0.0, sigma_add: float = 0.0,
                    n_bins: int = 8, n_sim: int = 200, seed: int = 20250614,
-                   wt_default: float = 70.0, min_subjects: int = 5) -> dict:
+                   wt_default: float = 70.0, min_subjects: int = 5,
+                   covariate_effects: list[dict] | None = None,
+                   omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Prediction-corrected VPC computed within each stratum.
 
     A single pooled VPC across dose groups is misleading — the lowest dose sets
@@ -462,7 +533,9 @@ def stratified_vpc(model_key: str, subjects: list[dict], typical_params: dict,
         pc = pcvpc(model_key, grp, typical_params, iiv_cv_by_param,
                    sigma_prop=sigma_prop, sigma_add=sigma_add, n_bins=n_bins,
                    n_sim=n_sim, seed=seed, wt_default=wt_default,
-                   correction=correction, x_by=x_by)
+                   correction=correction, x_by=x_by,
+                   covariate_effects=covariate_effects,
+                   omega_matrix=omega_matrix, omega_params=omega_params)
         strata.append({"label": label, "n": len(grp), "bins": pc.get("bins", [])})
 
     return {"status": "ok" if strata else "no_strata",
@@ -528,7 +601,9 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
                               sigma_prop: float = 0.0, sigma_add: float = 0.0,
                               n_sim: int = 200, seed: int = 20250614,
                               wt_default: float = 70.0, n_hist_bins: int = 24,
-                              min_subjects: int = 3) -> dict:
+                              min_subjects: int = 3,
+                              covariate_effects: list[dict] | None = None,
+                              omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Exposure predictive check (IU PopPK Week 11, ``model-vpc.R``).
 
     Summarise each subject's exposure over its window (:func:`_exposure_window_mask`):
@@ -547,8 +622,9 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
     hist: {edges, counts}}``.
     """
     model = get_model(model_key)
-    param_names = model.params
-    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
+    draw = make_param_sampler(model, typical_params, iiv_cv_by_param,
+                              covariate_effects=covariate_effects,
+                              omega_matrix=omega_matrix, omega_params=omega_params)
 
     partition, kind = _partition_by_stratum(subjects, group_by)
     if kind == "missing":
@@ -566,6 +642,10 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
             obs_c = np.asarray(s.get("obs_c", []), dtype=float)
             if obs_t.size < 2 or obs_t.size != obs_c.size:
                 continue
+            keep = _keep_mask(s, obs_t.size)         # BLQ rows are not exposure data
+            obs_t, obs_c = obs_t[keep], obs_c[keep]
+            if obs_t.size < 2:
+                continue
             doses = list(s.get("doses", []))
             multiple_dose = multiple_dose or len(doses) > 1
             mask = _exposure_window_mask(obs_t, doses)
@@ -573,7 +653,7 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
                 continue
             recs.append({
                 "doses": doses, "wt": float(s.get("wt", wt_default)),
-                "obs_t": obs_t, "mask": mask,
+                "obs_t": obs_t, "mask": mask, "cov": s.get("cov"),
                 "auc_obs": _trapz_partial_auc(obs_t[mask], obs_c[mask]),
                 "cmax_obs": float(np.max(np.maximum(obs_c[mask], 0.0))),
             })
@@ -601,9 +681,7 @@ def exposure_predictive_check(model_key: str, subjects: list[dict], typical_para
             a = np.empty(len(recs))
             cm = np.empty(len(recs))
             for j, rec in enumerate(recs):
-                params_i = {p: float(typical_params[p]) *
-                            float(np.exp(rng.normal(0.0, sds[p]) if sds[p] > 0 else 0.0))
-                            for p in param_names}
+                params_i = draw(rng, rec["cov"])
                 cp = np.asarray(simulate(model, params_i, rec["doses"], rec["obs_t"],
                                          wt=rec["wt"])["cp"], dtype=float)
                 var = sigma_add ** 2 + (sigma_prop * cp) ** 2
@@ -654,7 +732,9 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
                          iiv_cv_by_param: dict, *, lloq: float | None,
                          sigma_prop: float = 0.0, sigma_add: float = 0.0,
                          n_bins: int = 8, n_sim: int = 200, seed: int = 20250614,
-                         wt_default: float = 70.0, x_by: str = "time") -> dict:
+                         wt_default: float = 70.0, x_by: str = "time",
+                         covariate_effects: list[dict] | None = None,
+                         omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Fraction-below-LLOQ predictive check (Bergstrand & Karlsson 2009).
 
     Checks whether the model reproduces the fraction of observations that fall
@@ -679,8 +759,9 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
                             "BLQ rows carrying the LLOQ in DV).")}
 
     model = get_model(model_key)
-    param_names = model.params
-    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
+    draw = make_param_sampler(model, typical_params, iiv_cv_by_param,
+                              covariate_effects=covariate_effects,
+                              omega_matrix=omega_matrix, omega_params=omega_params)
 
     rows: list[list[float]] = []          # [x, is_blq]
     subj_rec: list[dict] = []
@@ -702,7 +783,7 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
         else:
             xv = obs_t
         start = len(rows)
-        subj_rec.append({"doses": doses, "wt": wt, "obs_t": obs_t,
+        subj_rec.append({"doses": doses, "wt": wt, "obs_t": obs_t, "cov": s.get("cov"),
                          "idx": list(range(start, start + obs_t.size))})
         for k in range(obs_t.size):
             rows.append([float(xv[k]), 1.0 if bool(blq[k]) else 0.0])
@@ -744,9 +825,7 @@ def blq_predictive_check(model_key: str, subjects: list[dict], typical_params: d
         sim_below = np.zeros(len(rows), dtype=bool)
         sim_ok = np.zeros(len(rows), dtype=bool)     # finite simulated draws only
         for s in subj_rec:
-            params_i = {p: float(typical_params[p]) *
-                        float(np.exp(rng.normal(0.0, sds[p]) if sds[p] > 0 else 0.0))
-                        for p in param_names}
+            params_i = draw(rng, s["cov"])
             cp = np.asarray(simulate(model, params_i, s["doses"], s["obs_t"],
                                      wt=s["wt"])["cp"], dtype=float)
             var = sigma_add ** 2 + (sigma_prop * cp) ** 2

@@ -51,6 +51,7 @@ class PharmAgentAdapter:
             sigma_prop=sigma.get("prop"), sigma_add=sigma.get("add"),
             iiv_params=r.get("iiv_params", []), error_model=r.get("error_model", "proportional"),
             covariate_effects=r.get("covariate_effects"),
+            omega_matrix=r.get("omega_matrix"),
         )
         aic, bic = aic_bic(r)
         return EngineResult(
