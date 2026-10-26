@@ -102,6 +102,7 @@ _THETA_REL_MAX = 1e7
 _THETA_CLAMP_MARGIN = 10.0
 _SIGMA_FLOOR = 1e-4          # hard floor on a residual-error sigma
 _BIG = 1e10                  # objective value returned on any failure
+_POWELL_MAXFEV = 800         # outer-fit evaluation ceiling (a converged fit needs ~250-300)
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
 _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covariance
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
@@ -875,7 +876,8 @@ def _jacobian(spec: _PopSpec, subj: _Subject, theta_i: dict[str, float],
 
 
 def _whiten(resid: np.ndarray, g: np.ndarray, omega2_vec: np.ndarray,
-           r_var: np.ndarray) -> tuple[np.ndarray, bool]:
+           r_var: np.ndarray, *, omega: np.ndarray | None = None
+           ) -> tuple[np.ndarray, bool]:
     """Symmetric (eigendecomposition) inverse square root of
     ``Cov = G @ diag(omega2) @ G.T + diag(r_var)``, applied to ``resid``.
 
@@ -898,8 +900,12 @@ def _whiten(resid: np.ndarray, g: np.ndarray, omega2_vec: np.ndarray,
     an absolute floor. Returns whether the floor engaged, so the caller can
     exclude the affected subject from pooled statistics rather than report a
     residual against a covariance that was not really positive definite.
+
+    ``omega`` (optional, full Omega) replaces ``diag(omega2_vec)`` so a
+    correlated block enters the marginal covariance ``G Omega G' + R``.
     """
-    cov = g @ np.diag(omega2_vec) @ g.T + np.diag(r_var)
+    om = np.diag(omega2_vec) if omega is None else omega
+    cov = g @ om @ g.T + np.diag(r_var)
     cov = 0.5 * (cov + cov.T)
     w, v = np.linalg.eigh(cov)
     floor = max(float(w.max()), 0.0) * _CWRES_EIG_REL_FLOOR
@@ -913,8 +919,12 @@ def _whiten(resid: np.ndarray, g: np.ndarray, omega2_vec: np.ndarray,
 def _cwres_subject(spec: _PopSpec, subj: _Subject, theta_i: dict[str, float],
                    eta_hat: np.ndarray, omega2_vec: np.ndarray,
                    sigma_prop: float, sigma_add: float, *,
-                   interaction: bool) -> dict[str, Any] | None:
+                   interaction: bool,
+                   omega: np.ndarray | None = None) -> dict[str, Any] | None:
     """CWRES/IWRES for one subject at a FIXED eta_hat (never re-optimized).
+
+    ``omega`` is the full fitted Omega for a correlated-block fit (None for a
+    diagonal one, which keeps using ``omega2_vec``).
 
     BLQ (censored) rows and rows where the prediction or its variance sits at
     the numerical floor (an under/overflowed simulation -- see `_predict`,
@@ -954,7 +964,7 @@ def _cwres_subject(spec: _PopSpec, subj: _Subject, theta_i: dict[str, float],
 
     e_foce = f_hat - g @ eta_hat
     resid = y - e_foce
-    cwres, used_fallback = _whiten(resid, g, omega2_vec, r_var)
+    cwres, used_fallback = _whiten(resid, g, omega2_vec, r_var, omega=omega)
     iwres_var = _residual_variance(spec, f_hat, sigma_prop, sigma_add)
     iwres = (y - f_hat) / np.sqrt(iwres_var)
 
@@ -1726,13 +1736,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
         return ofv
 
     # ``maxfev`` bounds the total objective evaluations (each is a full
-    # population Laplace pass), keeping wall-time predictable on large cohorts.
-    # A handful of Powell sweeps suffice because the inner EBEs are warm-started.
-    n_par = (spec.n_theta + spec.n_cov + spec.n_omega_par
-             + int(spec.has_prop) + int(spec.has_add))
+    # population Laplace pass), so wall-time stays bounded by ``max_iter``.
+    # It must NOT be tighter than Powell needs: a 12*n_par cap stopped the
+    # search after a single sweep, which the old finite-OFV rule then reported
+    # as converged. A genuinely converged fit needs ~3 sweeps (~240 evals for
+    # CL/V/KA + 2 IIV + sigma), so only ``max_iter`` bounds the budget.
     res = minimize(outer_obj, x0, method="Powell",
                    options={"maxiter": max_iter,
-                            "maxfev": min(max(12 * n_par, 24), 25 * max_iter),
+                            "maxfev": min(max(25 * max_iter, 24), _POWELL_MAXFEV),
                             "xtol": 1e-3, "ftol": 1e-3})
 
     x_final = np.asarray(res.x, dtype=float)
@@ -1745,14 +1756,14 @@ def focei_fit(model_key: str, subjects: list[dict], *,
     # the reported OFV both use it. ofv_likelihood keeps the penalty-free -2LL.
     pen = tprior.penalty(theta) if tprior is not None else 0.0
     final_ofv = final_ll + pen
-    # Converged if the optimizer reports success, OR it exhausted its evaluation
-    # budget at a finite OFV that improved on the starting value (a stabilized
-    # optimum that simply did not trip Powell's strict tolerance test).
-    improved = (start_ofv["v"] is not None
-                and math.isfinite(start_ofv["v"])
-                and final_ofv <= start_ofv["v"] + 1e-6)
-    converged = (bool(res.success) or improved) \
-        and math.isfinite(final_ofv) and final_ofv < _BIG
+    # Converged only if the optimizer reports success at a finite OFV. Powell
+    # never returns a point worse than its start, so "OFV did not get worse" is
+    # not evidence of convergence; it is kept as a separate diagnostic.
+    ofv_improved = (start_ofv["v"] is not None
+                    and math.isfinite(start_ofv["v"])
+                    and final_ofv <= start_ofv["v"] + 1e-6)
+    converged = (bool(res.success)
+                 and math.isfinite(final_ofv) and final_ofv < _BIG)
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cc, omega2, s_prop, s_add, eta_hats,
@@ -1764,6 +1775,7 @@ def focei_fit(model_key: str, subjects: list[dict], *,
                        final_ofv, eta_hats, prepared, n_obs, converged,
                        int(res.nit) if hasattr(res, "nit") else eval_count["n"],
                        omega_matrix=omega_m, uncertainty=uncertainty)
+    result["ofv_improved"] = bool(ofv_improved)
     if tprior is not None:
         prior_sd = np.sqrt(np.clip(np.diag(np.linalg.inv(tprior.prec)), 0.0, None))
         result["map"] = True
@@ -2129,7 +2141,7 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     final_ofv, eta_hats = _population_ofv(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas,
         omega_m)
-    converged = converged or (math.isfinite(final_ofv) and final_ofv < _BIG)
+    converged = converged and math.isfinite(final_ofv) and final_ofv < _BIG
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, eta_hats,
@@ -2344,7 +2356,10 @@ def _auto_fit(model_key: str, subjects: list[dict], *,
                 model_key, subjects, seed=s,
                 compute_uncertainty=compute_uncertainty, **kw)))
 
-    winner_name, winner = min(candidates, key=lambda kv: _ofv(kv[1]))
+    # A converged candidate always beats an unconverged one; OFV breaks ties.
+    # If none converged the winner is still reported converged=False.
+    winner_name, winner = min(
+        candidates, key=lambda kv: (not kv[1].get("converged"), _ofv(kv[1])))
     if escalated:
         reason = ("starts disagreed on OFV" if disagree
                   else "a start hit the iteration cap without converging")
@@ -2732,7 +2747,8 @@ def posthoc_residuals(model_key: str, subjects: list[dict], *,
                       iiv_params: list[str], error_model: str = "proportional",
                       covariate_effects: list[dict] | None = None,
                       etas: dict[Any, dict[str, float]] | None = None,
-                      interaction: bool = True) -> dict[str, Any]:
+                      interaction: bool = True,
+                      omega_matrix: list | np.ndarray | None = None) -> dict[str, Any]:
     """Conditional weighted residuals (CWRES; Hooker, Staatz & Karlsson 2007)
     and standardized IWRES from an ALREADY-FITTED population result.
 
@@ -2757,6 +2773,11 @@ def posthoc_residuals(model_key: str, subjects: list[dict], *,
         ``individual`` records reshaped to ``{r["subject"]: r["eta"] for r in
         individual}``. May be ``None``/incomplete; missing subjects are
         resolved locally.
+    omega_matrix:
+        The fitted full Omega (``omega_matrix`` of a block-Omega result, ordered
+        as ``iiv_params``). When it has off-diagonals it replaces the diagonal
+        ``omega2`` in the EBE prior (for subjects solved here) and in the CWRES
+        marginal covariance. ``None`` or a diagonal matrix keeps the diagonal path.
     interaction:
         ``True`` (default): the residual-error variance in CWRES is evaluated
         at the conditional-mode prediction (NONMEM's FOCE-I / METH=1 INTER;
@@ -2784,6 +2805,16 @@ def posthoc_residuals(model_key: str, subjects: list[dict], *,
     omega2_vec = np.array([max(omega2.get(p, _OMEGA_FLOOR), _OMEGA_FLOOR)
                            for p in spec.iiv_params], dtype=float)
     full_theta = {**model.defaults, **theta}
+    om_full: np.ndarray | None = None
+    prior: _OmegaPrior | None = None
+    if omega_matrix is not None:
+        om = np.asarray(omega_matrix, dtype=float)
+        if om.shape == (spec.n_omega, spec.n_omega) and np.any(om - np.diag(np.diag(om))):
+            om_full = 0.5 * (om + om.T)
+            try:
+                prior = _omega_prior(om_full)
+            except (np.linalg.LinAlgError, ValueError):
+                om_full, prior = None, None
 
     eta_by_sid = {_sid(k): v for k, v in (etas or {}).items()}
     subs = _prepare_subjects(subjects)
@@ -2813,11 +2844,12 @@ def posthoc_residuals(model_key: str, subjects: list[dict], *,
             n_etas_reused += 1
         else:
             eta_hat, _obj, _pred = _conditional_mode(
-                spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add)
+                spec, subj, theta_i, omega2_vec, sigma_prop, sigma_add, prior=prior)
             n_etas_resolved += 1
 
         out = _cwres_subject(spec, subj, theta_i, eta_hat, omega2_vec,
-                             sigma_prop, sigma_add, interaction=interaction)
+                             sigma_prop, sigma_add, interaction=interaction,
+                             omega=om_full)
         if out is None:
             skipped_subjects.append(subj.sid)
             continue

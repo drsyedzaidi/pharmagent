@@ -15,11 +15,15 @@ relaunch remembers it; keys come back from the environment or are re-entered.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -38,6 +42,66 @@ DEFAULT_MODELS: dict[str, str] = {
 }
 SETTINGS_FILE = "llm_settings.json"
 TEST_TIMEOUT_S = 60.0
+ALLOWLIST_ENV = "PHARMAGENT_LLM_BASE_URL_ALLOWLIST"   # comma-separated scheme://host[:port]
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_OLLAMA_PORT = 11434
+
+
+def _origin(url: str) -> tuple[str, str, int] | None:
+    """(scheme, host, port) with case and default ports normalised; None when the
+    URL is not a plain http(s) URL with a host and no embedded credentials."""
+    try:
+        parts = urlsplit(url.strip())
+        scheme, host = parts.scheme.lower(), (parts.hostname or "").lower().rstrip(".")
+        port = parts.port or _DEFAULT_PORTS.get(scheme)
+    except ValueError:
+        return None
+    if scheme not in _DEFAULT_PORTS or not host or port is None or parts.username or parts.password:
+        return None
+    return scheme, host, port
+
+
+def same_origin(a: str | None, b: str | None) -> bool:
+    oa, ob = (_origin(a) if a else None), (_origin(b) if b else None)
+    return oa is not None and oa == ob
+
+
+def _resolve_host(host: str) -> list[str]:
+    return [i[4][0] for i in socket.getaddrinfo(host, None)]
+
+
+def _allowed_origins() -> set[tuple[str, str, int]]:
+    urls = [settings.DEFAULT_OLLAMA_URL, OPENAI_API_URL, settings.llm_base_url or ""]
+    urls += os.environ.get(ALLOWLIST_ENV, "").split(",")
+    urls += [f"http://{h if h != '::1' else '[::1]'}:{_OLLAMA_PORT}" for h in _LOOPBACK_HOSTS]
+    return {o for o in (_origin(u) for u in urls if u.strip()) if o}
+
+
+def check_base_url(url: str) -> None:
+    """Raise ValueError unless ``url`` is allowlisted (scheme+host[:port]) or a
+    public address. Private, loopback and link-local targets need an allowlist
+    entry, so PUT /api/llm cannot be used to probe the host's own network."""
+    origin = _origin(url)
+    if origin is None:
+        raise ValueError("base_url must be an http(s) URL with a host and no credentials")
+    if origin in _allowed_origins():
+        return
+    host = origin[1]
+    if host == "localhost" or host.endswith(".localhost"):
+        addrs = ["127.0.0.1"]
+    else:
+        try:
+            ipaddress.ip_address(host)
+            addrs = [host]
+        except ValueError:
+            try:
+                addrs = _resolve_host(host)
+            except OSError as exc:
+                raise ValueError(f"base_url host {host!r} did not resolve: {exc}") from exc
+    if not addrs or not all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addrs):
+        raise ValueError(f"base_url {origin[0]}://{host}:{origin[2]} is a private, loopback or "
+                         f"link-local target; add it to {ALLOWLIST_ENV} to permit it")
 
 
 @dataclass(frozen=True)
@@ -177,11 +241,21 @@ class LlmManager:
         model = (body.get("model") or "").strip() or (
             self.choice.model if provider == self.choice.provider else DEFAULT_MODELS.get(provider, ""))
         base_url = (body.get("base_url") or "").strip() or None
-        key = (body.get("api_key") or "").strip() or (
-            self.choice.api_key if provider == self.choice.provider else None)
+        if base_url and provider in ("local", "openai"):
+            check_base_url(base_url)
+        target = LlmChoice(provider, model, base_url).effective_base_url
+
+        def _may_reuse(held: LlmChoice) -> bool:
+            # a held key goes only to the URL it was configured for (F-02)
+            return held.provider == provider and (
+                provider == "anthropic" or same_origin(target, held.effective_base_url))
+
+        key = (body.get("api_key") or "").strip() or None
+        if not key and _may_reuse(self.choice):
+            key = self.choice.api_key
         if not key:
             env = choice_from_settings()
-            if env.provider == provider:
+            if _may_reuse(env):
                 key = env.api_key
         choice = LlmChoice(provider, model or DEFAULT_MODELS.get(provider, ""), base_url, key)
         choice.validate()

@@ -389,8 +389,10 @@ def test_no_covariate_model_yields_empty_effects(focei_result: dict[str, Any]) -
 @pytest.fixture(scope="module")
 def cov_fit() -> dict[str, Any]:
     # Well-powered design (n=40, wide WT range) so the WT-on-CL effect is
-    # genuinely identifiable and its SE is cleanly estimable.
-    pop = _make_cov_population(seed=2024, n=40, beta_wt=0.75)
+    # genuinely identifiable and its SE is cleanly estimable. Seed 2026, not
+    # 2024: that realization converges but its OFV Hessian is near-singular
+    # (cond ~1e9, no RSEs), which the old early-stopped fit hid.
+    pop = _make_cov_population(seed=2026, n=40, beta_wt=0.75)
     return population_fit(
         MODEL_KEY, pop, method="focei", max_iter=30, compute_uncertainty=True,
         covariate_model=[{"param": "CL", "covariate": "WT",

@@ -108,7 +108,8 @@ def _cv_pct_to_sd(cv_pct: float | None) -> float:
 
 def fit_residuals(model_key: str, subjects: list[dict],
                   individual_params_by_subject: dict, typical_params: dict,
-                  *, wt_default: float = 70.0) -> dict:
+                  *, wt_default: float = 70.0,
+                  covariate_effects: list[dict] | None = None) -> dict:
     """Log-scale individual weighted residuals (IWRES).
 
     Parameters
@@ -124,6 +125,9 @@ def fit_residuals(model_key: str, subjects: list[dict],
         ``{param: value}`` population typical parameters (for PRED).
     wt_default:
         Weight used when a subject has no ``wt`` entry.
+    covariate_effects:
+        Fitted covariate records; PRED then uses each subject's covariate-
+        adjusted typical values (``subject["cov"]``).
 
     Returns
     -------
@@ -135,6 +139,7 @@ def fit_residuals(model_key: str, subjects: list[dict],
     contributing pairs.
     """
     model = get_model(model_key)
+    from app.compute.vpc import _typical_for  # lazy: vpc imports this module
 
     times: list[float] = []
     obs: list[float] = []
@@ -164,7 +169,9 @@ def fit_residuals(model_key: str, subjects: list[dict],
         wt = float(subject.get("wt", wt_default))
 
         sim_ipred = simulate(model, dict(indiv), doses, obs_t, wt=wt)["cp"]
-        sim_pred = simulate(model, dict(typical_params), doses, obs_t, wt=wt)["cp"]
+        sim_pred = simulate(model, _typical_for(model, typical_params, covariate_effects,
+                                                subject.get("cov")),
+                            doses, obs_t, wt=wt)["cp"]
         tad_all = time_after_dose(obs_t, doses)
 
         for t_val, obs_val, ip_val, pr_val, tad_val in zip(
@@ -221,7 +228,8 @@ def fit_residuals(model_key: str, subjects: list[dict],
 def npde(model_key: str, subjects: list[dict], typical_params: dict,
          iiv_cv_by_param: dict, *, sigma_prop: float, sigma_add: float,
          n_sim: int = 500, seed: int = 20250614,
-         wt_default: float = 70.0) -> dict:
+         wt_default: float = 70.0, covariate_effects: list[dict] | None = None,
+         omega_matrix=None, omega_params: list[str] | None = None) -> dict:
     """Simulation-based normalized prediction discrepancies (npd; see module docs).
 
     Parameters
@@ -248,6 +256,11 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
         Seed for ``numpy.random.default_rng`` -> bit-for-bit reproducibility.
     wt_default:
         Weight used when a subject has no ``wt`` entry.
+    covariate_effects, omega_matrix, omega_params:
+        The fitted covariate records and full Omega (ordered as ``omega_params``);
+        when given, each virtual subject carries the real subject's covariate
+        multipliers and etas are drawn from the full (correlated) Omega. Omitted,
+        the independent log-normal draw is unchanged.
 
     Returns
     -------
@@ -264,8 +277,10 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
     sigma_prop = float(sigma_prop)
     sigma_add = float(sigma_add)
 
-    param_names = model.params
-    sds = {p: _cv_pct_to_sd(iiv_cv_by_param.get(p)) for p in param_names}
+    from app.compute.vpc import make_param_sampler  # lazy: vpc imports this module
+    draw = make_param_sampler(model, typical_params, iiv_cv_by_param,
+                              covariate_effects=covariate_effects,
+                              omega_matrix=omega_matrix, omega_params=omega_params)
 
     # Clip bound keeps norm.ppf finite when an observation is below/above the
     # whole simulated cloud: F in [1/(2 n_sim), 1 - 1/(2 n_sim)].
@@ -300,12 +315,7 @@ def npde(model_key: str, subjects: list[dict], typical_params: dict,
         # residual noise is added vectorized over the whole matrix.
         sim = np.empty((n_sim, obs_t.size), dtype=float)
         for i in range(n_sim):
-            params_i: dict[str, float] = {}
-            for p in param_names:
-                base = float(typical_params[p])
-                sd = sds[p]
-                eta = rng.normal(0.0, sd) if sd > 0.0 else 0.0
-                params_i[p] = base * float(np.exp(eta))
+            params_i = draw(rng, subject.get("cov"))
             sim[i, :] = simulate(model, params_i, list(doses), obs_t, wt=wt)["cp"]
 
         # Residual error: SD = sqrt(sigma_add^2 + (sigma_prop * f)^2) per cell.

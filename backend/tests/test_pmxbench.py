@@ -396,7 +396,8 @@ def test_structural_comparison_is_described():
 
 def test_provenance_carries_verified_software_and_run_info():
     from app.core.provenance import collect_provenance
-    assert {k for k, _ in _PROV} == set(collect_provenance())
+    # the llm_* fields (F-25) describe the acting model, not the software stack this fixture mirrors
+    assert {k for k, _ in _PROV} == set(collect_provenance()) - {"llm_provider", "llm_model"}
     sub = pmx.build_submission(_state(nlme_results=_nl()),
                                run_info={"harness": "none", "model": "mock", "run_utc": "2026-10-24T00:00:00Z"})
     prov = sub["provenance"]

@@ -258,6 +258,8 @@ def quick_one_compartment(state: PharmState, ctx: ToolContext, args: dict[str, A
 
 
 _NUM = {"type": "number"}
+_POS = {"type": "number", "exclusiveMinimum": 0}
+_P01 = {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
 TOOLS = [
     Tool("calc_half_life",
          "Half-life ↔ elimination rate constant, or ke from two terminal-phase points "
@@ -306,8 +308,8 @@ TOOLS = [
          "Sample size for a 2×2 crossover average-bioequivalence study (TOST, normal "
          "approximation) from intra-subject CV (fraction or %), expected GMR, power, alpha "
          "and the acceptance bounds.",
-         AGENT, {"type": "object", "properties": {"cv_intra": _NUM, "gmr": _NUM, "power": _NUM, "alpha": _NUM,
-                                                   "lower": _NUM, "upper": _NUM},
+         AGENT, {"type": "object", "properties": {"cv_intra": _POS, "gmr": _POS, "power": _P01, "alpha": _P01,
+                                                   "lower": _POS, "upper": _POS},
                  "required": ["cv_intra"]},
          calc_be_sample_size),
     Tool("quick_one_compartment",

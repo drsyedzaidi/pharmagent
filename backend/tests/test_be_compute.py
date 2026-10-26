@@ -134,7 +134,7 @@ def test_assess_all_be_true():
     ref = {"Cmax": [100.0, 105.0, 95.0, 102.0],
            "AUC": [100.0, 98.0, 101.0, 99.0]}
     out = assess_bioequivalence(test, ref, paired=True)
-    assert out["design"] == "crossover (paired)"
+    assert out["design"] == "crossover (paired, no period/sequence adjustment)"
     assert out["limits"] == [80.0, 125.0]
     assert set(out["parameters"]) == {"Cmax", "AUC"}
     assert out["bioequivalent"] is True

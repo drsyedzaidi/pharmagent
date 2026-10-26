@@ -131,8 +131,8 @@ def test_policy_rejects_an_identical_repeat_and_stops_the_loop():
                       budget=policy.Budget())
     assert not d.allow and d.stop and "identical" in d.reason
     # Different arguments are not a repeat — the same rule Agent.run_turn applies.
-    assert policy.canonical_call("validate_cdisc", {}) != policy.canonical_call("validate_cdisc", {"strict": True})
-    d = policy.decide("validate_cdisc", {"strict": True}, PharmState(), roster=roster, history=history,
+    assert policy.canonical_call("validate_cdisc", {}) != policy.canonical_call("validate_cdisc", {"dataset_id": "ds_x"})
+    d = policy.decide("validate_cdisc", {"dataset_id": "ds_x"}, PharmState(), roster=roster, history=history,
                       budget=policy.Budget())
     assert d.allow
     # Only the LAST proposal counts, exactly like run_turn's last_call.
@@ -637,7 +637,8 @@ def test_http_start_runs_the_goal_leg_inline_to_the_gate_and_reject_clears_it(cl
     assert out["state"]["nlme_results"] is None
     # Rejection is inline and signed; the gate is cleared and no fit ran.
     rej = client.post(f"/api/sessions/{sid}/workflow/resume",
-                      json={"approve": False, "reason": "wrong model"}).json()
+                      json={"approve": False, "reason": "wrong model",
+                            "gate_id": out["review"]["gate_id"]}).json()
     assert rej["status"] == "rejected" and rej["state"]["pending_tool"] is None
     assert rej["state"]["nlme_results"] is None
     assert client.get(f"/api/sessions/{sid}/audit").json()["integrity"]["chain_ok"] is True
@@ -650,9 +651,10 @@ def test_http_approval_of_an_expensive_proposal_is_always_backgrounded(client, m
     submitted: list[dict] = []
     monkeypatch.setattr(main.jobs, "submit", lambda **kw: submitted.append(kw) or "job_fake")
     sid = client.post("/api/sessions").json()["id"]
-    client.post(f"/api/sessions/{sid}/workflow/start",
-                json={"workflow": "poppk_goal", "params": {"path": SAMPLE}})
-    r = client.post(f"/api/sessions/{sid}/workflow/resume", json={"approve": True, "reason": "ok"}).json()
+    gate = client.post(f"/api/sessions/{sid}/workflow/start",
+                       json={"workflow": "poppk_goal", "params": {"path": SAMPLE}}).json()["review"]
+    r = client.post(f"/api/sessions/{sid}/workflow/resume",
+                    json={"approve": True, "reason": "ok", "gate_id": gate["gate_id"]}).json()
     assert r == {"job_id": "job_fake", "status": "running", "kind": "workflow_resume"}
     assert submitted and submitted[0]["kind"] == "workflow_resume"
     # Nothing ran on the request thread and the proposal still waits for the job.
@@ -667,7 +669,9 @@ def test_http_cheap_gate_resumes_inline_through_the_existing_endpoint(client, mo
     out = client.post(f"/api/sessions/{sid}/workflow/start",
                       json={"workflow": "goal_report", "params": {"path": SAMPLE}}).json()
     assert out["status"] == "awaiting_review" and out["proposal"]["tool"] == "generate_report"
-    res = client.post(f"/api/sessions/{sid}/workflow/resume", json={"approve": True, "reason": "ok"}).json()
+    res = client.post(f"/api/sessions/{sid}/workflow/resume",
+                      json={"approve": True, "reason": "ok",
+                            "gate_id": out["review"]["gate_id"]}).json()
     assert res["status"] == "complete" and "job_id" not in res
     assert [e["tool"] for e in res["executed"]] == ["generate_report"]
     assert res["state"]["report_path"] and res["state"]["pending_tool"] is None
