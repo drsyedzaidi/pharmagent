@@ -208,6 +208,11 @@ def _report(client, headers, csv: Path):
     o = main.orch
     o.run_tool(sid, "load_dataset", "data_manager", {"path": path, "dataset_id": "shared_ds"})
     o.run_tool(sid, "compute_nca", "nca", {})
+    o.run_tool(sid, "run_qc", "qc", {})      # a report needs current NCA QC
+    state = o.sessions[sid].state
+    if state.nca_flagged_subjects:           # flagged fits need the analyst's recorded decision
+        assert client.post(f"/api/sessions/{sid}/lambda-z-review", headers=headers,
+                           json={"decision": "accept", "notes": "reviewed"}).status_code == 200
     r = client.post(f"/api/sessions/{sid}/report", headers=headers)
     assert r.status_code == 200, r.text
     return sid, r.json()

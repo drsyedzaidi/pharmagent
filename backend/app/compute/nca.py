@@ -142,12 +142,15 @@ def manual_lambda_z_fit(times: list[float], concs: list[float]) -> dict[str, Any
     ss_tot = float(np.sum((lnc - lnc.mean()) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     adj = 1.0 - (1.0 - r2) * (k - 1) / (k - 2) if k > 2 else r2
+    t_half = math.log(2) / float(-slope)
+    span_ratio = float((t.max() - t.min()) / t_half) if t_half > 0 else 0.0
     return {
         "lambda_z": float(-slope),
         "lambda_z_r2": round(r2, 6),
         "lambda_z_r2_adj": round(adj, 6),
         "lambda_z_n_points": k,
         "lambda_z_intervals": [float(t.min()), float(t.max())],
+        "lambda_z_span_ratio": round(span_ratio, 6),
         "lambda_z_intercept": float(intercept),
         "lambda_z_pts_t": t.tolist(),
         "lambda_z_pts_c": c.tolist(),

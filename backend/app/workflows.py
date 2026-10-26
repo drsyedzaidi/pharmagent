@@ -123,6 +123,8 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
         "steps": [
             {"agent": "modeler", "tool": "load_approved_fit",
              "label": "Load approved PopPK fit"},
+            # generate_report refuses any deliverable built on an NLME fit without a current PopPK QC verdict.
+            {"agent": "qc", "tool": "run_poppk_qc", "label": "PopPK estimation QC"},
             {"agent": "simulator", "tool": "propose_simulation_plan",
              "label": "Propose simulation plan (human review gate)", "gate": True},
             {"agent": "simulator", "tool": "run_dose_sweep",
