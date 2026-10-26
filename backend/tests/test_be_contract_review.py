@@ -26,8 +26,9 @@ def _pframe(n=12, **kw):
 def _recs(n=12):
     out = []
     for i in range(n):
-        out += [{"subject": i, "treatment": "R", "params": {"Cmax": 100.0 + i}},
-                {"subject": i, "treatment": "T", "params": {"Cmax": 101.0 + i}}]
+        first_is_test = i % 2 == 0                                   # two sequences, alternating
+        out += [{"subject": i, "treatment": "R", "params": {"Cmax": 100.0 + i}, "period": 2 if first_is_test else 1},
+                {"subject": i, "treatment": "T", "params": {"Cmax": 101.0 + i}, "period": 1 if first_is_test else 2}]
     return out
 
 
@@ -63,11 +64,10 @@ def test_the_estimator_exposes_unrounded_bounds():
 
 def test_the_verdict_is_not_double_rounded(monkeypatch):
     # a true lower bound of 79.99496 is 79.99 at two decimals; a 4-dp copy (79.995) would round to 80.00
-    monkeypatch.setattr(est, "be_one_parameter", lambda *a, **k: {
+    import app.compute.be_contract as bc
+    monkeypatch.setattr(bc, "_estimate", lambda *a, **k: {
         "gmr_pct": 95.0, "ci_lower_pct": 79.995, "ci_upper_pct": 110.0, "cv_intra_pct": 10.0,
         "gmr_raw": 95.0, "ci_lower_raw": 79.99496, "ci_upper_raw": 110.0})
-    import app.compute.be_contract as bc
-    monkeypatch.setattr(bc, "be_one_parameter", est.be_one_parameter)
     p = _contract(_recs())["parameters"]["Cmax"]
     assert p["ci_lower_rounded"] == "79.99" and p["within_limits"] is False
     m13a = _contract(_recs(), profile="ich_m13a")["parameters"]["Cmax"]

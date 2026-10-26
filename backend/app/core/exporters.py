@@ -55,7 +55,7 @@ def _be(state: PharmState) -> str:
     # the decision fields: the rounded bounds the verdict used, the acceptance reason and the evaluable count
     return _csv(rows, ["parameter", "profile", "design", "gmr_pct", "ci_lower_pct", "ci_upper_pct",
                        "ci_lower_rounded", "ci_upper_rounded", "within_limits", "acceptance",
-                       "n_evaluable", "n_test", "n_reference", "cv_intra_pct"])
+                       "n_evaluable", "n_test", "n_reference", "df_error", "se_log", "cv_intra_pct"])
 
 
 def _dose_prop(state: PharmState) -> str:

@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.5.0",
+  "catalog_version": "1.6.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -288,9 +288,9 @@
       "applies_to": [
         "bioequivalence"
       ],
-      "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile currently controls the confidence level, acceptance limits and rounding policy; the estimator is interim (paired log differences for a crossover, pooled two-sample log means for a parallel design, with no period or sequence terms) and is not the final profile-specific regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
+      "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model with sequence, subject within sequence, period and formulation, and a parallel design as two independent groups. These estimators are interim until independent validation is complete and are not yet cleared as the regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
       "parameters": {},
-      "version": "2.0.0",
+      "version": "2.1.0",
       "source": {
         "kind": "owner_decision",
         "reference": "Owner decisions of 2026-10-23 on the BE safety contract (app/compute/be_contract.py). Profiles: FDA, Statistical Approaches to Establishing Bioequivalence (May 2026); ICH M13A, EMA/CHMP/ICH/953493/2022; EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr**."
@@ -309,14 +309,21 @@
         "tests/test_be_tool_contract.py::test_the_refusal_is_constructive_and_says_nothing_was_concluded",
         "tests/test_be_contract_review.py::test_a_single_sequence_is_not_a_randomised_crossover",
         "tests/test_be_contract_review.py::test_every_dropped_concentration_row_is_in_the_ledger",
-        "tests/test_be_compute.py::test_paired_gmr_matches_hand_computed",
-        "tests/test_be_compute.py::test_parallel_gmr_and_ci_hand_computed"
+        "tests/test_be_compute.py::test_parallel_gmr_and_ci_hand_computed",
+        "tests/test_be_model.py::test_matches_the_closed_form_solution_balanced_and_unbalanced",
+        "tests/test_be_model.py::test_matches_a_generic_dummy_variable_least_squares_fit",
+        "tests/test_be_model.py::test_it_is_not_the_paired_t_test_when_sequences_are_unbalanced_or_a_period_effect_exists",
+        "tests/test_be_model.py::test_parallel_welch_matches_scipy_unequal_variance_t_with_satterthwaite_df",
+        "tests/test_be_engine_contract.py::test_the_crossover_estimate_is_the_fixed_effects_model_with_n_minus_2_df",
+        "tests/test_be_engine_contract.py::test_a_single_sequence_is_refused_by_the_contract_itself",
+        "tests/test_be_engine_contract.py::test_crossover_records_without_a_period_are_refused"
       ],
       "known_gaps": [
         "Half-up rounding of exact .xx5 ties is a PharmAgent implementation convention; the guidance does not define tie handling.",
-        "The period/sequence/formulation model required by the regulatory profiles (sequence, subject within sequence, period and formulation effects) is not implemented; the current estimator is interim.",
-        "NTI (narrow therapeutic index), highly variable, replicate and reference-scaled designs are unsupported and are refused.",
-        "The estimator is interim (paired log differences or pooled two-sample log means, no period or sequence terms); independent live cross-validation of the final estimator remains required."
+        "Independent validation of the 2x2 crossover model is pending: a cross-check against base R lm and nlme, and review by a biostatistician. Until then the outputs stay interim.",
+        "For complete two-period data the fixed-effects and mixed-model formulation estimates are expected to coincide because the subject effect cancels within subject; this is to be confirmed numerically against nlme and is not yet checked.",
+        "NTI (narrow therapeutic index), highly variable, replicate and reference-scaled designs are unsupported and are refused; so are multi-group data and crossovers with more than two periods.",
+        "A parallel design uses pooled variance by default; Welch is an explicit option. The guidance texts read do not choose between them (owner decision). Stratification factors and covariates for parallel designs (ICH M13A 2.2.3.4) are not supported."
       ]
     },
     {

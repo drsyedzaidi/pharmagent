@@ -1,0 +1,9 @@
+case,design
+xo_balanced_12,crossover
+xo_unbalanced_7_5,crossover
+xo_unbalanced_13_11,crossover
+xo_extreme_4_20,crossover
+xo_strong_period_8_4,crossover
+xo_large_36_36,crossover
+par_unequal_var_14_11,parallel
+par_unequal_n_24_9,parallel

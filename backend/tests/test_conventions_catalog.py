@@ -225,28 +225,32 @@ def test_the_endpoint_closure_wording_is_consistent():
 BE_STATEMENT = (
     "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation "
     "and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and "
-    "period identifiers and at least two observed treatment sequences. Positive finite parameter values are analysed "
-    "on the logarithmic scale. The selected regulatory profile currently controls the confidence level, acceptance "
-    "limits and rounding policy; the estimator is interim (paired log differences for a crossover, pooled two-sample "
-    "log means for a parallel design, with no period or sequence terms) and is not the final profile-specific "
-    "regulatory model. Missing, excluded and invalid observations are reported in a "
-    "parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than "
-    "switching design or inferring the reference formulation.")
+    "period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite "
+    "parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the "
+    "confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model "
+    "with sequence, subject within sequence, period and formulation, and a parallel design as two independent "
+    "groups. These estimators are interim until independent validation is complete and are not yet cleared as the "
+    "regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition "
+    "ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring "
+    "the reference formulation.")
 
 
-def test_the_be_entry_states_the_owner_wording_and_stays_pending():
+def test_the_be_entry_states_the_current_model_and_stays_pending():
     c = {c.id: c for c in load_catalog().conventions}["be.average_tost"]
     assert c.statement == BE_STATEMENT and c.parameters == {}
-    assert c.approval.status == "pending_owner_review" and c.version == "2.0.0"
+    assert c.approval.status == "pending_owner_review" and c.version == "2.1.0"
     gaps = " ".join(c.known_gaps).lower()
     assert "half-up" in gaps and "implementation convention" in gaps
     for design in ("nti", "highly variable", "replicate", "reference-scaled"):
         assert design in gaps, design
-    assert "independent live cross-validation" in gaps
-    assert "period/sequence/formulation model" in gaps and "not implemented" in gaps
-    assert "statistical method" not in c.statement and "not the final profile-specific regulatory model" in c.statement
-    assert all(t.startswith(("tests/test_be_contract", "tests/test_be_tool_contract", "tests/test_be_compute"))
-               for t in c.tests)
+    assert "independent validation" in gaps and "biostatistician" in gaps and "nlme" in gaps
+    assert "pooled variance" in gaps and "welch" in gaps and "stratification" in gaps
+    assert "not implemented" not in gaps or "period/sequence/formulation model" not in gaps   # that gap is closed
+    assert "paired log differences" not in c.statement and "not yet cleared as the regulatory model" in c.statement
+    assert all(t.startswith(("tests/test_be_contract", "tests/test_be_tool_contract", "tests/test_be_compute",
+                             "tests/test_be_model", "tests/test_be_engine_contract")) for t in c.tests)
+    assert not any("test_paired_gmr" in t for t in c.tests)          # the paired t-test is no longer the estimator
+    assert any(t.startswith("tests/test_be_model.py") for t in c.tests)
 
 
 def test_the_cutoff_entry_states_the_objective_scale_and_its_open_source():

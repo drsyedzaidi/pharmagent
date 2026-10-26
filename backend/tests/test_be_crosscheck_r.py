@@ -26,8 +26,23 @@ def _records(case):
     return out
 
 
-@pytest.mark.parametrize("case", sorted(R))
-def test_interim_estimator_matches_base_r(case):
+@pytest.mark.parametrize("case", sorted(c for c, r in R.items() if r["design"] == "crossover"))
+def test_the_legacy_paired_estimator_matches_base_r_paired_t(case):
+    """The crossover cases here are base R's PAIRED t-test, so they validate the legacy be_one_parameter, which is
+    no longer the contract's crossover estimator (see tests/test_be_crosscheck_r_anova.py for that)."""
+    from app.compute.bioequivalence import be_one_parameter
+
+    r = R[case]
+    rows = _records(case)
+    t = [x["params"]["Cmax"] for x in rows if x["treatment"] == "T"]
+    ref = [x["params"]["Cmax"] for x in rows if x["treatment"] == "R"]
+    p = be_one_parameter(t, ref, paired=True)
+    assert math.isclose(p["ci_lower_raw"], float(r["ci_lower_pct"]), rel_tol=1e-10)
+    assert math.isclose(p["ci_upper_raw"], float(r["ci_upper_pct"]), rel_tol=1e-10)
+
+
+@pytest.mark.parametrize("case", sorted(c for c, r in R.items() if r["design"] == "parallel"))
+def test_pooled_parallel_estimator_matches_base_r(case):
     r = R[case]
     p = assess_average_be(_records(case), design=r["design"], profile="fda_2026", test="T",
                           reference="R")["parameters"]["Cmax"]
