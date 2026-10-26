@@ -8,8 +8,10 @@ which every computation flows.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -40,6 +42,13 @@ class ToolResult:
     writes: dict[str, Any] = field(default_factory=dict)   # -> PharmState
     result: dict[str, Any] = field(default_factory=dict)   # payload for UI/LLM
     action: str = ""                  # audit action description
+
+
+def session_report_dir(ctx: ToolContext, state: PharmState) -> Path:
+    """Where this session's generated reports live: ``<data_dir>/reports/<session_id>/``. Scoping by session means
+    two sessions on the same dataset id never overwrite each other's file."""
+    sid = re.sub(r"[^A-Za-z0-9_-]", "", state.session_id or "")[:64] or "_nosession"
+    return Path(ctx.data_dir) / "reports" / sid
 
 
 def require_dataset(ctx: ToolContext, state: PharmState,

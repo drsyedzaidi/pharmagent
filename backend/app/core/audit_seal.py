@@ -627,7 +627,7 @@ def audit_security_from_settings(config) -> AuditSecurity | None:
         getattr(config, "audit_anchor_path", None),
     )
     if mode == "off":
-        if getattr(config, "api_token", None):
+        if getattr(config, "api_token", None) or getattr(config, "api_tokens", None):
             raise AuditConfigurationError(
                 "authenticated deployments require PHARMAGENT_AUDIT_MODE=enforce"
             )
