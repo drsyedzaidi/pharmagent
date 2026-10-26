@@ -247,7 +247,7 @@ def recovered_se():
     """Same cohort as `recovered`, fitted WITH the uncertainty pass."""
     return population_fit(MODEL_KEY, _cohort(R_TRUE, seed=20250614), method="saem",
                           iiv_params=["CL", "V"], error_model="proportional",
-                          max_iter=250, seed=7, compute_uncertainty=True,
+                          max_iter=1000, seed=7, compute_uncertainty=True,
                           omega_block=["CL", "V"])
 
 
@@ -330,9 +330,9 @@ def test_correlation_interval_excludes_zero_when_correlation_is_real(recovered_s
 
 def test_diagonal_fit_reports_no_correlation_se():
     """The key must not leak into a diagonal payload."""
-    diag = population_fit(MODEL_KEY, _cohort(0.0, seed=8), method="saem",
+    diag = population_fit(MODEL_KEY, _cohort(0.0, seed=11), method="saem",
                           iiv_params=["CL", "V"], error_model="proportional",
-                          max_iter=60, seed=7, compute_uncertainty=True)
+                          max_iter=1000, seed=7, compute_uncertainty=True)
     assert "omega_corr_se" not in diag
     for p in ("CL", "V"):
         assert p in diag["omega_rse_pct"]
