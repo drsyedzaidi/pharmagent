@@ -17,7 +17,13 @@ from typing import Any
 from docx import Document
 from docx.shared import Pt
 
-from app.compute.be_contract import report_ci, report_disclosure
+from app.compute.be_contract import (
+    report_ci,
+    report_disclosure,
+    report_disposition_rows,
+    report_qc_rows,
+    report_roles,
+)
 from app.core.pharmstate import PharmState, StudyInfo
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -176,8 +182,18 @@ def _section_23_analyses(doc: Document, state: PharmState) -> None:
         if be.get("profile"):
             doc.add_paragraph(report_disclosure(be))
             for k, v in (be.get("parameters") or {}).items():
-                doc.add_paragraph(f"{k}: GMR {v.get('gmr_pct')}%, 90% CI {report_ci(v)}%, "
+                role = f" ({v['role']})" if v.get("role") else ""
+                doc.add_paragraph(f"{k}{role}: GMR {v.get('gmr_pct')}%, 90% CI {report_ci(v)}%, "
                                   f"n {v.get('n_evaluable')}, {v.get('acceptance')}.")
+            doc.add_paragraph(report_roles(be))
+            if "qc_findings" in be:
+                doc.add_paragraph("QC findings" + (": none." if not be["qc_findings"] else ":"))
+                if be["qc_findings"]:
+                    _kv_table(doc, ["Rule", "Subject", "Treatment", "Period", "Action", "Detail"], report_qc_rows(be))
+            if be.get("dispositions"):
+                doc.add_paragraph("Subject disposition:")
+                _kv_table(doc, ["Subject", "Sequence/arm", "Disposition", "Reasons", "QC flags and notes"],
+                          report_disposition_rows(be))
 
 
 def _section_24_special_pops(doc: Document, state: PharmState) -> None:

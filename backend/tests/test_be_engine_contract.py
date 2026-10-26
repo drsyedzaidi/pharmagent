@@ -33,7 +33,8 @@ def _crossover_records(n_tr=7, n_rt=6, *, per=0.5, form=-0.03, labels=(1, 2), pa
 
 
 def _run(recs, **kw):
-    args = {"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R"}
+    args = {"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R",
+            "decision_parameters": ["Cmax"], "decision_justification": "unit-test data carry one parameter"}
     args.update(kw)
     return assess_average_be(recs, **args)
 

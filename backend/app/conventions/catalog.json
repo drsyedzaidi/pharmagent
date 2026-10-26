@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.7.0",
+  "catalog_version": "1.8.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -288,9 +288,9 @@
       "applies_to": [
         "bioequivalence"
       ],
-      "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model with sequence, subject within sequence, period and formulation, and a parallel design as two independent groups. These estimators are interim until independent validation is complete and are not yet cleared as the regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
+      "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model with sequence, subject within sequence, period and formulation, and a parallel design as two independent groups. Cmax and AUC(0-t) decide the verdict; other parameters are supportive unless a justified decision set is given. A pre-dose concentration above 5 percent of the period's Cmax excludes the affected period, unless a justified flag-only policy is chosen; very low exposure, incomplete AUC extrapolation and a Cmax at the first sample are flagged for discussion and never exclude a subject. These estimators are interim until independent validation is complete and are not yet cleared as the regulatory model. Missing, excluded and invalid observations, and every QC finding, are reported in a parameter-level disposition ledger and a subject-level disposition table. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
       "parameters": {},
-      "version": "2.2.0",
+      "version": "2.3.0",
       "source": {
         "kind": "owner_decision",
         "reference": "Owner decisions of 2026-10-23 on the BE safety contract (app/compute/be_contract.py). Profiles: FDA, Statistical Approaches to Establishing Bioequivalence (May 2026); ICH M13A, EMA/CHMP/ICH/953493/2022; EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr**."
@@ -319,14 +319,23 @@
         "tests/test_be_engine_contract.py::test_crossover_records_without_a_period_are_refused",
         "tests/test_be_crosscheck_r_anova.py::test_crossover_estimate_se_df_and_interval_match_r_lm",
         "tests/test_be_crosscheck_r_anova.py::test_crossover_anova_table_matches_r",
-        "tests/test_be_crosscheck_r_anova.py::test_the_mixed_model_gives_the_same_formulation_estimate_and_se_for_complete_data"
+        "tests/test_be_crosscheck_r_anova.py::test_the_mixed_model_gives_the_same_formulation_estimate_and_se_for_complete_data",
+        "tests/test_be_qc.py::test_a_predose_above_5_percent_of_cmax_drops_that_period_and_so_the_subject",
+        "tests/test_be_qc.py::test_the_predose_boundary_is_exact_five_percent_is_kept_just_above_is_dropped",
+        "tests/test_be_qc.py::test_cmax_and_auc_last_decide_and_auc_inf_is_supportive_for_every_profile",
+        "tests/test_be_qc.py::test_every_subject_has_a_disposition_row_with_sequence_periods_and_parameter_status",
+        "tests/test_be_qc_tool.py::test_a_subject_lost_in_both_arms_before_the_contract_still_has_a_row",
+        "tests/test_be_qc_reports.py::test_both_reports_show_the_disposition_table_and_the_qc_finding"
       ],
       "known_gaps": [
         "Half-up rounding of exact .xx5 ties is a PharmAgent implementation convention; the guidance does not define tie handling.",
         "Independent validation of the 2x2 crossover model is partly done: the estimate, standard error, confidence interval and ANOVA table agree with base R lm, drop1 and confint (R 4.5.1) on six crossover datasets to about 1e-11 or better. Review by a biostatistician is still pending; until then the outputs stay interim.",
         "For complete two-period data the nlme REML mixed-model formulation estimate and standard error agree with the fixed-effects ones on those six datasets (estimate to 1e-10, standard error to at most 1.5e-6, the REML optimizer's tolerance), with an interior between-subject variance in every case. The equivalence is not unconditional: when the REML between-subject variance is zero the mixed model collapses to ordinary least squares and its standard error differs.",
         "NTI (narrow therapeutic index), highly variable, replicate and reference-scaled designs are unsupported and are refused; so are multi-group data and crossovers with more than two periods.",
-        "A parallel design uses pooled variance by default; Welch is an explicit option. The guidance texts read do not choose between them (owner decision). Stratification factors and covariates for parallel designs (ICH M13A 2.2.3.4) are not supported."
+        "A parallel design uses pooled variance by default; Welch is an explicit option. The guidance texts read do not choose between them (owner decision). Stratification factors and covariates for parallel designs (ICH M13A 2.2.3.4) are not supported.",
+        "The 5 percent pre-dose rule is applied to single-dose data. Every sample at or before time 0 of a subject and treatment is a pre-dose sample and the highest decides (more than one is reported); the highest sample at or before time 0 is not checked against a washout window, steady-state studies are not supported, and a BLQ coding of the pre-dose sample is not interpreted.",
+        "The decision set (Cmax and AUC(0-t)) assumes an immediate-release product, from the FDA ANDA PK guidance, ICH M13A and EMA texts read. For modified-release products FDA also asks for AUC(0-inf): name it in decision_parameters with a justification. Product-specific guidance (for example partial AUC for early exposure) is not consulted. A decision-set override may only add parameters (for example AUC(0-inf)); it cannot drop a profile decision parameter that the data carry.",
+        "Very low exposure, incomplete AUC(0-t) coverage of AUC(0-inf) and a Cmax at the first sample are flags only; whether a very low exposure subject may be excluded is an exceptional-case decision for the protocol and the owner, never taken automatically."
       ]
     },
     {

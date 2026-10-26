@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from typing import Any
 
 from app.compute.nmexport import build_mrgsolve, build_nonmem
@@ -53,7 +54,7 @@ def _be(state: PharmState) -> str:
     rows = [{"parameter": k, "profile": r.get("profile"), "design": r.get("design"), **v}
             for k, v in params.items()]
     # the decision fields: the rounded bounds the verdict used, the acceptance reason and the evaluable count
-    return _csv(rows, ["parameter", "profile", "design", "gmr_pct", "ci_lower_pct", "ci_upper_pct",
+    return _csv(rows, ["parameter", "role", "profile", "design", "gmr_pct", "ci_lower_pct", "ci_upper_pct",
                        "ci_lower_rounded", "ci_upper_rounded", "within_limits", "acceptance",
                        "n_evaluable", "n_test", "n_reference", "df_error", "se_log", "cv_intra_pct"])
 
@@ -117,9 +118,31 @@ def _nlme(state: PharmState) -> str:
     return _csv(rows, ["parameter", "typical", "rse_pct", "iiv_cv_pct", "shrinkage_pct"])
 
 
+def _be_disposition(state: PharmState) -> str:
+    """One row per subject and parameter: the subject-level disposition the report prints, in long form."""
+    r = state.be_results or {}
+    rows = []
+    for d in r.get("dispositions") or []:
+        for name, info in (d.get("parameters") or {}).items():
+            rows.append({"subject": d["subject"], "sequence_or_arm": d.get("sequence") or d.get("arm"),
+                         "disposition": d["disposition"], "parameter": name, "status": info["status"],
+                         "reasons": "; ".join(info.get("reasons") or []),
+                         "qc_flags": "; ".join(d.get("qc_flags") or []), "notes": "; ".join(d.get("notes") or [])})
+    return _csv(rows, ["subject", "sequence_or_arm", "disposition", "parameter", "status", "reasons", "qc_flags",
+                       "notes"]) if rows else ""
+
+
+def _be_qc(state: PharmState) -> str:
+    r = state.be_results or {}
+    rows = [{"scope": f["scope"], "rule": f["rule"], "subject": f["subject"], "treatment": f["treatment"],
+             "period": f["period"], "action": f["action"], "basis": f["basis"],
+             "detail": json.dumps(f.get("detail") or {}, sort_keys=True)} for f in r.get("qc_findings") or []]
+    return _csv(rows, ["scope", "rule", "subject", "treatment", "period", "action", "basis", "detail"])
+
+
 _EXPORTERS = {
-    "nca": _nca, "be": _be, "dose_prop": _dose_prop, "pk_model": _pk_model,
-    "dose_sweep": _dose_sweep, "vpc": _vpc, "nlme": _nlme,
+    "nca": _nca, "be": _be, "be_disposition": _be_disposition, "be_qc": _be_qc, "dose_prop": _dose_prop,
+    "pk_model": _pk_model, "dose_sweep": _dose_sweep, "vpc": _vpc, "nlme": _nlme,
 }
 
 
@@ -130,6 +153,10 @@ def available(state: PharmState) -> list[str]:
         out.append("nca")
     if (state.be_results or {}).get("status") == "ok":
         out.append("be")
+        if state.be_results.get("dispositions"):
+            out.append("be_disposition")
+        if "qc_findings" in state.be_results:
+            out.append("be_qc")
     if (state.dose_prop_results or {}).get("status") == "ok":
         out.append("dose_prop")
     if (state.pk_model_results or {}).get("status") == "ok":

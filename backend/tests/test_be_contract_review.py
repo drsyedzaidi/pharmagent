@@ -34,7 +34,8 @@ def _recs(n=12):
 
 def _contract(recs, **kw):
     return assess_average_be(recs, **{"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R",
-                                      **kw})
+                                      "decision_parameters": ["Cmax"],
+                                      "decision_justification": "unit-test data carry one parameter", **kw})
 
 
 # ── B1 ─────────────────────────────────────────────────────────────────────────────────────────

@@ -46,7 +46,8 @@ def _parallel(n=12):
 
 
 def _run(recs, **kw):
-    args = {"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R"}
+    args = {"design": "crossover", "profile": "fda_2026", "test": "T", "reference": "R",
+            "decision_parameters": ["Cmax"], "decision_justification": "unit-test data carry one parameter"}
     args.update(kw)
     return assess_average_be(recs, **args)
 

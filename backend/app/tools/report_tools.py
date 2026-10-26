@@ -6,7 +6,13 @@ from typing import Any
 
 from docx import Document
 
-from app.compute.be_contract import report_ci, report_disclosure
+from app.compute.be_contract import (
+    report_ci,
+    report_disclosure,
+    report_disposition_rows,
+    report_qc_rows,
+    report_roles,
+)
 from app.core.pharmstate import PharmState
 from app.tools.base import Tool, ToolContext, ToolResult
 
@@ -141,10 +147,20 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
                           f"{'BIOEQUIVALENT' if be.get('bioequivalent') else 'NOT bioequivalent'}.")
         if be.get("profile"):
             doc.add_paragraph(report_disclosure(be))
-        _kv_table(doc, ["Parameter", "GMR %", "90% CI", "n", "Acceptance"],
-                  [[k, v.get("gmr_pct"), report_ci(v), str(v.get("n_evaluable", "n/a")),
+        _kv_table(doc, ["Parameter", "Role", "GMR %", "90% CI", "n", "Acceptance"],
+                  [[k, v.get("role", ""), v.get("gmr_pct"), report_ci(v), str(v.get("n_evaluable", "n/a")),
                     v.get("acceptance") or ("within limits" if v.get("within_limits") else "outside limits")]
                    for k, v in (be.get("parameters") or {}).items()])
+        if be.get("profile"):
+            doc.add_paragraph(report_roles(be))
+        if "qc_findings" in be:
+            doc.add_paragraph("QC findings" + (": none." if not be["qc_findings"] else ":"))
+            if be["qc_findings"]:
+                _kv_table(doc, ["Rule", "Subject", "Treatment", "Period", "Action", "Detail"], report_qc_rows(be))
+        if be.get("dispositions"):
+            doc.add_paragraph("Subject disposition:")
+            _kv_table(doc, ["Subject", "Sequence/arm", "Disposition", "Reasons", "QC flags and notes"],
+                      report_disposition_rows(be))
 
     dp = state.dose_prop_results
     if dp and dp.get("status") == "ok":
