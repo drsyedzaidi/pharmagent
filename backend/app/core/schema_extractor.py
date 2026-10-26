@@ -13,6 +13,8 @@ from typing import Any
 
 import pandas as pd
 
+from app.core.prompt_safety import sanitize_name
+
 # Exact (lowercased) names that pin a role unambiguously.
 ROLE_EXACT: dict[str, str] = {
     "id": "ID", "usubjid": "ID", "subject": "ID", "subjid": "ID", "subjectid": "ID",
@@ -91,9 +93,14 @@ def extract_schema(df: pd.DataFrame, *, dataset_id: str) -> dict[str, Any]:
 
     columns_meta = []
     for col in df.columns:
+        # "name" stays the real header (every column lookup uses it); "prompt_name" is the
+        # only form meant for LLM prompts, and "name_altered" records that it differs.
+        prompt_name, altered = sanitize_name(col)
         columns_meta.append(
             {
                 "name": col,
+                "prompt_name": prompt_name,
+                "name_altered": altered,
                 "dtype": str(df[col].dtype),
                 "role": roles.get(col, "UNKNOWN"),
                 "n_missing": int(df[col].isna().sum()),
@@ -123,6 +130,7 @@ def extract_schema(df: pd.DataFrame, *, dataset_id: str) -> dict[str, Any]:
         "dose_levels": dose_levels,
         "time_range": time_range,
         "columns": columns_meta,
+        "n_names_altered": sum(1 for c in columns_meta if c["name_altered"]),
         # explicit assurance flag for downstream consumers/auditors
         "privacy": "metadata_only; no individual rows or raw concentrations included",
     }

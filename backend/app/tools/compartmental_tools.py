@@ -130,7 +130,8 @@ TOOLS = [
                          "models": {"type": "array",
                                     "description": "Candidate models; default both. "
                                                    "'1cmt' = one-compartment, '2cmt' = two-compartment.",
-                                    "items": {"type": "string", "enum": ["1cmt", "2cmt"]}}},
+                                    "items": {"type": "string", "enum": ["1cmt", "2cmt"],
+                                              "x-normalized": True}}},
           "required": []},
          fit_compartmental_models),
 ]

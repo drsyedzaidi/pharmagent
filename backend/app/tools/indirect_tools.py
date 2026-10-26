@@ -33,7 +33,7 @@ _DIRECT_SCHEMA = {
         "se": {"type": "number"},
         "ci_lower": {"type": "number"},
         "ci_upper": {"type": "number"},
-        "ci_level": {"type": "number",
+        "ci_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1,
                      "description": ("confidence level of THIS comparison's CI as published, e.g. "
                                      "0.90 for a 90% CI (default 0.95). Required when the output "
                                      "ci_level is not 0.95 and this leg is given as a CI.")},
@@ -113,8 +113,9 @@ TOOLS = [
          "properties": {
              "ab": _DIRECT_SCHEMA,
              "cb": _DIRECT_SCHEMA,
-             "scale": {"type": "string", "enum": [*RATIO_SCALES, *DIFFERENCE_SCALES]},
-             "ci_level": {"type": "number",
+             "scale": {"type": "string", "x-normalized": True,   # the tool upper-cases it
+                       "enum": [*RATIO_SCALES, *DIFFERENCE_SCALES]},
+             "ci_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1,
                           "description": ("level of the OUTPUT (indirect) interval only, default "
                                           "0.95; it does not apply to the input CIs, whose level "
                                           "is each leg's own ci_level")},

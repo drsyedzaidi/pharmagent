@@ -14,6 +14,7 @@ from typing import Any
 from app.core.audit import AuditChain
 from app.core.finding_ids import finding_kind
 from app.core.pharmstate import PharmState
+from app.core.prompt_safety import prompt_view_of_metadata
 from app.tools.base import ExpensiveToolError, ToolContext, ToolRegistry
 
 MAX_TOOL_STEPS = 6
@@ -199,8 +200,7 @@ class Agent:
             "spaghetti_plotted": state.spaghetti_data is not None,
             "has_metadata": state.dataset_metadata is not None,
             "n_subjects": meta.get("n_subjects"),
-            "columns": meta.get("columns"),
-            "detected_roles": meta.get("detected_roles"),
+            **prompt_view_of_metadata(meta),
             "data_quality": (state.data_quality or {}).get("quality_flags"),
             "nca_parameters": "present" if state.nca_parameters else None,
             "nca_diagnostics": nca_diag,

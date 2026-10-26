@@ -18,6 +18,11 @@ import pandas as pd
 
 from app.core.audit import AuditChain
 from app.core.pharmstate import PharmState, apply_writes
+from app.tools.arg_validation import UNADVERTISED_ARGS, validate_args
+
+# Keys the framework adds itself: an approved pending tool is re-run with confirm=True
+# (Orchestrator.take_pending_tool) whether or not its schema declares it.
+FRAMEWORK_ARG_KEYS = frozenset({"confirm"})
 
 
 @dataclass
@@ -186,6 +191,10 @@ class ToolRegistry:
             raise HumanOnlyToolError(
                 f"'{name}' records a human decision and cannot be run by an agent; "
                 "the analyst must submit it from the review control (API) instead.")
+        extra = FRAMEWORK_ARG_KEYS | UNADVERTISED_ARGS.get(name, frozenset())
+        invalid = validate_args(tool.input_schema, args, allow_extra=extra)
+        if invalid:
+            raise ValueError(f"invalid arguments for '{name}': {invalid}")
         run_ctx = (replace(ctx, audit_trail=tuple(e.to_dict() for e in audit.entries))
                    if tool.uses_audit_trail else ctx)
         res = tool.run(state, run_ctx, args)

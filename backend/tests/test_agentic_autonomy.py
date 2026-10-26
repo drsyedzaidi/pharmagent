@@ -115,9 +115,9 @@ def test_turn_observations_are_fed_back_across_steps_in_a_turn():
             seen_summaries.append(state_summary)
             self.step += 1
             if self.step == 1:
-                return {"name": "list_pk_models", "input": {"family": "pk"}}
+                return {"name": "run_diagnostics", "input": {"cwres_interaction": True}}
             if self.step == 2:
-                return {"name": "list_pk_models", "input": {"family": "pd"}}
+                return {"name": "run_diagnostics", "input": {"cwres_interaction": False}}
             return None
 
     res = AGENTS["modeler"].run_turn(
@@ -133,8 +133,8 @@ def test_turn_observations_are_fed_back_across_steps_in_a_turn():
     assert len(res.tool_calls) == 2
     assert seen_summaries[0]["turn_observations"] is None
     assert len(seen_summaries[1]["turn_observations"]) == 1
-    assert seen_summaries[1]["turn_observations"][0]["tool"] == "list_pk_models"
-    assert seen_summaries[2]["turn_observations"][1]["tool"] == "list_pk_models"
+    assert seen_summaries[1]["turn_observations"][0]["tool"] == "run_diagnostics"
+    assert seen_summaries[2]["turn_observations"][1]["tool"] == "run_diagnostics"
 
 
 def test_multi_agent_chat_handoff_executes_pipeline_in_one_turn():
