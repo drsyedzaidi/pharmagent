@@ -102,11 +102,9 @@ def test_the_catalog_numbers_match_the_code_they_describe():
     assert by_id["nca.ss_endpoint_closure"].parameters["snap_fraction"] == sig.parameters["tol_frac"].default
     from app.compute.dosing import PRE_DOSE_TOL
     assert by_id["nca.ss_endpoint_closure"].parameters["pre_dose_tol"] == PRE_DOSE_TOL
-    from app.compute.bioequivalence import be_one_parameter
-    be = inspect.signature(be_one_parameter).parameters
-    bp = by_id["be.average_tost"].parameters
-    assert (bp["alpha"], bp["lower"], bp["upper"]) == (be["alpha"].default, be["lower"].default, be["upper"].default)
-    assert bp["ci_percent"] == round(100 * (1 - be["alpha"].default))
+    from app.compute.be_contract import PROFILES  # BE numbers live in the profiles, not in the catalog text
+    assert by_id["be.average_tost"].parameters == {}
+    assert {(str(p.lower), str(p.upper), p.ci_percent) for p in PROFILES.values()} == {("80.00", "125.00", 90)}
     from app.compute.nca import _MIN_LAMBDA_Z
     assert by_id["nca.lambda_z_window"].parameters["min_lambda_z"] == _MIN_LAMBDA_Z
 
@@ -224,11 +222,31 @@ def test_the_endpoint_closure_wording_is_consistent():
     assert any("integration rule" in g.lower() for g in c.known_gaps)
 
 
-def test_the_be_entry_discloses_dropped_rows_and_the_unchecked_guidance():
+BE_STATEMENT = (
+    "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation "
+    "and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and "
+    "period identifiers and at least two observed treatment sequences. Positive finite parameter values are analysed "
+    "on the logarithmic scale. The selected regulatory profile currently controls the confidence level, acceptance "
+    "limits and rounding policy; the estimator is interim (paired log differences for a crossover, pooled two-sample "
+    "log means for a parallel design, with no period or sequence terms) and is not the final profile-specific "
+    "regulatory model. Missing, excluded and invalid observations are reported in a "
+    "parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than "
+    "switching design or inferring the reference formulation.")
+
+
+def test_the_be_entry_states_the_owner_wording_and_stays_pending():
     c = {c.id: c for c in load_catalog().conventions}["be.average_tost"]
+    assert c.statement == BE_STATEMENT and c.parameters == {}
+    assert c.approval.status == "pending_owner_review" and c.version == "2.0.0"
     gaps = " ".join(c.known_gaps).lower()
-    assert "not counted" in gaps and "guidance" in gaps
-    assert "implementation behaviour" in c.statement.lower() and "silent" not in c.statement.lower()
+    assert "half-up" in gaps and "implementation convention" in gaps
+    for design in ("nti", "highly variable", "replicate", "reference-scaled"):
+        assert design in gaps, design
+    assert "independent live cross-validation" in gaps
+    assert "period/sequence/formulation model" in gaps and "not implemented" in gaps
+    assert "statistical method" not in c.statement and "not the final profile-specific regulatory model" in c.statement
+    assert all(t.startswith(("tests/test_be_contract", "tests/test_be_tool_contract", "tests/test_be_compute"))
+               for t in c.tests)
 
 
 def test_the_cutoff_entry_states_the_objective_scale_and_its_open_source():
