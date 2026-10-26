@@ -1,6 +1,7 @@
 """FastAPI application — PharmAgent backend."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 import uuid
@@ -24,6 +25,7 @@ from app.core.jobs import JobManager, JobRejected
 from app.core.logging_config import configure_logging
 from app.core.orchestrator import AccessError, Orchestrator
 from app.core.provenance import ProvenanceQuarantined
+from app.core.skills import SkillOwnershipError
 from app.workflows import WORKFLOWS, get_workflow
 
 configure_logging()
@@ -120,21 +122,31 @@ jobs = JobManager(clock=orch.clock)
 
 # ── auth ─────────────────────────────────────────────────────────────────────
 def current_owner(authorization: str | None = Header(default=None)) -> str | None:
-    """Bearer-token gate. Open (returns None) when no api_token is configured.
+    """Bearer-token gate. Open (returns None) when neither api_token nor api_tokens is configured.
 
-    Returns a NON-SECRET, stable principal derived from the token — never the
-    token itself. The returned value is persisted as the session ``owner`` and
-    written into the audit chain as the actor, so it must not carry the raw
-    credential (a DB backup or audit export would otherwise disclose the token)."""
+    A per-user token (PHARMAGENT_API_TOKENS, ``user=token,...``) yields the user name as owner/actor. The legacy
+    shared token yields a NON-SECRET, stable principal derived from it — never the token itself. The returned value
+    is persisted as the session ``owner`` and written into the audit chain as the actor, so it must not carry the
+    raw credential (a DB backup or audit export would otherwise disclose it)."""
     import hashlib
-    if not settings.api_token:
+    import hmac
+    user_tokens = settings.user_tokens
+    if not settings.api_token and not user_tokens:
         return None
     token = None
     if authorization and authorization[:7].lower() == "bearer ":
         token = authorization[7:].strip()
-    if token != settings.api_token:
-        raise HTTPException(401, "missing or invalid bearer token")
-    return "token:" + hashlib.sha256(token.encode()).hexdigest()[:16]
+    if token:
+        provided = token.encode()
+        matched_user = None
+        for known, user in user_tokens.items():    # no early exit: constant work per configured token
+            if hmac.compare_digest(provided, known.encode()):
+                matched_user = user
+        if matched_user is not None:
+            return matched_user
+        if settings.api_token and hmac.compare_digest(provided, settings.api_token.encode()):
+            return "token:" + hashlib.sha256(provided).hexdigest()[:16]
+    raise HTTPException(401, "missing or invalid bearer token")
 
 
 def owned_session(sid: str, owner: str | None = Depends(current_owner)):
@@ -363,7 +375,7 @@ def set_llm_config(req: LlmChoiceRequest, owner: str | None = Depends(current_ow
 def health() -> dict:
     return {"status": "ok", "app": settings.app_name, "org": settings.org_name,
             "llm": settings.llm_label,
-            "auth": "required" if settings.api_token else "open",
+            "auth": "required" if (settings.api_token or settings.api_tokens) else "open",
             "audit": "enforced" if orch.audit_security is not None else "hash_only"}
 
 
@@ -396,7 +408,8 @@ def writable_session(sess=Depends(owned_session)):
 
 
 @app.post("/api/sessions/{sid}/upload")
-async def upload_for_session(sid: str, request: Request, sess=Depends(writable_session)) -> dict:
+async def upload_for_session(sid: str, request: Request, sess=Depends(writable_session),
+                             actor: str = Depends(actor_id)) -> dict:
     # The body is parsed here, only after writable_session has run: a quarantined session never reaches the parser.
     try:
         form = await request.form(max_files=1, max_fields=5)
@@ -411,7 +424,8 @@ async def upload_for_session(sid: str, request: Request, sess=Depends(writable_s
         suffix = Path(file.filename or "upload").suffix.lower()
         if suffix not in ALLOWED_UPLOAD_SUFFIXES:
             raise HTTPException(400, f"unsupported file type: {suffix or '(none)'}; CSV only")
-        data_dir = Path(settings.data_dir)
+        from app.tools.data_tools import session_upload_dir
+        data_dir = session_upload_dir(sid)           # per-session: uploads never mix across sessions
         data_dir.mkdir(parents=True, exist_ok=True)
         stem = Path(file.filename or "upload").stem
         dest = data_dir / f"{stem}_{uuid.uuid4().hex[:6]}.csv"
@@ -421,11 +435,13 @@ async def upload_for_session(sid: str, request: Request, sess=Depends(writable_s
             except OSError:
                 raise HTTPException(400, "could not store the upload: invalid or too long file name")
             size = 0
+            digest = hashlib.sha256()                # raw upload bytes, recorded in the audit chain
             with out as f:
                 while chunk := await file.read(1 << 20):
                     size += len(chunk)
                     if size > MAX_UPLOAD_BYTES:
                         raise HTTPException(413, f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+                    digest.update(chunk)
                     f.write(chunk)
             import pandas as pd
 
@@ -437,6 +453,8 @@ async def upload_for_session(sid: str, request: Request, sess=Depends(writable_s
                 raise HTTPException(400, f"could not parse CSV: {e}")
             meta = extract_schema(df, dataset_id=dest.stem)
             meta["dataset_path"] = str(dest)
+            orch.record_upload(sid, filename=file.filename or "upload", size=size,
+                               sha256=digest.hexdigest(), dataset_id=dest.stem, actor=actor)
             return {"dataset_id": dest.stem, "metadata": meta}
         except BaseException:
             try:
@@ -971,6 +989,8 @@ def capture_skill(sid: str, req: CaptureSkillRequest, sess=Depends(owned_session
     try:
         return orch.capture_skill(sid, req.name, description=req.description,
                                   goal=req.goal, actor=actor)
+    except SkillOwnershipError as e:
+        raise HTTPException(403, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -980,25 +1000,31 @@ def list_skills(owner: str | None = Depends(current_owner)) -> dict:
     return {"skills": [s.to_dict() for s in orch.skills.list(owner=owner)]}
 
 
-@app.get("/api/skills/{name}")
-def get_skill(name: str, owner: str | None = Depends(current_owner)) -> dict:
+def _owned_skill(name: str, owner: str | None):
+    """The skill, refusing (403) one that belongs to another user when auth identifies the caller."""
     skill = orch.skills.get(name)
     if skill is None:
         raise HTTPException(404, f"unknown skill: {name}")
-    return skill.to_dict()
+    if owner is not None and skill.owner is not None and skill.owner != owner:
+        raise HTTPException(403, f"skill {name} belongs to another user")
+    return skill
+
+
+@app.get("/api/skills/{name}")
+def get_skill(name: str, owner: str | None = Depends(current_owner)) -> dict:
+    return _owned_skill(name, owner).to_dict()
 
 
 @app.get("/api/skills/{name}/markdown")
 def get_skill_markdown(name: str, owner: str | None = Depends(current_owner)) -> Response:
-    skill = orch.skills.get(name)
-    if skill is None:
-        raise HTTPException(404, f"unknown skill: {name}")
+    skill = _owned_skill(name, owner)
     return Response(content=skill.to_markdown(), media_type="text/markdown",
                     headers={"Content-Disposition": f'attachment; filename="{name}.SKILL.md"'})
 
 
 @app.delete("/api/skills/{name}")
 def delete_skill(name: str, owner: str | None = Depends(current_owner)) -> dict:
+    _owned_skill(name, owner)
     if not orch.skills.delete(name):
         raise HTTPException(404, f"unknown skill: {name}")
     return {"deleted": name}
@@ -1009,10 +1035,13 @@ def run_skill(name: str, req: RunSkillRequest,
               owner: str | None = Depends(current_owner),
               actor: str = Depends(actor_id)) -> dict:
     """Replay a captured skill on a new dataset in a fresh session."""
+    _owned_skill(name, owner)
     try:
         return orch.run_skill(name, dataset_path=req.dataset_path, owner=owner, actor=actor)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    except AccessError as e:
+        raise HTTPException(403, str(e))
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
 
@@ -1058,13 +1087,25 @@ def generate_report(sid: str, sess=Depends(owned_session),
         raise HTTPException(400, str(e))
 
 
+def _session_report_file(sid: str, path: str | None) -> Path | None:
+    """``path`` if it is a regular file strictly inside this session's report directory, else None."""
+    if not path:
+        return None
+    try:
+        p = Path(path).resolve()
+        base = (Path(settings.data_dir) / "reports" / sid).resolve()
+    except (OSError, ValueError):
+        return None
+    return p if base in p.parents and p.is_file() else None
+
+
 @app.get("/api/sessions/{sid}/report/{filename}")
 def download_report(sid: str, filename: str, sess=Depends(trusted_session)) -> FileResponse:
     report_path = sess.state.report_path
     if not report_path or Path(report_path).name != filename:
         raise HTTPException(404, "report not found")
-    p = Path(report_path)
-    if not p.exists():
+    p = _session_report_file(sid, report_path)
+    if p is None:
         raise HTTPException(404, "report file missing")
     return FileResponse(str(p), filename=filename, headers=export_provenance.headers(sess.state),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -1163,9 +1204,9 @@ def provenance_cdisc(sid: str, sess=Depends(trusted_session)) -> dict:
 
 
 def _file_manifest(sid: str, sess, path: str | None, kind: str) -> dict:
-    if not path or not Path(path).exists():
+    p = _session_report_file(sid, path) if kind != "memo" else (Path(path) if path and Path(path).exists() else None)
+    if p is None:
         raise HTTPException(404, f"no {kind} file")
-    p = Path(path)
     return export_provenance.manifest(sess.state, session_id=sid, kind=kind, filename=p.name, payload=p.read_bytes())
 
 

@@ -1,6 +1,7 @@
 """Data Manager tools: load, profile, validate, visualize datasets."""
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -13,15 +14,36 @@ from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles, extract_schema
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
 
+_SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SAMPLE_DATA_DIR = (Path(__file__).resolve().parent.parent.parent / "sample_data").resolve()
 
-def _safe_path(path: str) -> Path:
+
+def session_upload_dir(session_id: str) -> Path:
+    """Where a session's own uploads live: ``<data_dir>/sessions/<session_id>/``."""
+    if not _SID_RE.match(session_id or ""):
+        raise ValueError(f"invalid session id: {session_id!r}")
+    return Path(settings.data_dir).resolve() / "sessions" / session_id
+
+
+def _safe_path(path: str, session_id: str | None = None) -> Path:
     """Resolve and confine a dataset path to the allowed data roots.
 
-    Prevents arbitrary server-side file reads (path traversal / absolute paths
-    outside the configured data and sample directories).
+    With a ``session_id`` only that session's own upload directory, the read-only sample_data directory and files
+    placed directly in data_dir are allowed, so one session cannot load another's upload. Without one (direct tool
+    calls outside a session) the configured data and sample directories apply. Prevents arbitrary file reads.
     """
     p = Path(path).resolve()
-    roots = settings.allowed_data_dirs
+    if session_id:
+        roots = [session_upload_dir(session_id), SAMPLE_DATA_DIR]
+        data_root = Path(settings.data_dir).resolve()
+        # Operator-placed / pre-isolation files sit directly under data_dir; other sessions' uploads and
+        # reports live in the 'sessions' and 'reports' subtrees, which stay closed.
+        legacy = (p == data_root or data_root in p.parents) and not any(
+            r in p.parents for r in (data_root / "sessions", data_root / "reports"))
+        if legacy:
+            roots.append(data_root)
+    else:
+        roots = settings.allowed_data_dirs
     if not any(p == r or r in p.parents for r in roots):
         raise ValueError(
             f"path not permitted: dataset files must live under {', '.join(str(r) for r in roots)}")
@@ -33,8 +55,8 @@ def _safe_path(path: str) -> Path:
 NONMEM_NA_VALUES = ["."]
 
 
-def _read(path: str) -> pd.DataFrame:
-    p = _safe_path(path)
+def _read(path: str, session_id: str | None = None) -> pd.DataFrame:
+    p = _safe_path(path, session_id)
     suf = p.suffix.lower()
     if suf == ".csv":
         # NONMEM convention: "." marks a missing value. Without this a DV/AMT
@@ -59,8 +81,11 @@ def load_dataset(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> T
     path = args.get("path")
     if not path:
         raise ValueError("dataset path is required")
-    df = _read(path)
+    df = _read(path, state.session_id or None)
     dataset_id = args.get("dataset_id") or f"ds_{uuid.uuid4().hex[:8]}"
+    register = getattr(ctx.dataset_store, "register", None)
+    if register is not None:         # lazy store: remember how to reload this dataset so it can be evicted
+        register(dataset_id, path, None, state.session_id or None)
     ctx.dataset_store[dataset_id] = df  # raw df stays server-side
     meta = extract_schema(df, dataset_id=dataset_id)
     meta["dataset_sha256"] = file_sha256(path)  # data-integrity fingerprint (ALCOA+)
