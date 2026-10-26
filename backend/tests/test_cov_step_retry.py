@@ -22,7 +22,8 @@ _NOISY = np.diag([-9.0, 100.0, 1000.0, 2000.0])      # one noise-negative eigenv
 
 
 def _spec():
-
+    pop = tn._make_population(n=3)
+    prepared = nlme._prepare_subjects(pop)
     return nlme._PopSpec(nlme.get_model("oral_1cmt"), ["CL"], "proportional", [])
 
 
