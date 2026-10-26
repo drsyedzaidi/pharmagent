@@ -84,8 +84,8 @@ def test_obs_vs_pred_pred_includes_covariate_effect():
 
 
 def test_npde_uses_covariates_and_omega():
-    subs = _subjects(n_per=3)           # data generated WITH the SEX effect on CL
-    kw = dict(sigma_prop=0.1, sigma_add=0.0, n_sim=200)
+    subs = _subjects(n_per=8)           # data generated WITH the SEX effect on CL
+    kw = dict(sigma_prop=0.1, sigma_add=0.0, n_sim=400)
     cv = {"CL": 30.0, "V": 20.0}
     plain = npde("oral_1cmt", subs, TYP, cv, **kw)
     fit = npde("oral_1cmt", subs, TYP, cv, covariate_effects=SEX_CL, **kw)
@@ -120,6 +120,18 @@ def test_sampler_unchanged_without_covariates_or_omega():
     sd = {p: (math.sqrt(math.log1p((cv[p] / 100) ** 2)) if p in cv else 0.0) for p in model.params}
     ref = {p: TYP[p] * math.exp(r2.normal(0.0, sd[p]) if sd[p] > 0 else 0.0) for p in model.params}
     assert got == ref
+
+
+def test_diagonal_omega_matches_marginal_variances():
+    model = get_model("oral_1cmt")
+    cv = {"CL": 30.0, "V": 20.0}
+    om = [[math.log1p(0.3 ** 2), 0.0], [0.0, math.log1p(0.2 ** 2)]]
+    draw = make_param_sampler(model, TYP, cv, omega_matrix=om, omega_params=["CL", "V"])
+    rng = np.random.default_rng(3)
+    d = [draw(rng, {}) for _ in range(6000)]
+    for p, k in (("CL", 0), ("V", 1)):
+        assert math.isclose(float(np.var(np.log([x[p] for x in d]))), om[k][k], rel_tol=0.1)
+    assert abs(np.corrcoef(np.log([x["CL"] for x in d]), np.log([x["V"] for x in d]))[0, 1]) < 0.05
 
 
 def test_blq_rows_excluded_from_observed_side():
