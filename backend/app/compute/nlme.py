@@ -106,6 +106,7 @@ _POWELL_MAXFEV = 800         # outer-fit evaluation ceiling (a converged fit nee
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
 _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covariance
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
+_COV_RETRY_FACTORS = (2.0, 0.5, 4.0)   # alternative steps (x _COV_STEP) when the first Hessian is unclean
 _RSE_CAP = 1e3             # RSE% above this -> report None (parameter unidentified)
 _MIN_OBS_PER_SUBJECT = 1     # subjects with fewer usable obs are skipped
 _SAEM_SEED_ITER = 100        # SAEM burn-in length when seeding FOCE-I (basin-finding only)
@@ -1265,6 +1266,15 @@ def _empty_uncertainty(note: str = "") -> dict[str, Any]:
             "omega_corr_se": {}}
 
 
+def _hessian_clean(H: np.ndarray) -> bool:
+    """True when H is finite and numerically positive definite (no eigenvalue
+    at or below the floor ``_parameter_uncertainty`` would have to apply)."""
+    if not np.all(np.isfinite(H)):
+        return False
+    ev = np.linalg.eigvalsh(0.5 * (H + H.T))
+    return bool(ev.size and ev.max() > 0.0 and ev.min() > ev.max() * 1e-10)
+
+
 def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float],
                            x_hat: np.ndarray, *, step: float = _COV_STEP
                            ) -> dict[str, Any]:
@@ -1292,6 +1302,17 @@ def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float]
     """
     try:
         H = _numeric_hessian(ofv_at, x_hat, step=step)
+        # The OFV carries inner-solver noise, so a central-difference Hessian
+        # can come out with a spurious (slightly negative / ~0) eigenvalue at
+        # one step and be clean at a neighbouring one (seed-2024 covariate
+        # cohort: cond 1e9 at 0.05, 280 at 0.1; the OFV is clearly curved).
+        # Try other steps before concluding the information is singular.
+        if not _hessian_clean(H):
+            for factor in _COV_RETRY_FACTORS:
+                H2 = _numeric_hessian(ofv_at, x_hat, step=step * factor)
+                if _hessian_clean(H2):
+                    H = H2
+                    break
     except Exception:
         return _empty_uncertainty("covariance step failed; standard errors unavailable")
     if not np.all(np.isfinite(H)):
