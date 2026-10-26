@@ -7,6 +7,7 @@ import pandas as pd
 
 from app.compute.compartmental import fit_compartmental, fit_compartmental_ss
 from app.compute.dosing import extract_ss_intervals, is_multiple_dose
+from app.core.obs_loader import load_observations
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
@@ -79,7 +80,6 @@ def fit_compartmental_models(state: PharmState, ctx: ToolContext, args: dict[str
     time_col = next((c for c, r in roles.items() if r == "TIME"), None)
     dv_col = next((c for c, r in roles.items() if r == "DV"), None)
     amt_col = next((c for c, r in roles.items() if r == "AMT"), None)
-    evid_col = next((c for c, r in roles.items() if r == "EVID"), None)
     ii_col = next((c for c, r in roles.items() if r == "II"), None)
     addl_col = next((c for c, r in roles.items() if r == "ADDL"), None)
     if not (id_col and time_col and dv_col):
@@ -104,28 +104,8 @@ def fit_compartmental_models(state: PharmState, ctx: ToolContext, args: dict[str
                 action=f"fit_compartmental_ss({dsid})",
                 writes={"compartmental_results": compact}, result=compact)
 
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce")
-    if amt_col:
-        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce")
-
-    if evid_col:
-        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-        dose_rows, obs = df[ev == 1], df[ev == 0]
-    elif amt_col:
-        dose_rows = df[df[amt_col].fillna(0) > 0]
-        obs = df[df[amt_col].fillna(0) == 0]
-    else:
-        dose_rows, obs = df.iloc[0:0], df
-
-    dose_by_subject: dict[Any, float] = {}
-    if amt_col and len(dose_rows):
-        for sid, g in dose_rows.groupby(id_col):
-            amts = g[amt_col].dropna()
-            if len(amts):
-                dose_by_subject[sid] = float(amts.iloc[0])
-
-    obs = obs.dropna(subset=[time_col, dv_col])
+    loaded = load_observations(df, roles)
+    obs, dose_by_subject = loaded.obs, loaded.dose_by_subject
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     models = normalize_model_names(args.get("models"))
     out = fit_compartmental(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
