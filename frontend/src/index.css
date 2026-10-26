@@ -1196,3 +1196,9 @@ figcaption, .figcap { font-size: 12px; color: var(--text-dim); }
 .provenance-banner--error { border-color: var(--red); color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
 .provenance-banner--warning { border-color: var(--warning); color: var(--warning);
   background: color-mix(in srgb, var(--warning) 8%, transparent); }
+
+/* λz review gate */
+.lz-gate-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-h); }
+.lz-gate-status { margin-left: 6px; font-size: 11px; color: var(--text-dim); }
+.lz-gate-status.lz-accepted { color: var(--green); }
+.lz-gate-status.lz-revision { color: var(--yellow); }

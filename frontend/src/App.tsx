@@ -3851,6 +3851,8 @@ export default function App() {
   const [messages, setMessages] = useState<DisplayMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [lzBusy, setLzBusy] = useState(false);
+  const [lzError, setLzError] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
@@ -4913,6 +4915,22 @@ export default function App() {
     : null;
   /** Jump to the latest λz section in the document (id lands in S4; a re-run
    *  adds a newer section, so take the last) and focus its first control. */
+  /** Record the analyst's accept/revise decision on flagged λz fits (human-only endpoint), then adopt the
+   *  returned state so the gate, QC panel and report guards reflect it. */
+  const decideLz = async (body: Parameters<typeof api.lambdaZReview>[1]) => {
+    if (!session) return;
+    setLzBusy(true);
+    setLzError(null);
+    try {
+      const res = await api.lambdaZReview(session.id, body);
+      setState(res.state);
+    } catch (e) {
+      setLzError((e as Error).message);
+    } finally { setLzBusy(false); }
+  };
+  const lzGate = state?.lambda_z_review && state.nca_flagged_subjects?.length
+    ? { review: state.lambda_z_review, flagged: state.nca_flagged_subjects, busy: lzBusy, error: lzError, onDecide: decideLz }
+    : null;
   const onReviewLz = () => {
     const els = document.querySelectorAll<HTMLElement>('#lz');
     const el = els[els.length - 1];
@@ -5726,6 +5744,7 @@ export default function App() {
         onVerify={verifyChain}
         verifyNote={verifyNote}
         onReviewLz={onReviewLz}
+        lzGate={lzGate}
       />
     </>
   );

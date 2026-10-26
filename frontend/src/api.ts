@@ -1,7 +1,7 @@
 import type {
   Session, ChatResponse, PendingToolDecision, WorkflowStartResponse, LlmConfig, LlmChoiceBody, LlmSwitchResult, AuditEntry, PharmState, PkModelDef, JobResult,
   ReviewLoopResult, SkillDef, VariablesResponse, FlexplotSpec, FlexplotData,
-  AuditIntegrityStatus,
+  AuditIntegrityStatus, LambdaZReviewDecision,
 } from './types';
 import { describeApiError } from './provenance';
 
@@ -246,6 +246,16 @@ export const api = {
     fit_x: number[]; fit_y: number[];
   }> =>
     req(`/sessions/${sid}/nca/refit_lz`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  /** Human-only accept/revise decision on flagged λz fits; omit subject_ids for all flagged subjects. */
+  lambdaZReview: (sid: string, body: {
+    decision: LambdaZReviewDecision; subject_ids?: Array<string | number>; notes?: string;
+  }): Promise<{ summary: string; state: PharmState; audit_ok: boolean }> =>
+    req(`/sessions/${sid}/lambda-z-review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

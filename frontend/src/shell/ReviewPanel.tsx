@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CheckCircle, Download, Loader2, XCircle } from 'lucide-react';
-import type { AuditEntry, AuditIntegrityStatus, NcaSubject, QcCheck, QcIssue, WorkflowStatus } from '../types';
+import type { AuditEntry, AuditIntegrityStatus, LambdaZFlaggedSubject, LambdaZReview, NcaSubject, QcCheck, QcIssue, WorkflowStatus } from '../types';
 import type { Decision, GateSigner, Outcome, VerifyNote } from './types';
 import { AuditTrail } from './AuditTrail';
 import { QcEvidence } from './QcEvidence';
+import { LambdaZReviewGate } from './LambdaZReviewGate';
+import type { buildDecisionBody } from './lambdaZReview';
 
 type Gate = { title: string; subtitle: string; stepLabel: string; placeholder: string };
 type Qc = {
   verdict: string; checklist: QcCheck[] | null; issues: QcIssue[] | null;
   hash: string | null; subjects: NcaSubject[] | null;
+};
+
+type LzGate = {
+  review: LambdaZReview; flagged: LambdaZFlaggedSubject[]; busy: boolean; error: string | null;
+  onDecide: (body: ReturnType<typeof buildDecisionBody>) => void;
 };
 
 const SPIN = { animation: 'spin 0.6s linear infinite' } as const;
@@ -116,7 +123,7 @@ export function ReviewPanel({
   open, onClose, wfStatus, decision, deciding, loading, jobNote,
   gate, signer, onApprove, onReject,
   qc, evidence, outcome,
-  audit, integrity, onVerify, verifyNote, onReviewLz,
+  audit, integrity, onVerify, verifyNote, onReviewLz, lzGate,
 }: {
   open: boolean;
   onClose: () => void;
@@ -139,6 +146,8 @@ export function ReviewPanel({
   onVerify: () => void;
   verifyNote: VerifyNote | null;
   onReviewLz: () => void;
+  /** Flagged λz fits awaiting the analyst's accept/revise decision (human-only). */
+  lzGate?: LzGate | null;
 }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   // A gate is the one moment the panel demands attention: move focus to it.
@@ -181,7 +190,7 @@ export function ReviewPanel({
         </span>
       </div>
 
-      {!gate && !outcome && !qc && !evidence && (
+      {!gate && !outcome && !qc && !evidence && !lzGate && (
         <p className="review-empty">Nothing to review yet — a gated step will pause here.</p>
       )}
 
@@ -193,6 +202,8 @@ export function ReviewPanel({
           />
         )
         : evidence}
+
+      {lzGate && <LambdaZReviewGate {...lzGate} />}
 
       {gate && atGate && (
         <DecisionCard gate={gate} signer={signer} loading={loading} onApprove={onApprove} onReject={onReject} />
