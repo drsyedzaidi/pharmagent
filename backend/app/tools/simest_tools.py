@@ -118,7 +118,7 @@ TOOLS = [
           "properties": {
               "confirm": {"type": "boolean"},
               "design": {"type": "object"},
-              "n_rep": {"type": "integer"},
+              "n_rep": {"type": "integer", "minimum": 1, "maximum": 200},
               "params": {"type": "array", "items": {"type": "string"}},
               "ci_target_pct": {"type": "number"},
               "method": {"type": "string", "enum": ["focei", "saem"]},

@@ -42,8 +42,10 @@ def test_identical_repeat_is_executed_once():
 
 
 def test_different_arguments_are_not_a_repeat():
-    res = _turn(_Repeat([{"name": "list_pk_models", "input": {"family": "pk"}},
-                         {"name": "list_pk_models", "input": {"family": "pd"}}]))
+    # distinct arguments the tool actually declares: list_pk_models takes none, and
+    # ToolRegistry.execute now refuses undeclared keys (F-24)
+    res = _turn(_Repeat([{"name": "run_diagnostics", "input": {"cwres_interaction": True}},
+                         {"name": "run_diagnostics", "input": {"cwres_interaction": False}}]))
     ran = [c for c in res.tool_calls if c.get("summary")]
     assert len(ran) == 2
 

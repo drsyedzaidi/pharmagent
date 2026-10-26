@@ -4,13 +4,13 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose, parse_blq_flag
+from app.compute.dosing import extract_ss_intervals_checked, is_multiple_dose
 from app.compute.nca import _round_sig, run_nca
 from app.compute.nca_ss import run_nca_ss
 from app.conventions.runtime import applied_conventions
+from app.core.obs_loader import PRE_DOSE_RULE, _apply_m1, _blq_flags, load_observations  # noqa: F401
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
 from app.tools.base import Tool, ToolContext, ToolResult, require_dataset
@@ -26,81 +26,6 @@ def _roles(df: pd.DataFrame, state: PharmState) -> dict[str, str]:
     if state.dataset_metadata and state.dataset_metadata.get("detected_roles"):
         return state.dataset_metadata["detected_roles"]
     return detect_roles(list(df.columns))
-
-
-def _blq_flags(values: pd.Series, col: str) -> pd.Series:
-    """The below-LOQ flag column as booleans (``parse_blq_flag``). Unrecognised values stop the analysis: an unknown
-    code must not quietly mean "not BLQ" while the result says M1 was applied."""
-    bad: set[str] = set()
-
-    def parse(v: Any) -> bool:
-        try:
-            return parse_blq_flag(v)
-        except ValueError:
-            bad.add(str(v))
-            return False
-
-    flags = values.map(parse).astype(bool)
-    if bad:
-        raise ValueError(f"below-LOQ flag column {col!r} has unrecognised value(s) "
-                         f"{', '.join(repr(b) for b in sorted(bad))}: use 1/0, Y/N, YES/NO or TRUE/FALSE "
-                         "(blank = not flagged)")
-    return flags
-
-
-def _from_dose_time(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str | None,
-                    dose_times: dict[Any, float]) -> pd.DataFrame:
-    """Records before the dose add no area. Per subject (dose time = its first dose record, else TIME 0), rows before
-    the dose are removed and remaining times are expressed as time since that dose (t - t_dose). When no usable record
-    (BLQ-flagged, or a finite DV) is AT the dose time, the pre-dose record(s) closest to it supply C = 0 there if they
-    are BLQ-flagged or a measured 0 (no drug before the dose); a positive pre-dose value is not carried to the dose
-    time."""
-    flagged = (obs[cens_col].astype(bool) if cens_col is not None
-               else pd.Series(False, index=obs.index))
-    usable = flagged | np.isfinite(obs[dv_col].to_numpy(dtype=float))
-    parts = []
-    for sid, g in obs.groupby(id_col, sort=False):
-        td = dose_times.get(sid, 0.0)
-        before = g[time_col] < td
-        post = g[~before].copy()
-        pre = g[before & usable.loc[g.index]]
-        if len(pre) and not (usable.loc[post.index] & (post[time_col] == td)).any():
-            latest = pre[pre[time_col] == pre[time_col].max()]
-            if (flagged.loc[latest.index] | (latest[dv_col] == 0)).all():
-                post = pd.concat([latest.iloc[[0]].assign(**{time_col: td, dv_col: 0.0}), post])
-        if td != 0.0:
-            post[time_col] = post[time_col] - td
-        parts.append(post)
-    return pd.concat(parts) if parts else obs
-
-
-def _apply_m1(obs: pd.DataFrame, id_col: str, time_col: str, dv_col: str, cens_col: str) -> pd.DataFrame:
-    """Rule M1 for observations flagged below-LOQ (``parse_blq_flag``), per subject in time order: BLQ rows BEFORE the
-    first quantifiable value are a 0 baseline (their value is set to 0, also when it was blank); BLQ rows after it, in
-    the middle or trailing, are excluded. Quantifiable means unflagged with a finite numeric TIME and a finite,
-    POSITIVE DV: a row without a time or a DV carries no usable measurement, and an unflagged 0 is a measured value
-    that is kept as an observed zero but is not a quantifiable concentration, so neither ends the baseline. A subject
-    with nothing quantifiable keeps all its rows as zeros (as before)."""
-    flag = obs[cens_col].map(parse_blq_flag).astype(bool)
-    work = obs.assign(_blq=flag.to_numpy(), _t=pd.to_numeric(obs[time_col], errors="coerce"))
-    work = work.sort_values([id_col, "_t"], kind="stable")
-    parts = []
-    for _, g in work.groupby(id_col, sort=False):
-        blq = g["_blq"].to_numpy()
-        dv = pd.to_numeric(g[dv_col], errors="coerce").to_numpy(dtype=float)
-        measured = np.isfinite(dv) & np.isfinite(g["_t"].to_numpy(dtype=float))
-        quantified = np.flatnonzero(~blq & measured & (dv > 0))
-        first_q = int(quantified[0]) if quantified.size else len(g)
-        leading = blq & (np.arange(len(g)) < first_q)
-        g = g.copy()
-        g.loc[g.index[leading], dv_col] = 0.0
-        parts.append(g[((~blq) & measured) | leading])
-    return pd.concat(parts).drop(columns=["_blq", "_t"]) if parts else obs
-
-
-PRE_DOSE_RULE = ("Records before the dose (the subject's first dose record, else TIME 0) add no area: with no sample "
-                 "at the dose time, a BLQ-flagged or zero pre-dose record closest to it sets C = 0 there; other "
-                 "pre-dose records are not used. Times are reported relative to that dose time.")
 
 
 def _ss_endpoint_rule(ctau_assumed: list[str], c0_assumed: list[str]) -> str:
@@ -197,47 +122,13 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
                 result={"n_subjects": n, "steady_state": True, "nca_summary": out["nca_summary"]},
             )
 
-    df[time_col] = pd.to_numeric(df[time_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    df[dv_col] = pd.to_numeric(df[dv_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    if amt_col:
-        df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-
-    # split dosing vs observation rows
-    if evid_col:
-        ev = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-        dose_rows = df[ev == 1]
-        obs = df[ev == 0]
-    elif amt_col:
-        dose_rows = df[df[amt_col].fillna(0) > 0]
-        obs = df[(df[amt_col].fillna(0) == 0)]
-    else:
-        dose_rows = df.iloc[0:0]
-        obs = df
-
-    # dose per subject (single-dose: first dosing amount) and its time (the first dose record's TIME)
-    dose_by_subject: dict[Any, float] = {}
-    if amt_col and len(dose_rows):
-        for sid, g in dose_rows.groupby(id_col):
-            amts = g[amt_col].dropna()
-            if len(amts):
-                dose_by_subject[sid] = float(amts.iloc[0])
-    timed = dose_rows[np.isfinite(dose_rows[time_col].to_numpy(dtype=float))]
-    dose_times = {sid: float(t) for sid, t in timed.groupby(id_col)[time_col].min().items()}
-
-    # BLQ accounting (transparency): count below-LOQ observation records, by an
-    # explicit CENS flag if present, else non-positive concentrations.
-    if cens_col is not None:
-        n_blq = int(obs[cens_col].sum())
-    else:
-        n_blq = int((obs[dv_col] <= 0).sum())
-
-    obs = _from_dose_time(obs, id_col, time_col, dv_col, cens_col, dose_times)
-    if cens_col is not None:
-        obs = _apply_m1(obs, id_col, time_col, dv_col, cens_col)
-    obs = obs.dropna(subset=[time_col, dv_col])
+    loaded = load_observations(df, roles)
+    obs, dose_by_subject, n_blq = loaded.obs, loaded.dose_by_subject, loaded.n_blq
+    cens_col = loaded.cens_col               # also set when BLQ came from an LLOQ column
     records = obs[[id_col, time_col, dv_col]].to_dict("records")
     out = run_nca(records, id_col=id_col, time_col=time_col, dv_col=dv_col,
-                  dose_by_subject=dose_by_subject, is_iv=is_iv)
+                  dose_by_subject=dose_by_subject, t_inf_by_subject=loaded.t_inf_by_subject, is_iv=is_iv,
+                  include_unacceptable_lambda_z=bool(args.get("include_unacceptable_lambda_z", False)))
     out["nca_summary"]["route"] = "IV" if is_iv else "extravascular"
     out["nca_summary"]["conventions"] = applied_conventions(_CONV_SD + (_CONV_BLQ if cens_col else []))
     vss_note = " reported (IV)." if is_iv else " not reported for extravascular data."
@@ -294,10 +185,13 @@ def compute_nca(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> To
 
     nca_plot_data = {"subjects": lz_subjects}
 
+    n_lz_excl = out["nca_summary"]["lambda_z_excluded"]["n_subjects"]
     return ToolResult(
         summary=f"NCA complete ({'IV' if is_iv else 'extravascular'}): {n} subjects, "
                 f"{len(out['nca_summary']['by_dose'])} dose group(s), {n_blq} BLQ "
-                f"(linear-up/log-down, best-fit lambda_z).",
+                f"(linear-up/log-down, best-fit lambda_z)." + (
+                    f" {n_lz_excl} subject(s) with an unacceptable lambda_z fit are left out of AUC_inf-derived "
+                    "summaries." if n_lz_excl else ""),
         action=f"compute_nca({dsid})",
         writes={"nca_parameters": out["nca_parameters"], "nca_summary": out["nca_summary"],
                 "nca_plot_data": nca_plot_data},
@@ -312,6 +206,11 @@ TOOLS = [
          "best-fit terminal slope.",
          "nca",
          {"type": "object",
-          "properties": {"dataset_id": {"type": "string"}}, "required": []},
+          "properties": {"dataset_id": {"type": "string"}, "is_iv": {"type": "boolean"},
+                         "include_unacceptable_lambda_z": {
+                             "type": "boolean",
+                             "description": "Pool AUC_inf-derived values (AUC_inf, CL/F, Vz/F, Vss, MRT) of subjects "
+                                            "whose lambda_z fit fails the acceptance criteria. Default false."}},
+          "required": []},
          compute_nca),
 ]
