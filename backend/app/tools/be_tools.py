@@ -11,7 +11,14 @@ from typing import Any
 
 import pandas as pd
 
-from app.compute.be_contract import PROFILES, BEContractError, assess_average_be
+from app.compute.be_contract import (
+    PROFILES,
+    BEContractError,
+    BEUnsupportedDesign,
+    assess_average_be,
+    ordered_periods,
+    period_label,
+)
 from app.compute.nca import Profile, nca_subject
 from app.core.pharmstate import PharmState
 from app.core.schema_extractor import detect_roles
@@ -45,7 +52,7 @@ def _py(v: Any) -> Any:
 
 
 def _exposures_by_treatment(
-    obs: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, trt_col: str,
+    obs: pd.DataFrame, *, id_col: str, time_col: str, dv_col: str, trt_col: str, period_col: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Per-(subject, treatment) NCA exposures as contract records, plus ledger entries for profiles too short to
     analyse (fewer than 3 samples): those subjects are left out of every parameter for that treatment."""
@@ -60,7 +67,10 @@ def _exposures_by_treatment(
         prof = Profile(subject=sid, time=g[time_col].to_numpy(float),
                        conc=g[dv_col].to_numpy(float), dose=float("nan"))
         p = nca_subject(prof)
-        records.append({"subject": _py(sid), "treatment": _py(trt), "params": {k: p.get(k) for k in _BE_PARAMS}})
+        rec = {"subject": _py(sid), "treatment": _py(trt), "params": {k: p.get(k) for k in _BE_PARAMS}}
+        if period_col:                       # one value per (subject, treatment): _check_periods refused anything else
+            rec["period"] = _py(g[period_col].iloc[0])
+        records.append(rec)
     return records, ledger
 
 
@@ -89,9 +99,10 @@ def _row_ledger(obs: pd.DataFrame, raw_dv: pd.Series, *, id_col: str, time_col: 
 
 
 def _check_periods(obs: pd.DataFrame, period_col: str, *, id_col: str, trt_col: str, roles: set[str],
-                   crossover: bool) -> ToolResult | None:
+                   crossover: bool, compared: tuple[Any, Any]) -> ToolResult | None:
     """The period column must be its own column, set on every observation row, give each subject one period per
-    treatment, and (crossover) put test and reference in different periods in at least two sequences."""
+    treatment, and (crossover) put test and reference in different periods in at least two sequences. Only the
+    compared treatments are examined: any other arm is ignored by the analysis."""
     if period_col not in obs.columns:
         return _refusal("invalid_arguments", f"period_col {period_col!r} is not a column")
     if period_col in roles:
@@ -100,16 +111,26 @@ def _check_periods(obs: pd.DataFrame, period_col: str, *, id_col: str, trt_col: 
     if obs[period_col].isna().any():
         return _refusal("invalid_arguments", "observation rows without a period cannot be assigned; a missing "
                         "period could hide a repeated treatment")
+    obs = obs[obs[trt_col].astype(str).isin({str(c) for c in compared})]
+    try:                                    # the same label rules (and ordering) as the contract applies
+        labels = {period_label(_py(v)) for v in obs[period_col].unique()}
+        order = ordered_periods(labels)
+        rank = {lab: i for i, lab in enumerate(order)}
+    except BEContractError as exc:
+        return _refusal("invalid_arguments", f"period column {period_col!r}: {exc}")
     if (obs.groupby([id_col, trt_col])[period_col].nunique() > 1).any():
-        return _refusal("unsupported_design", "a subject received the same treatment in more than one period: "
-                        "replicate designs are not supported")
+        return _refusal("unsupported_design", "a subject has more than one period label for the same treatment: a "
+                        "replicate design (not supported) or inconsistent period labels")
     if not crossover:
         return None
     per = obs.groupby([id_col, trt_col], as_index=False)[period_col].first()
     if per.duplicated([id_col, period_col]).any():
         return _refusal("invalid_arguments", "a subject has test and reference in the same period, which is not a "
                         "crossover")
-    sequences = {tuple(g.sort_values(period_col)[trt_col].map(str)) for _, g in per.groupby(id_col) if len(g) > 1}
+    if len(order) > 2:
+        return _refusal("unsupported_design", f"only a two-period crossover is supported; found {len(order)} periods")
+    per = per.assign(_rank=per[period_col].map(lambda v: rank[period_label(_py(v))]))
+    sequences = {tuple(g.sort_values("_rank")[trt_col].map(str)) for _, g in per.groupby(id_col) if len(g) > 1}
     if len(sequences) < 2:
         return _refusal("invalid_arguments", "every subject received the treatments in the same order: one "
                         "sequence is not a randomised crossover, and period and formulation cannot be separated")
@@ -190,10 +211,15 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     if timed.duplicated([id_col, trt_col, time_col]).any():
         return _refusal("unsupported_design", "duplicate sampling rows (same subject, treatment and time): "
                         "replicate or duplicated data is not pooled")
+    present = sorted({str(x) for x in obs[trt_col].dropna().unique()})
+    for name in ("test", "reference"):
+        if str(args[name]) not in present:
+            return _refusal("invalid_arguments", f"{name} level {args[name]!r} is not in the data (levels: {present})")
     period_col = args.get("period_col")
     if period_col:
         refusal = _check_periods(obs, period_col, id_col=id_col, trt_col=trt_col, roles={
-            id_col, trt_col, time_col, dv_col}, crossover=args["design"] == "crossover")
+            id_col, trt_col, time_col, dv_col}, crossover=args["design"] == "crossover",
+            compared=(args["test"], args["reference"]))
         if refusal:
             return refusal
 
@@ -202,20 +228,20 @@ def run_bioequivalence(state: PharmState, ctx: ToolContext, args: dict[str, Any]
     try:
         test_lv, ref_lv = _match_level(levels, args["test"]), _match_level(levels, args["reference"])
         records, short = _exposures_by_treatment(obs, id_col=id_col, time_col=time_col, dv_col=dv_col,
-                                                 trt_col=trt_col)
+                                                 trt_col=trt_col, period_col=period_col)
         res = assess_average_be(
             records, design=args["design"], profile=args["profile"], test=_py(test_lv), reference=_py(ref_lv),
             prespecified_exclusions=args.get("prespecified_exclusions"),
-            limits=args.get("limits"), limits_justification=args.get("limits_justification"))
+            limits=args.get("limits"), limits_justification=args.get("limits_justification"),
+            variance=args.get("variance"))
     except BEContractError as exc:
-        status = "unsupported_design" if "replicate" in str(exc) else "invalid_arguments"
-        return _refusal(status, str(exc))
+        return _refusal("unsupported_design" if isinstance(exc, BEUnsupportedDesign) else "invalid_arguments", str(exc))
     res = {**res, "status": "ok", "exclusions": dropped + short + res["exclusions"],
            "test_level": str(test_lv), "reference_level": str(ref_lv)}
     verdict = "BIOEQUIVALENT" if res["bioequivalent"] else "NOT bioequivalent"
     return ToolResult(
         summary=(f"Bioequivalence ({res['design']}, profile {res['profile']}): {test_lv} vs {ref_lv} - {verdict}; "
-                 f"{len(res['exclusions'])} excluded value(s) listed; model is interim (no period/sequence terms)."),
+                 f"{len(res['exclusions'])} excluded value(s) listed; interim model, validation pending."),
         action=f"run_bioequivalence({dsid}, {res['profile']}, {res['design']}, {test_lv} vs {ref_lv})",
         writes={"be_results": res}, result=res)
 
@@ -224,7 +250,9 @@ TOOLS = [
     Tool("run_bioequivalence",
          "Assess average bioequivalence (test/reference geometric mean ratio and 90% CI for Cmax and AUC). "
          "REQUIRES design ('crossover' or 'parallel'), profile ('fda_2026', 'ich_m13a' or 'ema_2010'), and the "
-         "test and reference treatment levels; nothing is inferred. Optional: treatment_col, period_col, "
+         "test and reference treatment levels; nothing is inferred. A crossover is analysed with the 2x2 "
+         "fixed-effects model (sequence, subject within sequence, period, formulation) and needs period_col. "
+         "Optional: treatment_col, variance ('pooled' or 'welch', parallel only), "
          "prespecified_exclusions [{subject, reason}], limits [lower, upper] with limits_justification.",
          "be",
          {"type": "object",
@@ -234,6 +262,7 @@ TOOLS = [
                          "treatment_col": {"type": "string"},
                          "period_col": {"type": "string"},
                          "group_col": {"type": "string"},
+                         "variance": {"type": "string", "enum": ["pooled", "welch"]},
                          "test": {"type": "string"},
                          "reference": {"type": "string"},
                          "prespecified_exclusions": {"type": "array", "items": {"type": "object"}},

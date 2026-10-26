@@ -105,3 +105,11 @@ def test_the_refusal_is_constructive_and_says_nothing_was_concluded():
     assert {"design", "profile", "test", "reference", "period_col"} <= set(ex)
     assert "No bioequivalence conclusion was calculated" in res["message"]
     assert "bioequivalent" not in res and "parameters" not in res
+
+
+def test_the_tool_uses_the_period_column_for_the_crossover_model():
+    res = _call(_frame(13), **FULL).result
+    p = res["parameters"]["Cmax"]
+    assert res["status"] == "ok" and p["df_error"] == 11
+    assert sorted(p["n_per_sequence"].values()) == [6, 7] and len(p["anova"]) == 5
+    assert "ANOVA" in res["model"]

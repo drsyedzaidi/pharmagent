@@ -23,15 +23,20 @@ from app.compute.be_contract import (
 )
 
 
-def _rec(subject, treatment, cmax):
-    return {"subject": subject, "treatment": treatment, "params": {"Cmax": cmax}}
+def _rec(subject, treatment, cmax, period=None):
+    rec = {"subject": subject, "treatment": treatment, "params": {"Cmax": cmax}}
+    if period is not None:
+        rec["period"] = period
+    return rec
 
 
 def _crossover(n=12, ratio=1.0, ref=100.0):
     recs = []
     for i in range(n):
         r = ref + i
-        recs += [_rec(f"S{i}", "R", r), _rec(f"S{i}", "T", r * ratio * (1.0 + (0.01 if i % 2 else -0.01)))]
+        test_first = i % 2 == 1                                       # two sequences: RT (even i) and TR (odd i)
+        recs += [_rec(f"S{i}", "R", r, 2 if test_first else 1),
+                 _rec(f"S{i}", "T", r * ratio * (1.0 + (0.01 if i % 2 else -0.01)), 1 if test_first else 2)]
     return recs
 
 
@@ -94,7 +99,7 @@ def test_a_parallel_subject_in_both_arms_is_refused():
 
 # ── never switch design ────────────────────────────────────────────────────────────────────────
 def test_one_incomplete_crossover_subject_is_excluded_and_the_design_stays_crossover():
-    recs = _crossover(13) + [_rec("S99", "T", 100.0)]              # S99 has no reference period
+    recs = _crossover(13) + [_rec("S99", "T", 100.0, 1)]              # S99 has no reference period
     out = _run(recs)
     assert out["design"] == "crossover"
     p = out["parameters"]["Cmax"]

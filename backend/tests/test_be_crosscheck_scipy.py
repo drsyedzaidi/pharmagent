@@ -32,11 +32,14 @@ def _recs(test, ref, *, parallel=False):
 
 
 @pytest.mark.parametrize("seed, n", [(1, 12), (2, 18), (3, 24), (4, 36), (5, 60)])
-def test_crossover_matches_scipy_paired_t(seed, n):
+def test_the_legacy_paired_estimator_matches_scipy_paired_t(seed, n):
+    """be_one_parameter(paired=True) is no longer the contract's crossover estimator (that is the 2x2 model in
+    app.compute.be_model, checked in test_be_model.py); it is still used by PharmacometricsBench."""
+    from app.compute.bioequivalence import be_one_parameter
+
     test, ref = _data(seed, n)
     sc = stats.ttest_rel(np.log(test), np.log(ref)).confidence_interval(0.90)
-    p = assess_average_be(_recs(test, ref), design="crossover", profile="fda_2026", test="T",
-                          reference="R")["parameters"]["Cmax"]
+    p = be_one_parameter(test.tolist(), ref.tolist(), paired=True)
     assert math.isclose(p["ci_lower_raw"], 100 * math.exp(sc.low), rel_tol=1e-12)
     assert math.isclose(p["ci_upper_raw"], 100 * math.exp(sc.high), rel_tol=1e-12)
     assert math.isclose(p["gmr_pct"], round(100 * math.exp(np.mean(np.log(test / ref))), 4), rel_tol=1e-12)

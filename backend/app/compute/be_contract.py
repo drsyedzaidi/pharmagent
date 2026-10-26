@@ -21,32 +21,45 @@ Profiles and their sources (texts downloaded and read 2026-10-23):
 - ``ema_2010``: EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr** (sec. 4.1.8, rounding to two decimals; at least 12
   evaluable subjects).
 
-Statistical model: this slice keeps the existing estimator (paired log differences for a crossover, pooled two-sample
-log means for a parallel design). It has no period or sequence terms; the profile-specific models are a separate
-change, and every result says the model is interim.
+Statistical model (app.compute.be_model): a crossover is analysed with the 2x2 fixed-effects model (sequence, subject
+within sequence, period, formulation) and a parallel design as two independent groups (pooled variance by default,
+Welch on request). Every result says the model is interim until independent validation is complete.
 """
 from __future__ import annotations
 
 import logging
 import math
 import numbers
+import re
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from numpy import bool_ as np_bool
 
-from app.compute.bioequivalence import be_one_parameter
+from app.compute.be_model import VARIANCES, crossover_2x2, not_estimable, parallel_two_group
 
 DESIGNS = ("crossover", "parallel")
-INTERIM_MODEL = ("interim: paired log differences (crossover) or pooled two-sample log means (parallel); no period "
-                 "or sequence terms. The profile-specific model is pending.")
+MODEL_TEXT = {
+    "crossover": ("interim (validation pending): fixed-effects ANOVA on the log scale with sequence, subject within "
+                  "sequence, period and formulation; the formulation difference uses the residual mean square on "
+                  "n - 2 degrees of freedom (two-period, two-sequence design). Cross-checked against base R (lm, "
+                  "nlme); independent biostatistical review pending."),
+    "parallel": ("interim (validation pending): two independent groups on the log scale ({variance} variance); no "
+                 "stratification factors or covariates. Independent validation pending."),
+}
 _TWO_DP = Decimal("0.01")
+_PLAIN_DECIMAL = re.compile(r"\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?\s*", re.ASCII)
 _log = logging.getLogger(__name__)
 
 
 class BEContractError(ValueError):
     """The request cannot be analysed under the contract; the message says why."""
+
+
+class BEUnsupportedDesign(BEContractError):
+    """The data describe a design the contract does not support (replicate, more than two periods), as opposed to
+    a malformed or contradictory request. Callers decide the refusal status from this type, not from the wording."""
 
 
 @dataclass(frozen=True)
@@ -86,10 +99,12 @@ def regulatory_round(value: float) -> Decimal:
     return Decimal(str(float(value))).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
 
 
-def _estimate(test_vals: list[float], ref_vals: list[float], *, paired: bool, alpha: float) -> dict[str, Any]:
-    r = be_one_parameter(test_vals, ref_vals, paired=paired, alpha=alpha)
-    return {k: r.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
-                                  "ci_lower_raw", "ci_upper_raw")}
+def _estimate(design: str, test_vals: list[float], ref_vals: list[float], *, test_first: list[bool] | None,
+              alpha: float, variance: str | None) -> dict[str, Any]:
+    """The statistical model for one parameter (app.compute.be_model); a seam the tests can replace."""
+    if design == "crossover":
+        return crossover_2x2(test_vals, ref_vals, test_first or [], alpha=alpha)
+    return parallel_two_group(test_vals, ref_vals, alpha=alpha, variance=variance or "pooled")
 
 
 def _real(x) -> bool:
@@ -105,7 +120,7 @@ def _limit(x) -> Decimal:
     return d.quantize(_TWO_DP)
 
 
-def _validate(records, design, profile, test, reference, limits, limits_justification):
+def _validate(records, design, profile, test, reference, limits, limits_justification, variance=None):
     missing = [k for k, v in (("design", design), ("profile", profile), ("test", test),
                               ("reference", reference)) if v in (None, "")]
     if missing:
@@ -116,6 +131,11 @@ def _validate(records, design, profile, test, reference, limits, limits_justific
         raise BEContractError(f"profile must be one of {sorted(PROFILES)}; got {profile!r}")
     if test == reference:
         raise BEContractError("test and reference must be different treatment levels")
+    if variance is not None:
+        if design != "parallel":
+            raise BEContractError("variance applies only to a parallel design")
+        if variance not in VARIANCES:
+            raise BEContractError(f"variance must be one of {VARIANCES}; got {variance!r}")
     levels = {r["treatment"] for r in records}
     for name, lv in (("test", test), ("reference", reference)):
         if lv not in levels:
@@ -134,21 +154,78 @@ def _validate(records, design, profile, test, reference, limits, limits_justific
 
 
 def _index(records, design, test, reference):
-    """{treatment: {subject: params}} for the two compared levels; refuses replicate and cross-arm subjects."""
+    """({treatment: {subject: params}}, {(treatment, subject): period}) for the two compared levels; refuses
+    replicate and cross-arm subjects."""
     by: dict[Any, dict[Any, dict]] = {test: {}, reference: {}}
+    periods: dict[tuple, Any] = {}
     for r in records:
         if r["treatment"] not in by:
             continue
         arm = by[r["treatment"]]
         if r["subject"] in arm:
-            raise BEContractError(f"subject {r['subject']!r} has more than one {r['treatment']!r} record: replicate "
-                                  "designs are not supported")
+            raise BEUnsupportedDesign(f"subject {r['subject']!r} has more than one {r['treatment']!r} record: "
+                                      "replicate designs are not supported")
         arm[r["subject"]] = dict(r["params"])
+        periods[(r["treatment"], r["subject"])] = r.get("period")
     if design == "parallel":
         both = set(by[test]) & set(by[reference])
         if both:
             raise BEContractError(f"parallel design but subject(s) {sorted(map(str, both))} received both products")
-    return by
+    return by, periods
+
+
+def period_label(x: Any) -> Any:
+    """One period label as a plain, comparable value: text, or a finite int/float (numpy numbers included).
+    Missing, boolean, non-finite and other types are refused for the record that carries them."""
+    if x is None:
+        raise BEContractError("every crossover record needs a period (period_col); a record has none")
+    if isinstance(x, (bool, np_bool)) or not isinstance(x, (str, numbers.Real)):
+        raise BEContractError("period labels must be numbers or text")
+    if isinstance(x, str):
+        return x
+    if isinstance(x, numbers.Integral):
+        return int(x)
+    if not math.isfinite(float(x)):
+        raise BEContractError(f"period labels must be finite numbers; got {x!r}")
+    return float(x)
+
+
+def ordered_periods(labels: set[Any]) -> list[Any]:
+    """The two period labels, earlier first: numbers by value, text that reads as numbers by value, other text
+    by sort order. Numbers mixed with text are refused."""
+    if all(isinstance(x, str) for x in labels):
+        if not all(_PLAIN_DECIMAL.fullmatch(x) for x in labels):      # not plain ASCII decimals: order as text
+            return sorted(labels)
+        keys = {x: float(x) for x in labels}
+        if not all(math.isfinite(k) for k in keys.values()) or len(set(keys.values())) < len(keys):
+            raise BEContractError(f"period labels {sorted(labels)} are ambiguous as numbers")
+        return sorted(labels, key=keys.__getitem__)
+    if any(isinstance(x, str) for x in labels):
+        raise BEContractError("period labels must be all numbers or all text")
+    return sorted(labels)
+
+
+def _crossover_layout(by, periods, test, reference) -> dict[Any, bool]:
+    """{subject: test_first} for subjects with both products, after checking this is a real two-period,
+    two-sequence crossover. Every test/reference record must carry a period."""
+    periods = {k: period_label(v) for k, v in periods.items()}
+    labels = set(periods.values())
+    order = ordered_periods(labels)                       # refuses numbers mixed with text before anything is counted
+    if len(order) > 2:
+        raise BEUnsupportedDesign(f"only a two-period crossover is supported; found {len(order)} periods "
+                                  f"({sorted(map(str, labels))})")
+    if len(order) < 2:
+        raise BEContractError("a crossover needs two distinct periods")
+    layout: dict[Any, bool] = {}
+    for s in sorted(set(by[test]) & set(by[reference]), key=str):
+        p_t, p_r = periods[(test, s)], periods[(reference, s)]
+        if p_t == p_r:
+            raise BEContractError(f"subject {s!r} has both products in the same period {p_t!r}: not a crossover")
+        layout[s] = order.index(p_t) < order.index(p_r)
+    if len(set(layout.values())) < 2:
+        raise BEContractError("a crossover needs subjects in both sequences (TR and RT); with one sequence, period "
+                              "and formulation cannot be separated")
+    return layout
 
 
 def _entry(subject, treatment, parameter, reason, value, prespecified):
@@ -187,7 +264,8 @@ def _verdict(est, prof, lo, hi, enough):
             "ci_lower_rounded": rounded[0], "ci_upper_rounded": rounded[1]}
 
 
-def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, lo, hi, ledger):
+def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, lo, hi, ledger, layout=None,
+                   variance=None):
     t_arm, r_arm = by[test], by[reference]
     usable = {lv: {} for lv in (test, reference)}
     for lv, arm in ((test, t_arm), (reference, r_arm)):
@@ -207,29 +285,39 @@ def _one_parameter(name, by, design, test, reference, excluded_subjects, prof, l
             for s in sorted(set(usable[lv]) - set(usable[other]), key=str):
                 ledger.append(_entry(s, lv, name, "no_evaluable_counterpart", usable[lv][s], False))
         tv, rv = [usable[test][s] for s in common], [usable[reference][s] for s in common]
+        tf = [layout[s] for s in common]
         n_t = n_r = len(common)
         enough = len(common) >= prof.min_evaluable
+        if tf.count(True) == 0 or tf.count(False) == 0:           # exclusions emptied a sequence for this parameter
+            est = not_estimable(df=0, alpha=prof.alpha, n=len(common),
+                                n_per_sequence={"TR": tf.count(True), "RT": tf.count(False)})
+        else:
+            est = _estimate(design, tv, rv, test_first=tf, alpha=prof.alpha, variance=None)
     else:
         tv, rv = list(usable[test].values()), list(usable[reference].values())
         n_t, n_r = len(tv), len(rv)
         enough = min(n_t, n_r) >= prof.min_evaluable
-    est = _estimate(tv, rv, paired=design == "crossover", alpha=prof.alpha)
+        est = _estimate(design, tv, rv, test_first=None, alpha=prof.alpha, variance=variance)
     shown = {k: est.get(k) for k in ("gmr_pct", "ci_lower_pct", "ci_upper_pct", "cv_intra_pct",
                                      "ci_lower_raw", "ci_upper_raw")}
-    return {**shown, **_verdict(est, prof, lo, hi, enough),
+    model = {"df_error": est.get("df"), "se_log": est.get("se"), "mse_log": est.get("mse"),
+             "anova": est.get("anova"), "n_per_sequence": est.get("n_per_sequence"),
+             "geo_mean_test": est.get("geo_mean_test"), "geo_mean_ref": est.get("geo_mean_ref"),
+             "arith_mean_test": est.get("arith_mean_test"), "arith_mean_ref": est.get("arith_mean_ref")}
+    return {**shown, **model, **_verdict(est, prof, lo, hi, enough),
             "n_evaluable": n_t if design == "crossover" else n_t + n_r, "n_test": n_t, "n_reference": n_r,
             "min_evaluable": prof.min_evaluable}
 
 
 def assess_average_be(records: list[dict], *, design: str | None, profile: str | None, test: Any, reference: Any,
                       prespecified_exclusions: list[dict] | None = None, limits: tuple[float, float] | None = None,
-                      limits_justification: str | None = None) -> dict[str, Any]:
+                      limits_justification: str | None = None, variance: str | None = None) -> dict[str, Any]:
     """Average BE for every parameter in ``records`` (``[{subject, treatment, params: {name: value}}]``).
 
     Any malformed input is a BEContractError, never another exception."""
     try:
         return _assess(records, design, profile, test, reference, prespecified_exclusions, limits,
-                       limits_justification)
+                       limits_justification, variance)
     except BEContractError:
         raise
     except (TypeError, ValueError, ArithmeticError, InvalidOperation, KeyError, AttributeError) as exc:
@@ -262,14 +350,18 @@ def _exclusion_map(prespecified_exclusions, subjects) -> dict[Any, str]:
     return excluded
 
 
-def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification):
-    prof, lo, hi = _validate(records, design, profile, test, reference, limits, limits_justification)
-    by = _index(records, design, test, reference)
+def _assess(records, design, profile, test, reference, prespecified_exclusions, limits, limits_justification,
+            variance=None):
+    prof, lo, hi = _validate(records, design, profile, test, reference, limits, limits_justification, variance)
+    by, periods = _index(records, design, test, reference)
+    layout = _crossover_layout(by, periods, test, reference) if design == "crossover" else None
+    variance = (variance or "pooled") if design == "parallel" else None
     subjects = set(by[test]) | set(by[reference])
     excluded = _exclusion_map(prespecified_exclusions, subjects)
     names = sorted({k for arm in by.values() for p in arm.values() for k in p})
     ledger: list[dict] = []
-    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger) for n in names}
+    params = {n: _one_parameter(n, by, design, test, reference, excluded, prof, lo, hi, ledger, layout, variance)
+              for n in names}
     custom = (lo, hi) != (prof.lower, prof.upper)
     return {
         "design": design, "profile": prof.name, "profile_source": prof.source,
@@ -280,7 +372,8 @@ def _assess(records, design, profile, test, reference, prespecified_exclusions, 
                      "implementation convention (the guidance does not define tie handling)" if prof.rounding_source
                      else "none (the profile's source states no rounding rule)"),
         "rounding_mode": "ROUND_HALF_UP" if prof.rounding_source else None,
-        "model": INTERIM_MODEL,
+        "model": MODEL_TEXT[design].format(variance=variance),
+        "variance": variance,
         "ignored_treatments": sorted({r["treatment"] for r in records} - {test, reference}, key=str),
         "parameters": params, "exclusions": ledger,
         "bioequivalent": bool(params) and all(p["within_limits"] for p in params.values()),
