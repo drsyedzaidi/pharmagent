@@ -72,6 +72,41 @@ def _covariate_applier(covariate_effects: list[dict] | None):
     return apply
 
 
+def _omega_for_sampling(iiv_params: list[str], omega_matrix, omega_params):
+    """``(names, Omega)`` of the fitted covariance when usable, else None.
+
+    Usable = a square matrix ordered as ``omega_params`` whose members are all in
+    ``iiv_params``; anything else falls back to independent etas from the %CVs.
+    """
+    if omega_matrix is None:
+        return None
+    om = np.asarray(omega_matrix, dtype=float)
+    names = list(omega_params or iiv_params)   # a fit's Omega is ordered as its iiv_params
+    if om.shape != (len(names), len(names)) or any(n not in iiv_params for n in names):
+        return None
+    return names, 0.5 * (om + om.T)
+
+
+def _draw_etas(rng, iiv_params: list[str], sds: dict, omega, size: int | None = None):
+    """Draw etas for ``iiv_params``: {param: float} for one subject (``size`` None)
+    or {param: ndarray(size)}. With a fitted ``omega`` the params it covers are
+    drawn jointly (``multivariate_normal``, keeping the correlations); others,
+    and the no-omega case, are the original independent normals."""
+    n = 1 if size is None else int(size)
+    out: dict = {}
+    if omega is not None:
+        names, om = omega
+        joint = rng.multivariate_normal(np.zeros(len(names)), om, size=n)
+        for k, p in enumerate(names):
+            out[p] = joint[:, k]
+    for p in iiv_params:
+        if p not in out:
+            out[p] = rng.normal(0.0, sds[p], size=n) if sds[p] > 0 else np.zeros(n)
+    if size is None:
+        return {p: float(v[0]) for p, v in out.items()}
+    return out
+
+
 def _sample_population(cov_rows: list[dict] | None, wt_rows: list[float] | None,
                        n_subjects: int, rng: np.random.Generator,
                        wt_default: float) -> list[dict]:
@@ -235,6 +270,8 @@ def special_population_simulation(
     reference_dose: float | None = None, n_per_stratum: int = 600,
     seed: int = 20250614, wt_default: float = 70.0, n_points: int = 160,
     max_per_stratum: int = 2000, max_doses: int = 12,
+    omega_matrix=None, omega_params: list[str] | None = None,
+    wt_exponents: dict | None = None,
 ) -> dict:
     """Special-population exposure simulation (Week-13 ``renal-simulations.R``).
 
@@ -283,6 +320,7 @@ def special_population_simulation(
     typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
     apply_cov = _covariate_applier(covariate_effects)
     sds = {p: float(np.sqrt(_cv_pct_to_omega2(omega_cv_pct.get(p)))) for p in iiv_params}
+    omega = _omega_for_sampling(iiv_params, omega_matrix, omega_params)
     rng = np.random.default_rng(seed)
 
     def _exposure(dose: float, si: int, eta: dict) -> dict:
@@ -293,8 +331,9 @@ def special_population_simulation(
         for p in iiv_params:
             if p in params_i:
                 params_i[p] = params_i[p] * float(np.exp(eta[p]))
+        params_i, sim_wt = _scale_wt(params_i, wt, wt_exponents)
         sim = simulate_timecourse(model, params_i, dose=dose, tau=tau, n_doses=n_doses,
-                                  tmax=tmax, n_points=n_points, wt=wt)
+                                  tmax=tmax, n_points=n_points, wt=sim_wt)
         return _interval_metrics(sim["times"], sim["cp"], t_last=t_last, tau=tau, tmax=tmax)
 
     def _dist(pool: list[int], dose: float) -> dict:
@@ -302,7 +341,7 @@ def special_population_simulation(
         picks = _sample_indices(pool, n_per, rng)
         vals = {m: np.empty(len(picks)) for m in metrics}
         for k, si in enumerate(picks):
-            eta = {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
+            eta = _draw_etas(rng, iiv_params, sds, omega)
             m = _exposure(dose, si, eta)
             for met in metrics:
                 vals[met][k] = m[met]
@@ -591,6 +630,7 @@ def pediatric_simulation(
     wt_key: str = "WT", n_per_stratum: int = 1000, seed: int = 20250614,
     wt_default: float = 70.0, n_points: int = 160, wt_exponents: dict | None = None,
     max_per_stratum: int = 2000, max_doses: int = 12,
+    omega_matrix=None, omega_params: list[str] | None = None,
 ) -> dict:
     """Pediatric dose-finding by exposure matching (Week-13/14 ``pediatric-simulations.R``).
 
@@ -655,6 +695,7 @@ def pediatric_simulation(
     typical = {**model.defaults, **{k: float(v) for k, v in theta.items()}}
     apply_cov = _covariate_applier(covariate_effects)
     sds = {p: float(np.sqrt(_cv_pct_to_omega2(omega_cv_pct.get(p)))) for p in iiv_params}
+    omega = _omega_for_sampling(iiv_params, omega_matrix, omega_params)
     rng = np.random.default_rng(seed)
 
     def _exposure(dose: float, si: int, eta: dict) -> dict:
@@ -674,7 +715,7 @@ def pediatric_simulation(
         picks = _sample_indices(pool, n_per, rng)
         vals = {m: np.empty(len(picks)) for m in metrics}
         for k, si in enumerate(picks):
-            eta = {p: float(rng.normal(0.0, sds[p])) if sds[p] > 0 else 0.0 for p in iiv_params}
+            eta = _draw_etas(rng, iiv_params, sds, omega)
             mm = _exposure(dose, si, eta)
             for m in metrics:
                 vals[m][k] = mm[m]
@@ -727,6 +768,8 @@ def clinical_trial_simulation(
     seed: int = 20250614, wt_default: float = 70.0, n_points: int = 160,
     max_subjects: int = 2000, max_doses: int = 24,
     param_draws: list[dict] | None = None,
+    omega_matrix=None, omega_params: list[str] | None = None,
+    wt_exponents: dict | None = None,
 ) -> dict:
     """Probability of target attainment (PTA) across a dose grid.
 
@@ -771,8 +814,10 @@ def clinical_trial_simulation(
     pop = _sample_population(cov_rows, wt_rows, n_subjects, rng, wt_default)
     # Pre-draw IIV etas (subjects x params) so results are seed-deterministic and
     # independent of the dose-grid iteration order.
-    etas = {p: rng.normal(0.0, sds[p], size=n_subjects) if sds[p] > 0
-            else np.zeros(n_subjects) for p in iiv_params}
+    # (a fitted correlated Omega is drawn jointly; otherwise independent per %CV)
+    etas = _draw_etas(rng, iiv_params, sds,
+                      _omega_for_sampling(iiv_params, omega_matrix, omega_params),
+                      size=n_subjects)
     with_covariates = bool(covariate_effects) and bool(cov_rows)
 
     def _run_pop(theta_set: dict) -> dict:
@@ -787,9 +832,10 @@ def clinical_trial_simulation(
                 for p in iiv_params:
                     if p in params_i:
                         params_i[p] = params_i[p] * float(np.exp(etas[p][si]))
+                params_i, sim_wt = _scale_wt(params_i, subj["wt"], wt_exponents)
                 sim = simulate_timecourse(model, params_i, dose=d, tau=tau,
                                           n_doses=n_doses, tmax=tmax, n_points=n_points,
-                                          wt=subj["wt"])
+                                          wt=sim_wt)
                 m = _interval_metrics(sim["times"], sim["cp"],
                                       t_last=(n_doses - 1) * tau, tau=tau, tmax=tmax)
                 vals[si] = m[metric]
