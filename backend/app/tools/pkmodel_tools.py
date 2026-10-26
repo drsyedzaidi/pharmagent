@@ -1061,32 +1061,6 @@ def _theta_prior_from_fit(fit: dict, prior_var: float | None = None) -> dict | N
     return {"names": names, "mean_log": mean_log, "cov_log": np.diag(var).tolist()}
 
 
-def _nlme_stop_note(res: dict[str, Any]) -> str:
-    """Summary sentence saying why a SAEM run stopped without meeting its
-    stability rule (empty when it met it, or for methods without the field)."""
-    stop = res.get("stop") or {}
-    reason = stop.get("reason")
-    if res.get("converged") or reason in (None, "stability_rule_met"):
-        return ""
-    n, drift = stop.get("iterations"), stop.get("drift")
-    if reason == "budget_exhausted":
-        return (f" SAEM used its full {n} iterations and was still settling "
-                f"(window drift {drift}); raise max_iter.")
-    if reason == "budget_too_short":
-        return (f" SAEM stopped at its {n}-iteration cap before the smoothing "
-                "phase was long enough to test stability; raise max_iter "
-                "(about 1000 is typical).")
-    if reason == "not_stabilising":
-        return (f" SAEM did not stabilise in {n} iterations (window drift "
-                f"{drift}); more iterations are unlikely to help - check the "
-                "model, error model and data.")
-    if reason == "non_finite_ofv":
-        return " SAEM ended with a non-finite objective; estimates are unusable."
-    if reason == "degenerate_estimates":
-        return " SAEM met its stability rule but a parameter collapsed to a degenerate value."
-    return ""
-
-
 def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     """Population (mixed-effects) fit via FOCE-I or SAEM on a structural model.
 
@@ -1131,9 +1105,7 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
             theta_prior = _theta_prior_from_fit(prior_fit, prior_var=args.get("prior_var"))
     if theta_prior:
         method = "focei"
-    max_iter = args.get("max_iter")
     res = population_fit(model_key, subjects, method=method,
-                         max_iter=int(max_iter) if max_iter is not None else None,
                          iiv_params=args.get("iiv_params"),
                          error_model=args.get("error_model", "proportional"),
                          covariate_model=args.get("covariate_model"),
@@ -1145,12 +1117,11 @@ def run_nlme(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolR
         summary=(f"{res['method']} fit of {res['label']}: OFV {res['ofv']}, "
                  f"{res['n_subjects']} subjects, IIV on {res['iiv_params']} "
                  f"({'converged' if res.get('converged') else 'did not converge'}){map_note}."
-                 + _nlme_stop_note(res) + _m1_note(n_m1)),
+                 + _m1_note(n_m1)),
         action=f"run_nlme({method}, {model_key})",
         writes={"nlme_results": payload},
         result={"status": "ok", "method": res["method"], "theta": res["theta"],
-                "omega_cv_pct": res["omega_cv_pct"], "sigma": res["sigma"], "ofv": res["ofv"],
-                **({"stop": res["stop"]} if res.get("stop") else {})})
+                "omega_cv_pct": res["omega_cv_pct"], "sigma": res["sigma"], "ofv": res["ofv"]})
 
 
 def run_prior_check(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -1818,10 +1789,6 @@ TOOLS = [
                          "model_key": {"type": "string", "enum": _MODEL_KEY_ENUM},
                          "iiv_params": {"type": "array", "items": {"type": "string"}},
                          "error_model": {"type": "string"},
-                         "max_iter": {"type": "integer", "minimum": 1,
-                                      "description": "Iteration cap; default 1000 "
-                                      "for saem (needed to meet its stability "
-                                      "rule), 200 otherwise."},
                          "covariate_model": {"type": "array", "items": {"type": "object"}},
                          "prior_from": {"type": "string", "enum": ["nlme"]},
                          "prior_var": {"type": "number"}},
