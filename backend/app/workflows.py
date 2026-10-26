@@ -54,6 +54,9 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
              "args": {"compare": True}, "gate": True},
             # method is left at the tool default (focei); "auto" is job-backed/opt-in.
             {"agent": "modeler", "tool": "run_nlme", "label": "Population (NLME) fit"},
+            # Required by generate_report for any NLME fit; only run_nlme writes
+            # nlme_results, so the verdict stays current through the steps below.
+            {"agent": "qc", "tool": "run_poppk_qc", "label": "PopPK estimation QC"},
             {"agent": "modeler", "tool": "run_scm", "label": "Covariate model (SCM)"},
             {"agent": "modeler", "tool": "run_diagnostics", "label": "Residual diagnostics"},
             {"agent": "modeler", "tool": "run_covariate_forest", "label": "Covariate forest"},
@@ -101,8 +104,8 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
             "deliver the report. Stop when the goal is met or no admissible step remains."),
         "allowed_tools": [
             "load_dataset", "profile_pk_dataset", "validate_cdisc", "generate_spaghetti_plot",
-            "fit_pk_model", "run_nlme", "run_scm", "run_diagnostics", "run_covariate_forest",
-            "run_vpc", "adversarial_review", "generate_report",
+            "fit_pk_model", "run_nlme", "run_poppk_qc", "run_scm", "run_diagnostics",
+            "run_covariate_forest", "run_vpc", "adversarial_review", "generate_report",
         ],
         "budget": {"max_steps": 20, "max_gated": 6},
     },

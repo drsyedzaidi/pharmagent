@@ -337,6 +337,12 @@ class Orchestrator:
             owner=row["owner"], created_at=row["created_at"]
         ), "run_provenance_status": prov_status, "run_provenance_assurance": prov_assurance}
 
+    def _is_human_only(self, tool: str) -> bool:
+        try:
+            return self.registry.get(tool).human_only
+        except KeyError:
+            return False
+
     @staticmethod
     def _log_command(sess: Session, agent: str, tool: str, args: dict[str, Any]) -> None:
         """Record a replayable analysis command (skill capture source)."""
@@ -513,7 +519,7 @@ class Orchestrator:
                     "audit_ok": sess.audit.verify()}
 
     def run_tool(self, sid: str, tool: str, agent: str, args: dict[str, Any],
-                 actor: str | None = None) -> dict[str, Any]:
+                 actor: str | None = None, *, allow_human_only: bool = False) -> dict[str, Any]:
         """Execute a single tool directly (UI-driven diagnostics) with audit + writes.
 
         Held under the per-session lock so a tool run on a background job thread
@@ -529,8 +535,11 @@ class Orchestrator:
                 # This is the admission-controlled entry: the NLME/SCM/engine
                 # endpoints reach it via JobManager.submit, which bounds them.
                 allow_expensive=True,
+                allow_human_only=allow_human_only,
             )
-            self._log_command(sess, agent, tool, args or {})
+            # A human decision is not an analysis step: never make it replayable.
+            if not self.registry.get(tool).human_only:
+                self._log_command(sess, agent, tool, args or {})
             self._persist(sess)
             return {"agent": agent, "tool": tool, "summary": res.summary,
                     "state": sess.state.model_dump(), "result": res.result,
@@ -656,7 +665,8 @@ class Orchestrator:
         with self.session_lock(sid):
             sess = self.get_session(sid)
             self._ensure_writable(sess)
-            steps = distill_steps(sess.commands)
+            steps = [s for s in distill_steps(sess.commands)
+                     if not self._is_human_only(s["tool"])]
             if not steps:
                 raise ValueError("nothing to capture: run an analysis on this session first")
             skill = Skill(name=name, description=description, goal=goal, steps=steps,

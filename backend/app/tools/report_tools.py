@@ -54,6 +54,7 @@ _SUBJECT_COLS: list[tuple[str, str, int]] = [
     ("Vz/F", "Vz_F", 1),
     ("λz adjR²", "lambda_z_r2_adj", 3),
     ("λz n", "lambda_z_n_points", 0),
+    ("Span ratio", "lambda_z_span_ratio", 2),
     ("%extrap", "pct_AUC_extrap", 1),
 ]
 
@@ -197,6 +198,22 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
                 for e in ce))
         if nl.get("cov_note"):
             doc.add_paragraph(str(nl.get("cov_note")))
+        if state.poppk_qc_verdict:
+            digest_tag = (
+                f" [fit digest: {state.poppk_qc_nlme_digest[:12]}]"
+                if state.poppk_qc_nlme_digest
+                else ""
+            )
+            doc.add_paragraph(
+                f"PopPK estimation QC verdict: {state.poppk_qc_verdict}{digest_tag} "
+                "(numerical estimation & covariance health only; model qualification "
+                "additionally requires GOF, CWRES/NPDE residual diagnostics, VPC/pcVPC, "
+                "and human pharmacometrician review)."
+            )
+            for c in (state.poppk_qc_checklist or []):
+                p = doc.add_paragraph(style="List Bullet")
+                p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
+                p.add_run(str(c["detail"]))
 
     sc = state.scm_results
     if sc and sc.get("status") == "ok":
@@ -548,7 +565,11 @@ def _reproducibility_section(doc: Document, state: PharmState) -> None:
 
 def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     from app.core.provenance import run_provenance_report_lines
+    from app.tools.qc_tools import assert_deliverable_qc_gates
     run_provenance_report_lines(state)                  # refuse a quarantined (mismatched) session before any work
+    assert_deliverable_qc_gates(state, "report")        # NCA QC, human lambda_z gate, PopPK QC
+    lz_rev = state.lambda_z_review or {}
+
     title = args.get("title", "Pharmacokinetic Analysis Report")
     doc = Document()
     doc.add_heading(title, level=0)
@@ -599,6 +620,12 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
         p.add_run(c["detail"])
+    if lz_rev.get("status") and lz_rev.get("status") != "not_required":
+        flagged_ids = [f.get("id") for f in (state.nca_flagged_subjects or [])]
+        doc.add_paragraph(
+            f"Terminal slope (lambda_z) review gate: {lz_rev.get('status')} "
+            f"(flagged subjects: {flagged_ids}). {lz_rev.get('notes') or ''}".strip()
+        )
 
     _extra_sections(doc, state)
     _reproducibility_section(doc, state)
@@ -612,6 +639,8 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         "dataset": meta.get("dataset_id"),
         "methods": "NCA (linear-up/log-down, best-fit lambda_z)",
         "qc_verdict": state.qc_verdict,
+        **({"lambda_z_review_status": lz_rev.get("status")} if lz_rev.get("status") else {}),
+        **({"poppk_qc_verdict": state.poppk_qc_verdict} if state.poppk_qc_verdict else {}),
     }
     if state.protocol_sim:
         sections["protocol_simulation"] = _protocol_sim_section(Document(), state, 5)

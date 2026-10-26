@@ -1459,18 +1459,33 @@ def _covariate_records(spec: _PopSpec, cov_coefs: np.ndarray,
     return out
 
 
+def theta_estimation_bounds(defaults: dict[str, float],
+                            names: Any) -> dict[str, list[float]]:
+    """Natural-scale search box ``{name: [lo, hi]}`` the optimiser is confined to.
+
+    Single source for both the optimiser clamp (``_theta_log_bounds``) and the
+    ``theta_bounds`` recorded on a fit for QC. A parameter with no usable
+    (positive) model default has no box and is omitted.
+    """
+    out: dict[str, list[float]] = {}
+    for name in names:
+        ref = float((defaults or {}).get(name, 0.0) or 0.0)
+        if ref > 0.0:
+            out[name] = [ref * _THETA_REL_MIN / _THETA_CLAMP_MARGIN,
+                         ref * _THETA_REL_MAX * _THETA_CLAMP_MARGIN]
+    return out
+
+
 def _theta_log_bounds(spec: _PopSpec, name: str) -> tuple[float, float]:
     """Log-space box for one structural parameter, relative to the model default.
 
     Returns (-inf, +inf) when the model declares no usable default, so a model
     without one behaves exactly as before.
     """
-    defaults = getattr(spec.model, "defaults", {}) or {}
-    ref = float(defaults.get(name, 0.0) or 0.0)
-    if ref <= 0.0:
+    box = theta_estimation_bounds(getattr(spec.model, "defaults", {}) or {}, [name]).get(name)
+    if box is None:
         return (-math.inf, math.inf)
-    return (math.log(ref * _THETA_REL_MIN / _THETA_CLAMP_MARGIN),
-            math.log(ref * _THETA_REL_MAX * _THETA_CLAMP_MARGIN))
+    return (math.log(box[0]), math.log(box[1]))
 
 
 def _degenerate_thetas(spec: _PopSpec, theta: dict[str, float]) -> list[str]:
