@@ -106,8 +106,14 @@ _POWELL_MAXFEV = 800         # outer-fit evaluation ceiling (a converged fit nee
 _HESS_STEP = 1e-4            # base step for the numerical (Gauss-Newton) Hessian
 _COV_STEP = 5e-2            # larger step for the OFV Hessian -> parameter covariance
 _COND_RED_FLAG = 1e3        # condition number above this signals over-parameterization
+_COV_RETRY_FACTORS = (2.0, 0.5, 4.0)   # alternative steps (x _COV_STEP) when the first Hessian is unclean
 _RSE_CAP = 1e3             # RSE% above this -> report None (parameter unidentified)
 _MIN_OBS_PER_SUBJECT = 1     # subjects with fewer usable obs are skipped
+_SAEM_DEFAULT_ITER = 1000    # SAEM budget when the caller gives none (burn-in 60% + ~300 smoothing)
+_SAEM_WINDOW = 50            # stability rule: compare means of two consecutive windows
+_SAEM_TOL = 3e-3             # ... max relative difference allowed between them
+_SAEM_SPREAD = 3e-2          # ... and max relative sd inside the last window (real jitter: 0.4-1.1%)
+_SAEM_NEAR_FACTOR = 10.0     # drift within this x tol at the cap = "nearly there"
 _SAEM_SEED_ITER = 100        # SAEM burn-in length when seeding FOCE-I (basin-finding only)
 _AUTO_TOL_ABS = 1.0          # OFV units: two starts closer than this agree (same basin)
 _AUTO_TOL_REL = 1e-3         # ...or within this fraction of |OFV|, whichever is larger
@@ -1265,6 +1271,15 @@ def _empty_uncertainty(note: str = "") -> dict[str, Any]:
             "omega_corr_se": {}}
 
 
+def _hessian_clean(H: np.ndarray) -> bool:
+    """True when H is finite and numerically positive definite (no eigenvalue
+    at or below the floor ``_parameter_uncertainty`` would have to apply)."""
+    if not np.all(np.isfinite(H)):
+        return False
+    ev = np.linalg.eigvalsh(0.5 * (H + H.T))
+    return bool(ev.size and ev.max() > 0.0 and ev.min() > ev.max() * 1e-10)
+
+
 def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float],
                            x_hat: np.ndarray, *, step: float = _COV_STEP
                            ) -> dict[str, Any]:
@@ -1292,6 +1307,17 @@ def _parameter_uncertainty(spec: _PopSpec, ofv_at: Callable[[np.ndarray], float]
     """
     try:
         H = _numeric_hessian(ofv_at, x_hat, step=step)
+        # The OFV carries inner-solver noise, so a central-difference Hessian
+        # can come out with a spurious (slightly negative / ~0) eigenvalue at
+        # one step and be clean at a neighbouring one (seed-2024 covariate
+        # cohort: cond 1e9 at 0.05, 280 at 0.1; the OFV is clearly curved).
+        # Try other steps before concluding the information is singular.
+        if not _hessian_clean(H):
+            for factor in _COV_RETRY_FACTORS:
+                H2 = _numeric_hessian(ofv_at, x_hat, step=step * factor)
+                if _hessian_clean(H2):
+                    H = H2
+                    break
     except Exception:
         return _empty_uncertainty("covariance step failed; standard errors unavailable")
     if not np.all(np.isfinite(H)):
@@ -2054,11 +2080,10 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     n_walk = 2                                              # Metropolis steps/iter
     walk_scale = 0.4                                        # proposal scale
 
-    prev_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add,
-                             spec, omega_m)
     iterations_run = 0
     converged = False
-    stable_streak = 0
+    smooth_hist: list[np.ndarray] = []
+    last_drift: float | None = None
 
     for k in range(1, max_iter + 1):
         iterations_run = k
@@ -2114,17 +2139,17 @@ def saem_fit(model_key: str, subjects: list[dict], *,
                 sigma_add = math.sqrt(
                     (1.0 - gamma) * sigma_add ** 2 + gamma * new_var)
 
-        # Convergence: small relative change in the smoothing phase.
+        # Convergence: window means of the smoothing phase stop moving. A
+        # single-iteration step is dominated by the un-averaged theta M-step's
+        # jitter (~2-4e-3 at any length), so it cannot be thresholded reliably.
         cur_vec = _state_vector(theta, cov_coefs, omega2_vec, sigma_prop, sigma_add,
                                 spec, omega_m)
         if k > k1:
-            rel = float(np.max(np.abs(cur_vec - prev_vec)
-                               / (np.abs(prev_vec) + 1e-8)))
-            stable_streak = stable_streak + 1 if rel < 1e-3 else 0
-            if stable_streak >= 3:
+            smooth_hist.append(cur_vec)
+            stable, last_drift = _saem_stable(smooth_hist, _SAEM_WINDOW)
+            if stable:
                 converged = True
                 break
-        prev_vec = cur_vec
 
     omega2 = {p: float(omega2_vec[k]) for k, p in enumerate(spec.iiv_params)}
 
@@ -2132,16 +2157,64 @@ def saem_fit(model_key: str, subjects: list[dict], *,
     final_ofv, eta_hats = _population_ofv(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, etas,
         omega_m)
-    converged = converged and math.isfinite(final_ofv) and final_ofv < _BIG
+    ofv_ok = math.isfinite(final_ofv) and final_ofv < _BIG
+    converged = converged and ofv_ok
+    stop = _saem_stop_info(converged, ofv_ok, iterations_run, max_iter, last_drift)
 
     uncertainty = _post_fit_uncertainty(
         spec, prepared, theta, cov_coefs, omega2, sigma_prop, sigma_add, eta_hats,
         enabled=compute_uncertainty, converged=converged, omega_matrix=omega_m)
 
-    return _assemble(spec, "SAEM", model_key, theta, cov_coefs, omega2,
-                     sigma_prop, sigma_add, final_ofv, eta_hats, prepared, n_obs,
-                     converged, iterations_run, uncertainty=uncertainty,
-                     omega_matrix=omega_m)
+    res = _assemble(spec, "SAEM", model_key, theta, cov_coefs, omega2,
+                    sigma_prop, sigma_add, final_ofv, eta_hats, prepared, n_obs,
+                    converged, iterations_run, uncertainty=uncertainty,
+                    omega_matrix=omega_m)
+    if stop["reason"] == "stability_rule_met" and not res["converged"]:
+        stop["reason"] = "degenerate_estimates"     # _assemble vetoed the flag
+    res["stop"] = stop
+    return res
+
+
+def _saem_stable(hist: list[np.ndarray], window: int,
+                 tol: float = _SAEM_TOL) -> tuple[bool, float | None]:
+    """SAEM stability rule on window means: ``(met, drift)``.
+
+    ``drift`` is the larger of (a) the largest relative difference between the
+    mean state of the last ``window`` smoothing iterations and the ``window``
+    before them and (b) the within-window spread rescaled to ``tol``, or
+    ``None`` while fewer than ``2*window`` iterations exist. Averaging removes
+    the per-iteration jitter that made a single-step threshold a coin flip.
+    """
+    if len(hist) < 2 * window:
+        return False, None
+    last = np.asarray(hist[-window:])
+    a = np.mean(last, axis=0)
+    b = np.mean(hist[-2 * window:-window], axis=0)
+    shift = float(np.max(np.abs(a - b) / (np.abs(b) + 1e-8)))
+    # Window means alone would pass a parameter oscillating symmetrically about
+    # a constant, so the within-window spread is held to a (looser) bound too,
+    # expressed on the same scale as ``tol``.
+    spread = float(np.max(np.std(last, axis=0) / (np.abs(a) + 1e-8)))
+    drift = max(shift, spread * tol / _SAEM_SPREAD)
+    return drift < tol, drift
+
+
+def _saem_stop_info(converged: bool, ofv_ok: bool, iterations: int,
+                    max_iter: int, drift: float | None) -> dict[str, Any]:
+    """Why SAEM stopped, for the result payload and the tool summary."""
+    if converged:
+        reason = "stability_rule_met"
+    elif not ofv_ok:
+        reason = "non_finite_ofv"
+    elif drift is None:
+        reason = "budget_too_short"      # never reached 2 smoothing windows
+    elif drift <= _SAEM_NEAR_FACTOR * _SAEM_TOL:
+        reason = "budget_exhausted"      # still settling: more iterations should do
+    else:
+        reason = "not_stabilising"       # still moving a lot: model/data problem
+    return {"reason": reason, "iterations": int(iterations),
+            "max_iter": int(max_iter),
+            "drift": None if drift is None else round(drift, 6)}
 
 
 def _state_vector(theta: dict[str, float], cov_coefs: np.ndarray,
@@ -2179,7 +2252,7 @@ def _state_vector(theta: dict[str, float], cov_coefs: np.ndarray,
 
 def population_fit(model_key: str, subjects: list[dict], *,
                    method: str = "focei", iiv_params: list[str] | None = None,
-                   error_model: str = "proportional", max_iter: int = 200,
+                   error_model: str = "proportional", max_iter: int | None = None,
                    seed: int = 20250614, compute_uncertainty: bool = True,
                    covariate_model: list[dict] | None = None,
                    omega_block: list[str] | None = None,
@@ -2202,7 +2275,8 @@ def population_fit(model_key: str, subjects: list[dict], *,
             params, with a first-two-params fallback. ``V`` in a request means
             the central volume.
         error_model: "proportional" (default), "additive", or "combined".
-        max_iter: iteration cap forwarded to the chosen estimator (for
+        max_iter: iteration cap forwarded to the chosen estimator; ``None``
+            (default) means 1000 for "saem" and 200 otherwise (for
             "focei_saem" this caps the FOCE-I stage; the SAEM seed is capped
             separately at ``_SAEM_SEED_ITER``).
         seed: RNG seed for the stochastic stage ("saem", and the seed run of
@@ -2220,6 +2294,10 @@ def population_fit(model_key: str, subjects: list[dict], *,
     model = get_model(model_key)
     iiv = _resolve_iiv(model, iiv_params)
     m = method.lower().replace("-", "_")
+    if max_iter is None:
+        # SAEM needs its long smoothing phase to meet the stability rule; the
+        # other methods are capped by the outer optimiser, not by a schedule.
+        max_iter = _SAEM_DEFAULT_ITER if m == "saem" else 200
     # Informative theta priors (MAP) are implemented in the FOCE-I outer objective
     # only; SAEM's M-step is a separate closed-form path that does not carry them.
     if theta_prior and m != "focei":

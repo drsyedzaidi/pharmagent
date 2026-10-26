@@ -638,6 +638,7 @@ class NlmeRequest(BaseModel):
     model_key: str | None = None
     iiv_params: list[str] | None = None
     error_model: str = "proportional"
+    max_iter: int | None = Field(default=None, ge=1, le=5000)  # None -> method default
     prior_from: str | None = None        # "nlme" -> MAP with the stored fit as prior
     prior_var: float | None = None       # prior variance (log scale); None -> from RSE%
     covariate_model: list[dict] | None = None  # e.g. SCM-selected effects -> refit under M3
