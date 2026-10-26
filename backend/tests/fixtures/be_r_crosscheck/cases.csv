@@ -1,0 +1,9 @@
+case,design,seed,n
+crossover_1,crossover,1,12
+crossover_2,crossover,2,18
+crossover_3,crossover,3,24
+crossover_4,crossover,4,36
+crossover_5,crossover,5,60
+parallel_11,parallel,11,12
+parallel_12,parallel,12,20
+parallel_13,parallel,13,40
