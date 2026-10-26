@@ -128,7 +128,8 @@ def _kv_table(doc: Document, headers: list[str], rows: list[list[Any]]) -> None:
             cells[i].text = _fmt(v) if isinstance(v, (int, float)) else str(v)
 
 
-def _extra_sections(doc: Document, state: PharmState) -> None:
+def _extra_sections(doc: Document, state: PharmState,
+                    audit_trail: tuple[dict[str, Any], ...] = ()) -> None:
     """Append sections for any further analyses present in state."""
     n = 4
 
@@ -272,10 +273,38 @@ def _extra_sections(doc: Document, state: PharmState) -> None:
 
     if state.protocol_sim:
         n += 1
-        _protocol_sim_section(doc, state, n)
+        _protocol_sim_section(doc, state, n, audit_trail=audit_trail)
 
 
-def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5) -> dict[str, Any]:
+def _find_gate_approval(audit_trail: tuple[dict[str, Any], ...],
+                        gate_label: str = "Adversarial review") -> dict[str, Any] | None:
+    """Find the human_review approval for a specific gate in the audit trail.
+
+    Matches audit entries whose ``inputs.review.label`` contains *gate_label*
+    (case-insensitive).  This prevents attributing an earlier gate's approval
+    (e.g. the plan gate or special-population gate) to the adversarial-review
+    gate.  Returns a dict with ``actor``, ``timestamp`` and ``reason`` keys,
+    or None if no matching approval is found.  Searches backwards so the most
+    recent matching approval wins.
+    """
+    needle = gate_label.lower()
+    for entry in reversed(audit_trail):
+        if (entry.get("tool") == "human_review"
+                and isinstance(entry.get("action"), str)
+                and entry["action"].startswith("approved")):
+            review = (entry.get("inputs") or {}).get("review") or {}
+            label = (review.get("label") or "").lower()
+            if needle in label:
+                return {
+                    "actor": entry.get("actor") or "unknown",
+                    "timestamp": entry.get("timestamp") or "unknown",
+                    "reason": entry.get("reason") or "(no reason recorded)",
+                }
+    return None
+
+
+def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5,
+                          audit_trail: tuple[dict[str, Any], ...] = ()) -> dict[str, Any]:
     """Render the 'Protocol simulation' section strictly from ``state.protocol_sim``
     and ``state.review_results`` without inventing or transforming any numbers."""
     ps = state.protocol_sim or {}
@@ -474,7 +503,21 @@ def _protocol_sim_section(doc: Document, state: PharmState, section_num: int = 5
         md_lines.append("| ID | Severity | Target | Evidence | Disposition |")
         md_lines.append("| --- | --- | --- | --- | --- |")
         for f in high_crit:
-            disp = "Resolved" if f.get("resolved") else str(f.get("disposition") or "Unresolved (blocks gate)")
+            if f.get("resolved"):
+                disp = "Resolved"
+            elif f.get("disposition"):
+                disp = str(f["disposition"])
+            else:
+                # Look for the human_review approval that followed the adversarial
+                # review gate in the audit trail.
+                gate_approval = _find_gate_approval(audit_trail)
+                if gate_approval:
+                    disp = (
+                        f"Unresolved; gate approved by {gate_approval['actor']} "
+                        f"on {gate_approval['timestamp']}: {gate_approval['reason']}"
+                    )
+                else:
+                    disp = "Unresolved; no gate decision recorded"
             f_cells = [
                 f.get("id"),
                 f.get("severity"),
@@ -600,7 +643,7 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         p.add_run(f"[{c['status']}] {c['check']}: ").bold = True
         p.add_run(c["detail"])
 
-    _extra_sections(doc, state)
+    _extra_sections(doc, state, audit_trail=ctx.audit_trail)
     _reproducibility_section(doc, state)
 
     out_dir = Path(ctx.data_dir)
@@ -614,7 +657,8 @@ def generate_report(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -
         "qc_verdict": state.qc_verdict,
     }
     if state.protocol_sim:
-        sections["protocol_simulation"] = _protocol_sim_section(Document(), state, 5)
+        sections["protocol_simulation"] = _protocol_sim_section(Document(), state, 5,
+                                                                audit_trail=ctx.audit_trail)
     return ToolResult(
         summary=f"Generated DOCX report at {path}.",
         action=f"generate_report -> {path}",
@@ -630,5 +674,6 @@ TOOLS = [
          "report",
          {"type": "object",
           "properties": {"title": {"type": "string"}}, "required": []},
-         generate_report),
+         generate_report,
+         uses_audit_trail=True),
 ]

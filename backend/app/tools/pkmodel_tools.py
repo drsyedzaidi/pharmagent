@@ -1623,13 +1623,14 @@ def run_covariate_forest(state: PharmState, ctx: ToolContext, args: dict[str, An
 
 def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     import time
-    t0 = time.perf_counter() if state.protocol_sim is not None else 0.0
+    from_protocol_plan = bool(args.get("from_protocol_plan", False))
+    t0 = time.perf_counter() if from_protocol_plan else 0.0
     fitted_key, _fits, _pop, typical = _last_fit(state)
-    ps = dict(state.protocol_sim) if state.protocol_sim is not None else {}
+    ps = dict(state.protocol_sim) if from_protocol_plan and state.protocol_sim is not None else {}
     source_fit = ps.get("source_fit") or {}
     plan = ps.get("plan") or {}
 
-    if state.protocol_sim is not None and not fitted_key:
+    if from_protocol_plan and not fitted_key:
         nl = state.nlme_results if (state.nlme_results or {}).get("status") == "ok" else {}
         fitted_key = source_fit.get("model_key") or nl.get("model_key")
         typical = dict(source_fit.get("theta") or nl.get("theta") or {})
@@ -1663,7 +1664,7 @@ def run_dose_sweep(state: PharmState, ctx: ToolContext, args: dict[str, Any]) ->
                      wt=float(args.get("wt", 70.0)))
     payload = {"status": "ok", **out}
     writes: dict[str, Any] = {"dose_sweep_results": payload}
-    if state.protocol_sim is not None:
+    if from_protocol_plan:
         prov = dict(ps.get("provenance") or {})
         tv = dict(prov.get("tool_versions") or {})
         tv["run_dose_sweep"] = "1.0.0"

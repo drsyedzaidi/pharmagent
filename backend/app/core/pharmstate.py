@@ -32,22 +32,6 @@ class PharmStateError(Exception):
     """Raised when an agent writes to a field it does not own."""
 
 
-class ProtocolSimDict(dict):
-    """Dict subclass supporting both key and attribute access for protocol_sim."""
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            val = self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-        if isinstance(val, dict) and not isinstance(val, ProtocolSimDict):
-            val = ProtocolSimDict(val)
-            self[name] = val
-        return val
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        self[name] = value
-
 
 
 class PharmState(BaseModel):
@@ -171,6 +155,13 @@ class PharmState(BaseModel):
 
 # Per-agent write-access whitelist. The orchestrator enforces this on every
 # state mutation; an agent attempting to write outside its set raises.
+#
+# NOTE: ``protocol_sim`` appears in both ``modeler`` and ``simulator``.
+# The protocol_simulation workflow writes it whole in a fixed tool order
+# (load_approved_fit → propose_simulation_plan → run_dose_sweep →
+# simulate_trial_pta → simulate_special_populations →
+# propagate_parameter_uncertainty).  Each step merges into the previous
+# value.  An out-of-workflow write replaces the entire dict.
 AGENT_WRITE_FIELDS: dict[str, set[str]] = {
     "supervisor": {"last_agent", "workflow_name", "current_step", "session_id",
                    "pending_tool", "planner_history"},
@@ -210,6 +201,4 @@ def apply_writes(state: PharmState, agent: str, writes: dict[str, Any]) -> Pharm
         raise PharmStateError(
             f"Agent '{agent}' may not write {sorted(illegal)}; allowed: {sorted(allowed)}"
         )
-    if "protocol_sim" in writes and isinstance(writes["protocol_sim"], dict):
-        writes = {**writes, "protocol_sim": ProtocolSimDict(writes["protocol_sim"])}
     return state.model_copy(update=writes)

@@ -316,7 +316,7 @@ _CIRCULAR_SOURCES = frozenset({
 def _protocol_sim_refute(ps: dict[str, Any]) -> list[dict[str, Any]]:
     """Seven simulation-specific refutations for the governed protocol_simulation workflow.
 
-    Every check emits HIGH severity so any violation blocks the review gate:
+    Every check emits HIGH severity so any violation is surfaced for human review:
       1. Target window provenance missing or circular.
       2. PTA reported without Monte Carlo SE or with fewer than the plan's replicates.
       3. Any band where PTA depends on extrapolation outside the fit's covariate range,

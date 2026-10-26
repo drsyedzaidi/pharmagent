@@ -146,7 +146,7 @@ def test_propose_simulation_plan_writes_structured_plan_and_hash(tmp_path: Path)
         },
     )
     st = apply_writes(st, "simulator", res.writes)
-    plan = st.protocol_sim.plan
+    plan = st.protocol_sim["plan"]
     assert plan["n_subjects"] == 60
     assert plan["replicates"] == 8
     assert plan["seed"] == 2026
@@ -154,7 +154,7 @@ def test_propose_simulation_plan_writes_structured_plan_and_hash(tmp_path: Path)
     assert isinstance(plan["bands"], list) and len(plan["bands"]) >= 1
     assert isinstance(plan["regimens"], list) and len(plan["regimens"]) == 3
     assert plan["target_window"]["provenance"]["source"] == "protocol_specification"
-    assert st.protocol_sim.provenance["plan_hash"] == res.result["plan_hash"]
+    assert st.protocol_sim["provenance"]["plan_hash"] == res.result["plan_hash"]
 
 
 def test_simulate_trial_pta_computes_mc_se_and_recommendations(tmp_path: Path):
