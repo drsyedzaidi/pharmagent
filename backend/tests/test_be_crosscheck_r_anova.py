@@ -106,7 +106,9 @@ def test_the_mixed_model_gives_the_same_formulation_estimate_and_se_for_complete
         pytest.skip("nlme was not available in the R session")
     # the equivalence holds away from the boundary; at a zero REML between-subject SD the mixed model collapses
     assert float(want["lme_between_sd"]) > 1e-3, "REML between-subject variance on the boundary: unsuitable dataset"
-    assert _close(got["estimate"], want["lme_estimate"], 1e-6) and _close(got["se"], want["lme_se"], 1e-6)
+    # the estimate agrees to ~1e-11; the SE to the REML optimizer's tolerance (the variance components are found
+    # iteratively: the gap grew with subject count, 1e-10 at n=12 to 1.5e-6 at n=72), hence the looser bound
+    assert _close(got["estimate"], want["lme_estimate"], 1e-8) and _close(got["se"], want["lme_se"], 1e-5)
     assert got["df"] == int(float(want["lme_df"]))
 
 

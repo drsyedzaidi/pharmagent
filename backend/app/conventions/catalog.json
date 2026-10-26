@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.6.0",
+  "catalog_version": "1.7.0",
   "conventions": [
     {
       "id": "nca.linear_up_log_down",
@@ -290,7 +290,7 @@
       ],
       "statement": "PharmAgent evaluates average bioequivalence only when the study design, regulatory profile, test formulation and reference formulation are explicitly supplied. Crossover analyses require valid subject, treatment and period identifiers, exactly two periods and at least two observed treatment sequences. Positive finite parameter values are analysed on the logarithmic scale. The selected regulatory profile controls the confidence level, acceptance limits and rounding policy. A crossover is analysed with a fixed-effects model with sequence, subject within sequence, period and formulation, and a parallel design as two independent groups. These estimators are interim until independent validation is complete and are not yet cleared as the regulatory model. Missing, excluded and invalid observations are reported in a parameter-level disposition ledger. Ambiguous, incomplete or unsupported designs fail closed rather than switching design or inferring the reference formulation.",
       "parameters": {},
-      "version": "2.1.0",
+      "version": "2.2.0",
       "source": {
         "kind": "owner_decision",
         "reference": "Owner decisions of 2026-10-23 on the BE safety contract (app/compute/be_contract.py). Profiles: FDA, Statistical Approaches to Establishing Bioequivalence (May 2026); ICH M13A, EMA/CHMP/ICH/953493/2022; EMA, CPMP/EWP/QWP/1401/98 Rev. 1/Corr**."
@@ -316,12 +316,15 @@
         "tests/test_be_model.py::test_parallel_welch_matches_scipy_unequal_variance_t_with_satterthwaite_df",
         "tests/test_be_engine_contract.py::test_the_crossover_estimate_is_the_fixed_effects_model_with_n_minus_2_df",
         "tests/test_be_engine_contract.py::test_a_single_sequence_is_refused_by_the_contract_itself",
-        "tests/test_be_engine_contract.py::test_crossover_records_without_a_period_are_refused"
+        "tests/test_be_engine_contract.py::test_crossover_records_without_a_period_are_refused",
+        "tests/test_be_crosscheck_r_anova.py::test_crossover_estimate_se_df_and_interval_match_r_lm",
+        "tests/test_be_crosscheck_r_anova.py::test_crossover_anova_table_matches_r",
+        "tests/test_be_crosscheck_r_anova.py::test_the_mixed_model_gives_the_same_formulation_estimate_and_se_for_complete_data"
       ],
       "known_gaps": [
         "Half-up rounding of exact .xx5 ties is a PharmAgent implementation convention; the guidance does not define tie handling.",
-        "Independent validation of the 2x2 crossover model is pending: a cross-check against base R lm and nlme, and review by a biostatistician. Until then the outputs stay interim.",
-        "For complete two-period data the fixed-effects and mixed-model formulation estimates are expected to coincide because the subject effect cancels within subject; this is to be confirmed numerically against nlme and is not yet checked.",
+        "Independent validation of the 2x2 crossover model is partly done: the estimate, standard error, confidence interval and ANOVA table agree with base R lm, drop1 and confint (R 4.5.1) on six crossover datasets to about 1e-11 or better. Review by a biostatistician is still pending; until then the outputs stay interim.",
+        "For complete two-period data the nlme REML mixed-model formulation estimate and standard error agree with the fixed-effects ones on those six datasets (estimate to 1e-10, standard error to at most 1.5e-6, the REML optimizer's tolerance), with an interior between-subject variance in every case. The equivalence is not unconditional: when the REML between-subject variance is zero the mixed model collapses to ordinary least squares and its standard error differs.",
         "NTI (narrow therapeutic index), highly variable, replicate and reference-scaled designs are unsupported and are refused; so are multi-group data and crossovers with more than two periods.",
         "A parallel design uses pooled variance by default; Welch is an explicit option. The guidance texts read do not choose between them (owner decision). Stratification factors and covariates for parallel designs (ICH M13A 2.2.3.4) are not supported."
       ]

@@ -238,17 +238,19 @@ BE_STATEMENT = (
 def test_the_be_entry_states_the_current_model_and_stays_pending():
     c = {c.id: c for c in load_catalog().conventions}["be.average_tost"]
     assert c.statement == BE_STATEMENT and c.parameters == {}
-    assert c.approval.status == "pending_owner_review" and c.version == "2.1.0"
+    assert c.approval.status == "pending_owner_review" and c.version == "2.2.0"
     gaps = " ".join(c.known_gaps).lower()
     assert "half-up" in gaps and "implementation convention" in gaps
     for design in ("nti", "highly variable", "replicate", "reference-scaled"):
         assert design in gaps, design
     assert "independent validation" in gaps and "biostatistician" in gaps and "nlme" in gaps
     assert "pooled variance" in gaps and "welch" in gaps and "stratification" in gaps
+    assert "agree with base r" in gaps and "r 4.5.1" in gaps and "optimizer" in gaps   # what R confirmed, and how far
     assert "not implemented" not in gaps or "period/sequence/formulation model" not in gaps   # that gap is closed
     assert "paired log differences" not in c.statement and "not yet cleared as the regulatory model" in c.statement
     assert all(t.startswith(("tests/test_be_contract", "tests/test_be_tool_contract", "tests/test_be_compute",
-                             "tests/test_be_model", "tests/test_be_engine_contract")) for t in c.tests)
+                             "tests/test_be_model", "tests/test_be_engine_contract",
+                             "tests/test_be_crosscheck_r_anova")) for t in c.tests)
     assert not any("test_paired_gmr" in t for t in c.tests)          # the paired t-test is no longer the estimator
     assert any(t.startswith("tests/test_be_model.py") for t in c.tests)
 

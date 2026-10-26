@@ -8,9 +8,11 @@ e.g., general linear model (GLM) or mixed model" with tests of the same four eff
 mixed-effects or two-stage linear model with period and sequence terms. For COMPLETE 2x2 data (every analysed subject
 has both periods, which the safety contract enforces) the subject effect cancels within subject, so the formulation
 estimate and its standard error are expected not to depend on whether subject is fixed or random. That equivalence is
-argued here, not yet checked: the R comparison (nlme::lme) in the test fixtures has to be run first. It also has a
-boundary case: when the REML estimate of the between-subject variance is zero, a mixed model collapses to ordinary
-least squares without a subject term and its standard error differs; the fixed-effects model has no such case.
+checked on the six crossover datasets in tests/fixtures/be_r_anova against R 4.5.1 (nlme::lme, REML): the estimate
+agrees to 1e-10 or better and the standard error to the optimizer's tolerance (at most 1.5e-6 relative), with an
+interior between-subject variance in every case. It is not unconditional: when the REML estimate of the
+between-subject variance is zero, a mixed model collapses to ordinary least squares without a subject term and its
+standard error differs; the fixed-effects model has no such case.
 
 The formulation difference (T - R on the log scale) is the formulation coefficient of the full model; its standard
 error uses the residual mean square on n - 2 degrees of freedom (n = number of subjects). The paired t-test used

@@ -43,7 +43,8 @@ DESIGNS = ("crossover", "parallel")
 MODEL_TEXT = {
     "crossover": ("interim (validation pending): fixed-effects ANOVA on the log scale with sequence, subject within "
                   "sequence, period and formulation; the formulation difference uses the residual mean square on "
-                  "n - 2 degrees of freedom (two-period, two-sequence design). Independent validation pending."),
+                  "n - 2 degrees of freedom (two-period, two-sequence design). Cross-checked against base R (lm, "
+                  "nlme); independent biostatistical review pending."),
     "parallel": ("interim (validation pending): two independent groups on the log scale ({variance} variance); no "
                  "stratification factors or covariates. Independent validation pending."),
 }
