@@ -1,0 +1,143 @@
+{
+ "created_at": "2026-06-01T09:00:00Z",
+ "id": "sess_fixture_pre_provenance",
+ "owner": null,
+ "state": {
+  "be_results": null,
+  "bootstrap_results": null,
+  "clinpharm_history": null,
+  "clinpharm_results": null,
+  "clinsim_results": null,
+  "compartmental_results": null,
+  "covariate_results": null,
+  "current_step": 0,
+  "data_quality": null,
+  "dataset_id": "ds_fixture",
+  "dataset_metadata": {
+   "columns": [
+    {
+     "dtype": "int64",
+     "n_missing": 0,
+     "name": "ID",
+     "role": "ID",
+     "summary": {
+      "max": 12.0,
+      "mean": 6.5,
+      "median": 6.5,
+      "min": 1.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 12
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 0,
+     "name": "TIME",
+     "role": "TIME",
+     "summary": {
+      "max": 48.0,
+      "mean": 12.863636,
+      "median": 6.0,
+      "min": 0.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 11
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 12,
+     "name": "DV",
+     "role": "DV",
+     "summary": {
+      "max": 6.6167,
+      "mean": 1.788425,
+      "median": 1.2643,
+      "min": 0.0062,
+      "missing": 0,
+      "n": 120,
+      "n_unique": 119
+     }
+    }
+   ],
+   "dataset_id": "ds_fixture",
+   "detected_roles": {
+    "AMT": "AMT",
+    "CMT": "CMT",
+    "DOSE": "AMT",
+    "DV": "DV",
+    "EVID": "EVID",
+    "ID": "ID",
+    "MDV": "MDV",
+    "TIME": "TIME"
+   },
+   "dose_levels": [
+    100.0,
+    300.0
+   ],
+   "n_columns": 8,
+   "n_records": 132,
+   "n_subjects": 12,
+   "privacy": "metadata_only; no individual rows or raw concentrations included",
+   "time_range": [
+    0.0,
+    48.0
+   ]
+  },
+  "dataset_path": "sample_data/oral_pk.csv",
+  "diagnostics_results": null,
+  "dose_prop_results": null,
+  "dose_selection_results": null,
+  "dose_sweep_results": null,
+  "engine_comparison_results": null,
+  "er_history": null,
+  "er_results": null,
+  "exposure_forest_results": null,
+  "flexplot_data": null,
+  "forecast_results": null,
+  "forest_results": null,
+  "indirect_results": null,
+  "individual_exposures": null,
+  "knowledge_results": null,
+  "last_agent": "nca",
+  "memo_path": null,
+  "memo_results": null,
+  "model_results": null,
+  "nca_parameters": null,
+  "nca_plot_data": null,
+  "nca_summary": null,
+  "nlme_results": null,
+  "pediatric_results": null,
+  "pending_tool": null,
+  "pk_model_results": null,
+  "planner_history": null,
+  "poppk_results": null,
+  "prior_check_results": null,
+  "profile_results": null,
+  "protocol_sim": null,
+  "qc_checklist": null,
+  "qc_issues": null,
+  "qc_verdict": null,
+  "regulatory_refs": null,
+  "regulatory_report_path": null,
+  "report_path": null,
+  "report_sections": null,
+  "review_results": null,
+  "run_provenance": null,
+  "run_provenance_assurance": null,
+  "run_provenance_status": null,
+  "scm_results": null,
+  "session_id": "sess_fixture_pre_provenance",
+  "simest_results": null,
+  "simulation_results": null,
+  "sir_results": null,
+  "spaghetti_data": null,
+  "special_pop_results": null,
+  "stats_advice": null,
+  "study_info": null,
+  "vpc_results": null,
+  "widgets": [],
+  "workflow_name": null
+ }
+}
