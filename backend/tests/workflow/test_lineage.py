@@ -161,11 +161,13 @@ def test_check_lineage_accepts_only_exact_record_types():
     from app.workflow.contracts import DatasetVersion
 
     class Sneaky(DatasetVersion):
+        RECORD_TYPE = "TestSneakyDatasetVersion"
+
         def validated_copy(self):                      # a subclass that would vouch for itself
             return self
 
     good = dataset(id="dsv:x")
-    sneaky = Sneaky.model_validate({**good.model_dump(), "content_hash": ""})      # re-sealed: new record type
+    sneaky = Sneaky.create(**good.model_dump(exclude={"content_hash"}))      # sealed as its own record type
     with pytest.raises(ContractError, match="exact"):
         check_lineage([sneaky])
     with pytest.raises(ContractError, match="exact"):

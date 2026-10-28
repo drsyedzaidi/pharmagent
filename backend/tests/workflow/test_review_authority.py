@@ -50,7 +50,7 @@ def test_legacy_reviewer_values_are_kept_as_labelled_metadata_not_authority():
 
 
 @pytest.mark.parametrize("bad", ["Codex", "codex-agent", "Claude", "gpt-5", "GPT4", "ChatGPT", "mockllm", "assistant",
-                                 "LLM reviewer", "Copilot", "OpenAI", "ＣＬＡＵＤＥ"])
+                                 "LLM reviewer", "Copilot", "OpenAI", "\uff23\uff2c\uff21\uff35\uff24\uff25"])
 def test_the_name_lint_still_refuses_labels_that_name_an_automated_agent(bad):
     with pytest.raises(ValidationError):
         review(actor_label=bad)

@@ -8,10 +8,10 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, ValidationInfo, field_validator, model_validator
+from pydantic import Field, StrictBool, StringConstraints, ValidationInfo, field_validator, model_validator
 
 from .base import (
-    STRUCTURAL,
+    SEAL,
     ColumnName,
     FiniteFloat,
     Frozen,
@@ -36,7 +36,7 @@ from .errors import ContractError
 from .hashing import sha256_hex
 from .stages import ReviewGate, WorkflowStage
 
-_U = r"A-Za-z0-9µμ%°/*^().·\-"          # characters a unit may contain; interior spaces allowed, edges not
+_U = "A-Za-z0-9\u00b5\u03bc%\u00b0/*^().\u00b7\\-"  # characters a unit may contain; interior spaces allowed, edges not
 _UNIT = rf"^(?:[{_U}]|[{_U}][{_U} ]{{0,30}}[{_U}])$"
 Unit = Annotated[str, StringConstraints(pattern=_UNIT)]
 _TOKEN = r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}"
@@ -50,6 +50,7 @@ ArtifactKind = Literal["dataset", "code", "control_stream", "log", "output", "pl
 class ArtifactRef(WorkflowContract):
     """A reference to bytes by their SHA-256 digest. The id *is* the content address, so the same bytes always have the
     same id and different bytes never do; ``parents`` records the artifacts this one was derived from."""
+    RECORD_TYPE = "ArtifactRef"
     kind: ArtifactKind
     digest: Sha256Hex
     digest_algorithm: Literal["sha256"] = "sha256"
@@ -66,7 +67,7 @@ class ArtifactRef(WorkflowContract):
     def from_bytes(cls, data: bytes, *, kind: ArtifactKind, media_type: str, producer: str, created_at: datetime,
                    parents: IdTuple = ()) -> ArtifactRef:
         digest = sha256_hex(data)
-        return cls(id=f"sha256:{digest}", digest=digest, kind=kind, media_type=media_type, size_bytes=len(data),
+        return cls.create(id=f"sha256:{digest}", digest=digest, kind=kind, media_type=media_type, size_bytes=len(data),
                    producer=producer, created_at=created_at, parents=parents)
 
 
@@ -106,8 +107,9 @@ class BlqRepresentation(Frozen):
 
 
 class DatasetVersion(WorkflowContract):
+    RECORD_TYPE = "DatasetVersion"
     dataset_id: Identifier
-    display_version: Annotated[int, NoBool, Field(ge=1)] | None = None       # for display only; never identity
+    display_version: Annotated[int, Field(ge=1, strict=True)] | None = None       # for display only; never identity
     source: Label | Unknown = Field(default_factory=unrecorded)
     data_digest: Sha256Hex | Unknown = Field(default_factory=unrecorded)
     subject_id_column: ColumnName | Unknown = Field(default_factory=unrecorded)
@@ -142,6 +144,7 @@ RefTuple = Annotated[tuple[DatasetVersionRef, ...], Field(min_length=1, max_leng
 class TransformationRecord(WorkflowContract):
     """One or more input dataset versions become one or more output versions. ``parents`` must be exactly the inputs'
     version ids; ``check_lineage`` verifies, against the versions, that each output descends from them."""
+    RECORD_TYPE = "TransformationRecord"
     inputs: RefTuple
     outputs: RefTuple
     operation: Label
@@ -149,7 +152,7 @@ class TransformationRecord(WorkflowContract):
     actor: Label | Unknown = Field(default_factory=unrecorded)
     reason: Message | Unknown = Field(default_factory=unrecorded)
     affected_rows: NonNegInt | Unknown = Field(default_factory=unrecorded)
-    reversible: bool | Unknown = Field(default_factory=unrecorded)
+    reversible: StrictBool | Unknown = Field(default_factory=unrecorded)
     code_artifact_id: Identifier | None = None
 
     @model_validator(mode="after")
@@ -183,6 +186,7 @@ Route = Literal["iv_bolus", "iv_infusion", "oral", "subcutaneous", "other"]
 
 
 class AssumptionSet(WorkflowContract):
+    RECORD_TYPE = "AssumptionSet"
     route: Route | Unknown = Field(default_factory=unrecorded)
     dose_regimen: Message | Unknown = Field(default_factory=unrecorded)
     analyte: Label | Unknown = Field(default_factory=unrecorded)
@@ -235,6 +239,7 @@ TERMINAL = frozenset({"succeeded", "failed", "skipped"})
 
 
 class ExecutionRecord(WorkflowContract):
+    RECORD_TYPE = "ExecutionRecord"
     stage: WorkflowStage
     tool: Label
     engine: Label | Unknown = Field(default_factory=unrecorded)
@@ -245,7 +250,7 @@ class ExecutionRecord(WorkflowContract):
     output_artifact_ids: IdTuple = ()
     log_artifact_ids: IdTuple = ()
     config: JsonObject = Field(default_factory=FrozenMap)
-    seed: Annotated[int, NoBool] | Unknown = Field(default_factory=unrecorded)
+    seed: Annotated[int, Field(strict=True)] | Unknown = Field(default_factory=unrecorded)
     warnings: Annotated[tuple[Message, ...], Field(max_length=100)] = ()
     status: Literal["pending", "running", "succeeded", "failed", "skipped"]
     started_at: Timestamp
@@ -271,6 +276,7 @@ class ExecutionRecord(WorkflowContract):
 
 
 class Finding(WorkflowContract):
+    RECORD_TYPE = "Finding"
     stage: WorkflowStage
     severity: Literal["info", "warning", "error", "blocking"]
     code: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]{1,100}$")]
@@ -295,6 +301,7 @@ class ReviewRecord(WorkflowContract):
     evidence and neither affects ``binding_status`` or ``is_current_approval``. The name lint on ``actor_label`` is a
     lint, not authentication. ``authenticated_principal_ref`` is always ``None`` until Phase D resolves the reviewer
     through authentication and policy evaluation. Legacy reviewer values belong in ``legacy_metadata``."""
+    RECORD_TYPE = "ReviewRecord"
     gate: ReviewGate
     decision: Literal["approved", "rejected"]
     actor_label: Label
@@ -309,7 +316,7 @@ class ReviewRecord(WorkflowContract):
     @field_validator("actor_label")
     @classmethod
     def _label_lint(cls, v: str, info: ValidationInfo) -> str:
-        if info.context and info.context.get(STRUCTURAL):          # advisory lint: not re-run when re-validating
+        if not (info.context and info.context.get(SEAL)):          # advisory lint: judges NEW records only
             return v
         text = "".join(c for c in unicodedata.normalize("NFKC", v) if unicodedata.category(c) != "Cf").casefold()
         words = set(re.split(r"[^a-z0-9]+", text))
@@ -349,5 +356,9 @@ class ReviewRecord(WorkflowContract):
         return "invalid" if checked is None else checked._status_of(current)
 
     def is_current_approval(self, current: Mapping[str, str]) -> bool:
+        """STRUCTURAL check only, not an authorization: True when this record re-validates, says ``approved``, and every
+        bound artifact is currently present with the bound digest. It says nothing about who approved (the label is free
+        text and the hash is unkeyed), whether a later decision superseded it, or whether the gate required these
+        artifacts. Authority is established elsewhere (authenticated principal, audit seal, policy) in a later phase."""
         checked = self._validated()
         return checked is not None and checked.decision == "approved" and checked._status_of(current) == "current"

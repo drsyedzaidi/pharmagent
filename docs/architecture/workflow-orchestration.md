@@ -23,7 +23,7 @@ route, sign or approve anything.
 | `events.py` | `WorkflowEvent` (a domain-event **schema** only) and `AuditEntryRef` |
 | `compat.py` | Read-only projection of a legacy `PharmState` or serialized session row |
 | `hashing.py` | Canonical JSON and SHA-256 |
-| `errors.py` | `ContractError`, the one exception type this package raises for malformed or unreadable records |
+| `errors.py` | `ContractError`, raised by `validated_copy`, `check_lineage`, the compat projection and `replace`/`model_copy` for unusable input. Constructing, `create` and `load` raise pydantic's `ValidationError` instead |
 
 Tests are in `backend/tests/workflow/` (fixtures are sanitized serialized legacy sessions).
 
@@ -37,30 +37,44 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   arbitrary mappings are `FrozenMap`, a read-only, serializable mapping that deep-freezes its values on construction. It
   holds JSON-like values only (sets and bytes are refused) and limits nesting to 64 levels however it was assembled.
   Input containers are copied when a record is built, so mutating a caller-held dict or list afterwards cannot change
-  the record, and `model_dump()` hands out fresh plain copies. `object.__setattr__`, `model_construct` and pickle can
-  still bypass Python-level guards, as can reaching into `FrozenMap` internals; `verify_integrity()` is the backstop
-  for that, not the primary mechanism. "Immutable" means immutable through the normal API, not against a deliberate hack.
+  the record, and `model_dump()` hands out fresh plain copies. `object.__setattr__`, `model_construct`, pickle,
+  `copy.copy` and `copy.deepcopy` (whose pydantic implementations skip validation) can still bypass Python-level
+  guards, as can reaching into `FrozenMap` internals; `verify_integrity()` and `validated_copy()` are the backstop for
+  that, not the primary mechanism. "Immutable" means immutable through the normal API, not against a deliberate hack.
 * `content_hash` is SHA-256 over the canonical JSON (sorted keys, compact separators, ASCII, no NaN/Infinity) of a
-  domain-separated payload: `{domain, record_type, schema_version, fields}`, where `fields` is every other field. Two
-  record types, or two schema versions, therefore never share a hash even if their fields coincide. Ten pinned hash
-  vectors (one per record family, including the legacy projection) fail loudly if the recipe, a field or a
-  serialization rule ever changes; the response is a `schema_version` bump and a migration, never a silent re-pin.
-* **Constructing is not loading.** Building a record from fields seals it automatically. Anything read back from
-  storage must come through `WorkflowContract.load(...)`, which refuses a missing or blank `content_hash` instead of
-  sealing the content it was handed, so tampering plus stripping the hash cannot launder a record. A stored record whose
-  content was altered is refused, and `model_copy` re-validates so a change cannot ride along under the old hash. The
-  hash is an **unkeyed corruption check, not proof of authenticity**: anyone who can write a record can compute a
+  domain-separated payload: `{domain, record_type, schema_version, fields}`, where `fields` is every other field. The
+  record type is an explicit, unique `RECORD_TYPE` string declared on each class (a subclass without its own, or with a
+  duplicate, cannot even be defined), so renaming a Python class never changes stored hashes. Two record types, or two
+  schema versions, therefore never share a hash even if their fields coincide. The canonical form is **Python's**, not
+  RFC 8785 (JCS): float text is Python `repr`, object keys sort by code point rather than UTF-16 unit, and integers
+  above `sys.get_int_max_str_digits()` digits cannot be hashed, so a non-Python verifier would need to reproduce it.
+  Pinned hash vectors cover every record family plus the risky encodings (floats, `-0.0`, a 2**70 integer, non-ASCII
+  and astral text, microseconds, a `+05:30` offset, populated maps); ten of them were computed by hand from literal
+  JSON outside the model. They fail loudly if the recipe, a field or a serialization rule ever changes; the response is
+  a `schema_version` bump and a migration, never a silent re-pin.
+* **Sealing has a name; validating never seals.** `Model.create(**fields)` builds a NEW record and seals it, and
+  `record.replace(**changes)` makes a new sealed record from an existing one. Every other path (the constructor,
+  `model_validate`, `model_validate_json`, `load` and `model_copy`) requires an existing, correct `content_hash` and
+  refuses a missing or blank one, so a stored record whose content was altered, or whose hash was stripped, cannot be
+  laundered by reading it back. `model_copy(update=...)` can no longer change content (use `replace`). Stored bytes are
+  not themselves canonical: a validated record re-serializes to its canonical form, so a store that hashes raw bytes
+  would disagree with `content_hash`. The hash is an **unkeyed corruption check, not proof of authenticity**: anyone who can write a record can compute a
   matching hash. Authenticity comes only from the existing keyed audit seal.
 * `schema_version` must be the exact integer of a supported version (not `1.0`, `"1"` or `True`), refused in both
-  directions. Timestamps must be a `datetime` or an ISO-8601 string with an explicit offset and at most microsecond
+  directions. Counts, sizes, seeds and `from_schema_version` are strict integers and `reversible` a strict boolean (no
+  `"3"`, `3.0`, `True` or `"no"`); float fields accept numbers only. Timestamps must be a `datetime` or an ISO-8601 string with an explicit offset and at most microsecond
   precision; epoch numbers, naive strings and over-precise fractions are refused rather than coerced or truncated.
 * Nested model instances are re-validated when a record is built, so a forged `model_construct` child inside a record
   is refused at construction.
 * A value the source never recorded is an explicit `Unknown(status, reason)`. It is never filled in.
-* Text fields refuse control, format (bidi, zero-width), line-separator and lone-surrogate characters, a fixed list of
-  characters that render as blank (Hangul fillers, braille blank, Khmer inherent vowels, combining grapheme joiner) and
-  edge whitespace. That list is not exhaustive: other blank-looking characters may exist, and the labels are display text
-  that carries no authority. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
+* Text fields (labels, messages, and the `reason` and `note` of `Unknown` and `MigrationInfo`) refuse control, format
+  (bidi, zero-width), line-separator, private-use and unassigned characters, the Unicode Default_Ignorable ranges
+  (variation selectors, tag characters, fillers), a fixed list of other blank-rendering characters (braille blank, Khmer
+  inherent vowels), and edge whitespace, and must contain a letter, number, punctuation mark or symbol (marks alone do
+  not count). The ignorable ranges are written out by hand, so the set can drift from a future Unicode version;
+  confusable (look-alike) letters are not detected, and labels are display text that carries no authority. Validation
+  errors hide the offending input in their printed form, but `ValidationError.errors()` still carries it (as does
+  FastAPI's default 422 body) unless the caller passes `include_input=False`. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
   mapping fields are immutable too (pydantic does not validate defaults, so they are `FrozenMap` already). Equality is
   Python value equality (`1 == 1.0`); `content_hash` is stricter and treats `1` and `1.0`, and `0.0` and `-0.0`, as
   different, so two records that compare equal but carry different numeric spellings have different hashes.
@@ -93,16 +107,18 @@ require a reason. `StageTransition` refuses anything else.
 Seven gates: cleaned dataset, NCA exclusions and BLQ handling, base structural model, covariate model, final model,
 simulation scenario, final report. A `ReviewRecord` binds a decision to the exact digests of the artifacts reviewed
 (an `ArtifactBinding`'s id must be the content address of its digest). `binding_status(current)` reports `current`,
-`stale` (a bound artifact changed), `missing`, or `invalid` (the record fails its own integrity check or no longer
+`stale` (only an inconsistent caller map can produce it: binding ids are the content address of the digest, so a changed
+artifact has a new id and reports `missing`), `missing`, or `invalid` (the record fails its own integrity check or no longer
 re-validates); only an `approved` record with a `current` binding is a current approval. Re-validation catches records
 that are structurally invalid even if their hash was recomputed. It does **not** catch a structurally valid forgery
 whose hash was recomputed: that needs the keyed audit seal. The decision is made on a freshly validated copy, never the live object, because a `str`, `int` or `datetime`
 subclass with a lying comparison could otherwise be smuggled in through `model_construct` plus a rehash. The copy is
 rebuilt from the record's JSON form, so every field comes back as an exact built-in type, and a record with a blank
 stored hash is refused. Re-validation checks
-structure and the content hash but deliberately not the advisory name lint, so tightening that lint later cannot void
-approvals already recorded (the lint is skipped through a private validation-context key; that is not a security
-boundary). Copies made with `model_copy` are new records and are held to the current lint. Any other validator that is
+structure and the content hash. The advisory name lint judges only NEW records (`create` and `replace`); `load`,
+`model_validate`, `model_copy` and `validated_copy` never apply it, so tightening the lint later cannot void or make
+unreadable approvals already stored (the lint is triggered through a private validation-context key; that is not a
+security boundary). Any other validator that is
 tightened is a schema change and needs a `schema_version` bump; so does a change to the Unicode categories that
 `Label` and `Message` reject. The `current` mapping must be plain strings, is size-capped and read once; anything else raises
 `ContractError`. None of this defends against someone who can forge records and compute hashes: that is what the keyed
@@ -119,8 +135,10 @@ authority from an authenticated principal and policy evaluation.
 
 `WorkflowEvent` is a schema. It has no sequence, previous-hash, signature, seal or anchor fields on purpose. It can
 carry `source_audit_refs` (`AuditEntryRef`: session id, entry index, entry hash) naming the audit entries it was
-derived from, so the audit chain stays the compliance evidence and the event only points at it. `actor_kind` is a
-claim, not evidence, exactly like `claimed_actor_kind` on a review. The audit
+derived from, so the audit chain stays the compliance evidence and the event only points at it. `claimed_actor_kind` is a
+claim, not evidence, exactly like the same-named field on a review, and an event's `subject_id` and `subject_hash`
+carry no record type, so a hash from the wrong record family is not detectable at this layer. `AuditEntryRef` is an
+unverified pointer: nothing checks that the entry exists or that the hash is what the audit chain computes. The audit
 chain (`core/audit.py`), keyed seals and external anchors (`core/audit_seal.py`) and run provenance
 (`core/provenance.py`) remain the only tamper-evident record. A later phase connects workflow events to that system; no
 second log is introduced.

@@ -51,6 +51,7 @@ class StageEvidence(Frozen):
 
 
 class LegacyProjection(WorkflowContract):
+    RECORD_TYPE = "LegacyProjection"
     session_id: Label | Unknown
     dataset: DatasetVersion | Unknown
     environment_id: Label | Unknown
@@ -124,7 +125,7 @@ def _project_dataset(state: PharmState, as_of: datetime) -> DatasetVersion | Unk
     path = state.dataset_path
     source = re.split(r"[\\/]", path)[-1] if path else ""
     try:
-        return DatasetVersion(
+        return DatasetVersion.create(
             id=f"dataset:{state.dataset_id}:legacy:{digest[:32] if _valid_digest(digest) else 'nodigest'}",
             dataset_id=state.dataset_id, created_at=as_of,
             producer=PRODUCER, migration=_legacy_migration("dataset versions were not tracked"),
@@ -151,6 +152,11 @@ def _environment_id(state: PharmState) -> str | Unknown:
     return "env:" + sha256_hex(canonical_json([list(pair) for pair in state.run_provenance]))[:32]
 
 
+def _short_hash(text: str) -> str:
+    """128 bits of SHA-256, hex, for ids derived from text that may be unusable as an id itself."""
+    return sha256_hex(text.encode("utf-8", "surrogatepass"))[:32]
+
+
 def _projection_id(session_id: str) -> str:
     """Three disjoint namespaces: no session id, a usable id, and a hash of an unusable one."""
     if not session_id:
@@ -158,7 +164,7 @@ def _projection_id(session_id: str) -> str:
     candidate = f"legacy:id:{session_id}"
     if _ID_RE.fullmatch(candidate):
         return candidate
-    return "legacy:h:" + sha256_hex(session_id.encode("utf-8", "surrogatepass"))[:32]
+    return "legacy:h:" + _short_hash(session_id)
 
 
 def project_pharmstate(state: PharmState, *, as_of: datetime) -> LegacyProjection:
@@ -168,7 +174,7 @@ def project_pharmstate(state: PharmState, *, as_of: datetime) -> LegacyProjectio
         StageEvidence(stage=stage, fields=tuple(f for f in fields if _present(getattr(state, f))))
         for stage, fields in STAGE_EVIDENCE_FIELDS.items()
         if any(_present(getattr(state, f)) for f in fields))
-    return LegacyProjection(
+    return LegacyProjection.create(
         id=pid, created_at=as_of, producer=PRODUCER,
         migration=_legacy_migration("this state predates workflow contracts"),
         session_id=_label_or_unknown(state.session_id, "legacy state has no session id"),
@@ -179,8 +185,7 @@ def project_pharmstate(state: PharmState, *, as_of: datetime) -> LegacyProjectio
         executions=_unavailable("tool executions are recorded in the audit chain, not in PharmState"),
         reviews=_unavailable("human reviews are recorded in the audit chain and the session's pending review, "
                              "not in PharmState"),
-        assumptions=AssumptionSet(id="legacy-assumptions:" + sha256_hex(pid.encode("utf-8", "surrogatepass"))[:32],
-                                  created_at=as_of,
+        assumptions=AssumptionSet.create(id="legacy-assumptions:" + _short_hash(pid), created_at=as_of,
                                   producer=PRODUCER,
                                   migration=_legacy_migration("assumptions were not recorded as a set")))
 

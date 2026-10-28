@@ -70,7 +70,7 @@ def test_round_trip_json_is_byte_stable():
 
 
 def test_canonical_bytes_are_sorted_compact_ascii():
-    raw = finding(message="naïve µ").canonical_bytes()
+    raw = finding(message="na\u00efve \u00b5").canonical_bytes()
     assert raw.isascii()
     text = raw.decode()
     parsed = json.loads(text)
@@ -92,7 +92,7 @@ def test_unsupported_schema_versions_are_refused_in_both_directions():
             type(finding()).model_validate({**data, "schema_version": bad})
 
 
-@pytest.mark.parametrize("bad", ["", " lead", "has space", "x" * 129, "a/b", "-start", "tab\t", "új"])
+@pytest.mark.parametrize("bad", ["", " lead", "has space", "x" * 129, "a/b", "-start", "tab\t", "\u00faj"])
 def test_invalid_identifiers_are_rejected(bad):
     with pytest.raises(ValidationError):
         finding(id=bad)
@@ -137,7 +137,7 @@ def test_unknown_marker_requires_a_reason_and_a_known_status():
 # --- integrity of live objects (the seal is verified at load; verify_integrity covers objects already in memory) --
 def _event():
     from app.workflow.events import WorkflowEvent
-    return WorkflowEvent(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+    return WorkflowEvent.create(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                          actor="qc", subject_id="finding:f1", subject_hash="a" * 64, detail={"a": [1]})
 
 
@@ -157,7 +157,7 @@ def test_model_copy_cannot_smuggle_in_a_change_under_the_old_hash():
     e = _event()
     with pytest.raises(ValidationError, match="content_hash"):
         e.model_copy(update={"actor": "evil"})
-    resealed = e.model_copy(update={"actor": "alice", "content_hash": ""})
+    resealed = e.replace(actor="alice")
     assert resealed.actor == "alice" and resealed.verify_integrity() and resealed.content_hash != e.content_hash
     assert e.model_copy().content_hash == e.content_hash
 
@@ -211,14 +211,14 @@ def test_booleans_are_not_accepted_as_seed_lloq_or_schema_version():
 
 
 # --- text and size hardening ----------------------------------------------------------------------
-@pytest.mark.parametrize("bad", ["‮evil", "a b", "a​b", "​​", "x\u0085y", " lead", "trail ", " "])
+@pytest.mark.parametrize("bad", ["\u202eevil", "a\u2028b", "a\u200bb", "\u200b\u200b", "x\u0085y", " lead", "trail ", "\u00a0"])
 def test_labels_reject_bidi_separator_zero_width_blank_looking_and_edge_whitespace(bad):
     with pytest.raises(ValidationError):
         finding(producer=bad)
 
 
 def test_messages_reject_separators_and_invisible_text_but_keep_tabs_and_newlines():
-    for bad in ("a b", "‮evil", "​​"):
+    for bad in ("a\u2028b", "\u202eevil", "\u200b\u200b"):
         with pytest.raises(ValidationError):
             finding(message=bad)
     assert finding(message="a\tb\nc").message == "a\tb\nc"
@@ -228,11 +228,11 @@ def test_messages_reject_separators_and_invisible_text_but_keep_tabs_and_newline
 
 def test_json_objects_are_size_capped():
     from app.workflow.events import WorkflowEvent
-    base = dict(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system", actor="qc",
+    base = dict(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system", actor="qc",
                 subject_id="finding:f1", subject_hash="a" * 64)
-    assert WorkflowEvent(**base, detail={"k": "x" * 60_000}).detail["k"]
+    assert WorkflowEvent.create(**base, detail={"k": "x" * 60_000}).detail["k"]
     with pytest.raises(ValidationError, match="at most"):
-        WorkflowEvent(**base, detail={"k": "x" * 70_000})
+        WorkflowEvent.create(**base, detail={"k": "x" * 70_000})
 
 
 def test_collections_are_count_capped():

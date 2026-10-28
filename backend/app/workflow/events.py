@@ -28,17 +28,23 @@ EventType = Literal["dataset_registered", "transformation_recorded", "execution_
 
 
 class AuditEntryRef(Frozen):
-    """A pointer to an entry of the existing audit chain that this event was derived from. The audit entry stays the
-    compliance evidence; this only says which one."""
+    """An UNVERIFIED pointer to an entry of the existing audit chain that this event was derived from. The audit entry
+    stays the compliance evidence; this only says which one. Nothing here checks that the entry exists, that the hash is
+    what the audit chain computes, or that the event content matches the entry; a later phase must resolve and verify it
+    against the keyed chain."""
     session_id: Label
     index: NonNegInt
     entry_hash: Sha256Hex
 
 
 class WorkflowEvent(WorkflowContract):
+    """A domain-event record (a schema only; see the module docstring). ``claimed_actor_kind`` and ``actor`` are what
+    the producer claimed, not evidence. ``subject_id`` and ``subject_hash`` point at another record but this schema does
+    not identify the record type, so a hash from the wrong record family is not detectable at this layer."""
+    RECORD_TYPE = "WorkflowEvent"
     event_type: EventType
     stage: WorkflowStage | None = None
-    actor_kind: Literal["human", "agent", "system"]
+    claimed_actor_kind: Literal["human", "agent", "system"]
     actor: Label
     subject_id: Identifier
     subject_hash: Sha256Hex

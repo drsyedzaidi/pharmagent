@@ -22,7 +22,7 @@ from tests.workflow.factories import (
 
 
 def event(detail=None):
-    return WorkflowEvent(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+    return WorkflowEvent.create(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                          actor="qc", subject_id="finding:f1", subject_hash="a" * 64, detail=detail or {"a": [1, {"b": 2}]})
 
 
@@ -190,28 +190,28 @@ def test_freezing_is_idempotent_and_preserves_identity_for_frozen_maps():
 
 # --- defaults are part of the contract: validators do not run on them, so they must already be immutable ----------
 def _bare_event():
-    return WorkflowEvent(id="event:d", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+    return WorkflowEvent.create(id="event:d", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                          actor="qc", subject_id="finding:f1", subject_hash="a" * 64)
 
 
 def _bare_review():
     from app.workflow.contracts import ReviewRecord
     from app.workflow.stages import ReviewGate
-    return ReviewRecord(id="review:d", created_at=T0, producer="p", gate=ReviewGate.FINAL_MODEL, decision="rejected",
+    return ReviewRecord.create(id="review:d", created_at=T0, producer="p", gate=ReviewGate.FINAL_MODEL, decision="rejected",
                         actor_label="Jane", reason="x")
 
 
 def _bare_transformation():
     from app.workflow.contracts import DatasetVersionRef, TransformationRecord
     v1, v2 = dataset(), dataset(version=2, parents=("dsv:ds_1:1",))
-    return TransformationRecord(id="t:d", created_at=T0, producer="p", parents=(v1.id,),
+    return TransformationRecord.create(id="t:d", created_at=T0, producer="p", parents=(v1.id,),
                                 inputs=(DatasetVersionRef.to(v1),), outputs=(DatasetVersionRef.to(v2),), operation="x")
 
 
 def _bare_execution():
     from app.workflow.contracts import ExecutionRecord
     from app.workflow.stages import WorkflowStage
-    return ExecutionRecord(id="x:d", created_at=T0, producer="p", stage=WorkflowStage.NCA, tool="t", status="pending",
+    return ExecutionRecord.create(id="x:d", created_at=T0, producer="p", stage=WorkflowStage.NCA, tool="t", status="pending",
                            started_at=T0)
 
 
@@ -240,7 +240,7 @@ def test_class_level_defaults_are_immutable_so_they_cannot_be_poisoned_for_later
 
 def test_a_records_own_field_values_can_be_fed_back_into_a_constructor():
     e = event({"a": [1, {"b": 2}]})
-    again = WorkflowEvent(**{**e.model_dump(), "detail": e.detail})
+    again = WorkflowEvent.create(**{**e.model_dump(exclude={"content_hash"}), "detail": e.detail})
     assert again == e and again.verify_integrity()
     x = execution(config={"a": [1, {"b": 2}]})
     assert type(x).model_validate({**x.model_dump(), "config": x.config}) == x
@@ -322,9 +322,9 @@ def test_model_copy_refuses_unknown_fields_and_bad_values_with_clear_errors():
     with pytest.raises(ContractError, match="unknown fields"):
         r.model_copy(update={"zzz": 1})
     with pytest.raises(ValidationError):
-        r.model_copy(update={"bound_artifacts": [1], "content_hash": ""})
+        r.model_copy(update={"bound_artifacts": [1]})
     with pytest.raises(ValidationError):
-        r.model_copy(update={"decision": "maybe", "content_hash": ""})
+        r.model_copy(update={"decision": "maybe"})
 
 
 def test_remaining_collections_are_count_capped():

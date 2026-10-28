@@ -19,7 +19,7 @@ def test_artifact_is_content_addressed():
 def test_artifact_id_must_match_its_digest():
     a = artifact(b"x")
     with pytest.raises(ValidationError, match="content address"):
-        type(a)(**{**a.model_dump(), "id": "sha256:" + "0" * 64, "content_hash": ""})
+        type(a).create(**{**a.model_dump(exclude={"content_hash"}), "id": "sha256:" + "0" * 64})
 
 
 def test_artifact_lineage_records_parent_artifacts():
@@ -40,17 +40,17 @@ def test_artifact_kind_and_size_are_validated():
     a = artifact(b"")
     assert a.size_bytes == 0
     with pytest.raises(ValidationError):
-        type(a)(**{**a.model_dump(), "size_bytes": -1, "content_hash": ""})
+        type(a).create(**{**a.model_dump(exclude={"content_hash"}), "size_bytes": -1})
 
 
 def test_digest_must_be_lowercase_hex_sha256():
     a = artifact(b"x")
     for bad in ("A" * 64, "g" * 64, "a" * 63):
         with pytest.raises(ValidationError):
-            type(a)(**{**a.model_dump(), "digest": bad, "id": f"sha256:{bad}", "content_hash": ""})
+            type(a).create(**{**a.model_dump(exclude={"content_hash"}), "digest": bad, "id": f"sha256:{bad}"})
 
 
-@pytest.mark.parametrize("unit", ["ng/mL", "mg", "h", "1", "%", "µg/L", "10^9/L", "mL/min/1.73m^2"])
+@pytest.mark.parametrize("unit", ["ng/mL", "mg", "h", "1", "%", "\u00b5g/L", "10^9/L", "mL/min/1.73m^2"])
 def test_valid_units_are_accepted(unit):
     assert ColumnSchema(name="X", unit=unit).unit == unit
 

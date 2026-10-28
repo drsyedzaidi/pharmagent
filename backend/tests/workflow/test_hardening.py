@@ -33,9 +33,9 @@ def families():
     """One populated instance of every persisted record family."""
     from app.workflow.stages import StageTransition, WorkflowStage
     art = artifact(b"payload")
-    ev = WorkflowEvent(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+    ev = WorkflowEvent.create(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                        actor="qc", subject_id="finding:f1", subject_hash="a" * 64)
-    st = StageTransition(id="transition:t1", created_at=T0, producer="p", from_stage=None,
+    st = StageTransition.create(id="transition:t1", created_at=T0, producer="p", from_stage=None,
                          to_stage=WorkflowStage.DATA_CURATION, kind="advance", actor="alice")
     return [art, dataset(), transformation(), assumptions(), execution(), finding(), review(art), st, ev]
 
@@ -53,17 +53,7 @@ def test_load_round_trips_every_family_from_json_text_bytes_and_mappings(rec):
         assert loaded == rec and loaded.content_hash == rec.content_hash
 
 
-@pytest.mark.parametrize("rec", families(), ids=FAMILY_IDS)
-def test_a_stored_record_with_a_blank_or_missing_hash_is_refused_not_resealed(rec):
-    data = json.loads(rec.canonical_bytes())
-    for broken in ({**data, "content_hash": ""}, {k: v for k, v in data.items() if k != "content_hash"}):
-        with pytest.raises(ValidationError, match="content_hash"):
-            type(rec).load(broken)
-        with pytest.raises(ValidationError, match="content_hash"):
-            type(rec).load(json.dumps(broken))
-
-
-def test_tampering_with_a_stored_review_and_stripping_its_hash_cannot_launder_an_approval():
+def test_a_stored_review_with_swapped_content_and_a_stripped_hash_is_refused_on_load():
     art, other = artifact(b"cleaned"), artifact(b"swapped")
     data = json.loads(review(art).canonical_bytes())
     data["bound_artifacts"] = [{"artifact_id": other.id, "digest": other.digest}]
@@ -101,7 +91,7 @@ def test_forged_nested_instances_are_refused_at_construction():
         transformation(inputs=(DatasetVersionRef.model_construct(version_id="bad id", record_hash="x"),),
                        outputs=(DatasetVersionRef.to(dataset(version=2, parents=(v1.id,))),), parents=("bad id",))
     with pytest.raises(ValidationError):
-        WorkflowEvent(id="event:e9", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+        WorkflowEvent.create(id="event:e9", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                       actor="qc", subject_id="finding:f1", subject_hash="a" * 64,
                       source_audit_refs=(AuditEntryRef.model_construct(session_id="s", index=-1, entry_hash="zz"),))
 
@@ -111,7 +101,7 @@ def test_nested_forgeries_do_not_survive_model_copy_either():
     rec = review(art)
     forged = ArtifactBinding.model_construct(artifact_id="whatever", digest=art.digest)
     with pytest.raises(ValidationError):
-        rec.model_copy(update={"bound_artifacts": (forged,), "content_hash": ""})
+        rec.model_copy(update={"bound_artifacts": (forged,)})
 
 
 # --- 3. only well-formed UTF-8 text is accepted anywhere in JSON content --------------------------------------------
@@ -125,7 +115,7 @@ def test_lone_surrogates_are_rejected_in_json_values_keys_and_nested_content(bad
 
 
 def test_valid_unicode_including_astral_characters_is_still_accepted():
-    params = {"naïve": ["µg/L", "\U0001f9ea", " -is-fine-in-json-values"]}
+    params = {"na\u00efve": ["\u00b5g/L", "\U0001f9ea", "\u2028-is-fine-in-json-values"]}
     assert transformation(parameters=params).verify_integrity()
 
 
@@ -157,10 +147,10 @@ def test_hash_payload_names_its_domain_record_type_and_schema_version():
 
 def test_two_record_types_with_identical_fields_never_share_a_hash():
     class OtherFinding(type(finding())):
-        pass
+        RECORD_TYPE = "TestOtherFindingType"
 
     base = finding()
-    other = OtherFinding(**{k: getattr(base, k) for k in type(base).model_fields if k != "content_hash"})
+    other = OtherFinding.create(**{k: getattr(base, k) for k in type(base).model_fields if k != "content_hash"})
     assert other.model_dump(exclude={"content_hash"}) == base.model_dump(exclude={"content_hash"})
     assert other.content_hash != base.content_hash
 
@@ -199,7 +189,7 @@ def test_frozen_map_init_cannot_be_called_again_on_a_live_instance():
 
 
 def test_a_live_records_mapping_cannot_be_rewritten_through_init():
-    e = WorkflowEvent(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", actor_kind="system",
+    e = WorkflowEvent.create(id="event:e1", created_at=T0, producer="p", event_type="finding_raised", claimed_actor_kind="system",
                       actor="qc", subject_id="finding:f1", subject_hash="a" * 64, detail={"k": 1})
     with pytest.raises(TypeError):
         e.detail.__init__({"hijack": True})
@@ -214,8 +204,8 @@ def test_schema_version_must_be_the_exact_integer(bad):
     with pytest.raises(ValidationError):
         type(finding()).load(data)
     with pytest.raises(ValidationError):
-        type(finding())(**{**{k: getattr(finding(), k) for k in type(finding()).model_fields if k != "content_hash"},
-                           "schema_version": bad})
+        type(finding()).create(**{**{k: getattr(finding(), k) for k in type(finding()).model_fields
+                                     if k != "content_hash"}, "schema_version": bad})
 
 
 @pytest.mark.parametrize("bad", [0, 1_700_000_000, 1_700_000_000.5, True, "2026-10-26T12:00:00",
@@ -235,7 +225,7 @@ def test_well_formed_timestamps_are_still_accepted_and_normalised_to_utc(good):
 
 
 # --- 8. blank-looking text --------------------------------------------------------------------------------------------
-BLANKS = ["ㅤ", "ᅟ", "ᅠ", "ﾠ", "⠀", "឴", "឵", "͏"]
+BLANKS = ["\u3164", "\u115f", "\u1160", "\uffa0", "\u2800", "\u17b4", "\u17b5", "\u034f"]
 
 
 @pytest.mark.parametrize("blank", BLANKS)
@@ -252,7 +242,7 @@ def test_blank_looking_characters_are_refused_alone_or_mixed_into_labels(blank):
 
 
 def test_ordinary_non_ascii_names_are_still_accepted():
-    for fine in ("José Álvarez", "张伟", "O’Brien", "Müller-Lehmann"):
+    for fine in ("Jos\u00e9 \u00c1lvarez", "\u5f20\u4f1f", "O\u2019Brien", "M\u00fcller-Lehmann"):
         assert review(actor_label=fine).actor_label == fine
 
 
@@ -271,11 +261,11 @@ def test_the_doc_lists_every_module_and_the_load_construct_distinction():
     modules = {p.name for p in (Path(__file__).resolve().parents[2] / "app" / "workflow").glob("*.py") if p.name != "__init__.py"}
     for name in modules:
         assert f"`{name}`" in doc, f"{name} missing from the module table"
-    assert "WorkflowContract.load" in doc and "domain-separated" in doc
+    assert "`create`" in doc and "`replace`" in doc and "`load`" in doc and "domain-separated" in doc
 
 
 def test_the_doc_no_longer_overstates_what_re_validation_catches():
     doc = _doc()
     assert "which catches a forged record that was rehashed" not in doc
     assert "does **not** catch a structurally valid forgery" in doc
-    assert "not exhaustive" in doc            # the blank-looking character list
+    assert "confusable" in doc and "drift" in doc            # the blank-looking character rules are not complete

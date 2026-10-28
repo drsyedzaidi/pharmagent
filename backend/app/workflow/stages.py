@@ -41,7 +41,7 @@ GATE_STAGE: dict[ReviewGate, WorkflowStage] = {
 }
 
 #: Forward moves only. A population analysis may skip NCA; an NCA-only analysis may go straight to reporting.
-#: Going back (to repair or refit) is a rollback and a repeat of the same stage is a rerun — both need a reason.
+#: Going back (to repair or refit) is a rollback and a repeat of the same stage is a rerun; both need a reason.
 ALLOWED_ADVANCES: dict[WorkflowStage | None, frozenset[WorkflowStage]] = {
     None: frozenset({S.DATA_CURATION}),
     S.DATA_CURATION: frozenset({S.EDA}),
@@ -69,7 +69,7 @@ def _stage(value: object) -> WorkflowStage | None:
 
 
 def is_allowed(frm: WorkflowStage | str | None, to: WorkflowStage | str, kind: str) -> bool:
-    if kind not in ("advance", "rerun", "rollback"):
+    if type(kind) is not str or kind not in ("advance", "rerun", "rollback"):
         return False
     target = _stage(to)
     source = None if frm is None else _stage(frm)
@@ -85,6 +85,7 @@ def is_allowed(frm: WorkflowStage | str | None, to: WorkflowStage | str, kind: s
 
 
 class StageTransition(WorkflowContract):
+    RECORD_TYPE = "StageTransition"
     from_stage: WorkflowStage | None
     to_stage: WorkflowStage
     kind: Literal["advance", "rerun", "rollback"]

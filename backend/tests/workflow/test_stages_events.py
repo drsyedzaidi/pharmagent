@@ -14,7 +14,7 @@ def transition(frm, to, kind="advance", **kw):
     base = dict(id="transition:t1", created_at=T0, producer=PRODUCER, from_stage=frm, to_stage=to, kind=kind,
                 actor="alice", reason="ok")
     base.update(kw)
-    return StageTransition(**base)
+    return StageTransition.create(**base)
 
 
 def test_there_are_exactly_the_seven_scientific_stages_in_order():
@@ -74,29 +74,29 @@ def test_transition_needs_an_actor_and_valid_kind():
 # --- WorkflowEvent: a schema only, never a second audit chain --------------------------------------
 def test_event_references_a_record_by_id_and_hash():
     f = finding()
-    ev = WorkflowEvent(id="event:e1", created_at=T0, producer=PRODUCER, event_type="finding_raised", stage=S.DATA_CURATION,
-                       actor_kind="system", actor="qc", subject_id=f.id, subject_hash=f.content_hash)
+    ev = WorkflowEvent.create(id="event:e1", created_at=T0, producer=PRODUCER, event_type="finding_raised", stage=S.DATA_CURATION,
+                       claimed_actor_kind="system", actor="qc", subject_id=f.id, subject_hash=f.content_hash)
     assert ev.subject_hash == f.content_hash and ev.detail == {}
 
 
 def test_event_has_no_chain_signature_or_persistence_fields():
     fields = set(WorkflowEvent.model_fields)
     assert not fields & {"prev_hash", "previous_hash", "index", "sequence", "signature", "seal", "anchor", "entry_hash"}
-    payload = json.loads(WorkflowEvent(id="event:e1", created_at=T0, producer=PRODUCER, event_type="stage_transitioned",
-                                       actor_kind="human", actor="alice", subject_id="t", subject_hash="a" * 64).canonical_bytes())
+    payload = json.loads(WorkflowEvent.create(id="event:e1", created_at=T0, producer=PRODUCER, event_type="stage_transitioned",
+                                       claimed_actor_kind="human", actor="alice", subject_id="t", subject_hash="a" * 64).canonical_bytes())
     payload["prev_hash"] = "a" * 64
     with pytest.raises(ValidationError):
         WorkflowEvent.model_validate(payload)
 
 
 def test_event_validation():
-    base = dict(id="event:e1", created_at=T0, producer=PRODUCER, event_type="finding_raised", actor_kind="system",
+    base = dict(id="event:e1", created_at=T0, producer=PRODUCER, event_type="finding_raised", claimed_actor_kind="system",
                 actor="qc", subject_id="finding:f1", subject_hash="a" * 64)
-    for bad in ({"event_type": "mystery"}, {"actor_kind": "robot"}, {"actor": ""}, {"subject_hash": "xyz"},
+    for bad in ({"event_type": "mystery"}, {"claimed_actor_kind": "robot"}, {"actor": ""}, {"subject_hash": "xyz"},
                 {"subject_id": "bad id"}, {"detail": {"x": float("nan")}}):
         with pytest.raises(ValidationError):
-            WorkflowEvent(**{**base, **bad})
-    assert WorkflowEvent(**base, detail={"k": [1, "v"]}).detail == {"k": [1, "v"]}
+            WorkflowEvent.create(**{**base, **bad})
+    assert WorkflowEvent.create(**base, detail={"k": [1, "v"]}).detail == {"k": [1, "v"]}
 
 
 def test_there_is_a_persistence_free_module():
@@ -126,7 +126,7 @@ def test_rollback_and_rerun_without_any_reason_are_refused():
 
 # --- events retain references to the legacy audit entries they were derived from -------------------
 def _event_with(refs):
-    return WorkflowEvent(id="event:e9", created_at=T0, producer=PRODUCER, event_type="review_recorded", actor_kind="human",
+    return WorkflowEvent.create(id="event:e9", created_at=T0, producer=PRODUCER, event_type="review_recorded", claimed_actor_kind="human",
                          actor="alice", subject_id="review:r1", subject_hash="b" * 64, source_audit_refs=refs)
 
 
