@@ -16,14 +16,14 @@ route, sign or approve anything.
 
 | Module | Contents |
 |---|---|
-| `base.py` | `WorkflowContract` (the common record header), `FrozenMap`, `Unknown`, `MigrationInfo`, validated scalar types |
+| `base.py` | `WorkflowContract` (the common record header, `create`/`replace`/`load`), `FrozenMap`, `Unknown`, `MigrationInfo`, validated scalar types, the text policies |
 | `contracts.py` | `ArtifactRef`, `DatasetVersion`, `DatasetVersionRef`, `TransformationRecord`, `AssumptionSet`, `ExecutionRecord`, `Finding`, `ReviewRecord` |
 | `lineage.py` | `check_lineage`: graph-level checks over dataset versions and transformations |
 | `stages.py` | `WorkflowStage` (7 stages), `ReviewGate` (7 gates), allowed transitions, `StageTransition` |
 | `events.py` | `WorkflowEvent` (a domain-event **schema** only) and `AuditEntryRef` |
 | `compat.py` | Read-only projection of a legacy `PharmState` or serialized session row |
 | `hashing.py` | Canonical JSON and SHA-256 |
-| `errors.py` | `ContractError` (fixed-text messages; ids live on `.detail`) and `safe_errors`, the PHI-safe form of a validation error. `ContractError` comes from `validated_copy`, `check_lineage`, the compat projection and unknown field names in `replace`/`model_copy`; invalid field VALUES raise pydantic's `ValidationError`, as do constructing, `create` and `load` |
+| `errors.py` | `ContractError` (fixed-text messages; keeps no raw exception; `.detail` holds sanitized errors or ids) and `safe_errors`, the PHI-safe form of a validation error. `ContractError` comes from `validated_copy`, `check_lineage`, the compat projection and unknown field names in `replace`/`model_copy`; invalid field VALUES raise pydantic's `ValidationError`, as do constructing, `create` and `load` |
 
 Tests are in `backend/tests/workflow/` (fixtures are sanitized serialized legacy sessions).
 
@@ -51,14 +51,16 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   The recipe also depends on pydantic's JSON rendering, pinned in `requirements.txt`: datetimes serialize as UTC with a
   `Z`, no fraction when the microseconds are zero and exactly six digits otherwise (`.120000Z`), and an integer given
   for a float field becomes a float (`5` -> `5.0`). A non-Python verifier must reproduce these. Pinned hash vectors cover every record family plus the risky encodings (floats, `-0.0`, a 2**70 integer, non-ASCII
-  and astral text, microseconds, a `+05:30` offset, populated maps, a trailing-zero fraction); every pinned vector except the legacy projection's was recomputed by hand from literal JSON outside the model, by the author and independently by reviewers. They fail loudly if the recipe, a field or a serialization rule ever changes; the response is
+  and astral text, microseconds, a `+05:30` offset, populated maps, a trailing-zero fraction); every pinned vector except the legacy projection's was recomputed by hand from literal JSON outside the model (a script using only `json` and `hashlib`; the fixture is not trusted). They fail loudly if the recipe, a field or a serialization rule ever changes; the response is
   a `schema_version` bump and a migration, never a silent re-pin.
 * **Sealing has a name; validating never seals, and only the top-level record being created is sealed.** `Model.create(**fields)` builds a NEW record and seals it, and
   `record.replace(**changes)` makes a new sealed record from an existing one. Every other path (the constructor,
   `model_validate`, `model_validate_json`, `load` and `model_copy`) requires an existing, correct `content_hash` and
   refuses a missing or blank one, so a stored record whose content was altered, or whose hash was stripped, cannot be
   laundered by reading it back. `create` and `replace` seal ONLY the record they name: a nested record (for example the dataset inside a legacy
-  projection) must arrive with its own correct hash, or the whole creation is refused. `replace` reads its source through
+  projection) must arrive with its own correct hash, or the whole creation is refused. A contract may not contain a record of
+  its own class, directly or through another record (the class being created is the one whose missing hash is sealed, so
+  such a child would be sealed implicitly): `create`/`replace` refuse it with a `ContractError`. `replace` reads its source through
   `validated_copy`, so a tampered in-memory record cannot be turned into a valid-looking one, and `model_copy(update=...)`
   can no longer change content (use `replace`). The `SEAL` marker is a private class-valued validation-context key; it is
   importable, so it is not a security boundary. Stored bytes are
@@ -77,16 +79,15 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   (variation selectors, tag characters, fillers), a fixed list of other blank-rendering characters (braille blank, Khmer
   inherent vowels), and edge whitespace, and must contain a letter, number, punctuation mark or symbol (marks alone do
   not count). The ignorable ranges are written out by hand, so the set can drift from a future Unicode version, and `U+16FE4` (a Khitan
-  filler) is refused although it is not Default_Ignorable. Three joiners real text needs are allowed only where they
-  work (an IDNA CONTEXTJ-style rule): ZWNJ after a virama or between two Arabic-script letters (Persian), ZWJ after a
-  virama or between two emoji (Indic and Sinhala conjuncts, family and profession emoji), and VS16 after an emoji or
-  keycap base; ZWNJ/ZWJ/VS16 anywhere else, and LRM/RLM, are refused. Private-use and unassigned code points are
-  refused only when a record is CREATED (`create`/`replace`), because what counts as assigned depends on the
-  interpreter's Unicode database; stored records stay loadable across interpreter versions (a create-only rule).
+  filler) is refused although it is not Default_Ignorable. Two policies apply (see "Creation policy and load semantics"
+  below): stored values are checked under load semantics, new and changed values under the creation policy.
   Confusable (look-alike) letters are not detected, CRLF line endings are refused in messages (an API must normalise
   them), and labels are display text that carries no authority. Plain ASCII text is checked with a single compiled
   regex pass; only non-ASCII text is scanned per character. See "PHI-safe errors and repr" below
-  for what error text and `repr` expose. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
+  for what error text and `repr` expose. JSON content (`config`, `parameters`, `detail`, `legacy_metadata`) is checked recursively: every
+  key and every string value must be valid UTF-8 (no lone surrogates) and pass the same text rules (keys strictly; values may hold
+  newline and tab; empty strings are allowed), and all mapping keys must be strings (string keys only: an integer or other
+  key is refused with a static error that never echoes it); numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
   mapping fields are immutable too (pydantic does not validate defaults, so they are `FrozenMap` already). Equality is
   Python value equality (`1 == 1.0`); `content_hash` is stricter and treats `1` and `1.0`, and `0.0` and `-0.0`, as
   different, so two records that compare equal but carry different numeric spellings have different hashes.
@@ -168,6 +169,46 @@ same dataset id never collides: legacy state tracked no versions, so none is inv
 disjoint namespaces: `legacy:none`, `legacy:id:<session id>` and `legacy:h:<32 hex of a hash>`. Its `source` is the data file's base name, which
 may contain PHI or PII, so treat projected records as sensitive until the Phase D privacy review.
 
+## Creation policy and load semantics
+
+Text is validated under one of two policies, chosen by how the value arrives.
+
+* **Load semantics** apply to every stored value: the constructor, `model_validate*`, `load`, `model_copy`, nested model
+  instances built outside `create`, and every value `replace()` leaves unchanged. They refuse only what is never
+  acceptable: control and format characters, line and paragraph separators, the Default_Ignorable ranges (VS1 to VS15, tag
+  characters, fillers), blank-looking characters and lone surrogates. They accept ZWNJ, ZWJ and VS16 anywhere, and do not
+  look at private-use or unassigned code points or at mark runs. The context rules below depend on the interpreter's Unicode database or are judgement calls; a stored record
+  written on a newer Python must stay loadable on an older one, and the content hash already binds the stored text.
+* The **creation policy** applies to a new record (`create`) and to each value that `replace()` changes (a changed value
+  is validated on its own with its field's annotation, so unchanged legacy text is never re-rejected). It adds the rules
+  below. The legacy projection validates labels under this policy through `CREATION_CONTEXT`, which cannot seal anything.
+
+The supported contextual-joiner subset (creation policy). **This is not IDNA CONTEXTJ**: that rule needs the full Unicode
+Joining_Type table, which this layer does not carry, and no claim of compliance is made. Everything else is refused.
+
+* **VS16** is accepted after a keycap base (`#`, `*`, `0`-`9`) only when U+20E3 follows (a keycap sequence), and after a
+  Symbol-other (So) character in the Miscellaneous Symbols and Dingbats blocks (U+2600-U+27BF) or the emoji planes
+  (U+1F000-U+1FAFF). Emoji whose base is elsewhere (for example U+203C and U+2194) are refused; so are VS16 after a digit
+  without the keycap, after the copyright or degree sign and similar symbols, and two VS16 in a row.
+* **ZWNJ and ZWJ after a virama**: directly after a character of canonical combining class 9 that follows a letter of
+  the same script (matched by the first word of the Unicode name, for example `DEVANAGARI`), with only other
+  combining marks (a nukta; the run cap below bounds them) between the letter and the virama. This covers Devanagari, Bengali, Tamil, Malayalam
+  (chillu), Sinhala, Khmer, Myanmar, Thai and others whose virama is named after the script. A virama after a
+  joiner, after a Latin letter, or on its own does not qualify, so joiner chains are refused.
+* **ZWNJ between Persian/Arabic letters**: the letter before it must be a dual-joining letter and the letter after it a
+  dual- or right-joining letter, with nothing (no mark) between. The pinned sets are U+0626, U+0628, U+062A-U+062E,
+  U+0633-U+063A, U+0641-U+0647, U+0649, U+064A, U+067E, U+0686, U+06A9, U+06AF, U+06CC (dual-joining) and
+  U+0622-U+0625, U+0627, U+0629, U+062F-U+0632, U+0648, U+0698 (right-joining). Letters outside these sets, and ZWNJ after a
+  right-joining letter or around a combining mark, are refused.
+* **ZWJ between emoji**: after a pictograph, skin-tone modifier or VS16 and before a pictograph, at most
+  `MAX_ZWJ_LINKS` (7) links in one sequence. Tag sequences (regional-subdivision flags) are refused.
+* **Run caps**: at most `MAX_MARK_RUN` (5) consecutive combining marks.
+* **Private-use and unassigned** code points are refused.
+
+LRM and RLM are always refused. Confusable (look-alike) text is not detected. Joiner and mark rules use Python's
+`unicodedata` (Unicode 15.1 on the supported interpreter), so the creation policy may differ across interpreters; load
+semantics do not.
+
 ## PHI-safe errors and repr
 
 Validation errors and printed records can carry identifiers and free text that are PHI in a real study.
@@ -177,15 +218,33 @@ Validation errors and printed records can carry identifiers and free text that a
   makes `.json()` raise. `errors(include_input=False)` closes `input`, but not `loc` (a caller-chosen dict key or an
   extra field name appears there, also in `str()` of the error) and not any value a validator interpolated into `msg`.
 * `safe_errors(exc)` is the boundary: it returns only `{type, loc, msg}`, with `loc` reduced to static schema names and
-  list indices (anything else becomes `"<key>"`), no input, URL or context, and a length-capped message. Validator
-  messages are fixed text; none interpolates a caller-supplied value, and a test feeds PHI-like text through every
-  field of every record family to keep it that way. **Any API that exposes these models must route validation errors
-  through it; until a handler does and is tested, this is a blocking requirement for Phase B.**
-* `ContractError` messages are fixed text; the ids involved are on `.detail` for an authorised debugger and must not be
-  logged by default.
-* `repr` and `str` of every record and nested model show the record type and the first 12 hex characters of the hash
-  (or `<redacted>`), never field contents; `FrozenMap` prints its size. Use `model_dump()` deliberately when the
-  content is needed.
+  genuine list indices, no input, URL or context, and a length-capped message. Any location element that is not a static
+  schema name becomes `"<key>"`. The element right after a mapping field is always a caller's key and is redacted even
+  when it equals a schema name, and an integer survives only directly after a field that holds a sequence (one level);
+  anywhere else an integer is a mapping key and is redacted. Mapping fields accept string keys only
+  (validated before pydantic sees them), so a caller-chosen key never appears in `loc` at all. The messages of
+  discriminated-union tag errors, which repeat the input, are replaced by fixed text. Anything that is not a
+  `ValidationError` (or a `ContractError`, which maps to a fixed `contract_error` entry) yields a fixed
+  `unsupported_exception` entry instead of raising. Validator messages are fixed text; none interpolates a
+  caller-supplied value, and a test feeds PHI-like text through every field of every record family to keep it that way.
+  **Any API that exposes these models must route validation errors through it; until a handler does and is tested, this is
+  a blocking requirement for Phase B.**
+* `ContractError` messages are fixed text and a `ContractError` never keeps the exception behind it: it is raised after the
+  `except` block has finished, so `__cause__` and `__context__` are `None` and a traceback or `logging.exception` shows no
+  raw pydantic text. When a validation failure is the reason, `.detail` holds the already-sanitized `safe_errors` list;
+  for ids (unknown field names, duplicate ids) `.detail` is for an authorised debugger and must not be logged by default.
+* Tamper detection does not use the warnings system: a record whose content no longer serializes as its schema says is
+  reported as `ContractError` (and `verify_integrity()` returns `False`) without a Python warning, because pydantic's
+  serialization warning would print the offending value.
+* `repr`, `str`, `__repr_args__`, `__rich_repr__` and `__pretty__` of every record and nested model show the record type
+  and the first 12 hex characters of the hash (or `<redacted>`), never field contents; `FrozenMap` prints its size. Use
+  `model_dump()` deliberately when the content is needed.
+* `load()` is a bounded, strict boundary: JSON text longer than the maximum record size (`MAX_RECORD_BYTES`, 4 MiB, counted
+  in characters or bytes) is refused before it is parsed, and a document that repeats an object key anywhere (including
+  `content_hash`) or is nested too deeply to parse is refused with a fixed message that does not echo the key. Malformed
+  JSON is still reported by pydantic as a `ValidationError` (position only). Pretty-printed, re-ordered or `\u`-escaped
+  spellings of the same content still load and hash identically, so stored bytes are not unique; persistence must store
+  canonical bytes. `model_validate_json` called directly does not get these checks; use `load`.
 
 ## Required before records are persisted or acted on (Phase D)
 

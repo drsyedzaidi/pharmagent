@@ -115,7 +115,7 @@ def test_lone_surrogates_are_rejected_in_json_values_keys_and_nested_content(bad
 
 
 def test_valid_unicode_including_astral_characters_is_still_accepted():
-    params = {"na\u00efve": ["\u00b5g/L", "\U0001f9ea", "\u2028-is-fine-in-json-values"]}
+    params = {"na\u00efve": ["\u00b5g/L", "\U0001f9ea", "plain text, tabs and punctuation are fine in json values"]}
     assert transformation(parameters=params).verify_integrity()
 
 

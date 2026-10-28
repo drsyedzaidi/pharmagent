@@ -192,7 +192,8 @@ def test_native_script_and_emoji_joiners_are_accepted_where_they_belong(name):
                                  C(ZWJ, 0x61), C(0x61, VS16), C(VS16, 0x61), C(0x61, VS16, VS16), C(0x61, 0x200E, 0x62),
                                  C(0x61, 0x200F, 0x62), C(0x2764, ZWNJ, 0x2764), C(0x61, ZWJ, 0x2764)])
 def test_joiners_in_the_wrong_place_and_other_invisible_marks_are_still_refused(bad):
-    for make in (lambda t: review(actor_label=t), lambda t: finding(message="x " + t + " y"), lambda t: ColumnSchema(name=t)):
+    for make in (lambda t: review(actor_label=t), lambda t: finding(message="x " + t + " y"),
+                 lambda t: dataset(columns=(ColumnSchema(name="ID"), ColumnSchema(name=t)))):
         with pytest.raises(ValidationError):
             make(bad)
 
@@ -224,8 +225,10 @@ def test_private_use_and_unassigned_characters_are_refused_on_create_but_stored_
     assert keep.binding_status({art.id: art.digest}) == "current"
     with pytest.raises(ValidationError):
         review(actor_label="Pat " + co)
+    rereviewed = keep.replace(reason="re-reviewed")            # unchanged stored text is not re-judged on replace()
+    assert rereviewed.actor_label == "Pat " + co and rereviewed.reason == "re-reviewed"
     with pytest.raises(ValidationError):
-        keep.replace(reason="re-reviewed")
+        keep.replace(actor_label="Pat " + co + co)             # a CHANGED value is judged by the creation policy
 
 
 def _reference_bad(value, allow_layout):
@@ -348,9 +351,9 @@ def test_the_doc_makes_the_phi_error_boundary_a_phase_b_blocking_requirement():
 
 def test_the_doc_states_the_unicode_and_hash_stability_limits():
     doc = _doc()
-    for phrase in ("ZWNJ", "VS16", "create-only", "U+16FE4", "CRLF", "trailing-zero", "pydantic"):
+    for phrase in ("ZWNJ", "VS16", "creation policy", "U+16FE4", "CRLF", "trailing-zero", "pydantic"):
         assert phrase in doc, phrase
-    assert "validating never seals" not in doc.lower() or "only the top-level" in doc
+    assert "only the top-level record being created is sealed" in doc.lower()
 
 
 def test_the_doc_describes_hand_computed_vectors_accurately():
@@ -371,15 +374,11 @@ def test_the_abstract_base_cannot_create_a_record():
         WorkflowContract.create(id="x", created_at=T0, producer="p")
 
 
-def test_safe_errors_asks_pydantic_to_leave_out_input_url_and_context():
-    calls = []
-
-    class Recording:
-        def errors(self, **kwargs):
-            calls.append(kwargs)
-            return [{"type": "value_error", "loc": ("message",), "msg": "Value error, fixed text",
-                     "input": SECRET, "url": "https://example.invalid/" + SECRET, "ctx": {"error": SECRET}}]
-
-    cleaned = safe_errors(Recording())
-    assert calls == [{"include_input": False, "include_url": False, "include_context": False}]
-    assert SECRET not in json.dumps(cleaned) and cleaned == [{"type": "value_error", "loc": ("message",), "msg": "Value error, fixed text"}]
+def test_safe_errors_leaves_out_input_url_and_context_that_pydantic_itself_carries():
+    with pytest.raises(ValidationError) as caught:
+        Finding.load({**json.loads(finding().canonical_bytes()), "message": SECRET + chr(0)})
+    raw = caught.value.errors()
+    assert any("input" in e and "url" in e and "ctx" in e for e in raw)          # pydantic does carry them
+    assert SECRET in json.dumps(raw, default=str)
+    cleaned = safe_errors(caught.value)
+    assert cleaned and all(set(e) == {"type", "loc", "msg"} for e in cleaned) and SECRET not in json.dumps(cleaned)

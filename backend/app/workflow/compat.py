@@ -17,9 +17,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.core.pharmstate import PharmState
 
-from .base import ID_PATTERN, SEAL, Frozen, Label, MigrationInfo, Unknown, WorkflowContract
+from .base import CREATION_CONTEXT, ID_PATTERN, Frozen, Label, MigrationInfo, Unknown, WorkflowContract
 from .contracts import AssumptionSet, BlqRepresentation, ColumnSchema, DatasetVersion
-from .errors import ContractError
+from .errors import ContractError, safe_errors
 from .hashing import canonical_json, sha256_hex
 from .stages import WorkflowStage
 
@@ -76,8 +76,10 @@ MAX_STATE_JSON_CHARS = 10_000_000
 
 def _label_or_unknown(value: Any, reason: str) -> str | Unknown:
     """The value as a Label if it is one; otherwise an explicit Unknown, so one odd legacy value cannot fail the row."""
+    if not value:
+        return _unavailable(reason)
     try:
-        return _LABEL.validate_python(value) if value else _unavailable(reason)
+        return _LABEL.validate_python(value, context=CREATION_CONTEXT)
     except ValidationError:
         return _unavailable("legacy value is not representable as a label")
 
@@ -116,9 +118,6 @@ def _valid_digest(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA_RE.fullmatch(value))
 
 
-_LABEL_CHECK = TypeAdapter(Label)
-
-
 def _source_label(path: str | None) -> str | Unknown:
     """The data file's base name as a label, or an explicit Unknown. A file name that cannot be a label (control
     characters, stray joiners) degrades only this field, never the whole dataset."""
@@ -126,7 +125,7 @@ def _source_label(path: str | None) -> str | Unknown:
     if not name:
         return _unavailable("legacy state records no dataset path")
     try:
-        return _LABEL_CHECK.validate_python(name, context={SEAL: DatasetVersion})
+        return _LABEL.validate_python(name, context=CREATION_CONTEXT)
     except ValidationError:
         return _unavailable("the data file name is not representable as a label")
 
@@ -219,11 +218,19 @@ def project_session_row(row: Mapping[str, Any], *, as_of: datetime) -> LegacyPro
         try:
             raw = json.loads(text)
         except (TypeError, ValueError, RecursionError) as exc:
-            raise ContractError(f"session state_json is not valid JSON: {type(exc).__name__}") from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                       # raised outside the handler: the raw exception is not chained
+            raise ContractError(f"session state_json is not valid JSON: {failure}")
     if raw is None:
         raise ContractError("session row has no state")
     try:
         state = PharmState.model_validate(raw)
     except (ValidationError, TypeError, RecursionError) as exc:
-        raise ContractError(f"session state is not a readable PharmState: {type(exc).__name__}") from exc
+        failure, detail = type(exc).__name__, safe_errors(exc)
+    else:
+        failure = None
+    if failure is not None:
+        raise ContractError(f"session state is not a readable PharmState: {failure}", detail=detail)
     return project_pharmstate(state, as_of=as_of)

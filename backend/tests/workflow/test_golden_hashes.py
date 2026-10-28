@@ -2,7 +2,7 @@
 
 A change to any of these means the hash recipe, a field, or a serialization rule changed: stored hashes would no
 longer verify. Bump ``schema_version`` and migrate deliberately; never just re-pin. Every vector here except the legacy projection's
-was also recomputed by hand from literal JSON (outside the model), by the author and independently by reviewers.
+was also recomputed by hand from literal JSON (outside the model).
 """
 import json
 from datetime import UTC, datetime
@@ -67,7 +67,7 @@ RICH_GOLDEN = {
     "ReviewRecord": "69f40f5c5faa0aeaeafb1d3b0101b97ca445bcdfdc3f986c33c48016c0dbcb75",
 }
 # These five (and the family vectors above, except the legacy projection) were recomputed by hand from literal JSON
-# with only json + hashlib, outside the model, by the author and independently by reviewers.
+# with only json + hashlib, outside the model.
 
 
 def _rich():

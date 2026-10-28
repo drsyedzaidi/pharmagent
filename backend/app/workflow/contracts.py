@@ -238,8 +238,10 @@ def _snapshot_current(current: Mapping[str, str]) -> dict[str, str]:
             snapshot[key] = value
     except ContractError:
         raise
-    except Exception as exc:
-        raise ContractError("current artifacts could not be read") from exc
+    except Exception:
+        snapshot = None
+    if snapshot is None:                               # raised outside the handler: the caller's exception is not kept
+        raise ContractError("current artifacts could not be read")
     return snapshot
 
 
