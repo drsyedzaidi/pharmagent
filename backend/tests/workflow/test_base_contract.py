@@ -28,12 +28,13 @@ def test_content_hash_is_computed_and_matches_an_independent_recomputation():
     f = finding()
     body = json.loads(f.canonical_bytes())
     body.pop("content_hash")
-    expected = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    payload = {"domain": "pharmagent.workflow.record", "record_type": "Finding", "schema_version": 1, "fields": body}
+    expected = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
     assert f.content_hash == expected and f.hash_algorithm == "sha256"
 
 
 def test_content_hash_is_pinned_so_a_silent_format_change_fails():
-    assert finding().content_hash == "516d6604c760cdf11bea272472d081d1ab91472fd525a192231c62da4ca291e3"
+    assert finding().content_hash == "7741cb758a8166f7e8684a686ee387bb35cdb1df0042d649b08c704c3b4ad143"
 
 
 def test_equal_content_gives_equal_hash_and_any_change_gives_another():

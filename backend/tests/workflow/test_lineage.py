@@ -165,7 +165,7 @@ def test_check_lineage_accepts_only_exact_record_types():
             return self
 
     good = dataset(id="dsv:x")
-    sneaky = Sneaky.model_validate(good.model_dump())
+    sneaky = Sneaky.model_validate({**good.model_dump(), "content_hash": ""})      # re-sealed: new record type
     with pytest.raises(ContractError, match="exact"):
         check_lineage([sneaky])
     with pytest.raises(ContractError, match="exact"):

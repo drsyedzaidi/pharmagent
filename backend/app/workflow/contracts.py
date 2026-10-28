@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, StringConstraints, ValidationInfo, field_validator, model_validator
+from pydantic import Field, StringConstraints, ValidationInfo, field_validator, model_validator
 
 from .base import (
     STRUCTURAL,
@@ -24,6 +24,7 @@ from .base import (
     NoBool,
     NonNegInt,
     Sha256Hex,
+    Timestamp,
     Unknown,
     WorkflowContract,
     frozen_map_of,
@@ -247,8 +248,8 @@ class ExecutionRecord(WorkflowContract):
     seed: Annotated[int, NoBool] | Unknown = Field(default_factory=unrecorded)
     warnings: Annotated[tuple[Message, ...], Field(max_length=100)] = ()
     status: Literal["pending", "running", "succeeded", "failed", "skipped"]
-    started_at: AwareDatetime
-    finished_at: AwareDatetime | None = None
+    started_at: Timestamp
+    finished_at: Timestamp | None = None
 
     _norm_times = field_validator("started_at", "finished_at")(lambda v: None if v is None else to_utc(v))
 

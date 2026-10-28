@@ -111,6 +111,10 @@ def _count(value: Any, what: str) -> int | Unknown:
     return _unavailable(f"legacy state does not record {what}")
 
 
+def _valid_digest(value: Any) -> bool:
+    return isinstance(value, str) and bool(_SHA_RE.fullmatch(value))
+
+
 def _project_dataset(state: PharmState, as_of: datetime) -> DatasetVersion | Unknown:
     if not state.dataset_id:
         return _unavailable("no dataset is loaded in this legacy state")
@@ -121,10 +125,11 @@ def _project_dataset(state: PharmState, as_of: datetime) -> DatasetVersion | Unk
     source = re.split(r"[\\/]", path)[-1] if path else ""
     try:
         return DatasetVersion(
-            id=f"dataset:{state.dataset_id}:legacy", dataset_id=state.dataset_id, created_at=as_of,
+            id=f"dataset:{state.dataset_id}:legacy:{digest[:32] if _valid_digest(digest) else 'nodigest'}",
+            dataset_id=state.dataset_id, created_at=as_of,
             producer=PRODUCER, migration=_legacy_migration("dataset versions were not tracked"),
             source=source or _unavailable("legacy state records no dataset path"),
-            data_digest=digest if isinstance(digest, str) and _SHA_RE.fullmatch(digest)
+            data_digest=digest if _valid_digest(digest)
             else _unavailable("legacy state records no valid dataset SHA-256"),
             subject_id_column=_role_column(roles, "ID"),
             columns=tuple(ColumnSchema(name=c["name"], role=c.get("role"), dtype=c.get("dtype"),
@@ -153,7 +158,7 @@ def _projection_id(session_id: str) -> str:
     candidate = f"legacy:id:{session_id}"
     if _ID_RE.fullmatch(candidate):
         return candidate
-    return "legacy:h:" + sha256_hex(session_id.encode("utf-8", "surrogatepass"))[:16]
+    return "legacy:h:" + sha256_hex(session_id.encode("utf-8", "surrogatepass"))[:32]
 
 
 def project_pharmstate(state: PharmState, *, as_of: datetime) -> LegacyProjection:
@@ -174,7 +179,8 @@ def project_pharmstate(state: PharmState, *, as_of: datetime) -> LegacyProjectio
         executions=_unavailable("tool executions are recorded in the audit chain, not in PharmState"),
         reviews=_unavailable("human reviews are recorded in the audit chain and the session's pending review, "
                              "not in PharmState"),
-        assumptions=AssumptionSet(id="legacy-assumptions:" + sha256_hex(pid.encode())[:16], created_at=as_of,
+        assumptions=AssumptionSet(id="legacy-assumptions:" + sha256_hex(pid.encode("utf-8", "surrogatepass"))[:32],
+                                  created_at=as_of,
                                   producer=PRODUCER,
                                   migration=_legacy_migration("assumptions were not recorded as a set")))
 

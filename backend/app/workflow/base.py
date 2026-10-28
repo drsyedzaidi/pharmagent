@@ -8,6 +8,7 @@ loaded again. ``verify_integrity()`` and ``validated_copy()`` re-check a record 
 from __future__ import annotations
 
 import copy
+import re
 import unicodedata
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from pydantic import (
     Field,
     JsonValue,
     StringConstraints,
+    ValidationInfo,
     WrapSerializer,
     field_validator,
     model_validator,
@@ -36,8 +38,26 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
 
 
 
-#: controls, format characters (bidi overrides, zero-width), line and paragraph separators
+#: controls, format characters (bidi overrides, zero-width), line and paragraph separators. (Lone surrogates in plain
+#: string fields are already refused by pydantic itself; JSON content is checked by ``_json_utf8_ok``.)
 _FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+#: characters that render as nothing (or as blank space) yet are not whitespace or format characters: Hangul fillers,
+#: braille blank, Khmer inherent vowels, combining grapheme joiner
+_BLANK_LOOKING = frozenset("\u115f\u1160\u3164\uffa0\u2800\u17b4\u17b5\u034f")
+
+
+def _bad_character(c: str, *, allow_layout: bool = False) -> bool:
+    if allow_layout and c in "\n\t":
+        return False
+    return unicodedata.category(c) in _FORBIDDEN_CATEGORIES or c in _BLANK_LOOKING
+
+
+def _utf8(value: str) -> str:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("string contains a lone surrogate and is not valid UTF-8 text") from exc
+    return value
 
 
 def _has_visible_character(value: str) -> bool:
@@ -47,14 +67,14 @@ def _has_visible_character(value: str) -> bool:
 def _label(value: str) -> str:
     if value != value.strip():
         raise ValueError("must not have leading or trailing whitespace")
-    if any(unicodedata.category(c) in _FORBIDDEN_CATEGORIES for c in value):
-        raise ValueError("must not contain control, format or line-separator characters")
-    return value          # non-empty, no edge whitespace and no format/control characters: a visible character remains
+    if any(_bad_character(c) for c in value):
+        raise ValueError("must not contain control, format, blank-looking or surrogate characters")
+    return value          # non-empty, no edge whitespace and none of the invisible characters: a visible one remains
 
 
 def _message(value: str) -> str:
-    if any(unicodedata.category(c) in _FORBIDDEN_CATEGORIES and c not in "\n\t" for c in value):
-        raise ValueError("must not contain control, format or line-separator characters")
+    if any(_bad_character(c, allow_layout=True) for c in value):
+        raise ValueError("must not contain control, format, blank-looking or surrogate characters")
     if not _has_visible_character(value):
         raise ValueError("must contain a visible character")
     return value
@@ -67,6 +87,26 @@ MAX_NESTING = 64
 #: Private key for the validation context that skips advisory lints during structural re-validation. A module-level
 #: object, not a string, so it cannot be guessed; it is not a security boundary (importing it is possible).
 STRUCTURAL = object()
+#: Private key marking a LOAD of a stored record (see ``WorkflowContract.load``).
+REQUIRE_HASH = object()
+#: Hashes are computed over {domain, record_type, schema_version, fields}, so records of different types or schema
+#: versions can never share a hash even if their fields happened to coincide.
+HASH_DOMAIN = "pharmagent.workflow.record"
+
+_ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$")
+
+
+def _strict_timestamp(value: Any) -> Any:
+    """A ``datetime``, or an ISO-8601 string with an explicit offset and at most microsecond precision. Epoch numbers,
+    bare dates, naive strings, bytes and over-precise fractions are refused rather than coerced or truncated."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and _ISO_TIMESTAMP.fullmatch(value):
+        return value
+    raise ValueError("a timestamp must be a datetime or an ISO-8601 string with an offset (at most microseconds)")
+
+
+Timestamp = Annotated[AwareDatetime, BeforeValidator(_strict_timestamp)]
 
 
 def to_utc(value: datetime) -> datetime:
@@ -87,6 +127,8 @@ class FrozenMap(Mapping):
     __slots__ = ("_data", "_height")
 
     def __init__(self, data: Mapping[str, Any] | None = None, _depth: int = 0):
+        if hasattr(self, "_data"):
+            raise TypeError("FrozenMap is already initialized and cannot be re-initialized")
         items = dict(data or {})
         if not all(isinstance(k, str) for k in items):
             raise TypeError("FrozenMap keys must be strings")
@@ -160,6 +202,23 @@ def thaw(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+def _all_utf8(value: Any) -> None:
+    if isinstance(value, str):
+        _utf8(value)
+    elif isinstance(value, Mapping):
+        for k, v in value.items():
+            _utf8(k)
+            _all_utf8(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            _all_utf8(v)
+
+
+def _json_utf8_ok(value: dict[str, Any]) -> dict[str, Any]:
+    _all_utf8(value)
+    return value
+
+
 def _json_size_ok(value: dict[str, Any]) -> dict[str, Any]:
     if len(canonical_json(value)) > MAX_JSON_BYTES:         # also raises on NaN / Infinity / non-JSON values
         raise ValueError(f"must serialize to at most {MAX_JSON_BYTES} bytes")
@@ -191,13 +250,13 @@ ColumnName = Annotated[str, StringConstraints(min_length=1, max_length=128), Aft
 Message = Annotated[str, StringConstraints(min_length=1, max_length=2000), AfterValidator(_message)]
 NonNegInt = Annotated[int, NoBool, Field(ge=0)]
 FiniteFloat = Annotated[float, NoBool, Field(allow_inf_nan=False)]
-JsonObject = Annotated[dict[str, JsonValue], BeforeValidator(thaw), AfterValidator(_json_size_ok),
-                       AfterValidator(freeze), WrapSerializer(_thaw_for_serialization)]
+JsonObject = Annotated[dict[str, JsonValue], BeforeValidator(thaw), AfterValidator(_json_utf8_ok),
+                       AfterValidator(_json_size_ok), AfterValidator(freeze), WrapSerializer(_thaw_for_serialization)]
 IdTuple = Annotated[tuple[Identifier, ...], Field(max_length=1000)]
 
 
 class Frozen(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", revalidate_instances="always")
 
 
 class Unknown(Frozen):
@@ -218,7 +277,7 @@ class MigrationInfo(Frozen):
 class WorkflowContract(Frozen):
     schema_version: int = SCHEMA_VERSION
     id: Identifier
-    created_at: AwareDatetime
+    created_at: Timestamp
     producer: Label
     parents: IdTuple = ()
     hash_algorithm: Literal["sha256"] = "sha256"
@@ -228,7 +287,7 @@ class WorkflowContract(Frozen):
     @field_validator("schema_version", mode="before")
     @classmethod
     def _supported_version(cls, v: Any) -> int:
-        if isinstance(v, bool) or v not in SUPPORTED_SCHEMA_VERSIONS:
+        if type(v) is not int or v not in SUPPORTED_SCHEMA_VERSIONS:      # exact int: not 1.0, "1" or True
             raise ValueError(f"unsupported schema_version {v}; supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}")
         return v
 
@@ -245,15 +304,27 @@ class WorkflowContract(Frozen):
         return v
 
     @model_validator(mode="after")
-    def _seal(self):
+    def _seal(self, info: ValidationInfo):
         if self.id in self.parents:
             raise ValueError("a record cannot be its own parent: id appears in parents (itself)")
         digest = self.compute_hash()
         if self.content_hash == "":
-            object.__setattr__(self, "content_hash", digest)
+            if info.context and info.context.get(REQUIRE_HASH):
+                raise ValueError("a stored record must carry its content_hash; a missing or blank hash is refused")
+            object.__setattr__(self, "content_hash", digest)          # fresh construction: seal now
         elif self.content_hash != digest:
             raise ValueError("content_hash does not match the record content")
         return self
+
+    @classmethod
+    def load(cls, data):
+        """The entry point for STORED records (JSON text or bytes, or a mapping). Unlike fresh construction it refuses
+        a missing or blank ``content_hash`` instead of sealing the content it was given, so tampering plus stripping the
+        hash cannot launder a record. Anything read back from storage must come through here."""
+        context = {REQUIRE_HASH: True}
+        if isinstance(data, str | bytes | bytearray):
+            return cls.model_validate_json(data, context=context)
+        return cls.model_validate(data, context=context)
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False):
         """A copy is validated from scratch, so ``update`` cannot smuggle in a record that skips its own rules or keeps
@@ -274,15 +345,16 @@ class WorkflowContract(Frozen):
         lying comparison, smuggled in through ``model_construct``, cannot reach a decision). A record with no stored
         content hash is refused. Policy lints (see ``ReviewRecord``) are skipped, so tightening one later does not void
         old records."""
-        if self.content_hash == "":
-            raise ContractError(f"integrity check failed: {type(self).__name__} has no content hash")
         try:
-            return type(self).model_validate_json(self.model_dump_json(), context={STRUCTURAL: True})
+            context = {STRUCTURAL: True, REQUIRE_HASH: True}           # REQUIRE_HASH refuses a blank stored hash
+            return type(self).model_validate_json(self.model_dump_json(), context=context)
         except Exception as exc:
             raise ContractError(f"integrity check failed: {type(self).__name__} failed re-validation") from exc
 
     def compute_hash(self) -> str:
-        return sha256_hex(canonical_json(self.model_dump(mode="json", exclude={"content_hash"})))
+        payload = {"domain": HASH_DOMAIN, "record_type": type(self).__name__, "schema_version": self.schema_version,
+                   "fields": self.model_dump(mode="json", exclude={"content_hash"})}
+        return sha256_hex(canonical_json(payload))
 
     def verify_integrity(self) -> bool:
         """True if the live object still matches its content hash. The seal is checked when a record is constructed

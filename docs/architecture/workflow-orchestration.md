@@ -23,6 +23,7 @@ route, sign or approve anything.
 | `events.py` | `WorkflowEvent` (a domain-event **schema** only) and `AuditEntryRef` |
 | `compat.py` | Read-only projection of a legacy `PharmState` or serialized session row |
 | `hashing.py` | Canonical JSON and SHA-256 |
+| `errors.py` | `ContractError`, the one exception type this package raises for malformed or unreadable records |
 
 Tests are in `backend/tests/workflow/` (fixtures are sanitized serialized legacy sessions).
 
@@ -39,15 +40,27 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   the record, and `model_dump()` hands out fresh plain copies. `object.__setattr__`, `model_construct` and pickle can
   still bypass Python-level guards, as can reaching into `FrozenMap` internals; `verify_integrity()` is the backstop
   for that, not the primary mechanism. "Immutable" means immutable through the normal API, not against a deliberate hack.
-* `content_hash` is SHA-256 over the canonical JSON (sorted keys, compact separators, ASCII, no NaN/Infinity) of every
-  other field. It is computed when omitted and verified when supplied, so an altered record is refused when it is
-  loaded again, and `model_copy` re-validates, so a change cannot ride along under the old hash. It is an **unkeyed
-  corruption check, not proof of authenticity**: anyone who can write a record can compute a matching hash.
-  Authenticity comes only from the existing keyed audit seal.
-* Unsupported `schema_version` values are refused in both directions.
+* `content_hash` is SHA-256 over the canonical JSON (sorted keys, compact separators, ASCII, no NaN/Infinity) of a
+  domain-separated payload: `{domain, record_type, schema_version, fields}`, where `fields` is every other field. Two
+  record types, or two schema versions, therefore never share a hash even if their fields coincide. Ten pinned hash
+  vectors (one per record family, including the legacy projection) fail loudly if the recipe, a field or a
+  serialization rule ever changes; the response is a `schema_version` bump and a migration, never a silent re-pin.
+* **Constructing is not loading.** Building a record from fields seals it automatically. Anything read back from
+  storage must come through `WorkflowContract.load(...)`, which refuses a missing or blank `content_hash` instead of
+  sealing the content it was handed, so tampering plus stripping the hash cannot launder a record. A stored record whose
+  content was altered is refused, and `model_copy` re-validates so a change cannot ride along under the old hash. The
+  hash is an **unkeyed corruption check, not proof of authenticity**: anyone who can write a record can compute a
+  matching hash. Authenticity comes only from the existing keyed audit seal.
+* `schema_version` must be the exact integer of a supported version (not `1.0`, `"1"` or `True`), refused in both
+  directions. Timestamps must be a `datetime` or an ISO-8601 string with an explicit offset and at most microsecond
+  precision; epoch numbers, naive strings and over-precise fractions are refused rather than coerced or truncated.
+* Nested model instances are re-validated when a record is built, so a forged `model_construct` child inside a record
+  is refused at construction.
 * A value the source never recorded is an explicit `Unknown(status, reason)`. It is never filled in.
-* Text fields refuse control, format (bidi, zero-width) and line-separator characters, blank-looking values and edge
-  whitespace; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
+* Text fields refuse control, format (bidi, zero-width), line-separator and lone-surrogate characters, a fixed list of
+  characters that render as blank (Hangul fillers, braille blank, Khmer inherent vowels, combining grapheme joiner) and
+  edge whitespace. That list is not exhaustive: other blank-looking characters may exist, and the labels are display text
+  that carries no authority. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
   mapping fields are immutable too (pydantic does not validate defaults, so they are `FrozenMap` already). Equality is
   Python value equality (`1 == 1.0`); `content_hash` is stricter and treats `1` and `1.0`, and `0.0` and `-0.0`, as
   different, so two records that compare equal but carry different numeric spellings have different hashes.
@@ -81,8 +94,9 @@ Seven gates: cleaned dataset, NCA exclusions and BLQ handling, base structural m
 simulation scenario, final report. A `ReviewRecord` binds a decision to the exact digests of the artifacts reviewed
 (an `ArtifactBinding`'s id must be the content address of its digest). `binding_status(current)` reports `current`,
 `stale` (a bound artifact changed), `missing`, or `invalid` (the record fails its own integrity check or no longer
-re-validates, which catches a forged record that was rehashed); only an `approved` record with a `current` binding is
-a current approval. The decision is made on a freshly validated copy, never the live object, because a `str`, `int` or `datetime`
+re-validates); only an `approved` record with a `current` binding is a current approval. Re-validation catches records
+that are structurally invalid even if their hash was recomputed. It does **not** catch a structurally valid forgery
+whose hash was recomputed: that needs the keyed audit seal. The decision is made on a freshly validated copy, never the live object, because a `str`, `int` or `datetime`
 subclass with a lying comparison could otherwise be smuggled in through `model_construct` plus a rehash. The copy is
 rebuilt from the record's JSON form, so every field comes back as an exact built-in type, and a record with a blank
 stored hash is refused. Re-validation checks
@@ -118,8 +132,10 @@ database or audit access. The caller supplies `as_of`. They report what a legacy
 digest, columns and roles, subject count, environment id derived from the recorded run provenance, which result fields
 are populated per stage). Units, dose-record counts, executions, reviews and assumptions were not recorded in
 `PharmState`, so they are `Unknown(unavailable, ...)`. "Stage evidence" says a result field is populated; it says
-nothing about completion, validity or approval. The projected dataset has `display_version=None` and an id ending
-in `:legacy`: legacy state tracked no versions, so none is invented. Its `source` is the data file's base name, which
+nothing about completion, validity or approval. The projected dataset has `display_version=None` and an id of the form
+`dataset:<dataset_id>:legacy:<first 32 hex of its data digest>` (or `...:legacy:nodigest`), so different data under the
+same dataset id never collides: legacy state tracked no versions, so none is invented. Projection ids come from three
+disjoint namespaces: `legacy:none`, `legacy:id:<session id>` and `legacy:h:<32 hex of a hash>`. Its `source` is the data file's base name, which
 may contain PHI or PII, so treat projected records as sensitive until the Phase D privacy review.
 
 ## Required before records are persisted or acted on (Phase D)
