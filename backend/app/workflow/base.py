@@ -40,31 +40,78 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
 
 
 
-#: controls, format characters (bidi overrides, zero-width), line and paragraph separators, private-use and unassigned
-#: code points. (Lone surrogates in plain string fields are already refused by pydantic itself; JSON content is
-#: checked by ``_json_utf8_ok``.)
-_FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cn"})
-#: Unicode Default_Ignorable_Code_Point ranges (rendered as nothing). Written as integers so this file stays ASCII.
+#: Always refused: controls, format characters (bidi overrides, zero-width), line and paragraph separators. Lone
+#: surrogates in plain string fields are already refused by pydantic itself; JSON content is checked by
+#: ``_json_utf8_ok``. Private-use (Co) and unassigned (Cn) code points are refused only when a record is being CREATED:
+#: whether a code point is assigned depends on the interpreter's Unicode database, and a stored record written on a
+#: newer Python must stay loadable on an older one.
+_ALWAYS_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_CREATE_BAD_CATEGORIES = frozenset({"Co", "Cn"})
+#: Unicode Default_Ignorable_Code_Point ranges (rendered as nothing), plus U+16FE4 (Khitan small script filler, which is
+#: not Default_Ignorable but is a blank-rendering filler). Written as integers so this file stays ASCII.
 _DEFAULT_IGNORABLE = (
     (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
     (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
     (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x16FE4, 0x16FE4), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
     (0xE0000, 0xE0FFF),
 )
+_IGNORABLE = frozenset(cp for lo, hi in _DEFAULT_IGNORABLE for cp in range(lo, hi + 1))
 #: characters that render as nothing (or as blank space) yet are not whitespace or format characters: Hangul fillers,
 #: braille blank, Khmer inherent vowels, combining grapheme joiner
 _BLANK_LOOKING = frozenset("\u115f\u1160\u3164\uffa0\u2800\u17b4\u17b5\u034f")
+_ZWNJ, _ZWJ, _VS16 = 0x200C, 0x200D, 0xFE0F
+_VIRAMA = 9                                   # canonical combining class of Indic viramas
+_KEYCAP_BASES = frozenset("#*0123456789")
+_ASCII_STRICT = re.compile(r"[\x00-\x1f\x7f]")
+_ASCII_LAYOUT = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")           # newline and tab allowed
+_ASCII_VISIBLE = re.compile(r"[!-~]")                                # every printable ASCII non-space is L, N, P or S
+_TEXT_REFUSED = "must not contain control, format, blank-looking, private-use or surrogate characters"
 
 
-def _default_ignorable(c: str) -> bool:
-    cp = ord(c)
-    return any(lo <= cp <= hi for lo, hi in _DEFAULT_IGNORABLE)
+def _arabic_letter(c: str) -> bool:
+    return unicodedata.category(c).startswith("L") and "ARABIC" in unicodedata.name(c, "")
 
 
-def _bad_character(c: str, *, allow_layout: bool = False) -> bool:
-    if allow_layout and c in "\n\t":
+def _joiner_allowed(cp: int, prev: str, nxt: str) -> bool:
+    """The three format characters real text needs, allowed only where they do their job (an IDNA CONTEXTJ-style rule):
+    ZWNJ after a virama or between two Arabic-script letters (Persian); ZWJ after a virama (Indic conjuncts, Sinhala,
+    Malayalam chillu) or between two emoji (family and profession sequences); VS16 after an emoji or a keycap base."""
+    if not prev:
         return False
-    return unicodedata.category(c) in _FORBIDDEN_CATEGORIES or c in _BLANK_LOOKING or _default_ignorable(c)
+    after_virama = unicodedata.combining(prev) == _VIRAMA
+    if cp == _ZWNJ:
+        return after_virama or bool(nxt and _arabic_letter(prev) and _arabic_letter(nxt))
+    if cp == _ZWJ:
+        emoji_before = unicodedata.category(prev) in {"So", "Sk"} or ord(prev) == _VS16
+        return after_virama or bool(nxt and emoji_before and unicodedata.category(nxt) == "So")
+    return unicodedata.category(prev) in {"So", "Sk"} or prev in _KEYCAP_BASES                      # VS16
+
+
+def check_text(value: str, *, allow_layout: bool, creating: bool) -> None:
+    """Refuse invisible, control and private-use characters. Plain ASCII takes a single compiled-regex pass; other text
+    is scanned per character with the context rules for joiners above."""
+    if value.isascii():
+        if (_ASCII_LAYOUT if allow_layout else _ASCII_STRICT).search(value):
+            raise ValueError(_TEXT_REFUSED)
+        return
+    prev = ""
+    last = len(value) - 1
+    for i, c in enumerate(value):
+        cp = ord(c)
+        if allow_layout and c in "\n\t":
+            prev = c
+            continue
+        if cp in (_ZWNJ, _ZWJ, _VS16):
+            if not _joiner_allowed(cp, prev, value[i + 1] if i < last else ""):
+                raise ValueError(_TEXT_REFUSED)
+            prev = c
+            continue
+        category = unicodedata.category(c)
+        if category in _ALWAYS_BAD_CATEGORIES or c in _BLANK_LOOKING or cp in _IGNORABLE:
+            raise ValueError(_TEXT_REFUSED)
+        if creating and category in _CREATE_BAD_CATEGORIES:
+            raise ValueError(_TEXT_REFUSED)
+        prev = c
 
 
 def _utf8(value: str) -> str:
@@ -77,22 +124,30 @@ def _utf8(value: str) -> str:
 
 def _has_visible_character(value: str) -> bool:
     """At least one letter, number, punctuation or symbol (combining marks and separators alone do not count)."""
+    if value.isascii():
+        return bool(_ASCII_VISIBLE.search(value))
     return any(unicodedata.category(c)[0] in "LNPS" for c in value)
 
 
-def _label(value: str) -> str:
+def sealing_class(info: ValidationInfo) -> type | None:
+    """The record class being CREATED by ``create()``/``replace()`` (the validation context's seal marker), else
+    ``None``. Anything that is not a class, and any non-mapping context, counts as "not creating"."""
+    context = info.context
+    marker = context.get(SEAL) if isinstance(context, Mapping) else None
+    return marker if isinstance(marker, type) else None
+
+
+def _label(value: str, info: ValidationInfo) -> str:
     if value != value.strip():
         raise ValueError("must not have leading or trailing whitespace")
-    if any(_bad_character(c) for c in value):
-        raise ValueError("must not contain control, format, blank-looking or surrogate characters")
+    check_text(value, allow_layout=False, creating=sealing_class(info) is not None)
     if not _has_visible_character(value):
         raise ValueError("must contain a letter, number, punctuation or symbol")
     return value
 
 
-def _message(value: str) -> str:
-    if any(_bad_character(c, allow_layout=True) for c in value):
-        raise ValueError("must not contain control, format, blank-looking or surrogate characters")
+def _message(value: str, info: ValidationInfo) -> str:
+    check_text(value, allow_layout=True, creating=sealing_class(info) is not None)
     if not _has_visible_character(value):
         raise ValueError("must contain a visible character")
     return value
@@ -132,7 +187,11 @@ def to_utc(value: datetime) -> datetime:
         u = datetime.astimezone(value, UTC)               # the real method, not a subclass override
     except OverflowError as exc:                       # the instant is outside the representable UTC range
         raise ValueError("datetime is outside the representable UTC range") from exc
-    return datetime(u.year, u.month, u.day, u.hour, u.minute, u.second, u.microsecond, tzinfo=UTC)
+    def field(name: str) -> int:                                 # read the C-level value, never a subclass override
+        return getattr(datetime, name).__get__(u)
+
+    return datetime(field("year"), field("month"), field("day"), field("hour"), field("minute"), field("second"),
+                    field("microsecond"), tzinfo=UTC)
 
 
 class FrozenMap(Mapping):
@@ -168,13 +227,18 @@ class FrozenMap(Mapping):
         return len(self._data)
 
     def __eq__(self, other: object) -> bool:
-        return thaw(self) == thaw(other) if isinstance(other, Mapping) else NotImplemented
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        try:
+            return thaw(self) == thaw(other)
+        except ValueError:                                      # a foreign mapping nested deeper than the limit
+            return False
 
     def __hash__(self) -> int:
         return hash(tuple(self._data.items()))
 
     def __repr__(self) -> str:
-        return f"FrozenMap({thaw(self)!r})"
+        return f"FrozenMap(<{len(self._data)} entries>)"            # contents may be PHI: never printed by default
 
     def __reduce__(self):
         return (FrozenMap, (thaw(self),))
@@ -255,17 +319,10 @@ def frozen_map_of(key_type: Any, value_type: Any) -> Any:
 ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 Identifier = Annotated[str, StringConstraints(pattern=ID_PATTERN)]
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-def _reject_bool(value: Any) -> Any:
-    if isinstance(value, bool):
-        raise ValueError("a boolean is not a number")
-    return value
-
-
-NoBool = BeforeValidator(_reject_bool)
 Label = Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_label)]
 ColumnName = Annotated[str, StringConstraints(min_length=1, max_length=128), AfterValidator(_label)]
 Message = Annotated[str, StringConstraints(min_length=1, max_length=2000), AfterValidator(_message)]
-def _numbers_only(value: Any) -> Any:
+def numbers_only(value: Any) -> Any:
     """int or float, not bool and not a numeric string: stored bytes stay canonical (one spelling per value)."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ValueError("a number is required (not a boolean or a string)")
@@ -273,13 +330,21 @@ def _numbers_only(value: Any) -> Any:
 
 
 NonNegInt = Annotated[int, Field(ge=0, strict=True)]            # strict: not "3", 3.0 or True
-FiniteFloat = Annotated[float, BeforeValidator(_numbers_only), Field(allow_inf_nan=False)]
+FiniteFloat = Annotated[float, BeforeValidator(numbers_only), Field(allow_inf_nan=False)]
 JsonObject = Annotated[dict[str, JsonValue], BeforeValidator(thaw), AfterValidator(_json_utf8_ok),
                        AfterValidator(_json_size_ok), AfterValidator(freeze), WrapSerializer(_thaw_for_serialization)]
 IdTuple = Annotated[tuple[Identifier, ...], Field(max_length=1000)]
 
 
 class Frozen(BaseModel):
+    """Base of every nested value model. ``repr`` and ``str`` are redacted: fields can hold free text and identifiers
+    that are PHI in a real study. Use ``model_dump()`` deliberately when the content is needed."""
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(<redacted>)"
+
+    __str__ = __repr__
+
     model_config = ConfigDict(frozen=True, extra="forbid", revalidate_instances="always", hide_input_in_errors=True)
 
 
@@ -298,6 +363,7 @@ class MigrationInfo(Frozen):
     note: Annotated[str, StringConstraints(min_length=1, max_length=500), AfterValidator(_message)]
 
 
+_RECORD_TYPE_FORM = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _RECORD_TYPES: dict[str, tuple[str, str]] = {}      # constant -> (module, qualname) that claimed it
 
 
@@ -311,8 +377,8 @@ class WorkflowContract(Frozen):
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
         constant = vars(cls).get("RECORD_TYPE")
-        if not isinstance(constant, str) or not constant.strip():
-            raise TypeError(f"{cls.__name__} must declare its own non-empty RECORD_TYPE string")
+        if not isinstance(constant, str) or not _RECORD_TYPE_FORM.fullmatch(constant):
+            raise TypeError(f"{cls.__name__} must declare its own RECORD_TYPE: a plain ASCII identifier string")
         owner = _RECORD_TYPES.get(constant)
         here = (cls.__module__, cls.__qualname__)
         if owner is not None and owner != here:
@@ -332,7 +398,8 @@ class WorkflowContract(Frozen):
     @classmethod
     def _supported_version(cls, v: Any) -> int:
         if type(v) is not int or v not in SUPPORTED_SCHEMA_VERSIONS:      # exact int: not 1.0, "1" or True
-            raise ValueError(f"unsupported schema_version {v}; supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}")
+            raise ValueError(f"unsupported schema_version (got a {type(v).__name__}); "
+                             f"supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}")
         return v
 
     @field_validator("created_at")
@@ -353,7 +420,7 @@ class WorkflowContract(Frozen):
             raise ValueError("a record cannot be its own parent: id appears in parents (itself)")
         digest = self.compute_hash()
         if self.content_hash == "":
-            if not (info.context and info.context.get(SEAL)):
+            if sealing_class(info) is not type(self):            # nested records and every other path must bring a hash
                 raise ValueError(
                     "content_hash is required: build a NEW record with create() or replace(), and read a stored "
                     "one with load(); a missing or blank hash is never sealed implicitly")
@@ -369,18 +436,18 @@ class WorkflowContract(Frozen):
         ``load`` and ``model_copy`` all require an existing, correct ``content_hash`` and never seal on their own."""
         if "content_hash" in fields:
             raise TypeError("create() seals the record itself; do not pass content_hash")
-        if "RECORD_TYPE" not in vars(cls):
-            raise TypeError(f"{cls.__name__} is abstract: it declares no RECORD_TYPE")
-        return cls.model_validate({**fields, "content_hash": ""}, context={SEAL: True})
+        return cls.model_validate({**fields, "content_hash": ""}, context={SEAL: cls})
 
     def replace(self, **changes: Any):
         """A NEW sealed record equal to this one except for ``changes`` (the named replacement API). The original is
-        untouched. Unknown fields are refused."""
+        untouched. The source record must still match its own hash (it is read through ``validated_copy``), so a
+        tampered record cannot be turned into a valid-looking one. Unknown fields are refused."""
         fields = type(self).model_fields
         unknown = set(changes) - set(fields)
         if unknown:
-            raise ContractError(f"unknown fields: {sorted(unknown)}")
-        data = {name: getattr(self, name) for name in fields if name != "content_hash"}
+            raise ContractError("unknown fields in replace()", detail=sorted(unknown))
+        source = self.validated_copy()
+        data = {name: getattr(source, name) for name in fields if name != "content_hash"}
         data.update(changes)
         return type(self).create(**data)
 
@@ -399,7 +466,7 @@ class WorkflowContract(Frozen):
         fields = type(self).model_fields
         unknown = set(update or {}) - set(fields)
         if unknown:
-            raise ContractError(f"unknown fields in update: {sorted(unknown)}")
+            raise ContractError("unknown fields in model_copy() update", detail=sorted(unknown))
         data = {name: getattr(self, name) for name in fields}
         data.update(update or {})
         return type(self).model_validate(copy.deepcopy(data) if deep else data)
@@ -416,14 +483,24 @@ class WorkflowContract(Frozen):
         except Exception as exc:
             raise ContractError(f"integrity check failed: {type(self).__name__} failed re-validation") from exc
 
+    def __repr__(self) -> str:
+        record_type = getattr(type(self), "RECORD_TYPE", type(self).__name__)
+        return f"{record_type}(hash={self.content_hash[:12] or 'unsealed'})"
+
+    __str__ = __repr__
+
     def compute_hash(self) -> str:
-        payload = {"domain": HASH_DOMAIN, "record_type": self.RECORD_TYPE, "schema_version": self.schema_version,
+        record_type = getattr(type(self), "RECORD_TYPE", None)
+        if not isinstance(record_type, str):
+            raise TypeError(f"{type(self).__name__} declares no RECORD_TYPE")
+        payload = {"domain": HASH_DOMAIN, "record_type": record_type, "schema_version": self.schema_version,
                    "fields": self.model_dump(mode="json", exclude={"content_hash"})}
         return sha256_hex(canonical_json(payload))
 
     def verify_integrity(self) -> bool:
-        """True if the live object still matches its content hash. The seal is checked when a record is constructed
-        or loaded; a forced attribute rewrite (``object.__setattr__``) or ``model_construct`` is caught by this call."""
+        """True if the live object still matches its content hash. It checks the HASH ONLY: a forced attribute rewrite
+        (``object.__setattr__``) is caught, but a ``model_construct`` record whose hash was recomputed passes. Use
+        ``validated_copy()`` for the structural check."""
         try:
             return self.content_hash == self.compute_hash()
         except Exception:                 # content that cannot even be serialized is not intact

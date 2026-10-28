@@ -19,7 +19,7 @@ from .contracts import (
     ReviewRecord,
     TransformationRecord,
 )
-from .errors import ContractError
+from .errors import ContractError, safe_errors
 from .events import AuditEntryRef, WorkflowEvent
 from .lineage import check_lineage
 from .stages import ALLOWED_ADVANCES, GATE_STAGE, ReviewGate, StageTransition, WorkflowStage, is_allowed
@@ -29,5 +29,5 @@ __all__ = [
     "Bounds", "ColumnSchema", "ContractError", "DatasetVersion", "DatasetVersionRef", "ExecutionRecord", "Finding",
     "FrozenMap", "GATE_STAGE", "ReviewGate", "ReviewRecord", "SCHEMA_VERSION", "StageTransition",
     "TransformationRecord", "Unknown", "WorkflowContract", "WorkflowEvent", "WorkflowStage", "check_lineage",
-    "is_allowed",
+    "is_allowed", "safe_errors",
 ]

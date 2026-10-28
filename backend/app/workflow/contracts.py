@@ -8,10 +8,17 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, StrictBool, StringConstraints, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    StrictBool,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from .base import (
-    SEAL,
     ColumnName,
     FiniteFloat,
     Frozen,
@@ -21,14 +28,15 @@ from .base import (
     JsonObject,
     Label,
     Message,
-    NoBool,
     NonNegInt,
     Sha256Hex,
     Timestamp,
     Unknown,
     WorkflowContract,
     frozen_map_of,
+    numbers_only,
     require_unique,
+    sealing_class,
     to_utc,
     unrecorded,
 )
@@ -95,7 +103,8 @@ class ColumnSchema(Frozen):
 class BlqRepresentation(Frozen):
     basis: Literal["cens_flag", "dv_nonpositive", "none"]
     censoring_column: ColumnName | None = None
-    lloq: Annotated[float, NoBool, Field(ge=0, allow_inf_nan=False)] | Unknown = Field(default_factory=unrecorded)
+    lloq: Annotated[float, BeforeValidator(numbers_only), Field(ge=0, allow_inf_nan=False)] | Unknown = Field(
+        default_factory=unrecorded)
 
     @model_validator(mode="after")
     def _column_matches_basis(self):
@@ -208,7 +217,7 @@ class AssumptionSet(WorkflowContract):
             for name, value in self.initial_estimates.items():
                 b = self.bounds.get(name)
                 if b and ((b.lower is not None and value < b.lower) or (b.upper is not None and value > b.upper)):
-                    raise ValueError(f"initial estimate for '{name}' is outside its bounds")
+                    raise ValueError("an initial estimate is outside its bounds")
         return self
 
 
@@ -316,7 +325,8 @@ class ReviewRecord(WorkflowContract):
     @field_validator("actor_label")
     @classmethod
     def _label_lint(cls, v: str, info: ValidationInfo) -> str:
-        if not (info.context and info.context.get(SEAL)):          # advisory lint: judges NEW records only
+        creating = sealing_class(info)
+        if creating is None or not issubclass(creating, ReviewRecord):          # advisory lint: judges NEW reviews only
             return v
         text = "".join(c for c in unicodedata.normalize("NFKC", v) if unicodedata.category(c) != "Cf").casefold()
         words = set(re.split(r"[^a-z0-9]+", text))

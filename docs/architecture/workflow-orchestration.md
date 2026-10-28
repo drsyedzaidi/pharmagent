@@ -23,7 +23,7 @@ route, sign or approve anything.
 | `events.py` | `WorkflowEvent` (a domain-event **schema** only) and `AuditEntryRef` |
 | `compat.py` | Read-only projection of a legacy `PharmState` or serialized session row |
 | `hashing.py` | Canonical JSON and SHA-256 |
-| `errors.py` | `ContractError`, raised by `validated_copy`, `check_lineage`, the compat projection and `replace`/`model_copy` for unusable input. Constructing, `create` and `load` raise pydantic's `ValidationError` instead |
+| `errors.py` | `ContractError` (fixed-text messages; ids live on `.detail`) and `safe_errors`, the PHI-safe form of a validation error. `ContractError` comes from `validated_copy`, `check_lineage`, the compat projection and unknown field names in `replace`/`model_copy`; invalid field VALUES raise pydantic's `ValidationError`, as do constructing, `create` and `load` |
 
 Tests are in `backend/tests/workflow/` (fixtures are sanitized serialized legacy sessions).
 
@@ -48,15 +48,20 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   schema versions, therefore never share a hash even if their fields coincide. The canonical form is **Python's**, not
   RFC 8785 (JCS): float text is Python `repr`, object keys sort by code point rather than UTF-16 unit, and integers
   above `sys.get_int_max_str_digits()` digits cannot be hashed, so a non-Python verifier would need to reproduce it.
-  Pinned hash vectors cover every record family plus the risky encodings (floats, `-0.0`, a 2**70 integer, non-ASCII
-  and astral text, microseconds, a `+05:30` offset, populated maps); ten of them were computed by hand from literal
-  JSON outside the model. They fail loudly if the recipe, a field or a serialization rule ever changes; the response is
+  The recipe also depends on pydantic's JSON rendering, pinned in `requirements.txt`: datetimes serialize as UTC with a
+  `Z`, no fraction when the microseconds are zero and exactly six digits otherwise (`.120000Z`), and an integer given
+  for a float field becomes a float (`5` -> `5.0`). A non-Python verifier must reproduce these. Pinned hash vectors cover every record family plus the risky encodings (floats, `-0.0`, a 2**70 integer, non-ASCII
+  and astral text, microseconds, a `+05:30` offset, populated maps, a trailing-zero fraction); every pinned vector except the legacy projection's was recomputed by hand from literal JSON outside the model, by the author and independently by reviewers. They fail loudly if the recipe, a field or a serialization rule ever changes; the response is
   a `schema_version` bump and a migration, never a silent re-pin.
-* **Sealing has a name; validating never seals.** `Model.create(**fields)` builds a NEW record and seals it, and
+* **Sealing has a name; validating never seals, and only the top-level record being created is sealed.** `Model.create(**fields)` builds a NEW record and seals it, and
   `record.replace(**changes)` makes a new sealed record from an existing one. Every other path (the constructor,
   `model_validate`, `model_validate_json`, `load` and `model_copy`) requires an existing, correct `content_hash` and
   refuses a missing or blank one, so a stored record whose content was altered, or whose hash was stripped, cannot be
-  laundered by reading it back. `model_copy(update=...)` can no longer change content (use `replace`). Stored bytes are
+  laundered by reading it back. `create` and `replace` seal ONLY the record they name: a nested record (for example the dataset inside a legacy
+  projection) must arrive with its own correct hash, or the whole creation is refused. `replace` reads its source through
+  `validated_copy`, so a tampered in-memory record cannot be turned into a valid-looking one, and `model_copy(update=...)`
+  can no longer change content (use `replace`). The `SEAL` marker is a private class-valued validation-context key; it is
+  importable, so it is not a security boundary. Stored bytes are
   not themselves canonical: a validated record re-serializes to its canonical form, so a store that hashes raw bytes
   would disagree with `content_hash`. The hash is an **unkeyed corruption check, not proof of authenticity**: anyone who can write a record can compute a
   matching hash. Authenticity comes only from the existing keyed audit seal.
@@ -71,10 +76,17 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   (bidi, zero-width), line-separator, private-use and unassigned characters, the Unicode Default_Ignorable ranges
   (variation selectors, tag characters, fillers), a fixed list of other blank-rendering characters (braille blank, Khmer
   inherent vowels), and edge whitespace, and must contain a letter, number, punctuation mark or symbol (marks alone do
-  not count). The ignorable ranges are written out by hand, so the set can drift from a future Unicode version;
-  confusable (look-alike) letters are not detected, and labels are display text that carries no authority. Validation
-  errors hide the offending input in their printed form, but `ValidationError.errors()` still carries it (as does
-  FastAPI's default 422 body) unless the caller passes `include_input=False`. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
+  not count). The ignorable ranges are written out by hand, so the set can drift from a future Unicode version, and `U+16FE4` (a Khitan
+  filler) is refused although it is not Default_Ignorable. Three joiners real text needs are allowed only where they
+  work (an IDNA CONTEXTJ-style rule): ZWNJ after a virama or between two Arabic-script letters (Persian), ZWJ after a
+  virama or between two emoji (Indic and Sinhala conjuncts, family and profession emoji), and VS16 after an emoji or
+  keycap base; ZWNJ/ZWJ/VS16 anywhere else, and LRM/RLM, are refused. Private-use and unassigned code points are
+  refused only when a record is CREATED (`create`/`replace`), because what counts as assigned depends on the
+  interpreter's Unicode database; stored records stay loadable across interpreter versions (a create-only rule).
+  Confusable (look-alike) letters are not detected, CRLF line endings are refused in messages (an API must normalise
+  them), and labels are display text that carries no authority. Plain ASCII text is checked with a single compiled
+  regex pass; only non-ASCII text is scanned per character. See "PHI-safe errors and repr" below
+  for what error text and `repr` expose. Strings inside JSON content must be valid UTF-8 (no lone surrogates), keys included; numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
   mapping fields are immutable too (pydantic does not validate defaults, so they are `FrozenMap` already). Equality is
   Python value equality (`1 == 1.0`); `content_hash` is stricter and treats `1` and `1.0`, and `0.0` and `-0.0`, as
   different, so two records that compare equal but carry different numeric spellings have different hashes.
@@ -156,6 +168,25 @@ same dataset id never collides: legacy state tracked no versions, so none is inv
 disjoint namespaces: `legacy:none`, `legacy:id:<session id>` and `legacy:h:<32 hex of a hash>`. Its `source` is the data file's base name, which
 may contain PHI or PII, so treat projected records as sensitive until the Phase D privacy review.
 
+## PHI-safe errors and repr
+
+Validation errors and printed records can carry identifiers and free text that are PHI in a real study.
+
+* `hide_input_in_errors=True` hides the offending input in the printed and logged form of an error only.
+  `ValidationError.errors()`, `.json()` and FastAPI's default 422 body still carry it under `input`, and a lone surrogate
+  makes `.json()` raise. `errors(include_input=False)` closes `input`, but not `loc` (a caller-chosen dict key or an
+  extra field name appears there, also in `str()` of the error) and not any value a validator interpolated into `msg`.
+* `safe_errors(exc)` is the boundary: it returns only `{type, loc, msg}`, with `loc` reduced to static schema names and
+  list indices (anything else becomes `"<key>"`), no input, URL or context, and a length-capped message. Validator
+  messages are fixed text; none interpolates a caller-supplied value, and a test feeds PHI-like text through every
+  field of every record family to keep it that way. **Any API that exposes these models must route validation errors
+  through it; until a handler does and is tested, this is a blocking requirement for Phase B.**
+* `ContractError` messages are fixed text; the ids involved are on `.detail` for an authorised debugger and must not be
+  logged by default.
+* `repr` and `str` of every record and nested model show the record type and the first 12 hex characters of the hash
+  (or `<redacted>`), never field contents; `FrozenMap` prints its size. Use `model_dump()` deliberately when the
+  content is needed.
+
 ## Required before records are persisted or acted on (Phase D)
 
 Raised by the Phase A security review and deliberately not built here:
@@ -167,6 +198,8 @@ Raised by the Phase A security review and deliberately not built here:
   kinds and minimum set, a link to the review it supersedes, and a server-assigned timestamp. Without these an approval
   can be replayed against a later state with the same digests.
 * Enforce that a rollback targets a stage that was actually visited; Phase A checks only that it goes backwards.
+* **Blocking for Phase B and any API: a tested PHI-safe error boundary.** See below. No handler may return or log
+  `ValidationError.errors()`, `.json()`, `.errors(include_input=False)` or `str()` of a validation error directly.
 * Privacy review of dataset file names carried by the projection, and CSV/formula escaping on every export.
 
 ## Later phases (not implemented, not approved)

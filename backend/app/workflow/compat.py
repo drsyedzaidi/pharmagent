@@ -17,7 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.core.pharmstate import PharmState
 
-from .base import ID_PATTERN, Frozen, Label, MigrationInfo, Unknown, WorkflowContract
+from .base import ID_PATTERN, SEAL, Frozen, Label, MigrationInfo, Unknown, WorkflowContract
 from .contracts import AssumptionSet, BlqRepresentation, ColumnSchema, DatasetVersion
 from .errors import ContractError
 from .hashing import canonical_json, sha256_hex
@@ -116,6 +116,21 @@ def _valid_digest(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA_RE.fullmatch(value))
 
 
+_LABEL_CHECK = TypeAdapter(Label)
+
+
+def _source_label(path: str | None) -> str | Unknown:
+    """The data file's base name as a label, or an explicit Unknown. A file name that cannot be a label (control
+    characters, stray joiners) degrades only this field, never the whole dataset."""
+    name = re.split(r"[\\/]", path)[-1] if path else ""
+    if not name:
+        return _unavailable("legacy state records no dataset path")
+    try:
+        return _LABEL_CHECK.validate_python(name, context={SEAL: DatasetVersion})
+    except ValidationError:
+        return _unavailable("the data file name is not representable as a label")
+
+
 def _project_dataset(state: PharmState, as_of: datetime) -> DatasetVersion | Unknown:
     if not state.dataset_id:
         return _unavailable("no dataset is loaded in this legacy state")
@@ -123,13 +138,13 @@ def _project_dataset(state: PharmState, as_of: datetime) -> DatasetVersion | Unk
     roles = meta.get("detected_roles") or {}
     digest = meta.get("dataset_sha256")
     path = state.dataset_path
-    source = re.split(r"[\\/]", path)[-1] if path else ""
+    source = _source_label(path)
     try:
         return DatasetVersion.create(
             id=f"dataset:{state.dataset_id}:legacy:{digest[:32] if _valid_digest(digest) else 'nodigest'}",
             dataset_id=state.dataset_id, created_at=as_of,
             producer=PRODUCER, migration=_legacy_migration("dataset versions were not tracked"),
-            source=source or _unavailable("legacy state records no dataset path"),
+            source=source,
             data_digest=digest if _valid_digest(digest)
             else _unavailable("legacy state records no valid dataset SHA-256"),
             subject_id_column=_role_column(roles, "ID"),

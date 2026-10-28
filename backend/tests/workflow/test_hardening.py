@@ -268,4 +268,4 @@ def test_the_doc_no_longer_overstates_what_re_validation_catches():
     doc = _doc()
     assert "which catches a forged record that was rehashed" not in doc
     assert "does **not** catch a structurally valid forgery" in doc
-    assert "confusable" in doc and "drift" in doc            # the blank-looking character rules are not complete
+    assert "confusable" in doc.lower() and "drift" in doc            # the blank-looking character rules are not complete

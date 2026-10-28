@@ -19,7 +19,7 @@ def canonical_json(value: Any) -> bytes:
         text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
         return text.encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:
-        raise ContractError(f"value is not canonical JSON: {exc}") from exc
+        raise ContractError(f"value is not canonical JSON ({type(exc).__name__})") from exc
 
 
 def sha256_hex(data: bytes) -> str:

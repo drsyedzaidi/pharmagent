@@ -188,7 +188,7 @@ def test_a_label_or_message_of_only_combining_marks_is_refused_but_accented_name
 @pytest.mark.parametrize("rec", families(), ids=FAMILY_IDS)
 def test_every_family_declares_its_record_type_explicitly(rec):
     cls = type(rec)
-    assert "RECORD_TYPE" in cls.__dict__ and cls.RECORD_TYPE == cls.__name__
+    assert "RECORD_TYPE" in cls.__dict__ and isinstance(cls.RECORD_TYPE, str) and cls.RECORD_TYPE
 
 
 def test_the_hash_uses_the_declared_constant_not_the_class_name():
