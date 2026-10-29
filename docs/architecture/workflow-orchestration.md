@@ -62,7 +62,12 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   its own class, directly or through another record (the class being created is the one whose missing hash is sealed, so
   such a child would be sealed implicitly): `create`/`replace` refuse it with a `ContractError`. `replace` reads its source through
   `validated_copy`, so a tampered in-memory record cannot be turned into a valid-looking one, and `model_copy(update=...)`
-  can no longer change content (use `replace`). The `SEAL` marker is a private class-valued validation-context key; it is
+  can no longer change content (use `replace`). `replace` validates each changed value once, on its own, under the
+  creation policy and puts that validated value (never the caller's object, so an iterator or a stateful mapping is
+  read once) into the new record; unchanged values are re-validated under load semantics, and the advisory name lint
+  runs only on a new or changed label, so an unchanged stored label is not re-linted by `replace(reason=...)`.
+  A contract may not contain a record of its own class, however deeply nested (the walk covers pydantic models,
+  mappings, lists, tuples, sets and frozensets and is cycle-safe). The `SEAL` marker is a private class-valued validation-context key; it is
   importable, so it is not a security boundary. Stored bytes are
   not themselves canonical: a validated record re-serializes to its canonical form, so a store that hashes raw bytes
   would disagree with `content_hash`. The hash is an **unkeyed corruption check, not proof of authenticity**: anyone who can write a record can compute a
@@ -81,12 +86,17 @@ Every record is a frozen Pydantic model with `extra="forbid"` and carries `schem
   not count). The ignorable ranges are written out by hand, so the set can drift from a future Unicode version, and `U+16FE4` (a Khitan
   filler) is refused although it is not Default_Ignorable. Two policies apply (see "Creation policy and load semantics"
   below): stored values are checked under load semantics, new and changed values under the creation policy.
+  Labels and column names (and JSON keys) are additionally held to a stable canonical form under BOTH policies: they must
+  already be in Unicode normalization form NFC (a non-NFC label is refused, never rewritten) and may contain no space
+  separator other than the ordinary ASCII space (no-break space, ideographic space and the other Zs characters are
+  refused); free-text messages and JSON string values keep the wider rules. Identifiers are ASCII-only by pattern.
   Confusable (look-alike) letters are not detected, CRLF line endings are refused in messages (an API must normalise
   them), and labels are display text that carries no authority. Plain ASCII text is checked with a single compiled
   regex pass; only non-ASCII text is scanned per character. See "PHI-safe errors and repr" below
   for what error text and `repr` expose. JSON content (`config`, `parameters`, `detail`, `legacy_metadata`) is checked recursively: every
   key and every string value must be valid UTF-8 (no lone surrogates) and pass the same text rules (keys strictly; values may hold
-  newline and tab; empty strings are allowed), and all mapping keys must be strings (string keys only: an integer or other
+  newline and tab; empty strings are allowed; CR, form feed and U+2028 are refused, so a stored parent-era record
+  holding them no longer loads), and all mapping keys must be strings (string keys only: an integer or other
   key is refused with a static error that never echoes it); numbers refuse booleans; JSON objects are capped at 64 KiB and collections at fixed counts. Defaults for
   mapping fields are immutable too (pydantic does not validate defaults, so they are `FrozenMap` already). Equality is
   Python value equality (`1 == 1.0`); `content_hash` is stricter and treats `1` and `1.0`, and `0.0` and `-0.0`, as
@@ -201,13 +211,29 @@ Joining_Type table, which this layer does not carry, and no claim of compliance 
   U+0622-U+0625, U+0627, U+0629, U+062F-U+0632, U+0648, U+0698 (right-joining). Letters outside these sets, and ZWNJ after a
   right-joining letter or around a combining mark, are refused.
 * **ZWJ between emoji**: after a pictograph, skin-tone modifier or VS16 and before a pictograph, at most
-  `MAX_ZWJ_LINKS` (7) links in one sequence. Tag sequences (regional-subdivision flags) are refused.
+  `MAX_ZWJ_LINKS` (7) links per sequence. A pictograph that is not joined to the previous one by ZWJ starts a new
+  sequence, so adjacent family emoji are counted separately. Tag sequences (regional-subdivision flags) are refused.
 * **Run caps**: at most `MAX_MARK_RUN` (5) consecutive combining marks.
 * **Private-use and unassigned** code points are refused.
 
+**Unsupported spelling, Bengali:** the ra + ZWJ + virama + ya spelling (U+09B0 U+200D U+09CD U+09AF), with the joiner
+BEFORE the virama, is not covered by the virama rule above and is refused at creation; it is accepted when a stored
+record is loaded. It is documented as unsupported rather than guessed at; other scripts that place the joiner before
+the virama are in the same position.
+
 LRM and RLM are always refused. Confusable (look-alike) text is not detected. Joiner and mark rules use Python's
 `unicodedata` (Unicode 15.1 on the supported interpreter), so the creation policy may differ across interpreters; load
-semantics do not.
+semantics do not. The NFC and space checks apply under both policies; they rest on the Unicode normalization stability
+guarantee and the fixed set of space separators.
+
+**Residual ambiguity (documented, not closed).** Load semantics accept the three joiners anywhere. That is structural
+compatibility with stored records across Unicode versions, not semantic uniqueness and not authenticity: a stored label
+with a stray joiner can differ from a clean one and still load, and `require_unique` over labels, column names or ids
+does not protect against every visual lookalike. Even at creation, contextual ZWNJ placement between Persian letters,
+VS16 after emoji, ZWJ links between emoji, runs of consecutive ASCII spaces, compatibility-equivalent and confusable
+letters, and free-text messages and JSON values (which keep the wider rules) remain places where visually identical
+text can differ; a covert channel of some bits per label is therefore still possible. Closing those would need a
+whitespace policy beyond single ASCII spaces, NFKC or confusable folding, and a schema decision.
 
 ## PHI-safe errors and repr
 
@@ -222,7 +248,9 @@ Validation errors and printed records can carry identifiers and free text that a
   schema name becomes `"<key>"`. The element right after a mapping field is always a caller's key and is redacted even
   when it equals a schema name, and an integer survives only directly after a field that holds a sequence (one level);
   anywhere else an integer is a mapping key and is redacted. Mapping fields accept string keys only
-  (validated before pydantic sees them), so a caller-chosen key never appears in `loc` at all. The messages of
+  (validated before pydantic sees them), so a non-string key is refused with a static message; a string key still appears in
+  pydantic's own raw `loc`, and only `safe_errors` redacts it. Keys deeper than the first segment below a mapping field that
+  happen to equal a schema name are shown as that name. The messages of
   discriminated-union tag errors, which repeat the input, are replaced by fixed text. Anything that is not a
   `ValidationError` (or a `ContractError`, which maps to a fixed `contract_error` entry) yields a fixed
   `unsupported_exception` entry instead of raising. Validator messages are fixed text; none interpolates a
@@ -232,16 +260,21 @@ Validation errors and printed records can carry identifiers and free text that a
 * `ContractError` messages are fixed text and a `ContractError` never keeps the exception behind it: it is raised after the
   `except` block has finished, so `__cause__` and `__context__` are `None` and a traceback or `logging.exception` shows no
   raw pydantic text. When a validation failure is the reason, `.detail` holds the already-sanitized `safe_errors` list;
-  for ids (unknown field names, duplicate ids) `.detail` is for an authorised debugger and must not be logged by default.
+  for ids (duplicate ids, missing parents) `.detail` is for an authorised debugger and must not be logged by default.
+  Unknown field names passed to `replace()` or `model_copy()` are never echoed: `.detail` is the fixed
+  `{"code": "unknown_field", "count": n}`.
 * Tamper detection does not use the warnings system: a record whose content no longer serializes as its schema says is
   reported as `ContractError` (and `verify_integrity()` returns `False`) without a Python warning, because pydantic's
   serialization warning would print the offending value.
 * `repr`, `str`, `__repr_args__`, `__rich_repr__` and `__pretty__` of every record and nested model show the record type
   and the first 12 hex characters of the hash (or `<redacted>`), never field contents; `FrozenMap` prints its size. Use
   `model_dump()` deliberately when the content is needed.
-* `load()` is a bounded, strict boundary: JSON text longer than the maximum record size (`MAX_RECORD_BYTES`, 4 MiB, counted
-  in characters or bytes) is refused before it is parsed, and a document that repeats an object key anywhere (including
-  `content_hash`) or is nested too deeply to parse is refused with a fixed message that does not echo the key. Malformed
+* `load()` is a bounded, strict boundary. It accepts an exact `str`, `bytes` or `bytearray` (a subclass is refused, because
+  its `len` and `decode` could lie) or a mapping, and snapshots the JSON once into immutable bytes. JSON longer than the
+  maximum record size (`MAX_RECORD_BYTES`, 4 MiB of UTF-8 bytes, also for text) is refused before it is parsed, and a
+  document that repeats an object key anywhere (including `content_hash`) is refused with a fixed message that does not
+  echo the key. Excessive nesting (more than `MAX_LOAD_DEPTH`, 72 containers, or too deep for the parser, in JSON or in a
+  mapping, including a cyclic one) is always the same `ContractError`. Malformed
   JSON is still reported by pydantic as a `ValidationError` (position only). Pretty-printed, re-ordered or `\u`-escaped
   spellings of the same content still load and hash identically, so stored bytes are not unique; persistence must store
   canonical bytes. `model_validate_json` called directly does not get these checks; use `load`.

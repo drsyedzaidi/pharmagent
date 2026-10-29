@@ -93,8 +93,9 @@ def test_stored_reviews_stay_readable_after_the_lint_is_tightened_but_new_ones_a
         assert stored.model_copy() == stored
         with pytest.raises(ValidationError, match="automated agent"):
             review(art, actor_label="Pat Smith")
+        assert stored.replace(reason="re-reviewed").actor_label == "Pat Smith"      # an unchanged stored label is not re-linted
         with pytest.raises(ValidationError, match="automated agent"):
-            stored.replace(reason="re-reviewed")
+            stored.replace(actor_label="Pat Smith")                                 # a changed label is
     finally:
         contracts.AUTOMATED_NAME_BRANDS = original
 
@@ -180,8 +181,10 @@ def test_a_label_or_message_of_only_combining_marks_is_refused_but_accented_name
             finding(producer=only_marks)
         with pytest.raises(ValidationError):
             finding(message=only_marks)
-    for fine in ("Jos\u00e9", "Jose\u0301", "\u5f20\u4f1f", "O\u2019Brien"):
+    for fine in ("Jos\u00e9", "\u5f20\u4f1f", "O\u2019Brien"):
         assert review(actor_label=fine).actor_label == fine
+    with pytest.raises(ValidationError, match="NFC"):                    # decomposed accents are refused, not rewritten
+        review(actor_label="Jose\u0301")
 
 
 # --- item 7: explicit, unique, stable record-type constants ------------------------------------------------------------

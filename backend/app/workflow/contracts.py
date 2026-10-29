@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BeforeValidator,
     Field,
     StrictBool,
@@ -33,10 +34,10 @@ from .base import (
     Timestamp,
     Unknown,
     WorkflowContract,
+    creation_policy,
     frozen_map_of,
     numbers_only,
     require_unique,
-    sealing_class,
     to_utc,
     unrecorded,
 )
@@ -305,6 +306,19 @@ AUTOMATED_NAME_BRANDS = ("codex", "claude", "gemini", "chatgpt", "copilot", "ope
 _GPT_TOKEN = re.compile(r"^gpt(\d\w*)?$")                                           # gpt, gpt4, gpt5o; not 'egypt'
 
 
+def _label_lint(value: str, info: ValidationInfo) -> str:
+    """Advisory lint on a reviewer label. It runs only under the creation policy, so it judges a NEW label, or one that
+    ``replace()`` changes; a stored label is never re-linted by loading, validating, or an unrelated ``replace()``."""
+    if not creation_policy(info):
+        return value
+    text = "".join(c for c in unicodedata.normalize("NFKC", value) if unicodedata.category(c) != "Cf").casefold()
+    words = set(re.split(r"[^a-z0-9]+", text))
+    if (AUTOMATED_NAME_WORDS & words or any(b in text for b in AUTOMATED_NAME_BRANDS)
+            or any(_GPT_TOKEN.fullmatch(w) for w in words)):
+        raise ValueError("label must name a person, not an automated agent")
+    return value
+
+
 class ReviewRecord(WorkflowContract):
     """A review decision bound to exact artifact hashes.
 
@@ -315,7 +329,7 @@ class ReviewRecord(WorkflowContract):
     RECORD_TYPE = "ReviewRecord"
     gate: ReviewGate
     decision: Literal["approved", "rejected"]
-    actor_label: Label
+    actor_label: Annotated[Label, AfterValidator(_label_lint)]
     claimed_actor_kind: Literal["human", "agent", "system", "unknown"] | None = None
     authenticated_principal_ref: None = None
     reason: Message
@@ -323,19 +337,6 @@ class ReviewRecord(WorkflowContract):
     bound_artifacts: Annotated[tuple[ArtifactBinding, ...], Field(max_length=256)] = ()
     rule_versions: RuleVersions = Field(default_factory=FrozenMap)
     legacy_metadata: JsonObject = Field(default_factory=FrozenMap)
-
-    @field_validator("actor_label")
-    @classmethod
-    def _label_lint(cls, v: str, info: ValidationInfo) -> str:
-        creating = sealing_class(info)
-        if creating is None or not issubclass(creating, ReviewRecord):          # advisory lint: judges NEW reviews only
-            return v
-        text = "".join(c for c in unicodedata.normalize("NFKC", v) if unicodedata.category(c) != "Cf").casefold()
-        words = set(re.split(r"[^a-z0-9]+", text))
-        if (AUTOMATED_NAME_WORDS & words or any(b in text for b in AUTOMATED_NAME_BRANDS)
-                or any(_GPT_TOKEN.fullmatch(w) for w in words)):
-            raise ValueError("label must name a person, not an automated agent")
-        return v
 
     @model_validator(mode="after")
     def _binding(self):

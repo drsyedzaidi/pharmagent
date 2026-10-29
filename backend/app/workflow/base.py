@@ -28,9 +28,9 @@ from pydantic import (
     Field,
     JsonValue,
     StringConstraints,
-    TypeAdapter,
     ValidationInfo,
     WrapSerializer,
+    create_model,
     field_validator,
     model_validator,
 )
@@ -118,9 +118,11 @@ def _zwnj_between_persian_letters(prev: str, nxt: str) -> bool:
     return bool(prev and nxt) and ord(prev) in _DUAL_JOINING and ord(nxt) in _DUAL_JOINING | _RIGHT_JOINING
 
 
-def check_text(value: str, *, allow_layout: bool, creating: bool) -> None:
+def check_text(value: str, *, allow_layout: bool, creating: bool, labels: bool = False) -> None:
     """Refuse invisible, control and private-use characters. Plain ASCII takes a single compiled-regex pass; other text
-    is scanned per character. ``creating`` selects the creation policy (see above) instead of load semantics."""
+    is scanned per character. ``creating`` selects the creation policy (see above) instead of load semantics. ``labels``
+    (identifier-like text) additionally refuses every Unicode space separator except the ASCII space, under both
+    policies."""
     if value.isascii():
         if (_ASCII_LAYOUT if allow_layout else _ASCII_STRICT).search(value):
             raise ValueError(_TEXT_REFUSED)
@@ -153,14 +155,16 @@ def check_text(value: str, *, allow_layout: bool, creating: bool) -> None:
         category = unicodedata.category(c)
         if category in _ALWAYS_BAD_CATEGORIES or c in _BLANK_LOOKING or cp in _IGNORABLE:
             raise ValueError(_TEXT_REFUSED)
+        if labels and category == "Zs" and c != " ":
+            raise ValueError(_TEXT_REFUSED)
         if creating:
             if category in _CREATE_BAD_CATEGORIES:
                 raise ValueError(_TEXT_REFUSED)
             marks = marks + 1 if category[0] == "M" else 0
             if marks > MAX_MARK_RUN:
                 raise ValueError(_TEXT_REFUSED)
-            if links and not _emoji_element(c):
-                links = 0
+            if links and (not _emoji_element(c) or (_pictograph(c) and prev != chr(_ZWJ))):
+                links = 0                                   # a pictograph not joined by ZWJ starts a new sequence
         prev = c
 
 
@@ -183,12 +187,12 @@ def _has_visible_character(value: str) -> bool:
     return any(unicodedata.category(c)[0] in "LNPS" for c in value)
 
 
-def sealing_class(info: ValidationInfo) -> type | None:
-    """The record class being CREATED by ``create()``/``replace()`` (the validation context's seal marker), else
-    ``None``. Anything that is not a class, and any non-mapping context, counts as "not creating"."""
+def sealing_class(info: ValidationInfo) -> Any:
+    """The validation context's seal marker (the record class being sealed by ``create()``/``replace()``), else
+    ``None`` for any other context. A record seals a blank hash only when this IS its own class, so a junk marker, a
+    superclass or a subclass never seals anything."""
     context = info.context
-    marker = context.get(SEAL) if isinstance(context, Mapping) else None
-    return marker if isinstance(marker, type) else None
+    return context.get(SEAL) if isinstance(context, Mapping) else None
 
 
 def creation_policy(info: ValidationInfo) -> bool:
@@ -199,10 +203,15 @@ def creation_policy(info: ValidationInfo) -> bool:
     return isinstance(context, Mapping) and context.get(CREATE_POLICY) is True
 
 
+_NOT_NFC = "must already be in Unicode normalization form NFC (it is never rewritten)"
+
+
 def _label(value: str, info: ValidationInfo) -> str:
     if value != value.strip():
         raise ValueError("must not have leading or trailing whitespace")
-    check_text(value, allow_layout=False, creating=creation_policy(info))
+    if not value.isascii() and not unicodedata.is_normalized("NFC", value):
+        raise ValueError(_NOT_NFC)
+    check_text(value, allow_layout=False, creating=creation_policy(info), labels=True)
     if not _has_visible_character(value):
         raise ValueError("must contain a letter, number, punctuation or symbol")
     return value
@@ -228,9 +237,11 @@ SEAL = object()
 #: ``CREATION_CONTEXT`` and cannot seal anything.
 CREATE_POLICY = object()
 CREATION_CONTEXT = MappingProxyType({CREATE_POLICY: True})
-#: Upper bound on the text ``load()`` will parse. Generous for any real record (each JSON object field is capped at
-#: 64 KiB); it exists so a hostile document is refused before it is parsed.
+#: Upper bound, in UTF-8 bytes, on the JSON ``load()`` will parse. Generous for any real record (each JSON object field
+#: is capped at 64 KiB); it exists so a hostile document is refused before it is parsed.
 MAX_RECORD_BYTES = 4 * 1024 * 1024
+#: Deepest container nesting ``load()`` accepts: the longest legal JSON content (64 levels) plus the record around it.
+MAX_LOAD_DEPTH = 72
 #: Hashes are computed over {domain, record_type, schema_version, fields}, so records of different types or schema
 #: versions can never share a hash even if their fields happened to coincide.
 HASH_DOMAIN = "pharmagent.workflow.record"
@@ -349,9 +360,10 @@ def freeze(value: Any, _depth: int = 0) -> Any:
 def thaw(value: Any, _depth: int = 0) -> Any:
     _too_deep(_depth)
     if isinstance(value, Mapping):
-        if not all(isinstance(k, str) for k in value):
+        items = list(value.items())                                    # one read: a stateful mapping is snapshotted
+        if not all(isinstance(k, str) for k, _ in items):
             raise ValueError("mapping keys must be strings")          # a static message: the key is never echoed
-        return {k: thaw(v, _depth + 1) for k, v in value.items()}
+        return {k: thaw(v, _depth + 1) for k, v in items}
     if isinstance(value, list | tuple):
         return [thaw(v, _depth + 1) for v in value]
     return value
@@ -368,7 +380,10 @@ def _json_text_ok(value: dict[str, Any], info: ValidationInfo) -> dict[str, Any]
             check_text(_utf8(item), allow_layout=True, creating=creating)
         elif isinstance(item, Mapping):
             for key, child in item.items():
-                check_text(_utf8(key), allow_layout=False, creating=creating)
+                _utf8(key)
+                if not key.isascii() and not unicodedata.is_normalized("NFC", key):
+                    raise ValueError(_NOT_NFC)
+                check_text(key, allow_layout=False, creating=creating, labels=True)
                 stack.append(child)
         elif isinstance(item, list | tuple):
             stack.extend(item)
@@ -458,44 +473,71 @@ def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return dict(pairs)
 
 
-def _json_problem(text: str | bytes | bytearray) -> str | None:
-    """``"duplicate"`` if any JSON object repeats a key, ``"deep"`` if the text is too deeply nested to parse, else
-    ``None``. Malformed JSON is left for pydantic to report (it gives a position, never the content)."""
+def _too_nested(value: Any) -> bool:
+    """True if mappings, lists and tuples inside ``value`` nest deeper than ``MAX_LOAD_DEPTH`` (a cycle counts as
+    infinitely deep). Iterative, and it stops at the first violation."""
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, Mapping):
+            children = list(item.values())
+        elif isinstance(item, list | tuple):
+            children = item
+        else:
+            continue
+        if depth > MAX_LOAD_DEPTH:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
+def _json_problem(raw: bytes) -> str | None:
+    """``"duplicate"`` if any JSON object repeats a key, ``"deep"`` if the document nests too deeply (or is too deep
+    for the parser), else ``None``. Malformed JSON is left for pydantic to report (it gives a position, never the
+    content)."""
     try:
-        json.loads(text, object_pairs_hook=_no_duplicate_keys)
+        parsed = json.loads(raw, object_pairs_hook=_no_duplicate_keys)
     except _DuplicateKey:
         return "duplicate"
     except RecursionError:
         return "deep"
     except ValueError:
         return None
-    return None
+    return "deep" if _too_nested(parsed) else None
 
 
-@functools.cache
-def _field_adapter(cls: type, name: str) -> TypeAdapter:
-    """A validator for one field of ``cls`` built from its annotation and metadata, so ``replace()`` can apply the
-    creation text policy to a changed value alone."""
+@functools.lru_cache(maxsize=256)
+def _field_model(cls: type, name: str) -> type[BaseModel]:
+    """A one-field model built from ``cls``'s field (its annotation and metadata), so ``replace()`` can validate a
+    changed value alone under the creation policy. It hides the offending input in errors and keeps the static field
+    name in ``loc``. Bounded cache: at most 256 (class, field) pairs are kept alive."""
     info = cls.model_fields[name]
-    return TypeAdapter(Annotated[info.annotation, *info.metadata] if info.metadata else info.annotation)
+    return create_model("ReplaceField", __config__=ConfigDict(hide_input_in_errors=True, extra="forbid"),
+                        **{name: (info.annotation, info)})
 
 
 def _refuse_self_nesting(record: WorkflowContract) -> None:
     """A contract may not contain a record of its own class: ``create()`` seals a missing hash only when the record's
     class is the one being created, so a nested instance of that class (direct or through another record) would be
-    sealed implicitly. Only the top-level record is ever sealed."""
+    sealed implicitly. Only the top-level record is ever sealed. The walk covers pydantic models of any kind, mappings,
+    lists, tuples, sets and frozensets, and is cycle-safe."""
     cls = type(record)
-    stack: list[Any] = [getattr(record, name) for name in cls.model_fields]
-    while stack:                                    # validation copies every nested model, so this is a tree
+    stack: list[Any] = [record]
+    seen = {id(record)}
+    while stack:
         item = stack.pop()
-        if isinstance(item, Frozen):
-            if type(item) is cls:
+        if isinstance(item, BaseModel):
+            if item is not record and type(item) is cls:
                 raise ContractError("a contract cannot nest a record of its own class")
-            stack.extend(getattr(item, name) for name in type(item).model_fields)
+            children = [getattr(item, name, None) for name in type(item).model_fields]
         elif isinstance(item, Mapping):
-            stack.extend(item.values())
-        elif isinstance(item, tuple):
-            stack.extend(item)
+            children = list(item.values())
+        else:                                  # only containers are pushed: list, tuple, set or frozenset
+            children = list(item)
+        for child in children:
+            if isinstance(child, BaseModel | Mapping | list | tuple | set | frozenset) and id(child) not in seen:
+                seen.add(id(child))
+                stack.append(child)
 
 
 _RECORD_TYPE_FORM = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -579,41 +621,51 @@ class WorkflowContract(Frozen):
     def replace(self, **changes: Any):
         """A NEW sealed record equal to this one except for ``changes`` (the named replacement API). The original is
         untouched. The source record must still match its own hash (it is read through ``validated_copy``), so a
-        tampered record cannot be turned into a valid-looking one. Unknown fields are refused. The creation text policy
-        judges only the CHANGED values: unchanged stored text is re-validated under load semantics, so a legacy value
-        that was acceptable when stored never blocks an unrelated change."""
+        tampered record cannot be turned into a valid-looking one. Unknown fields are refused with a fixed code (the
+        names are never echoed). Each CHANGED value is validated once, on its own, under the creation policy, and the
+        validated value (never the caller's object) is what goes into the new record, so iterators and stateful
+        mappings are read exactly once. Unchanged values are re-validated under load semantics: stored text that was
+        acceptable when it was written, including a stored reviewer label, never blocks an unrelated change."""
         cls = type(self)
         fields = cls.model_fields
         unknown = set(changes) - set(fields)
         if unknown:
-            raise ContractError("unknown fields in replace()", detail=sorted(unknown))
+            raise ContractError("unknown fields in replace()", detail={"code": "unknown_field", "count": len(unknown)})
         if "content_hash" in changes:
             raise TypeError("replace() seals the record itself; do not pass content_hash")
         source = self.validated_copy()
         data = {name: getattr(source, name) for name in fields if name != "content_hash"}
-        data.update(changes)
         for name, value in changes.items():
-            _field_adapter(cls, name).validate_python(value, context=CREATION_CONTEXT)
+            data[name] = getattr(_field_model(cls, name).model_validate({name: value}, context=CREATION_CONTEXT), name)
         record = cls.model_validate({**data, "content_hash": ""}, context={SEAL: cls})
         _refuse_self_nesting(record)
         return record
 
     @classmethod
     def load(cls, data):
-        """Read a STORED record (JSON text or bytes, or a mapping). The hash must be present and correct; there is no
-        sealing here, so tampering plus stripping the hash cannot launder a record. ``model_validate`` and
-        ``model_validate_json`` behave the same way: they are all verification paths. JSON text larger than
-        ``MAX_RECORD_BYTES``, nested too deeply, or repeating an object key is refused before it is validated (a
-        duplicate key would let two readers see two different records)."""
-        if isinstance(data, str | bytes | bytearray):
-            if len(data) > MAX_RECORD_BYTES:
+        """Read a STORED record: JSON as an exact ``str``, ``bytes`` or ``bytearray`` (a subclass is refused: its
+        ``len`` and ``decode`` could lie), or a mapping. The hash must be present and correct; there is no sealing here,
+        so tampering plus stripping the hash cannot launder a record. ``model_validate`` and ``model_validate_json``
+        behave the same way: they are all verification paths. JSON is snapshotted once into immutable bytes, and
+        refused before validation if it is larger than ``MAX_RECORD_BYTES`` UTF-8 bytes, repeats an object key, or
+        nests deeper than ``MAX_LOAD_DEPTH`` (a mapping is checked for depth the same way). Every excessive-nesting case
+        is one ``ContractError``."""
+        if type(data) in (str, bytes, bytearray):
+            if type(data) is str and len(data) > MAX_RECORD_BYTES:
                 raise ContractError("stored record is too large to read")
-            problem = _json_problem(data)
+            raw = data.encode("utf-8", "surrogatepass") if type(data) is str else bytes(data)
+            if len(raw) > MAX_RECORD_BYTES:
+                raise ContractError("stored record is too large to read")
+            problem = _json_problem(raw)
             if problem == "duplicate":
                 raise ContractError("stored record JSON has duplicate keys")
             if problem == "deep":
-                raise ContractError("stored record JSON is nested too deeply")
-            return cls.model_validate_json(data)
+                raise ContractError("stored record is nested too deeply")
+            return cls.model_validate_json(raw)
+        if isinstance(data, str | bytes | bytearray):
+            raise ContractError("stored record JSON must be an exact str, bytes or bytearray")
+        if _too_nested(data):
+            raise ContractError("stored record is nested too deeply")
         return cls.model_validate(data)
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False):
@@ -622,7 +674,8 @@ class WorkflowContract(Frozen):
         fields = type(self).model_fields
         unknown = set(update or {}) - set(fields)
         if unknown:
-            raise ContractError("unknown fields in model_copy() update", detail=sorted(unknown))
+            raise ContractError("unknown fields in model_copy() update",
+                                detail={"code": "unknown_field", "count": len(unknown)})
         data = {name: getattr(self, name) for name in fields}
         data.update(update or {})
         return type(self).model_validate(copy.deepcopy(data) if deep else data)
