@@ -1,0 +1,899 @@
+{
+ "created_at": "2026-10-20T10:00:00Z",
+ "id": "sess_fixture_full",
+ "owner": "alice",
+ "state": {
+  "be_results": null,
+  "bootstrap_results": null,
+  "clinpharm_history": null,
+  "clinpharm_results": null,
+  "clinsim_results": null,
+  "compartmental_results": null,
+  "covariate_results": null,
+  "current_step": 0,
+  "data_quality": {
+   "blq_basis": "DV<=0",
+   "blq_pct": 0.0,
+   "n_observations": 120,
+   "n_sparse_subjects": 0,
+   "quality_flags": [],
+   "sparse_subjects": [],
+   "total_missing_pct": 12.5
+  },
+  "dataset_id": "ds_fixture",
+  "dataset_metadata": {
+   "columns": [
+    {
+     "dtype": "int64",
+     "n_missing": 0,
+     "name": "ID",
+     "role": "ID",
+     "summary": {
+      "max": 12.0,
+      "mean": 6.5,
+      "median": 6.5,
+      "min": 1.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 12
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 0,
+     "name": "TIME",
+     "role": "TIME",
+     "summary": {
+      "max": 48.0,
+      "mean": 12.863636,
+      "median": 6.0,
+      "min": 0.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 11
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 12,
+     "name": "DV",
+     "role": "DV",
+     "summary": {
+      "max": 6.6167,
+      "mean": 1.788425,
+      "median": 1.2643,
+      "min": 0.0062,
+      "missing": 0,
+      "n": 120,
+      "n_unique": 119
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 120,
+     "name": "AMT",
+     "role": "AMT",
+     "summary": {
+      "max": 300.0,
+      "mean": 200.0,
+      "median": 200.0,
+      "min": 100.0,
+      "missing": 0,
+      "n": 12,
+      "n_unique": 2
+     }
+    },
+    {
+     "dtype": "int64",
+     "n_missing": 0,
+     "name": "EVID",
+     "role": "EVID",
+     "summary": {
+      "max": 1.0,
+      "mean": 0.090909,
+      "median": 0.0,
+      "min": 0.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 2
+     }
+    },
+    {
+     "dtype": "int64",
+     "n_missing": 0,
+     "name": "MDV",
+     "role": "MDV",
+     "summary": {
+      "max": 1.0,
+      "mean": 0.090909,
+      "median": 0.0,
+      "min": 0.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 2
+     }
+    },
+    {
+     "dtype": "int64",
+     "n_missing": 0,
+     "name": "CMT",
+     "role": "CMT",
+     "summary": {
+      "max": 1.0,
+      "mean": 1.0,
+      "median": 1.0,
+      "min": 1.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 1
+     }
+    },
+    {
+     "dtype": "float64",
+     "n_missing": 0,
+     "name": "DOSE",
+     "role": "AMT",
+     "summary": {
+      "max": 300.0,
+      "mean": 200.0,
+      "median": 200.0,
+      "min": 100.0,
+      "missing": 0,
+      "n": 132,
+      "n_unique": 2
+     }
+    }
+   ],
+   "dataset_id": "ds_fixture",
+   "dataset_sha256": "76acc715f2981ff108f801758d7adacb8d9cced390c0a4c9abf2a2ebaf57ec4f",
+   "detected_roles": {
+    "AMT": "AMT",
+    "CMT": "CMT",
+    "DOSE": "AMT",
+    "DV": "DV",
+    "EVID": "EVID",
+    "ID": "ID",
+    "MDV": "MDV",
+    "TIME": "TIME"
+   },
+   "dose_levels": [
+    100.0,
+    300.0
+   ],
+   "n_columns": 8,
+   "n_records": 132,
+   "n_subjects": 12,
+   "privacy": "metadata_only; no individual rows or raw concentrations included",
+   "time_range": [
+    0.0,
+    48.0
+   ]
+  },
+  "dataset_path": "sample_data/oral_pk.csv",
+  "diagnostics_results": null,
+  "dose_prop_results": null,
+  "dose_selection_results": null,
+  "dose_sweep_results": null,
+  "engine_comparison_results": null,
+  "er_history": null,
+  "er_results": null,
+  "exposure_forest_results": null,
+  "flexplot_data": null,
+  "forecast_results": null,
+  "forest_results": null,
+  "indirect_results": null,
+  "individual_exposures": null,
+  "knowledge_results": null,
+  "last_agent": "nca",
+  "memo_path": null,
+  "memo_results": null,
+  "model_results": null,
+  "nca_parameters": [
+   {
+    "AUC_inf": 29.624678,
+    "AUC_last": 28.999907,
+    "CL_F": 3.375564,
+    "Clast": 0.049,
+    "Cmax": 2.266,
+    "MRT": 13.78547,
+    "MRT_note": "extravascular: MRT includes mean absorption time",
+    "Tlast": 48.0,
+    "Tmax": 2.0,
+    "Vss": null,
+    "Vz_F": 43.039885,
+    "dose": 100.0,
+    "lambda_z": 0.0784287,
+    "lambda_z_intercept": 0.8996089523242253,
+    "lambda_z_intervals": [
+     4.0,
+     48.0
+    ],
+    "lambda_z_n_points": 7,
+    "lambda_z_pts_c": [
+     1.7391,
+     1.47,
+     1.2936,
+     0.9543,
+     0.4096,
+     0.1709,
+     0.049
+    ],
+    "lambda_z_pts_t": [
+     4.0,
+     6.0,
+     8.0,
+     12.0,
+     24.0,
+     36.0,
+     48.0
+    ],
+    "lambda_z_r2_adj": 0.993347,
+    "pct_AUC_extrap": 2.109,
+    "route": "extravascular",
+    "subject": 1,
+    "t_half": 8.837923
+   },
+   {
+    "AUC_inf": 48.994807,
+    "AUC_last": 48.953487,
+    "CL_F": 6.123098,
+    "Clast": 0.0062,
+    "Cmax": 6.203,
+    "MRT": 7.622276,
+    "MRT_note": "extravascular: MRT includes mean absorption time",
+    "Tlast": 48.0,
+    "Tmax": 2.0,
+    "Vss": null,
+    "Vz_F": 40.807192,
+    "dose": 300.0,
+    "lambda_z": 0.150049,
+    "lambda_z_intercept": 2.1355550896948383,
+    "lambda_z_intervals": [
+     4.0,
+     48.0
+    ],
+    "lambda_z_n_points": 7,
+    "lambda_z_pts_c": [
+     4.6073,
+     3.5844999999999994,
+     2.3998,
+     1.36,
+     0.254,
+     0.037200000000000004,
+     0.006200000000000001
+    ],
+    "lambda_z_pts_t": [
+     4.0,
+     6.0,
+     8.0,
+     12.0,
+     24.0,
+     36.0,
+     48.0
+    ],
+    "lambda_z_r2_adj": 0.999501,
+    "pct_AUC_extrap": 0.0843,
+    "route": "extravascular",
+    "subject": 10,
+    "t_half": 4.619457
+   }
+  ],
+  "nca_plot_data": {
+   "n_subjects": 12
+  },
+  "nca_summary": {
+   "blq": {
+    "n_below_loq": 0,
+    "rule": "No BLQ flag in the data: concentrations are used as given (a 0 is a measured zero), except that AUC_last ends at Tlast, the last positive concentration. Records before the dose (the subject's first dose record, else TIME 0) add no area: with no sample at the dose time, a BLQ-flagged or zero pre-dose record closest to it sets C = 0 there; other pre-dose records are not used. Times are reported relative to that dose time. Vss/MRT not reported for extravascular data."
+   },
+   "by_dose": [
+    {
+     "AUC_inf_geocv_pct": 21.5416,
+     "AUC_inf_geomean": 24.8054,
+     "AUC_last_geocv_pct": 20.1095,
+     "AUC_last_geomean": 23.8293,
+     "CL_F_geocv_pct": 21.5416,
+     "CL_F_geomean": 4.0314,
+     "Cmax_geocv_pct": 25.2894,
+     "Cmax_geomean": 1.6639,
+     "Vz_F_geocv_pct": 29.7567,
+     "Vz_F_geomean": 53.9705,
+     "dose": 100.0,
+     "n": 6,
+     "t_half_median": 9.0121
+    },
+    {
+     "AUC_inf_geocv_pct": 23.371,
+     "AUC_inf_geomean": 58.9341,
+     "AUC_last_geocv_pct": 22.2951,
+     "AUC_last_geomean": 58.3422,
+     "CL_F_geocv_pct": 23.371,
+     "CL_F_geomean": 5.0904,
+     "Cmax_geocv_pct": 18.2828,
+     "Cmax_geomean": 5.2935,
+     "Vz_F_geocv_pct": 14.0155,
+     "Vz_F_geomean": 44.3523,
+     "dose": 300.0,
+     "n": 6,
+     "t_half_median": 5.3485
+    }
+   ],
+   "conventions": {
+    "approval_meaning": "Approved means the owner reviewed an entry as an accurate description of PharmAgent behaviour. For an implementation_convention it is not regulatory validation.",
+    "catalog_version": "1.5.0",
+    "conventions": [
+     {
+      "approval": "approved",
+      "approved_by": "Syed Saoud Zaidi",
+      "approved_on": "2026-10-21",
+      "id": "nca.linear_up_log_down",
+      "rule_text": "AUC is integrated with the linear-up/log-down trapezoidal rule: linear on rising or flat segments, logarithmic on declining positive segments.",
+      "version": "1.0.0"
+     },
+     {
+      "approval": "approved",
+      "approved_by": "Syed Saoud Zaidi",
+      "approved_on": "2026-10-21",
+      "id": "nca.auc_last_ends_at_tlast",
+      "rule_text": "AUC_last and AUMC_last end at Tlast, the last positive concentration. Zero or BLQ rows after it add no area, and AUC_inf extrapolates from Tlast once.",
+      "version": "1.0.0"
+     },
+     {
+      "approval": "approved",
+      "approved_by": "Syed Saoud Zaidi",
+      "approved_on": "2026-10-21",
+      "id": "nca.pre_dose_records",
+      "rule_text": "Single-dose records before the dose time add no area before the dose. With no usable record at the dose time, the closest pre-dose record sets C = 0 there only when it is BLQ-flagged or a measured 0; a positive pre-dose value is never carried to the dose time.",
+      "version": "1.0.0"
+     },
+     {
+      "approval": "approved",
+      "approved_by": "Syed Saoud Zaidi",
+      "approved_on": "2026-10-21",
+      "id": "nca.lambda_z_window",
+      "rule_text": "Lambda_z is fitted over contiguous windows of at least 3 positive concentrations after Tmax that always end at the last point, and the window with the largest adjusted R-squared is chosen. A window needs a decline steeper than 1e-09 per time unit (issue #12: this rejects floating-point noise on flat terminal phases) and a positive adjusted R-squared; otherwise no lambda_z is reported. Equal fits go to the longest window: a later, shorter window replaces the current best only when its adjusted R-squared is strictly greater than the stored best, rounded to 6 decimals.",
+      "version": "1.1.0"
+     }
+    ]
+   },
+   "descriptive": [
+    {
+     "group": "all",
+     "label": "All subjects",
+     "n": 12,
+     "parameters": [
+      {
+       "cv_pct": 57.5835,
+       "geocv_pct": 71.0241,
+       "geomean": 2.9678,
+       "max": 6.6167,
+       "mean": 3.5364,
+       "median": 3.218,
+       "min": 1.2402,
+       "n": 12,
+       "parameter": "Cmax",
+       "sd": 2.0364
+      },
+      {
+       "cv_pct": 44.9467,
+       "geocv_pct": 43.171,
+       "geomean": 2.7614,
+       "max": 6.0,
+       "mean": 3.0,
+       "median": 2.0,
+       "min": 2.0,
+       "n": 12,
+       "parameter": "Tmax",
+       "sd": 1.3484
+      },
+      {
+       "cv_pct": 101.2717,
+       "geocv_pct": 168.0803,
+       "geomean": 0.03479,
+       "max": 0.1866,
+       "mean": 0.06046,
+       "median": 0.037,
+       "min": 0.0062,
+       "n": 12,
+       "parameter": "Clast",
+       "sd": 0.06123
+      },
+      {
+       "cv_pct": 0.0,
+       "geocv_pct": 0.0,
+       "geomean": 48.0,
+       "max": 48.0,
+       "mean": 48.0,
+       "median": 48.0,
+       "min": 48.0,
+       "n": 12,
+       "parameter": "Tlast",
+       "sd": 0.0
+      },
+      {
+       "cv_pct": 49.9345,
+       "geocv_pct": 54.3403,
+       "geomean": 37.2861,
+       "max": 82.2684,
+       "mean": 41.8988,
+       "median": 38.4693,
+       "min": 19.1447,
+       "n": 12,
+       "parameter": "AUC_last",
+       "sd": 20.922
+      },
+      {
+       "cv_pct": 49.2467,
+       "geocv_pct": 53.1762,
+       "geomean": 38.2346,
+       "max": 83.5979,
+       "mean": 42.7857,
+       "median": 38.9591,
+       "min": 19.252,
+       "n": 12,
+       "parameter": "AUC_inf",
+       "sd": 21.0705
+      },
+      {
+       "cv_pct": 132.7337,
+       "geocv_pct": 319.3535,
+       "geomean": 0.9828,
+       "max": 11.142,
+       "mean": 2.4298,
+       "median": 1.2119,
+       "min": 0.0843,
+       "n": 12,
+       "parameter": "pct_AUC_extrap",
+       "sd": 3.2252
+      },
+      {
+       "cv_pct": 34.8303,
+       "geocv_pct": 38.6497,
+       "geomean": 0.09259,
+       "max": 0.15,
+       "mean": 0.09837,
+       "median": 0.09418,
+       "min": 0.0456,
+       "n": 12,
+       "parameter": "lambda_z",
+       "sd": 0.03426
+      },
+      {
+       "cv_pct": 39.6597,
+       "geocv_pct": 38.6498,
+       "geomean": 7.4861,
+       "max": 15.2021,
+       "mean": 7.9964,
+       "median": 7.3788,
+       "min": 4.6195,
+       "n": 12,
+       "parameter": "t_half",
+       "sd": 3.1714
+      },
+      {
+       "cv_pct": 34.4389,
+       "geocv_pct": 32.938,
+       "geomean": 11.8409,
+       "max": 22.4904,
+       "mean": 12.4374,
+       "median": 11.1384,
+       "min": 7.6223,
+       "n": 12,
+       "parameter": "MRT",
+       "sd": 4.2833
+      },
+      {
+       "cv_pct": 23.9838,
+       "geocv_pct": 24.7876,
+       "geomean": 4.5301,
+       "max": 6.313,
+       "mean": 4.654,
+       "median": 4.7297,
+       "min": 3.2898,
+       "n": 12,
+       "parameter": "CL_F",
+       "sd": 1.1162
+      },
+      {
+       "cv_pct": 27.8738,
+       "geocv_pct": 24.418,
+       "geomean": 48.9256,
+       "max": 83.5178,
+       "mean": 50.3798,
+       "median": 44.201,
+       "min": 40.1248,
+       "n": 12,
+       "parameter": "Vz_F",
+       "sd": 14.0428
+      }
+     ]
+    },
+    {
+     "group": 100.0,
+     "label": "Dose 100.0",
+     "n": 6,
+     "parameters": [
+      {
+       "cv_pct": 24.5704,
+       "geocv_pct": 25.2894,
+       "geomean": 1.6639,
+       "max": 2.266,
+       "mean": 1.707,
+       "median": 1.6974,
+       "min": 1.2402,
+       "n": 6,
+       "parameter": "Cmax",
+       "sd": 0.4194
+      },
+      {
+       "cv_pct": 48.9898,
+       "geocv_pct": 50.5733,
+       "geomean": 3.0262,
+       "max": 6.0,
+       "mean": 3.3333,
+       "median": 3.0,
+       "min": 2.0,
+       "n": 6,
+       "parameter": "Tmax",
+       "sd": 1.633
+      },
+      {
+       "cv_pct": 83.0229,
+       "geocv_pct": 119.202,
+       "geomean": 0.04407,
+       "max": 0.1525,
+       "mean": 0.06107,
+       "median": 0.0578,
+       "min": 0.0119,
+       "n": 6,
+       "parameter": "Clast",
+       "sd": 0.0507
+      },
+      {
+       "cv_pct": 0.0,
+       "geocv_pct": 0.0,
+       "geomean": 48.0,
+       "max": 48.0,
+       "mean": 48.0,
+       "median": 48.0,
+       "min": 48.0,
+       "n": 6,
+       "parameter": "Tlast",
+       "sd": 0.0
+      },
+      {
+       "cv_pct": 19.6311,
+       "geocv_pct": 20.1095,
+       "geomean": 23.8293,
+       "max": 29.4919,
+       "mean": 24.2228,
+       "median": 24.2219,
+       "min": 19.1447,
+       "n": 6,
+       "parameter": "AUC_last",
+       "sd": 4.7552
+      },
+      {
+       "cv_pct": 20.8494,
+       "geocv_pct": 21.5416,
+       "geomean": 24.8054,
+       "max": 30.3971,
+       "mean": 25.2726,
+       "median": 25.7889,
+       "min": 19.252,
+       "n": 6,
+       "parameter": "AUC_inf",
+       "sd": 5.2692
+      },
+      {
+       "cv_pct": 103.4195,
+       "geocv_pct": 160.575,
+       "geomean": 2.3782,
+       "max": 11.142,
+       "mean": 3.8637,
+       "median": 2.5434,
+       "min": 0.5577,
+       "n": 6,
+       "parameter": "pct_AUC_extrap",
+       "sd": 3.9959
+      },
+      {
+       "cv_pct": 31.1105,
+       "geocv_pct": 33.7242,
+       "geomean": 0.0747,
+       "max": 0.1108,
+       "mean": 0.07799,
+       "median": 0.07694,
+       "min": 0.0456,
+       "n": 6,
+       "parameter": "lambda_z",
+       "sd": 0.02426
+      },
+      {
+       "cv_pct": 34.0848,
+       "geocv_pct": 33.7243,
+       "geomean": 9.2796,
+       "max": 15.2021,
+       "mean": 9.7154,
+       "median": 9.0121,
+       "min": 6.2543,
+       "n": 6,
+       "parameter": "t_half",
+       "sd": 3.3115
+      },
+      {
+       "cv_pct": 30.5095,
+       "geocv_pct": 29.5774,
+       "geomean": 14.1865,
+       "max": 22.4904,
+       "mean": 14.7075,
+       "median": 14.0452,
+       "min": 10.5049,
+       "n": 6,
+       "parameter": "MRT",
+       "sd": 4.4872
+      },
+      {
+       "cv_pct": 21.2838,
+       "geocv_pct": 21.5416,
+       "geomean": 4.0314,
+       "max": 5.1943,
+       "mean": 4.1084,
+       "median": 3.9654,
+       "min": 3.2898,
+       "n": 6,
+       "parameter": "CL_F",
+       "sd": 0.8744
+      },
+      {
+       "cv_pct": 31.4528,
+       "geocv_pct": 29.7567,
+       "geomean": 53.9705,
+       "max": 83.5178,
+       "mean": 56.0231,
+       "median": 46.4592,
+       "min": 43.0399,
+       "n": 6,
+       "parameter": "Vz_F",
+       "sd": 17.6208
+      }
+     ]
+    },
+    {
+     "group": 300.0,
+     "label": "Dose 300.0",
+     "n": 6,
+     "parameters": [
+      {
+       "cv_pct": 17.8328,
+       "geocv_pct": 18.2828,
+       "geomean": 5.2935,
+       "max": 6.6167,
+       "mean": 5.3657,
+       "median": 5.3883,
+       "min": 4.17,
+       "n": 6,
+       "parameter": "Cmax",
+       "sd": 0.9568
+      },
+      {
+       "cv_pct": 38.7298,
+       "geocv_pct": 36.9717,
+       "geomean": 2.5198,
+       "max": 4.0,
+       "mean": 2.6667,
+       "median": 2.0,
+       "min": 2.0,
+       "n": 6,
+       "parameter": "Tmax",
+       "sd": 1.0328
+      },
+      {
+       "cv_pct": 125.8799,
+       "geocv_pct": 243.1581,
+       "geomean": 0.02747,
+       "max": 0.1866,
+       "mean": 0.05985,
+       "median": 0.01845,
+       "min": 0.0062,
+       "n": 6,
+       "parameter": "Clast",
+       "sd": 0.07534
+      },
+      {
+       "cv_pct": 0.0,
+       "geocv_pct": 0.0,
+       "geomean": 48.0,
+       "max": 48.0,
+       "mean": 48.0,
+       "median": 48.0,
+       "min": 48.0,
+       "n": 6,
+       "parameter": "Tlast",
+       "sd": 0.0
+      },
+      {
+       "cv_pct": 23.1694,
+       "geocv_pct": 22.2951,
+       "geomean": 58.3422,
+       "max": 82.2684,
+       "mean": 59.5749,
+       "median": 54.7757,
+       "min": 47.4467,
+       "n": 6,
+       "parameter": "AUC_last",
+       "sd": 13.8031
+      },
+      {
+       "cv_pct": 24.1961,
+       "geocv_pct": 23.371,
+       "geomean": 58.9341,
+       "max": 83.5979,
+       "mean": 60.2987,
+       "median": 54.9217,
+       "min": 47.5212,
+       "n": 6,
+       "parameter": "AUC_inf",
+       "sd": 14.5899
+      },
+      {
+       "cv_pct": 141.4015,
+       "geocv_pct": 277.8164,
+       "geomean": 0.4061,
+       "max": 3.6274,
+       "mean": 0.996,
+       "median": 0.2585,
+       "min": 0.0843,
+       "n": 6,
+       "parameter": "pct_AUC_extrap",
+       "sd": 1.4083
+      },
+      {
+       "cv_pct": 26.5917,
+       "geocv_pct": 30.3077,
+       "geomean": 0.1148,
+       "max": 0.15,
+       "mean": 0.1187,
+       "median": 0.1302,
+       "min": 0.07161,
+       "n": 6,
+       "parameter": "lambda_z",
+       "sd": 0.03158
+      },
+      {
+       "cv_pct": 32.1351,
+       "geocv_pct": 30.3078,
+       "geomean": 6.0393,
+       "max": 9.6793,
+       "mean": 6.2775,
+       "median": 5.3485,
+       "min": 4.6195,
+       "n": 6,
+       "parameter": "t_half",
+       "sd": 2.0173
+      },
+      {
+       "cv_pct": 27.5738,
+       "geocv_pct": 25.7801,
+       "geomean": 9.8832,
+       "max": 15.1225,
+       "mean": 10.1673,
+       "median": 9.0203,
+       "min": 7.6223,
+       "n": 6,
+       "parameter": "MRT",
+       "sd": 2.8035
+      },
+      {
+       "cv_pct": 21.6047,
+       "geocv_pct": 23.371,
+       "geomean": 5.0904,
+       "max": 6.313,
+       "mean": 5.1996,
+       "median": 5.4983,
+       "min": 3.5886,
+       "n": 6,
+       "parameter": "CL_F",
+       "sd": 1.1234
+      },
+      {
+       "cv_pct": 15.3111,
+       "geocv_pct": 14.0155,
+       "geomean": 44.3523,
+       "max": 58.3182,
+       "mean": 44.7366,
+       "median": 42.1838,
+       "min": 40.1248,
+       "n": 6,
+       "parameter": "Vz_F",
+       "sd": 6.8496
+      }
+     ]
+    }
+   ],
+   "n_subjects": 12,
+   "route": "extravascular"
+  },
+  "nlme_results": null,
+  "pediatric_results": null,
+  "pending_tool": null,
+  "pk_model_results": null,
+  "planner_history": null,
+  "poppk_results": null,
+  "prior_check_results": null,
+  "profile_results": null,
+  "protocol_sim": null,
+  "qc_checklist": null,
+  "qc_issues": null,
+  "qc_verdict": null,
+  "regulatory_refs": null,
+  "regulatory_report_path": null,
+  "report_path": null,
+  "report_sections": null,
+  "review_results": null,
+  "run_provenance": [
+   [
+    "app_version",
+    "0.1.0"
+   ],
+   [
+    "git_sha",
+    "da6449c"
+   ],
+   [
+    "python",
+    "3.13.7"
+   ],
+   [
+    "platform",
+    "macOS-26.2-x86_64-i386-64bit-Mach-O"
+   ],
+   [
+    "numpy",
+    "2.4.6"
+   ],
+   [
+    "scipy",
+    "1.17.1"
+   ],
+   [
+    "pandas",
+    "3.0.3"
+   ],
+   [
+    "fastapi",
+    "0.136.3"
+   ],
+   [
+    "pydantic",
+    "2.13.4"
+   ],
+   [
+    "python-docx",
+    "1.2.0"
+   ],
+   [
+    "conventions_catalog_version",
+    "1.5.0"
+   ],
+   [
+    "conventions_catalog_canonical_json_sha256",
+    "7680af77800935df4a3c7974834ed1df016f4402fee541a7a65b7aa40bcf5d79"
+   ]
+  ],
+  "run_provenance_assurance": "hash_only",
+  "run_provenance_status": "verified",
+  "scm_results": null,
+  "session_id": "sess_fixture_full",
+  "simest_results": null,
+  "simulation_results": null,
+  "sir_results": null,
+  "spaghetti_data": null,
+  "special_pop_results": null,
+  "stats_advice": null,
+  "study_info": null,
+  "vpc_results": null,
+  "widgets": [],
+  "workflow_name": null
+ }
+}
